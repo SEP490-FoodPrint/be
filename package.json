@@ -2,24 +2,65 @@
   "name": "foodprint-be",
   "version": "1.0.0",
   "description": "Backend API for FoodPrint - School Meal Management & Traceability System",
-  "type": "module",
-  "main": "src/server.js",
+  "type": "commonjs",
+  "main": "dist/server.js",
+  "engines": {
+    "node": ">=24.22.1 <25",
+    "npm": ">=11 <12"
+  },
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "nodemon src/server.js"
+    "start": "node dist/server.js",
+    "dev": "tsx watch src/server.ts",
+    "build": "prisma generate && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "prisma:generate": "prisma generate",
+    "prisma:validate": "prisma validate",
+    "db:check": "tsx src/scripts/check-db.ts",
+    "lint": "eslint . --max-warnings=0",
+    "lint:fix": "npm run lint -- --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "validate": "npm run lint && npm run format:check && npm run typecheck && npm run build",
+    "prepare": "husky",
+    "redis:check": "tsx src/scripts/check-redis.ts",
+    "test:rate-limit": "tsx --test tests/rate-limit.test.ts",
+    "test:rate-limit:redis": "tsx --test tests/rate-limit.redis.test.ts",
+    "test:cache": "tsx --test tests/cache.test.ts",
+    "test:cache:redis": "tsx --test tests/cache.redis.test.ts"
   },
   "dependencies": {
+    "@prisma/adapter-pg": "7.10.1",
+    "@prisma/client": "7.10.1",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "express-rate-limit": "8.7.1",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
     "pg": "^8.13.3",
-    "pg-hstore": "^2.3.4",
-    "sequelize": "^6.37.5"
+    "rate-limit-redis": "6.0.1",
+    "redis": "6.3.0"
   },
   "devDependencies": {
-    "nodemon": "^3.1.9"
+    "@commitlint/cli": "21.2.4",
+    "@commitlint/config-conventional": "21.2.4",
+    "@eslint/js": "10.0.1",
+    "@types/cors": "2.8.19",
+    "@types/express": "4.17.25",
+    "@types/jsonwebtoken": "9.0.10",
+    "@types/morgan": "1.9.10",
+    "@types/node": "24.19.2",
+    "@types/pg": "8.23.1",
+    "eslint": "10.13.0",
+    "eslint-config-prettier": "10.1.8",
+    "globals": "17.13.0",
+    "husky": "9.1.7",
+    "lint-staged": "17.6.0",
+    "prettier": "3.9.10",
+    "prisma": "7.10.1",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.0"
   }
 }

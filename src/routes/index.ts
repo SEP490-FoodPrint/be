@@ -1,6 +1,6 @@
-import { Router } from "express"
+import { Router } from "express";
 
-const router = Router()
+const router = Router();
 
 // Health check endpoint
 router.get("/health", (req, res) => {
@@ -8,21 +8,21 @@ router.get("/health", (req, res) => {
     status: "ok",
     service: "FoodPrint Backend API",
     architecture: "Modular Architecture",
-    database: "PostgreSQL (foodprint)",
+    database: "PostgreSQL (Prisma)",
     timestamp: new Date().toISOString(),
-  })
-})
+  });
+});
 
 /**
  * Đăng ký routes của các modules tại đây khi triển khai từng module:
  *
- * import authRoutes from "../modules/auth/auth.routes.js"
- * import userRoutes from "../modules/user/user.routes.js"
- * import menuRoutes from "../modules/menu/menu.routes.js"
+ * import authRoutes from "../modules/auth/auth.routes"
+ * import userRoutes from "../modules/user/user.routes"
+ * import menuRoutes from "../modules/menu/menu.routes"
  *
  * router.use("/auth", authRoutes)
  * router.use("/users", userRoutes)
  * router.use("/menus", menuRoutes)
  */
 
-export default router
+export default router;
