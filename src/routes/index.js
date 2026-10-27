@@ -1,6 +1,9 @@
 import { Router } from "express"
+import menuRoutes from "../modules/menu/menu.routes.js"
 
 const router = Router()
+
+router.use("/menus", menuRoutes)
 
 // Health check endpoint
 router.get("/health", (req, res) => {
