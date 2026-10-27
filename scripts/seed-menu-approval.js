@@ -1,6 +1,7 @@
 import pg from "pg"
 import sequelize from "../src/config/database.js"
 import Ingredient from "../src/modules/ingredient/ingredient.model.js"
+import IngredientEntry from "../src/modules/ingredient-entry/ingredient-entry.model.js"
 import {
   Dish,
   DishIngredientEntry,
@@ -10,6 +11,7 @@ import {
   WeeklyMenu,
 } from "../src/modules/menu/menu.model.js"
 import { School, Supplier } from "../src/modules/organization/organization.model.js"
+import Role from "../src/modules/role/role.model.js"
 import User from "../src/modules/user/user.model.js"
 
 const { Client } = pg
@@ -134,8 +136,8 @@ const ensureDatabase = async () => {
 const seed = async () => {
   await ensureDatabase()
   await sequelize.authenticate()
+  await sequelize.query('CREATE SCHEMA IF NOT EXISTS "foodprint"')
   await sequelize.sync()
-  await sequelize.query('ALTER TABLE "users" DROP COLUMN IF EXISTS "password_hash"')
 
   await School.upsert({
     id: IDS.school,
@@ -148,12 +150,29 @@ const seed = async () => {
   for (const [id, code, name] of suppliers) {
     await Supplier.upsert({
       id,
-      code,
       name,
-      contract_number: code === "SUP-XANH-SONG-HONG" ? "HĐ-2026/SH-08" : null,
-      food_safety_registration: code === "SUP-XANH-SONG-HONG" ? "0422/2025/ATTP-HN" : null,
+      tax_code: code,
       status: "ACTIVE",
     })
+  }
+
+  const roleIds = new Map()
+  const roleCodes = [
+    "SYSTEM_ADMIN",
+    "INGREDIENT_SUPPLIER",
+    "SCHOOL_ADMIN",
+    "SCHOOL_MANAGEMENT_BOARD",
+    "SCHOOL_HEALTH_OFFICER",
+    "SCHOOL_KITCHEN_STAFF",
+    "HOMEROOM_TEACHER",
+    "PARENTS_COMMITTEE",
+    "INGREDIENT_MANAGEMENT_DEPARTMENT",
+  ]
+  for (let index = 0; index < roleCodes.length; index += 1) {
+    const code = roleCodes[index]
+    const id = `21000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`
+    roleIds.set(code, id)
+    await Role.upsert({ id, code, name: code, type: "SYSTEM", description: null })
   }
 
   const users = [
@@ -167,15 +186,16 @@ const seed = async () => {
     ["20000000-0000-4000-8000-000000000014", "school_parents", "Ông Bùi Quốc Tuấn", "PARENTS_COMMITTEE", IDS.school, null, "SCHOOL"],
     ["20000000-0000-4000-8000-000000000015", "school_warehouse", "Đỗ Minh Quân", "INGREDIENT_MANAGEMENT_DEPARTMENT", IDS.school, null, "SCHOOL"],
   ]
-  for (const [id, username, fullName, role, schoolId, supplierId, orgType] of users) {
+  for (const [id, username, fullName, role, schoolId, supplierId] of users) {
     await User.upsert({
       id,
+      role_id: roleIds.get(role),
       school_id: schoolId,
       supplier_id: supplierId,
       username,
+      email: `${username}@foodprint.local`,
+      password_hash: "prototype-no-login",
       full_name: fullName,
-      role,
-      org_type: orgType,
       status: "ACTIVE",
     })
   }
@@ -183,42 +203,24 @@ const seed = async () => {
   await WeeklyMenu.upsert({
     id: IDS.menu,
     school_id: IDS.school,
-    code: "TĐ-2026-T43",
+    created_by_user_id: IDS.adminUser,
     title: "Thực đơn Bán trú Tiêu chuẩn Mùa Thu - Tuần 43",
-    description: "Thực đơn bán trú tuần 43 (26/10/2026 - 30/10/2026) do Bộ phận Bếp và Cán bộ Bán trú phụ trách trường đề xuất.",
-    week_number: 43,
-    start_date: "2026-10-26",
-    end_date: "2026-10-30",
+    week_start_date: "2026-10-26",
     status: "PENDING_APPROVAL",
-    total_classes: 44,
-    total_students: 1520,
-    proposer_name: "Tổ Dinh dưỡng Bán trú",
-    proposer_detail: "Bếp trưởng: Trần Văn Quý",
     submitted_at: new Date("2026-10-20T14:30:00+07:00"),
   })
 
   await MenuReviewRecord.destroy({
-    where: { weekly_menu_id: IDS.menu, review_type: "MANAGEMENT" },
+    where: { weekly_menu_id: IDS.menu },
   })
 
   await MenuReviewRecord.upsert({
     id: IDS.medicalReview,
     weekly_menu_id: IDS.menu,
-    reviewer_id: IDS.healthUser,
-    review_type: "MEDICAL",
+    reviewer_user_id: IDS.healthUser,
     decision: "APPROVED",
-    comment: "Đã thẩm định cơ cấu nhóm chất cân đối. Các món phù hợp với thời tiết giao mùa cuối thu và không lặp lại dị nguyên có nguy cơ cao đã ghi nhận trong tuần 42.",
+    feedback: "Đã thẩm định cơ cấu nhóm chất cân đối. Các món phù hợp với thời tiết giao mùa cuối thu.",
     reviewed_at: new Date("2026-10-21T09:15:00+07:00"),
-    metadata: {
-      status: "Đạt tiêu chuẩn",
-      role: "Cán bộ Chuyên trách Y tế Học đường",
-      documents: ["Kiểm thực 3 bước (QĐ 1246)", "Biên bản test hàn the và formol"],
-      compliance: [
-        { id: "three-step", title: "Kiểm thực 3 bước", detail: "Quy trình nhập kho và lưu mẫu 24 giờ sẵn sàng", tone: "success" },
-        { id: "medical", title: "Thẩm định Y tế Trường học", detail: "Đã kiểm duyệt cân đối khẩu phần và dinh dưỡng", tone: "success" },
-        { id: "allergy", title: "Hồ sơ dị ứng tuần 43", detail: "14 học sinh có tiền sử dị ứng hải sản hoặc đậu phộng", tone: "warning" },
-      ],
-    },
   })
 
   const suppliersByCode = new Map(suppliers.map(([id, code]) => [code, id]))
@@ -227,9 +229,8 @@ const seed = async () => {
     await MenuDay.upsert({
       id: menuDayId,
       weekly_menu_id: IDS.menu,
-      service_date: day.date,
-      day_order: day.order,
-      portion_count: 1520,
+      menu_date: day.date,
+      note: "Phục vụ 1.520 suất",
     })
 
     for (let index = 0; index < day.items.length; index += 1) {
@@ -245,35 +246,39 @@ const seed = async () => {
         school_id: IDS.school,
         name,
         description,
-        dish_type: dishType,
-        allergen_label: tag,
-        warning_level: tone,
+        status: "ACTIVE",
       })
       await Ingredient.upsert({
         id: ingredientId,
         supplier_id: suppliersByCode.get(supplierCode),
         name: `Nguyên liệu chính: ${name}`,
-        code: `ING-T43-${day.order}-${sequence}`,
-        unit: "kg",
-        allergen_code: tone === "error" || tone === "warning" ? tag : null,
+        category: dishType,
+        default_unit: "kg",
         description,
         status: "ACTIVE",
       })
+      await IngredientEntry.upsert({
+        id: entryId,
+        school_id: IDS.school,
+        ingredient_id: ingredientId,
+        storage_requirements: tag || null,
+        shelf_life_days: 1,
+        handling_type: "FRESH",
+        status: "ACTIVE",
+        created_by_user_id: IDS.adminUser,
+      })
       await MenuDayDish.upsert({
-        id: menuDayDishId,
         menu_day_id: menuDayId,
         dish_id: dishId,
         meal_type: mealType,
-        serving_time: mealType === "LUNCH" ? "10:30 - 11:30" : "14:30 - 15:00",
-        sort_order: sequence,
-        portion: 1520,
+        display_order: sequence,
+        portion_size: 1520,
         portion_unit: "suất",
       })
       await DishIngredientEntry.upsert({
-        id: entryId,
         dish_id: dishId,
-        ingredient_id: ingredientId,
-        quantity: 1,
+        ingredient_entry_id: entryId,
+        required_quantity: 1,
         unit: "định lượng chuẩn",
       })
     }

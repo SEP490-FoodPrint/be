@@ -6,18 +6,66 @@ const User = sequelize.define(
   {
     id: {
       type: DataTypes.UUID,
-      defaultValue: DataTypes.UUIDV4,
       primaryKey: true,
+      defaultValue: DataTypes.UUIDV4,
     },
-    school_id: { type: DataTypes.UUID, allowNull: true },
-    supplier_id: { type: DataTypes.UUID, allowNull: true },
-    username: { type: DataTypes.STRING(80), allowNull: false, unique: true },
-    full_name: { type: DataTypes.STRING(150), allowNull: false },
-    role: { type: DataTypes.STRING(80), allowNull: false },
-    org_type: { type: DataTypes.STRING(30), allowNull: false },
-    status: { type: DataTypes.STRING(30), allowNull: false, defaultValue: "ACTIVE" },
+    role_id: {
+      type: DataTypes.UUID,
+      allowNull: false,
+    },
+    school_id: {
+      type: DataTypes.UUID,
+      allowNull: true,
+    },
+    supplier_id: {
+      type: DataTypes.UUID,
+      allowNull: true,
+    },
+    commune_food_safety_unit_id: {
+      type: DataTypes.UUID,
+      allowNull: true,
+    },
+    username: {
+      type: DataTypes.STRING(120),
+      allowNull: false,
+    },
+    email: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    password_hash: {
+      type: DataTypes.TEXT,
+      allowNull: false,
+    },
+    full_name: {
+      type: DataTypes.STRING(255),
+      allowNull: false,
+    },
+    phone: {
+      type: DataTypes.STRING(30),
+      allowNull: true,
+    },
+    status: {
+      type: DataTypes.STRING(50),
+      allowNull: false,
+    },
+    email_verified_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    last_login_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    }
   },
-  { tableName: "users" }
+  {
+    tableName: "users",
+    schema: "foodprint",
+    timestamps: true,
+    createdAt: "created_at",
+    updatedAt: "updated_at",
+    underscored: true,
+  }
 )
 
 export default User

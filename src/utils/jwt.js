@@ -9,6 +9,8 @@ export const signToken = (payload) => {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN })
 }
 
+export const generateToken = signToken
+
 export const verifyToken = (token) => {
   return jwt.verify(token, JWT_SECRET)
 }

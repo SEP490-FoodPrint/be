@@ -6,18 +6,42 @@ const Ingredient = sequelize.define(
   {
     id: {
       type: DataTypes.UUID,
-      defaultValue: DataTypes.UUIDV4,
       primaryKey: true,
+      defaultValue: DataTypes.UUIDV4,
     },
-    supplier_id: { type: DataTypes.UUID, allowNull: true },
-    name: { type: DataTypes.STRING(180), allowNull: false },
-    code: { type: DataTypes.STRING(80), allowNull: false, unique: true },
-    unit: { type: DataTypes.STRING(30), allowNull: false, defaultValue: "kg" },
-    allergen_code: { type: DataTypes.STRING(80), allowNull: true },
-    description: { type: DataTypes.TEXT, allowNull: true },
-    status: { type: DataTypes.STRING(30), allowNull: false, defaultValue: "ACTIVE" },
+    supplier_id: {
+      type: DataTypes.UUID,
+      allowNull: false,
+    },
+    name: {
+      type: DataTypes.STRING(255),
+      allowNull: false,
+    },
+    category: {
+      type: DataTypes.STRING(120),
+      allowNull: true,
+    },
+    default_unit: {
+      type: DataTypes.STRING(30),
+      allowNull: false,
+    },
+    description: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    status: {
+      type: DataTypes.STRING(50),
+      allowNull: false,
+    }
   },
-  { tableName: "ingredients" }
+  {
+    tableName: "ingredients",
+    schema: "foodprint",
+    timestamps: true,
+    createdAt: "created_at",
+    updatedAt: "updated_at",
+    underscored: true,
+  }
 )
 
 export default Ingredient
