@@ -27,7 +27,8 @@
     "test:rate-limit:redis": "tsx --test tests/rate-limit.redis.test.ts",
     "test:cache": "tsx --test tests/cache.test.ts",
     "test:cache:redis": "tsx --test tests/cache.redis.test.ts",
-    "test:modules": "tsx --test tests/modules.test.ts"
+    "test:modules": "tsx --test tests/modules.test.ts",
+    "test:unit": "tsx --test tests/cache.test.ts tests/modules.test.ts tests/rate-limit.test.ts tests/role.middleware.test.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "7.10.1",

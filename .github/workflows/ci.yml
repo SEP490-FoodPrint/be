@@ -1,0 +1,69 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Backend quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI: "true"
+      HUSKY: "0"
+      NODE_ENV: test
+      NPM_CONFIG_ENGINE_STRICT: "true"
+      # Prisma config needs a valid URL; these checks never connect to PostgreSQL.
+      DATABASE_URL: postgresql://ci_validation@127.0.0.1:1/foodprint_ci?schema=foodprint
+      JWT_SECRET: foodprint-ci-test-only-secret-not-for-runtime
+      JWT_EXPIRES_IN: 1h
+      PRISMA_HIDE_UPDATE_MESSAGE: "true"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js from .nvmrc
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Validate pull request commit messages
+        if: github.event_name == 'pull_request'
+        env:
+          COMMIT_BASE: ${{ github.event.pull_request.base.sha }}
+          COMMIT_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: npm exec --no -- commitlint --from "$COMMIT_BASE" --to "$COMMIT_HEAD" --verbose
+
+      - name: Validate pushed commit message
+        if: github.event_name == 'push'
+        run: git log -1 --format=%B | npm exec --no -- commitlint --verbose
+
+      - name: Validate Prisma schema
+        run: npm run prisma:validate
+
+      - name: Generate Prisma Client for type-aware checks
+        run: npm run prisma:generate
+
+      - name: Check lint, formatting, types and build
+        run: npm run validate
+
+      - name: Run infrastructure-free tests
+        run: npm run test:unit
