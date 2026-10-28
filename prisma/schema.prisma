@@ -702,11 +702,41 @@ model Role {
   createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
   users             User[]             @relation("users_role_id__roles")
   deliveryApprovals DeliveryApproval[] @relation("delivery_approvals_role_id__roles")
+  rolePermissions   RolePermission[]   @relation("role_permissions_role_id__roles")
 
   @@unique([code])
   @@map("roles")
   @@schema("foodprint")
 }
+
+model Permission {
+  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code            String           @unique @db.VarChar(100)
+  name            String           @db.VarChar(150)
+  module          String           @db.VarChar(80)
+  action          String           @db.VarChar(50)
+  description     String?          @db.Text
+  isActive        Boolean          @default(true) @map("is_active")
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  rolePermissions RolePermission[] @relation("role_permissions_permission_id__permissions")
+
+  @@map("permissions")
+  @@schema("foodprint")
+}
+
+model RolePermission {
+  roleId       String     @map("role_id") @db.Uuid
+  permissionId String     @map("permission_id") @db.Uuid
+  assignedAt   DateTime   @default(now()) @map("assigned_at") @db.Timestamptz(6)
+  role         Role       @relation("role_permissions_role_id__roles", fields: [roleId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  permission   Permission @relation("role_permissions_permission_id__permissions", fields: [permissionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId], map: "idx_role_permissions_permission_id")
+  @@map("role_permissions")
+  @@schema("foodprint")
+}
+
 
 /// Stores School-Supplier partnership history. SUSPENDED means temporarily paused; UNLINKED means the relationship has ended.
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
