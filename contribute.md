@@ -182,7 +182,8 @@ Chạy thêm theo phần thay đổi:
 
 - Cache: `npm run test:cache`; có Redis local thì chạy `npm run test:cache:redis`.
 - Rate limit: `npm run test:rate-limit`; có Redis local thì chạy `npm run test:rate-limit:redis`.
-- Kết nối PostgreSQL/Redis: chạy `npm run db:check` hoặc `npm run redis:check` tương ứng khi hạ tầng local sẵn sàng.
+- Kết nối PostgreSQL/Redis: chạy `npm run db:check` hoặc `npm run redis:check` tương ứng khi hạ tầng sẵn sàng.
+- Thay đổi schema/model database: chạy `npm run prisma:validate`, kiểm tra `npm run db:check` và đồng bộ schema qua `npm run db:migrate` (hoặc `npm run db:push`).
 - Chỉ sửa tài liệu: kiểm tra Prettier các file Markdown đã sửa. Không cần mở kết nối database để kiểm tra tài liệu.
 
 Ghi rõ kiểm tra bị BLOCKED và nguyên nhân nếu thiếu hạ tầng. Các lệnh kiểm tra/generate không cho phép tự chạy DDL, migrations, reset, deploy hoặc xóa volume; tuân thủ phạm vi được phê duyệt trong AGENTS.md.
