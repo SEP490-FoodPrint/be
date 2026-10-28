@@ -28,7 +28,11 @@
     "test:cache": "tsx --test tests/cache.test.ts",
     "test:cache:redis": "tsx --test tests/cache.redis.test.ts",
     "test:modules": "tsx --test tests/modules.test.ts",
-    "test:unit": "tsx --test tests/cache.test.ts tests/modules.test.ts tests/rate-limit.test.ts tests/role.middleware.test.ts"
+    "test:unit": "tsx --test tests/cache.test.ts tests/modules.test.ts tests/rate-limit.test.ts tests/role.middleware.test.ts",
+    "db:migrate": "prisma migrate dev",
+    "db:push": "prisma db push",
+    "db:pull": "prisma db pull",
+    "db:studio": "prisma studio"
   },
   "dependencies": {
     "@prisma/adapter-pg": "7.10.1",

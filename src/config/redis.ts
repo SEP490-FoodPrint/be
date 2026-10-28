@@ -32,6 +32,7 @@ export async function connectRedis(): Promise<void> {
   connecting ??= (async () => {
     if (!redis.isOpen) await redis.connect();
     await redis.ping();
+    console.log("⚡Kết nối Redis Cache & Rate-limit thành công!");
   })().finally(() => {
     connecting = undefined;
   });
