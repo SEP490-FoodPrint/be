@@ -19,7 +19,7 @@ function connectionCode(error: unknown, depth = 0): string | undefined {
 async function main(): Promise<void> {
   try {
     await connectDB();
-    console.log("PASS: Prisma SELECT 1");
+    console.log("✨ Kiểm tra truy vấn: SELECT 1 thành công!");
   } catch (error) {
     console.error(
       "FAIL: Không thể kết nối PostgreSQL local. Kiểm tra DATABASE_URL.",
