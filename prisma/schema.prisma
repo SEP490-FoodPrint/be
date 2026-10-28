@@ -1,0 +1,1273 @@
+// Source: database/FoodPrint_PostgreSQL_Database_v5.sql.
+// SQL-first schema for the new database; no introspection of the old local database.
+// Database-only rules and deployment status: database/SCHEMA_BASELINE.md.
+
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "cjs"
+  importFileExtension = ""
+  previewFeatures     = ["partialIndexes"]
+}
+
+datasource db {
+  provider = "postgresql"
+  schemas  = ["foodprint"]
+}
+
+/// Physical table for conceptual M:N relationship Class HAS ALLERGY IngredientEntry. No Student entity; affected_count is a class-level aggregate.
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model ClassAllergy {
+  classId              String                @map("class_id") @db.Uuid
+  ingredientEntryId    String                @map("ingredient_entry_id") @db.Uuid
+  affectedCount        Int                   @map("affected_count") @db.Integer
+  updatedByUserId      String?               @map("updated_by_user_id") @db.Uuid
+  updatedAt            DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  Class                Class                 @relation("class_allergies_class_id__classes", fields: [classId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  IngredientEntry      IngredientEntry       @relation("class_allergies_ingredient_entry_id__ingredient_entries", fields: [ingredientEntryId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  User                 User?                 @relation("class_allergies_updated_by_user_id__users", fields: [updatedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  dailyAllergyPortions DailyAllergyPortion[] @relation("daily_allergy_portions_class_id_ingredient_entry_id__class_allergies")
+
+  @@id([classId, ingredientEntryId])
+  @@map("class_allergies")
+  @@schema("foodprint")
+}
+
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model Class {
+  id                     String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  schoolId               String             @map("school_id") @db.Uuid
+  name                   String             @db.VarChar(120)
+  academicYear           String?            @map("academic_year") @db.VarChar(30)
+  registeredMealPortions Int                @default(0) @map("registered_meal_portions") @db.Integer
+  status                 EntityStatus       @default(ACTIVE)
+  createdAt              DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  School                 School             @relation("classes_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  dailyMealPortions      DailyMealPortion[] @relation("daily_meal_portions_class_id__classes")
+  classAllergies         ClassAllergy[]     @relation("class_allergies_class_id__classes")
+
+  @@unique([schoolId, name, academicYear])
+  @@index([schoolId], map: "idx_classes_school_id")
+  @@map("classes")
+  @@schema("foodprint")
+}
+
+model CommuneFoodSafetyUnit {
+  id                          String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code                        String                       @db.VarChar(80)
+  name                        String                       @db.VarChar(255)
+  address                     String?                      @db.Text
+  email                       String?                      @db.Citext
+  phone                       String?                      @db.VarChar(30)
+  status                      EntityStatus                 @default(ACTIVE)
+  createdAt                   DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                   DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  users                       User[]                       @relation("users_commune_food_safety_unit_id__commune_food_safety_units")
+  foodSafetyReportForwardings FoodSafetyReportForwarding[] @relation("food_safety_report_forwardings_recipient_commune_food_safety_unit_id__commune_food_safety_units")
+
+  @@unique([code])
+  @@map("commune_food_safety_units")
+  @@schema("foodprint")
+}
+
+/// Physical table for conceptual M:N relationship CookingBatch USES IngredientLot.
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model CookingBatchLot {
+  cookingBatchId  String        @map("cooking_batch_id") @db.Uuid
+  ingredientLotId String        @map("ingredient_lot_id") @db.Uuid
+  /// Planned ingredient quantity from this IngredientLot before cooking.
+  plannedQuantity Decimal       @map("planned_quantity") @db.Decimal(14, 3)
+  /// Actual quantity consumed; written after plan confirmation and before completion, NULL earlier.
+  quantityUsed    Decimal?      @map("quantity_used") @db.Decimal(14, 3)
+  unit            String        @db.VarChar(30)
+  CookingBatch    CookingBatch  @relation("cooking_batch_lots_cooking_batch_id__cooking_batches", fields: [cookingBatchId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  IngredientLot   IngredientLot @relation("cooking_batch_lots_ingredient_lot_id__ingredient_lots", fields: [ingredientLotId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([cookingBatchId, ingredientLotId])
+  @@index([ingredientLotId], map: "idx_cooking_batch_lots_lot")
+  @@map("cooking_batch_lots")
+  @@schema("foodprint")
+}
+
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model CookingBatch {
+  id                    String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  batchCode             String                @map("batch_code") @db.VarChar(100)
+  menuDayId             String                @map("menu_day_id") @db.Uuid
+  dishId                String                @map("dish_id") @db.Uuid
+  /// Meal slot inherited from selected MenuDay-Dish entry.
+  mealType              MealType              @map("meal_type")
+  /// Snapshot of school policy at creation; old batches unaffected by later school configuration changes.
+  cookingModeApplied    CookingMode           @map("cooking_mode_applied")
+  createdByUserId       String                @map("created_by_user_id") @db.Uuid
+  status                CookingBatchStatus    @default(UNCONFIRMED)
+  plannedPortions       Int?                  @map("planned_portions") @db.Integer
+  /// Actual cooked portions, NULL until COMPLETED; never use planned_portions for allocation.
+  preparedPortions      Int?                  @map("prepared_portions") @db.Integer
+  note                  String?               @db.Text
+  confirmedByUserId     String?               @map("confirmed_by_user_id") @db.Uuid
+  /// Time kitchen confirmed the PLAN, BEFORE cooking (not completion time).
+  confirmedAt           DateTime?             @map("confirmed_at") @db.Timestamptz(6)
+  completedByUserId     String?               @map("completed_by_user_id") @db.Uuid
+  /// Time cooking result was recorded; COMPLETED is required for meal allocation.
+  completedAt           DateTime?             @map("completed_at") @db.Timestamptz(6)
+  createdAt             DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  MenuDay               MenuDay               @relation("cooking_batches_menu_day_id__menu_days", fields: [menuDayId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  Dish                  Dish                  @relation("cooking_batches_dish_id__dishes", fields: [dishId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  createdByUser         User                  @relation("cooking_batches_created_by_user_id__users", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  confirmedByUser       User?                 @relation("cooking_batches_confirmed_by_user_id__users", fields: [confirmedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  completedByUser       User?                 @relation("cooking_batches_completed_by_user_id__users", fields: [completedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  MenuDayDish           MenuDayDish           @relation("cooking_batches_menu_day_id_dish_id_meal_type__menu_day_dishes", fields: [menuDayId, dishId, mealType], references: [menuDayId, dishId, mealType], onDelete: Restrict, onUpdate: NoAction, map: "fk_cooking_batch_menu_dish_meal")
+  cookingBatchLots      CookingBatchLot[]     @relation("cooking_batch_lots_cooking_batch_id__cooking_batches")
+  RetainedFoodSample    RetainedFoodSample?   @relation("retained_food_samples_cooking_batch_id__cooking_batches")
+  mealAllocationBatches MealAllocationBatch[] @relation("meal_allocation_batches_cooking_batch_id__cooking_batches")
+  traceabilityAnchors   TraceabilityAnchor[]  @relation("traceability_anchors_cooking_batch_id__cooking_batches")
+
+  @@unique([batchCode])
+  @@index([menuDayId], map: "idx_cooking_batches_menu_day")
+  @@index([dishId], map: "idx_cooking_batches_dish")
+  @@index([menuDayId, mealType, status], map: "idx_cooking_batches_meal_state")
+  @@map("cooking_batches")
+  @@schema("foodprint")
+}
+
+/// Daily allergy-specific portion count for one DailyMealPortion and one class-level allergy pair (Class, IngredientEntry).
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model DailyAllergyPortion {
+  dailyMealPortionId String           @map("daily_meal_portion_id") @db.Uuid
+  classId            String           @map("class_id") @db.Uuid
+  ingredientEntryId  String           @map("ingredient_entry_id") @db.Uuid
+  portionCount       Int              @map("portion_count") @db.Integer
+  createdAt          DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  DailyMealPortion   DailyMealPortion @relation("daily_allergy_portions_daily_meal_portion_id__daily_meal_portions", fields: [dailyMealPortionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  ClassAllergy       ClassAllergy     @relation("daily_allergy_portions_class_id_ingredient_entry_id__class_allergies", fields: [classId, ingredientEntryId], references: [classId, ingredientEntryId], onDelete: Restrict, onUpdate: NoAction, map: "fk_daily_allergy_class_entry")
+
+  @@id([dailyMealPortionId, classId, ingredientEntryId])
+  @@index([classId, ingredientEntryId], map: "idx_daily_allergy_portions_class_entry")
+  @@map("daily_allergy_portions")
+  @@schema("foodprint")
+}
+
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model DailyMealPortion {
+  id                   String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  classId              String                @map("class_id") @db.Uuid
+  confirmedByUserId    String                @map("confirmed_by_user_id") @db.Uuid
+  mealDate             DateTime              @map("meal_date") @db.Date
+  /// Demand scoped to LUNCH or AFTERNOON; unique per Class/date/meal.
+  mealType             MealType              @map("meal_type")
+  totalPortions        Int                   @map("total_portions") @db.Integer
+  allergyNotes         String?               @map("allergy_notes") @db.Text
+  status               MealPortionStatus     @default(DRAFT)
+  finalizedAt          DateTime?             @map("finalized_at") @db.Timestamptz(6)
+  createdAt            DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  Class                Class                 @relation("daily_meal_portions_class_id__classes", fields: [classId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  User                 User                  @relation("daily_meal_portions_confirmed_by_user_id__users", fields: [confirmedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  dailyAllergyPortions DailyAllergyPortion[] @relation("daily_allergy_portions_daily_meal_portion_id__daily_meal_portions")
+  MealAllocation       MealAllocation?       @relation("meal_allocations_daily_meal_portion_id__daily_meal_portions")
+
+  @@unique([classId, mealDate, mealType])
+  @@index([mealDate], map: "idx_daily_meal_portions_date")
+  @@index([classId, mealDate, mealType], map: "idx_dmp_class_date_meal")
+  @@map("daily_meal_portions")
+  @@schema("foodprint")
+}
+
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model Delivery {
+  id                        String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  deliveryNo                String                      @map("delivery_no") @db.VarChar(80)
+  supplyRequestId           String                      @map("supply_request_id") @db.Uuid
+  supplierId                String                      @map("supplier_id") @db.Uuid
+  status                    DeliveryStatus              @default(CREATED)
+  createdByUserId           String?                     @map("created_by_user_id") @db.Uuid
+  expectedArrivalAt         DateTime?                   @map("expected_arrival_at") @db.Timestamptz(6)
+  arrivedAt                 DateTime?                   @map("arrived_at") @db.Timestamptz(6)
+  receivedByUserId          String?                     @map("received_by_user_id") @db.Uuid
+  receivedAt                DateTime?                   @map("received_at") @db.Timestamptz(6)
+  vehiclePlate              String?                     @map("vehicle_plate") @db.VarChar(40)
+  note                      String?                     @db.Text
+  createdAt                 DateTime                    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                 DateTime                    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  SupplyRequest             SupplyRequest               @relation("deliveries_supply_request_id__supply_requests", fields: [supplyRequestId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  Supplier                  Supplier                    @relation("deliveries_supplier_id__suppliers", fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  createdByUser             User?                       @relation("deliveries_created_by_user_id__users", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  receivedByUser            User?                       @relation("deliveries_received_by_user_id__users", fields: [receivedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  deliveryApprovals         DeliveryApproval[]          @relation("delivery_approvals_delivery_id__deliveries")
+  deliveryItems             DeliveryItem[]              @relation("delivery_items_delivery_id__deliveries")
+  ingredientQualityFeedback IngredientQualityFeedback[] @relation("ingredient_quality_feedback_delivery_id__deliveries")
+  traceabilityAnchors       TraceabilityAnchor[]        @relation("traceability_anchors_delivery_id__deliveries")
+
+  @@unique([deliveryNo])
+  @@index([createdByUserId], map: "idx_deliveries_created_by")
+  @@index([supplyRequestId, status], map: "idx_deliveries_request_status")
+  @@map("deliveries")
+  @@schema("foodprint")
+}
+
+/// Physical table for conceptual User APPROVES INCOMING Delivery relationship. One decision per required role per Delivery.
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model DeliveryApproval {
+  id         String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  deliveryId String           @map("delivery_id") @db.Uuid
+  userId     String           @map("user_id") @db.Uuid
+  roleId     String           @map("role_id") @db.Uuid
+  decision   ApprovalDecision
+  reason     String?          @db.Text
+  decidedAt  DateTime         @default(now()) @map("decided_at") @db.Timestamptz(6)
+  Delivery   Delivery         @relation("delivery_approvals_delivery_id__deliveries", fields: [deliveryId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  User       User             @relation("delivery_approvals_user_id__users", fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  Role       Role             @relation("delivery_approvals_role_id__roles", fields: [roleId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([deliveryId, userId])
+  @@unique([deliveryId, roleId])
+  @@index([deliveryId], map: "idx_delivery_approvals_delivery")
+  @@map("delivery_approvals")
+  @@schema("foodprint")
+}
+
+/// Actual ingredient lines in a Delivery. Each row references the corresponding SupplyRequestItem and can contain multiple IngredientLot rows.
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model DeliveryItem {
+  id                  String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  deliveryId          String            @map("delivery_id") @db.Uuid
+  supplyRequestItemId String            @map("supply_request_item_id") @db.Uuid
+  actualQuantity      Decimal           @map("actual_quantity") @db.Decimal(14, 3)
+  unit                String            @db.VarChar(30)
+  note                String?           @db.Text
+  Delivery            Delivery          @relation("delivery_items_delivery_id__deliveries", fields: [deliveryId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  SupplyRequestItem   SupplyRequestItem @relation("delivery_items_supply_request_item_id__supply_request_items", fields: [supplyRequestItemId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  ingredientLots      IngredientLot[]   @relation("ingredient_lots_delivery_item_id__delivery_items")
+
+  @@unique([deliveryId, supplyRequestItemId])
+  @@index([deliveryId], map: "idx_delivery_items_delivery")
+  @@index([supplyRequestItemId], map: "idx_delivery_items_request_item")
+  @@map("delivery_items")
+  @@schema("foodprint")
+}
+
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model DishIngredientEntry {
+  dishId            String          @map("dish_id") @db.Uuid
+  ingredientEntryId String          @map("ingredient_entry_id") @db.Uuid
+  /// Ingredient quantity for ONE standard serving of this Dish. Total demand = required_quantity times serving count (convert units consistently).
+  requiredQuantity  Decimal         @map("required_quantity") @db.Decimal(14, 3)
+  unit              String          @db.VarChar(30)
+  Dish              Dish            @relation("dish_ingredient_entries_dish_id__dishes", fields: [dishId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  IngredientEntry   IngredientEntry @relation("dish_ingredient_entries_ingredient_entry_id__ingredient_entries", fields: [ingredientEntryId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([dishId, ingredientEntryId])
+  @@map("dish_ingredient_entries")
+  @@schema("foodprint")
+}
+
+model Dish {
+  id                    String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  schoolId              String                @map("school_id") @db.Uuid
+  name                  String                @db.VarChar(255)
+  description           String?               @db.Text
+  status                EntityStatus          @default(ACTIVE)
+  createdAt             DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  School                School                @relation("dishes_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  menuDayDishes         MenuDayDish[]         @relation("menu_day_dishes_dish_id__dishes")
+  dishIngredientEntries DishIngredientEntry[] @relation("dish_ingredient_entries_dish_id__dishes")
+  cookingBatches        CookingBatch[]        @relation("cooking_batches_dish_id__dishes")
+
+  @@unique([schoolId, name])
+  @@map("dishes")
+  @@schema("foodprint")
+}
+
+/// Records food or ingredient analysis/test results associated with a FoodSafetyIncident. Does not imply any laboratory integration.
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model FoodAnalysisResult {
+  id                   String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  incidentId           String              @map("incident_id") @db.Uuid
+  ingredientLotId      String?             @map("ingredient_lot_id") @db.Uuid
+  retainedFoodSampleId String?             @map("retained_food_sample_id") @db.Uuid
+  laboratoryName       String?             @map("laboratory_name") @db.VarChar(255)
+  reportNumber         String?             @map("report_number") @db.VarChar(120)
+  testType             String?             @map("test_type") @db.VarChar(160)
+  sampleDescription    String?             @map("sample_description") @db.Text
+  sampledAt            DateTime?           @map("sampled_at") @db.Timestamptz(6)
+  testedAt             DateTime?           @map("tested_at") @db.Timestamptz(6)
+  resultSummary        String              @map("result_summary") @db.Text
+  documentUrl          String?             @map("document_url") @db.Text
+  recordedByUserId     String?             @map("recorded_by_user_id") @db.Uuid
+  createdAt            DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  FoodSafetyIncident   FoodSafetyIncident  @relation("food_analysis_results_incident_id__food_safety_incidents", fields: [incidentId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  IngredientLot        IngredientLot?      @relation("food_analysis_results_ingredient_lot_id__ingredient_lots", fields: [ingredientLotId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  RetainedFoodSample   RetainedFoodSample? @relation("food_analysis_results_retained_food_sample_id__retained_food_samples", fields: [retainedFoodSampleId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  User                 User?               @relation("food_analysis_results_recorded_by_user_id__users", fields: [recordedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([incidentId, testedAt(sort: Desc)], map: "idx_food_analysis_results_incident")
+  @@map("food_analysis_results")
+  @@schema("foodprint")
+}
+
+/// Links a food-safety incident to affected MealAllocation records; trace Class via DailyMealPortion and source batches/lots via MealAllocationBatch and CookingBatchLot.
+model FoodSafetyIncidentAllocation {
+  incidentId         String             @map("incident_id") @db.Uuid
+  mealAllocationId   String             @map("meal_allocation_id") @db.Uuid
+  note               String?            @db.Text
+  FoodSafetyIncident FoodSafetyIncident @relation("food_safety_incident_allocations_incident_id__food_safety_incidents", fields: [incidentId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  MealAllocation     MealAllocation     @relation("food_safety_incident_allocations_meal_allocation_id__meal_allocations", fields: [mealAllocationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([incidentId, mealAllocationId])
+  @@index([mealAllocationId], map: "idx_food_safety_incident_allocations_allocation")
+  @@map("food_safety_incident_allocations")
+  @@schema("foodprint")
+}
+
+/// Food-safety incident header at School level. Affected class meals are linked through food_safety_incident_allocations for traceability to Class, CookingBatch and IngredientLot.
+model FoodSafetyIncident {
+  id                            String                         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  schoolId                      String                         @map("school_id") @db.Uuid
+  reportedByUserId              String?                        @map("reported_by_user_id") @db.Uuid
+  title                         String                         @db.VarChar(255)
+  description                   String                         @db.Text
+  status                        IncidentStatus                 @default(OPEN)
+  occurredAt                    DateTime?                      @map("occurred_at") @db.Timestamptz(6)
+  resolvedAt                    DateTime?                      @map("resolved_at") @db.Timestamptz(6)
+  createdAt                     DateTime                       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                     DateTime                       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  School                        School                         @relation("food_safety_incidents_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  User                          User?                          @relation("food_safety_incidents_reported_by_user_id__users", fields: [reportedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  foodSafetyIncidentAllocations FoodSafetyIncidentAllocation[] @relation("food_safety_incident_allocations_incident_id__food_safety_incidents")
+  foodSafetyReportForwardings   FoodSafetyReportForwarding[]   @relation("food_safety_report_forwardings_incident_id__food_safety_incidents")
+  foodAnalysisResults           FoodAnalysisResult[]           @relation("food_analysis_results_incident_id__food_safety_incidents")
+  incidentSchoolAlerts          IncidentSchoolAlert[]          @relation("incident_school_alerts_incident_id__food_safety_incidents")
+  traceabilityAnchors           TraceabilityAnchor[]           @relation("traceability_anchors_food_safety_incident_id__food_safety_incidents")
+
+  @@index([schoolId, status], map: "idx_food_safety_incidents_school_status")
+  @@map("food_safety_incidents")
+  @@schema("foodprint")
+}
+
+/// Audit trail of food-safety reports forwarded to external recipients; recipient details are stored as text because external authorities are not platform users.
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model FoodSafetyReportForwarding {
+  id                               String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  incidentId                       String                 @map("incident_id") @db.Uuid
+  recipientCommuneFoodSafetyUnitId String?                @map("recipient_commune_food_safety_unit_id") @db.Uuid
+  recipientOrganization            String                 @map("recipient_organization") @db.VarChar(255)
+  recipientName                    String?                @map("recipient_name") @db.VarChar(255)
+  recipientEmail                   String?                @map("recipient_email") @db.Citext
+  recipientPhone                   String?                @map("recipient_phone") @db.VarChar(30)
+  forwardingChannel                String?                @map("forwarding_channel") @db.VarChar(60)
+  referenceNumber                  String?                @map("reference_number") @db.VarChar(120)
+  status                           NotificationStatus     @default(PENDING)
+  forwardedByUserId                String?                @map("forwarded_by_user_id") @db.Uuid
+  attemptedAt                      DateTime?              @map("attempted_at") @db.Timestamptz(6)
+  forwardedAt                      DateTime?              @map("forwarded_at") @db.Timestamptz(6)
+  note                             String?                @db.Text
+  createdAt                        DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  FoodSafetyIncident               FoodSafetyIncident     @relation("food_safety_report_forwardings_incident_id__food_safety_incidents", fields: [incidentId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  recipientCommuneFoodSafetyUnit   CommuneFoodSafetyUnit? @relation("food_safety_report_forwardings_recipient_commune_food_safety_unit_id__commune_food_safety_units", fields: [recipientCommuneFoodSafetyUnitId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  User                             User?                  @relation("food_safety_report_forwardings_forwarded_by_user_id__users", fields: [forwardedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([incidentId, createdAt(sort: Desc)], map: "idx_food_safety_forwardings_incident")
+  @@index([recipientCommuneFoodSafetyUnitId, createdAt(sort: Desc)], map: "idx_food_safety_forwardings_recipient_unit", where: raw("recipient_commune_food_safety_unit_id IS NOT NULL"))
+  @@map("food_safety_report_forwardings")
+  @@schema("foodprint")
+}
+
+/// Tracks food-safety alerts intended for other schools. No Student-level data is introduced.
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model IncidentSchoolAlert {
+  id                 String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  incidentId         String             @map("incident_id") @db.Uuid
+  targetSchoolId     String             @map("target_school_id") @db.Uuid
+  sentByUserId       String?            @map("sent_by_user_id") @db.Uuid
+  message            String             @db.Text
+  status             NotificationStatus @default(PENDING)
+  attemptedAt        DateTime?          @map("attempted_at") @db.Timestamptz(6)
+  sentAt             DateTime?          @map("sent_at") @db.Timestamptz(6)
+  createdAt          DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  FoodSafetyIncident FoodSafetyIncident @relation("incident_school_alerts_incident_id__food_safety_incidents", fields: [incidentId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  School             School             @relation("incident_school_alerts_target_school_id__schools", fields: [targetSchoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  User               User?              @relation("incident_school_alerts_sent_by_user_id__users", fields: [sentByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([targetSchoolId, createdAt(sort: Desc)], map: "idx_incident_school_alerts_target")
+  @@map("incident_school_alerts")
+  @@schema("foodprint")
+}
+
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model IngredientEntry {
+  id                    String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  schoolId              String                 @map("school_id") @db.Uuid
+  ingredientId          String                 @map("ingredient_id") @db.Uuid
+  storageRequirements   String?                @map("storage_requirements") @db.Text
+  shelfLifeDays         Int?                   @map("shelf_life_days") @db.Integer
+  /// School-specific handling method: DRY_STOCK = dry goods kept across days (rice, salt, spices); DIRECT_USE = fresh ingredients received and prepared the same day. Both types retain lots and inventory movement/traceability records.
+  handlingType          IngredientHandlingType @map("handling_type")
+  status                EntityStatus           @default(ACTIVE)
+  createdByUserId       String?                @map("created_by_user_id") @db.Uuid
+  createdAt             DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime               @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  School                School                 @relation("ingredient_entries_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  Ingredient            Ingredient             @relation("ingredient_entries_ingredient_id__ingredients", fields: [ingredientId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  User                  User?                  @relation("ingredient_entries_created_by_user_id__users", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  classAllergies        ClassAllergy[]         @relation("class_allergies_ingredient_entry_id__ingredient_entries")
+  supplyRequestItems    SupplyRequestItem[]    @relation("supply_request_items_ingredient_entry_id__ingredient_entries")
+  dishIngredientEntries DishIngredientEntry[]  @relation("dish_ingredient_entries_ingredient_entry_id__ingredient_entries")
+
+  @@unique([schoolId, ingredientId])
+  @@index([schoolId], map: "idx_ingredient_entries_school_id")
+  @@index([ingredientId], map: "idx_ingredient_entries_ingredient_id")
+  @@map("ingredient_entries")
+  @@schema("foodprint")
+}
+
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model IngredientLot {
+  id                        String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  deliveryItemId            String                      @map("delivery_item_id") @db.Uuid
+  /// Optional origin facility for this lot; when set, it must belong to the Supplier that delivered the lot.
+  sourceFacilityId          String?                     @map("source_facility_id") @db.Uuid
+  /// Stable opaque token suitable for generating a QR link; the QR image itself is generated by the application.
+  qrToken                   String                      @default(dbgenerated("CAST(gen_random_uuid() AS text)")) @map("qr_token") @db.VarChar(160)
+  lotCode                   String                      @map("lot_code") @db.VarChar(120)
+  manufactureDate           DateTime?                   @map("manufacture_date") @db.Date
+  expiryDate                DateTime?                   @map("expiry_date") @db.Date
+  receivedQuantity          Decimal                     @map("received_quantity") @db.Decimal(14, 3)
+  availableQuantity         Decimal                     @default(0) @map("available_quantity") @db.Decimal(14, 3)
+  unit                      String                      @db.VarChar(30)
+  status                    IngredientLotStatus         @default(BLOCKED)
+  createdAt                 DateTime                    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                 DateTime                    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  DeliveryItem              DeliveryItem                @relation("ingredient_lots_delivery_item_id__delivery_items", fields: [deliveryItemId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  SourceFacility            SourceFacility?             @relation("ingredient_lots_source_facility_id__source_facilities", fields: [sourceFacilityId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  inventoryTransactions     InventoryTransaction[]      @relation("inventory_transactions_ingredient_lot_id__ingredient_lots")
+  cookingBatchLots          CookingBatchLot[]           @relation("cooking_batch_lots_ingredient_lot_id__ingredient_lots")
+  ingredientQualityFeedback IngredientQualityFeedback[] @relation("ingredient_quality_feedback_ingredient_lot_id__ingredient_lots")
+  foodAnalysisResults       FoodAnalysisResult[]        @relation("food_analysis_results_ingredient_lot_id__ingredient_lots")
+  traceabilityAnchors       TraceabilityAnchor[]        @relation("traceability_anchors_ingredient_lot_id__ingredient_lots")
+
+  @@unique([qrToken])
+  @@unique([deliveryItemId, lotCode])
+  @@index([sourceFacilityId], map: "idx_ingredient_lots_source_facility")
+  @@index([deliveryItemId], map: "idx_ingredient_lots_delivery_item")
+  @@index([expiryDate], map: "idx_ingredient_lots_expiry_date")
+  @@map("ingredient_lots")
+  @@schema("foodprint")
+}
+
+/// Feedback about ingredient quality on delivery/lot. Separate from meal_complaints, which concerns served meals. Only the Delivery Supplier may respond.
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model IngredientQualityFeedback {
+  id                String                          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  deliveryId        String                          @map("delivery_id") @db.Uuid
+  ingredientLotId   String?                         @map("ingredient_lot_id") @db.Uuid
+  submittedByUserId String                          @map("submitted_by_user_id") @db.Uuid
+  title             String                          @db.VarChar(255)
+  description       String                          @db.Text
+  status            IngredientQualityFeedbackStatus @default(SUBMITTED)
+  supplierResponse  String?                         @map("supplier_response") @db.Text
+  respondedByUserId String?                         @map("responded_by_user_id") @db.Uuid
+  respondedAt       DateTime?                       @map("responded_at") @db.Timestamptz(6)
+  createdAt         DateTime                        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime                        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  Delivery          Delivery                        @relation("ingredient_quality_feedback_delivery_id__deliveries", fields: [deliveryId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  IngredientLot     IngredientLot?                  @relation("ingredient_quality_feedback_ingredient_lot_id__ingredient_lots", fields: [ingredientLotId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  submittedByUser   User                            @relation("ingredient_quality_feedback_submitted_by_user_id__users", fields: [submittedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  respondedByUser   User?                           @relation("ingredient_quality_feedback_responded_by_user_id__users", fields: [respondedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([deliveryId, createdAt(sort: Desc)], map: "idx_ingredient_quality_feedback_delivery")
+  @@index([status, createdAt(sort: Desc)], map: "idx_ingredient_quality_feedback_status")
+  @@map("ingredient_quality_feedback")
+  @@schema("foodprint")
+}
+
+model Ingredient {
+  id                String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  supplierId        String            @map("supplier_id") @db.Uuid
+  name              String            @db.VarChar(255)
+  category          String?           @db.VarChar(120)
+  defaultUnit       String            @map("default_unit") @db.VarChar(30)
+  description       String?           @db.Text
+  status            EntityStatus      @default(ACTIVE)
+  createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  Supplier          Supplier          @relation("ingredients_supplier_id__suppliers", fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  ingredientEntries IngredientEntry[] @relation("ingredient_entries_ingredient_id__ingredients")
+
+  @@unique([supplierId, name])
+  @@index([supplierId], map: "idx_ingredients_supplier_id")
+  @@map("ingredients")
+  @@schema("foodprint")
+}
+
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model InventoryTransaction {
+  id              String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ingredientLotId String                @map("ingredient_lot_id") @db.Uuid
+  movementType    InventoryMovementType @map("movement_type")
+  quantity        Decimal               @db.Decimal(14, 3)
+  unit            String                @db.VarChar(30)
+  createdByUserId String?               @map("created_by_user_id") @db.Uuid
+  referenceType   String?               @map("reference_type") @db.VarChar(80)
+  referenceId     String?               @map("reference_id") @db.Uuid
+  note            String?               @db.Text
+  occurredAt      DateTime              @default(now()) @map("occurred_at") @db.Timestamptz(6)
+  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  IngredientLot   IngredientLot         @relation("inventory_transactions_ingredient_lot_id__ingredient_lots", fields: [ingredientLotId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  User            User?                 @relation("inventory_transactions_created_by_user_id__users", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([ingredientLotId], map: "uq_inventory_initial_receipt_per_lot", where: raw("movement_type = 'RECEIPT'"))
+  @@unique([ingredientLotId, referenceId], map: "uq_inventory_usage_per_batch_lot", where: raw("movement_type = 'COOKING_USAGE' AND reference_type = 'COOKING_BATCH'"))
+  @@index([ingredientLotId, occurredAt(sort: Desc)], map: "idx_inventory_transactions_lot_time")
+  @@map("inventory_transactions")
+  @@schema("foodprint")
+}
+
+/// Batch portions from completed CookingBatch. Complete meal validation totals portions PER Dish; allocation aggregate lacks allergen-specific batch split, so app must validate allergy safety separately.
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model MealAllocationBatch {
+  mealAllocationId  String         @map("meal_allocation_id") @db.Uuid
+  cookingBatchId    String         @map("cooking_batch_id") @db.Uuid
+  allocatedPortions Int            @map("allocated_portions") @db.Integer
+  MealAllocation    MealAllocation @relation("meal_allocation_batches_meal_allocation_id__meal_allocations", fields: [mealAllocationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  CookingBatch      CookingBatch   @relation("meal_allocation_batches_cooking_batch_id__cooking_batches", fields: [cookingBatchId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([mealAllocationId, cookingBatchId])
+  @@index([cookingBatchId], map: "idx_meal_allocation_batches_batch")
+  @@map("meal_allocation_batches")
+  @@schema("foodprint")
+}
+
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model MealAllocation {
+  id                            String                         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  dailyMealPortionId            String                         @map("daily_meal_portion_id") @db.Uuid
+  createdByUserId               String                         @map("created_by_user_id") @db.Uuid
+  status                        MealAllocationStatus           @default(ALLOCATED)
+  allocatedAt                   DateTime                       @default(now()) @map("allocated_at") @db.Timestamptz(6)
+  distributedAt                 DateTime?                      @map("distributed_at") @db.Timestamptz(6)
+  /// School Kitchen Staff user who explicitly confirmed actual class meal distribution.
+  distributedByUserId           String?                        @map("distributed_by_user_id") @db.Uuid
+  finalizedAt                   DateTime?                      @map("finalized_at") @db.Timestamptz(6)
+  note                          String?                        @db.Text
+  createdAt                     DateTime                       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                     DateTime                       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  DailyMealPortion              DailyMealPortion               @relation("meal_allocations_daily_meal_portion_id__daily_meal_portions", fields: [dailyMealPortionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  createdByUser                 User                           @relation("meal_allocations_created_by_user_id__users", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  distributedByUser             User?                          @relation("meal_allocations_distributed_by_user_id__users", fields: [distributedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  mealAllocationBatches         MealAllocationBatch[]          @relation("meal_allocation_batches_meal_allocation_id__meal_allocations")
+  mealComplaints                MealComplaint[]                @relation("meal_complaints_meal_allocation_id__meal_allocations")
+  foodSafetyIncidentAllocations FoodSafetyIncidentAllocation[] @relation("food_safety_incident_allocations_meal_allocation_id__meal_allocations")
+  traceabilityAnchors           TraceabilityAnchor[]           @relation("traceability_anchors_meal_allocation_id__meal_allocations")
+
+  @@unique([dailyMealPortionId])
+  @@map("meal_allocations")
+  @@schema("foodprint")
+}
+
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model MealComplaint {
+  id                String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  mealAllocationId  String            @map("meal_allocation_id") @db.Uuid
+  submittedByUserId String            @map("submitted_by_user_id") @db.Uuid
+  complaintType     MealComplaintType @map("complaint_type")
+  description       String            @db.Text
+  status            ComplaintStatus   @default(SUBMITTED)
+  handledByUserId   String?           @map("handled_by_user_id") @db.Uuid
+  resolution        String?           @db.Text
+  submittedAt       DateTime          @default(now()) @map("submitted_at") @db.Timestamptz(6)
+  resolvedAt        DateTime?         @map("resolved_at") @db.Timestamptz(6)
+  updatedAt         DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  MealAllocation    MealAllocation    @relation("meal_complaints_meal_allocation_id__meal_allocations", fields: [mealAllocationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  submittedByUser   User              @relation("meal_complaints_submitted_by_user_id__users", fields: [submittedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  handledByUser     User?             @relation("meal_complaints_handled_by_user_id__users", fields: [handledByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([mealAllocationId], map: "idx_meal_complaints_allocation")
+  @@map("meal_complaints")
+  @@schema("foodprint")
+}
+
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model MenuDayDish {
+  menuDayId      String         @map("menu_day_id") @db.Uuid
+  dishId         String         @map("dish_id") @db.Uuid
+  /// Dish inclusion scoped to meal slot. A Dish can appear in both meal slots of one MenuDay.
+  mealType       MealType       @map("meal_type")
+  /// Optional planned dish portion presentation/size, NOT a recipe multiplier by default. Do not multiply required_quantity by portion_size and serving count again.
+  portionSize    Decimal?       @map("portion_size") @db.Decimal(12, 3)
+  portionUnit    String?        @map("portion_unit") @db.VarChar(30)
+  displayOrder   Int?           @map("display_order") @db.Integer
+  MenuDay        MenuDay        @relation("menu_day_dishes_menu_day_id__menu_days", fields: [menuDayId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  Dish           Dish           @relation("menu_day_dishes_dish_id__dishes", fields: [dishId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  cookingBatches CookingBatch[] @relation("cooking_batches_menu_day_id_dish_id_meal_type__menu_day_dishes")
+
+  @@id([menuDayId, dishId, mealType])
+  @@index([menuDayId, mealType], map: "idx_menu_day_dishes_meal")
+  @@map("menu_day_dishes")
+  @@schema("foodprint")
+}
+
+model MenuDay {
+  id             String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  weeklyMenuId   String         @map("weekly_menu_id") @db.Uuid
+  menuDate       DateTime       @map("menu_date") @db.Date
+  note           String?        @db.Text
+  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  WeeklyMenu     WeeklyMenu     @relation("menu_days_weekly_menu_id__weekly_menus", fields: [weeklyMenuId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  menuDayDishes  MenuDayDish[]  @relation("menu_day_dishes_menu_day_id__menu_days")
+  cookingBatches CookingBatch[] @relation("cooking_batches_menu_day_id__menu_days")
+
+  @@unique([weeklyMenuId, menuDate])
+  @@index([weeklyMenuId, menuDate], map: "idx_menu_days_menu_date")
+  @@map("menu_days")
+  @@schema("foodprint")
+}
+
+/// Each row is one menu review transaction/decision. No separate MenuReviewTransaction table is needed.
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model MenuReviewRecord {
+  id             String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  weeklyMenuId   String             @map("weekly_menu_id") @db.Uuid
+  reviewerUserId String             @map("reviewer_user_id") @db.Uuid
+  decision       MenuReviewDecision
+  feedback       String?            @db.Text
+  reviewedAt     DateTime           @default(now()) @map("reviewed_at") @db.Timestamptz(6)
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  WeeklyMenu     WeeklyMenu         @relation("menu_review_records_weekly_menu_id__weekly_menus", fields: [weeklyMenuId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  User           User               @relation("menu_review_records_reviewer_user_id__users", fields: [reviewerUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([weeklyMenuId, reviewedAt(sort: Desc)], map: "idx_menu_review_records_menu_time")
+  @@map("menu_review_records")
+  @@schema("foodprint")
+}
+
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model RegistrationRequest {
+  id                  String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  applicantUserId     String                    @map("applicant_user_id") @db.Uuid
+  requestType         RegistrationRequestType   @map("request_type")
+  status              RegistrationRequestStatus @default(PENDING)
+  profileData         Json                      @default("{}") @map("profile_data") @db.JsonB
+  supportingDocuments Json                      @default("[]") @map("supporting_documents") @db.JsonB
+  rejectionReason     String?                   @map("rejection_reason") @db.Text
+  reviewedByUserId    String?                   @map("reviewed_by_user_id") @db.Uuid
+  submittedAt         DateTime                  @default(now()) @map("submitted_at") @db.Timestamptz(6)
+  reviewedAt          DateTime?                 @map("reviewed_at") @db.Timestamptz(6)
+  updatedAt           DateTime                  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  applicantUser       User                      @relation("registration_requests_applicant_user_id__users", fields: [applicantUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  reviewedByUser      User?                     @relation("registration_requests_reviewed_by_user_id__users", fields: [reviewedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([applicantUserId])
+  @@map("registration_requests")
+  @@schema("foodprint")
+}
+
+/// Current project rule: one CookingBatch has at most one retained sample; enforced by UNIQUE(cooking_batch_id).
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model RetainedFoodSample {
+  id                  String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  cookingBatchId      String               @map("cooking_batch_id") @db.Uuid
+  recordedByUserId    String               @map("recorded_by_user_id") @db.Uuid
+  sampledAt           DateTime             @default(now()) @map("sampled_at") @db.Timestamptz(6)
+  quantity            Decimal?             @db.Decimal(12, 3)
+  unit                String?              @db.VarChar(30)
+  storageLocation     String?              @map("storage_location") @db.VarChar(255)
+  status              RetainedSampleStatus @default(STORED)
+  disposedAt          DateTime?            @map("disposed_at") @db.Timestamptz(6)
+  disposalNote        String?              @map("disposal_note") @db.Text
+  createdAt           DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  CookingBatch        CookingBatch         @relation("retained_food_samples_cooking_batch_id__cooking_batches", fields: [cookingBatchId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  User                User                 @relation("retained_food_samples_recorded_by_user_id__users", fields: [recordedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  foodAnalysisResults FoodAnalysisResult[] @relation("food_analysis_results_retained_food_sample_id__retained_food_samples")
+
+  @@unique([cookingBatchId])
+  @@map("retained_food_samples")
+  @@schema("foodprint")
+}
+
+model Role {
+  id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code              String             @db.VarChar(60)
+  name              String             @db.VarChar(120)
+  /// Organizational role group: SYSTEM for System Admin, SCHOOL for school-side actors, SUPPLIER for Ingredient Supplier.
+  type              RoleType
+  description       String?            @db.Text
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  users             User[]             @relation("users_role_id__roles")
+  deliveryApprovals DeliveryApproval[] @relation("delivery_approvals_role_id__roles")
+
+  @@unique([code])
+  @@map("roles")
+  @@schema("foodprint")
+}
+
+/// Stores School-Supplier partnership history. SUSPENDED means temporarily paused; UNLINKED means the relationship has ended.
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model SchoolSupplierRelationship {
+  id                String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  schoolId          String               @map("school_id") @db.Uuid
+  supplierId        String               @map("supplier_id") @db.Uuid
+  status            SchoolSupplierStatus @default(ACTIVE)
+  linkedByUserId    String?              @map("linked_by_user_id") @db.Uuid
+  unlinkedByUserId  String?              @map("unlinked_by_user_id") @db.Uuid
+  suspendedByUserId String?              @map("suspended_by_user_id") @db.Uuid
+  linkNote          String?              @map("link_note") @db.Text
+  unlinkReason      String?              @map("unlink_reason") @db.Text
+  suspensionReason  String?              @map("suspension_reason") @db.Text
+  linkedAt          DateTime             @default(now()) @map("linked_at") @db.Timestamptz(6)
+  unlinkedAt        DateTime?            @map("unlinked_at") @db.Timestamptz(6)
+  suspendedAt       DateTime?            @map("suspended_at") @db.Timestamptz(6)
+  createdAt         DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  School            School               @relation("school_supplier_relationships_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  Supplier          Supplier             @relation("school_supplier_relationships_supplier_id__suppliers", fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  linkedByUser      User?                @relation("school_supplier_relationships_linked_by_user_id__users", fields: [linkedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  unlinkedByUser    User?                @relation("school_supplier_relationships_unlinked_by_user_id__users", fields: [unlinkedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  suspendedByUser   User?                @relation("school_supplier_relationships_suspended_by_user_id__users", fields: [suspendedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([schoolId, supplierId], map: "uq_school_supplier_current", where: raw("status IN ('ACTIVE', 'SUSPENDED')"))
+  @@map("school_supplier_relationships")
+  @@schema("foodprint")
+}
+
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model School {
+  id                          String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                        String                       @db.VarChar(255)
+  code                        String?                      @db.VarChar(80)
+  email                       String?                      @db.Citext
+  phone                       String?                      @db.VarChar(30)
+  address                     String?                      @db.Text
+  /// Optional public website URL for the School profile.
+  websiteUrl                  String?                      @map("website_url") @db.Text
+  /// Configured by authorized school actor; SEPARATE_BY_LOT or COMBINE_LOTS. NULL until configured; kitchen cannot override in CookingBatch.
+  cookingMode                 CookingMode?                 @map("cooking_mode")
+  /// School local time for lunch service; setup before lunch batch creation.
+  lunchTime                   DateTime?                    @map("lunch_time") @db.Time(6)
+  /// School local time for afternoon meal; setup before afternoon batch creation.
+  afternoonMealTime           DateTime?                    @map("afternoon_meal_time") @db.Time(6)
+  status                      EntityStatus                 @default(ACTIVE)
+  createdAt                   DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                   DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  users                       User[]                       @relation("users_school_id__schools")
+  schoolSupplierRelationships SchoolSupplierRelationship[] @relation("school_supplier_relationships_school_id__schools")
+  classes                     Class[]                      @relation("classes_school_id__schools")
+  ingredientEntries           IngredientEntry[]            @relation("ingredient_entries_school_id__schools")
+  supplyRequests              SupplyRequest[]              @relation("supply_requests_school_id__schools")
+  weeklyMenus                 WeeklyMenu[]                 @relation("weekly_menus_school_id__schools")
+  dishes                      Dish[]                       @relation("dishes_school_id__schools")
+  foodSafetyIncidents         FoodSafetyIncident[]         @relation("food_safety_incidents_school_id__schools")
+  incidentSchoolAlerts        IncidentSchoolAlert[]        @relation("incident_school_alerts_target_school_id__schools")
+
+  @@unique([code])
+  @@map("schools")
+  @@schema("foodprint")
+}
+
+/// Supplier-owned source/production facilities. IngredientLot may record the facility that supplied that specific lot.
+model SourceFacility {
+  id              String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  supplierId      String          @map("supplier_id") @db.Uuid
+  facilityCode    String?         @map("facility_code") @db.VarChar(80)
+  name            String          @db.VarChar(255)
+  address         String?         @db.Text
+  contactName     String?         @map("contact_name") @db.VarChar(255)
+  contactPhone    String?         @map("contact_phone") @db.VarChar(30)
+  contactEmail    String?         @map("contact_email") @db.Citext
+  status          EntityStatus    @default(ACTIVE)
+  isVisible       Boolean         @default(true) @map("is_visible") @db.Boolean
+  createdByUserId String?         @map("created_by_user_id") @db.Uuid
+  updatedByUserId String?         @map("updated_by_user_id") @db.Uuid
+  createdAt       DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  Supplier        Supplier        @relation("source_facilities_supplier_id__suppliers", fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  createdByUser   User?           @relation("source_facilities_created_by_user_id__users", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  updatedByUser   User?           @relation("source_facilities_updated_by_user_id__users", fields: [updatedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  ingredientLots  IngredientLot[] @relation("ingredient_lots_source_facility_id__source_facilities")
+
+  @@unique([supplierId, name])
+  @@unique([supplierId, facilityCode], map: "uq_source_facility_supplier_code", where: raw("facility_code IS NOT NULL"))
+  @@index([supplierId, status], map: "idx_source_facilities_supplier_status")
+  @@index([supplierId, isVisible], map: "idx_source_facilities_visibility")
+  @@map("source_facilities")
+  @@schema("foodprint")
+}
+
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model SupplierCertification {
+  id                String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  supplierId        String       @map("supplier_id") @db.Uuid
+  certificationType String       @map("certification_type") @db.VarChar(120)
+  certificateNo     String       @map("certificate_no") @db.VarChar(120)
+  issuedDate        DateTime?    @map("issued_date") @db.Date
+  expiryDate        DateTime?    @map("expiry_date") @db.Date
+  documentUrl       String?      @map("document_url") @db.Text
+  status            EntityStatus @default(ACTIVE)
+  createdAt         DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  Supplier          Supplier     @relation("supplier_certifications_supplier_id__suppliers", fields: [supplierId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([supplierId, certificateNo])
+  @@index([supplierId], map: "idx_supplier_certifications_supplier")
+  @@map("supplier_certifications")
+  @@schema("foodprint")
+}
+
+model Supplier {
+  id                          String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                        String                       @db.VarChar(255)
+  taxCode                     String?                      @map("tax_code") @db.VarChar(80)
+  email                       String?                      @db.Citext
+  phone                       String?                      @db.VarChar(30)
+  address                     String?                      @db.Text
+  status                      EntityStatus                 @default(ACTIVE)
+  createdAt                   DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                   DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  supplierCertifications      SupplierCertification[]      @relation("supplier_certifications_supplier_id__suppliers")
+  users                       User[]                       @relation("users_supplier_id__suppliers")
+  sourceFacilities            SourceFacility[]             @relation("source_facilities_supplier_id__suppliers")
+  schoolSupplierRelationships SchoolSupplierRelationship[] @relation("school_supplier_relationships_supplier_id__suppliers")
+  ingredients                 Ingredient[]                 @relation("ingredients_supplier_id__suppliers")
+  supplyRequests              SupplyRequest[]              @relation("supply_requests_supplier_id__suppliers")
+  deliveries                  Delivery[]                   @relation("deliveries_supplier_id__suppliers")
+
+  @@unique([taxCode])
+  @@map("suppliers")
+  @@schema("foodprint")
+}
+
+/// Physical table for conceptual M:N relationship SupplyRequest REQUESTS IngredientEntry.
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model SupplyRequestItem {
+  id                String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  supplyRequestId   String          @map("supply_request_id") @db.Uuid
+  ingredientEntryId String          @map("ingredient_entry_id") @db.Uuid
+  requestedQuantity Decimal         @map("requested_quantity") @db.Decimal(14, 3)
+  unit              String          @db.VarChar(30)
+  note              String?         @db.Text
+  SupplyRequest     SupplyRequest   @relation("supply_request_items_supply_request_id__supply_requests", fields: [supplyRequestId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  IngredientEntry   IngredientEntry @relation("supply_request_items_ingredient_entry_id__ingredient_entries", fields: [ingredientEntryId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  deliveryItems     DeliveryItem[]  @relation("delivery_items_supply_request_item_id__supply_request_items")
+
+  @@unique([supplyRequestId, ingredientEntryId])
+  @@map("supply_request_items")
+  @@schema("foodprint")
+}
+
+model SupplyRequest {
+  id                    String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  requestNo             String              @map("request_no") @db.VarChar(80)
+  schoolId              String              @map("school_id") @db.Uuid
+  supplierId            String              @map("supplier_id") @db.Uuid
+  createdByUserId       String              @map("created_by_user_id") @db.Uuid
+  status                SupplyRequestStatus @default(DRAFT)
+  requestedDeliveryDate DateTime?           @map("requested_delivery_date") @db.Date
+  note                  String?             @db.Text
+  supplierResponseNote  String?             @map("supplier_response_note") @db.Text
+  acceptedByUserId      String?             @map("accepted_by_user_id") @db.Uuid
+  acceptedAt            DateTime?           @map("accepted_at") @db.Timestamptz(6)
+  sentAt                DateTime?           @map("sent_at") @db.Timestamptz(6)
+  createdAt             DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  School                School              @relation("supply_requests_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  Supplier              Supplier            @relation("supply_requests_supplier_id__suppliers", fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  createdByUser         User                @relation("supply_requests_created_by_user_id__users", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  acceptedByUser        User?               @relation("supply_requests_accepted_by_user_id__users", fields: [acceptedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  supplyRequestItems    SupplyRequestItem[] @relation("supply_request_items_supply_request_id__supply_requests")
+  deliveries            Delivery[]          @relation("deliveries_supply_request_id__supply_requests")
+
+  @@unique([requestNo])
+  @@index([acceptedByUserId], map: "idx_supply_requests_accepted_by")
+  @@index([schoolId, status], map: "idx_supply_requests_school_status")
+  @@index([supplierId, status], map: "idx_supply_requests_supplier_status")
+  @@map("supply_requests")
+  @@schema("foodprint")
+}
+
+/// Optional Blockchain evidence metadata. PostgreSQL remains the business source of truth; rows may be PREPARED without a submitted transaction.
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model TraceabilityAnchor {
+  id                   String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  deliveryId           String?                      @map("delivery_id") @db.Uuid
+  ingredientLotId      String?                      @map("ingredient_lot_id") @db.Uuid
+  cookingBatchId       String?                      @map("cooking_batch_id") @db.Uuid
+  mealAllocationId     String?                      @map("meal_allocation_id") @db.Uuid
+  foodSafetyIncidentId String?                      @map("food_safety_incident_id") @db.Uuid
+  payloadHash          String                       @map("payload_hash") @db.VarChar(128)
+  hashAlgorithm        String                       @default("SHA-256") @map("hash_algorithm") @db.VarChar(30)
+  networkName          String                       @map("network_name") @db.VarChar(80)
+  contractAddress      String?                      @map("contract_address") @db.VarChar(100)
+  transactionHash      String?                      @map("transaction_hash") @db.VarChar(100)
+  blockNumber          BigInt?                      @map("block_number") @db.BigInt
+  anchorStatus         BlockchainAnchorStatus       @default(PREPARED) @map("anchor_status")
+  verificationStatus   BlockchainVerificationStatus @default(NOT_VERIFIED) @map("verification_status")
+  verifiedAt           DateTime?                    @map("verified_at") @db.Timestamptz(6)
+  verificationResult   String?                      @map("verification_result") @db.Text
+  createdByUserId      String?                      @map("created_by_user_id") @db.Uuid
+  createdAt            DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  Delivery             Delivery?                    @relation("traceability_anchors_delivery_id__deliveries", fields: [deliveryId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  IngredientLot        IngredientLot?               @relation("traceability_anchors_ingredient_lot_id__ingredient_lots", fields: [ingredientLotId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  CookingBatch         CookingBatch?                @relation("traceability_anchors_cooking_batch_id__cooking_batches", fields: [cookingBatchId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  MealAllocation       MealAllocation?              @relation("traceability_anchors_meal_allocation_id__meal_allocations", fields: [mealAllocationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  FoodSafetyIncident   FoodSafetyIncident?          @relation("traceability_anchors_food_safety_incident_id__food_safety_incidents", fields: [foodSafetyIncidentId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  User                 User?                        @relation("traceability_anchors_created_by_user_id__users", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([transactionHash], map: "uq_traceability_anchor_tx_hash", where: raw("transaction_hash IS NOT NULL"))
+  @@index([ingredientLotId], map: "idx_traceability_anchors_lot")
+  @@index([cookingBatchId], map: "idx_traceability_anchors_batch")
+  @@index([mealAllocationId], map: "idx_traceability_anchors_allocation")
+  @@map("traceability_anchors")
+  @@schema("foodprint")
+}
+
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model User {
+  id                                           String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  roleId                                       String                       @map("role_id") @db.Uuid
+  schoolId                                     String?                      @map("school_id") @db.Uuid
+  /// Many Supplier users may reference one Supplier; role and organization authorization must be enforced by the application and relevant service logic.
+  supplierId                                   String?                      @map("supplier_id") @db.Uuid
+  communeFoodSafetyUnitId                      String?                      @map("commune_food_safety_unit_id") @db.Uuid
+  username                                     String                       @db.VarChar(120)
+  email                                        String                       @db.Citext
+  passwordHash                                 String                       @map("password_hash") @db.Text
+  fullName                                     String                       @map("full_name") @db.VarChar(255)
+  phone                                        String?                      @db.VarChar(30)
+  status                                       AccountStatus                @default(UNVERIFIED)
+  emailVerifiedAt                              DateTime?                    @map("email_verified_at") @db.Timestamptz(6)
+  lastLoginAt                                  DateTime?                    @map("last_login_at") @db.Timestamptz(6)
+  createdAt                                    DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                                    DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  Role                                         Role                         @relation("users_role_id__roles", fields: [roleId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  School                                       School?                      @relation("users_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  Supplier                                     Supplier?                    @relation("users_supplier_id__suppliers", fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  communeFoodSafetyUnit                        CommuneFoodSafetyUnit?       @relation("users_commune_food_safety_unit_id__commune_food_safety_units", fields: [communeFoodSafetyUnitId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  sourceFacilitiesAsCreatedByUser              SourceFacility[]             @relation("source_facilities_created_by_user_id__users")
+  sourceFacilitiesAsUpdatedByUser              SourceFacility[]             @relation("source_facilities_updated_by_user_id__users")
+  RegistrationRequestAsApplicantUser           RegistrationRequest?         @relation("registration_requests_applicant_user_id__users")
+  registrationRequestsAsReviewedByUser         RegistrationRequest[]        @relation("registration_requests_reviewed_by_user_id__users")
+  schoolSupplierRelationshipsAsLinkedByUser    SchoolSupplierRelationship[] @relation("school_supplier_relationships_linked_by_user_id__users")
+  schoolSupplierRelationshipsAsUnlinkedByUser  SchoolSupplierRelationship[] @relation("school_supplier_relationships_unlinked_by_user_id__users")
+  schoolSupplierRelationshipsAsSuspendedByUser SchoolSupplierRelationship[] @relation("school_supplier_relationships_suspended_by_user_id__users")
+  dailyMealPortions                            DailyMealPortion[]           @relation("daily_meal_portions_confirmed_by_user_id__users")
+  ingredientEntries                            IngredientEntry[]            @relation("ingredient_entries_created_by_user_id__users")
+  classAllergies                               ClassAllergy[]               @relation("class_allergies_updated_by_user_id__users")
+  supplyRequestsAsCreatedByUser                SupplyRequest[]              @relation("supply_requests_created_by_user_id__users")
+  supplyRequestsAsAcceptedByUser               SupplyRequest[]              @relation("supply_requests_accepted_by_user_id__users")
+  deliveriesAsCreatedByUser                    Delivery[]                   @relation("deliveries_created_by_user_id__users")
+  deliveriesAsReceivedByUser                   Delivery[]                   @relation("deliveries_received_by_user_id__users")
+  deliveryApprovals                            DeliveryApproval[]           @relation("delivery_approvals_user_id__users")
+  inventoryTransactions                        InventoryTransaction[]       @relation("inventory_transactions_created_by_user_id__users")
+  weeklyMenus                                  WeeklyMenu[]                 @relation("weekly_menus_created_by_user_id__users")
+  menuReviewRecords                            MenuReviewRecord[]           @relation("menu_review_records_reviewer_user_id__users")
+  cookingBatchesAsCreatedByUser                CookingBatch[]               @relation("cooking_batches_created_by_user_id__users")
+  cookingBatchesAsConfirmedByUser              CookingBatch[]               @relation("cooking_batches_confirmed_by_user_id__users")
+  cookingBatchesAsCompletedByUser              CookingBatch[]               @relation("cooking_batches_completed_by_user_id__users")
+  retainedFoodSamples                          RetainedFoodSample[]         @relation("retained_food_samples_recorded_by_user_id__users")
+  mealAllocationsAsCreatedByUser               MealAllocation[]             @relation("meal_allocations_created_by_user_id__users")
+  mealAllocationsAsDistributedByUser           MealAllocation[]             @relation("meal_allocations_distributed_by_user_id__users")
+  mealComplaintsAsSubmittedByUser              MealComplaint[]              @relation("meal_complaints_submitted_by_user_id__users")
+  mealComplaintsAsHandledByUser                MealComplaint[]              @relation("meal_complaints_handled_by_user_id__users")
+  foodSafetyIncidents                          FoodSafetyIncident[]         @relation("food_safety_incidents_reported_by_user_id__users")
+  ingredientQualityFeedbackAsSubmittedByUser   IngredientQualityFeedback[]  @relation("ingredient_quality_feedback_submitted_by_user_id__users")
+  ingredientQualityFeedbackAsRespondedByUser   IngredientQualityFeedback[]  @relation("ingredient_quality_feedback_responded_by_user_id__users")
+  foodSafetyReportForwardings                  FoodSafetyReportForwarding[] @relation("food_safety_report_forwardings_forwarded_by_user_id__users")
+  foodAnalysisResults                          FoodAnalysisResult[]         @relation("food_analysis_results_recorded_by_user_id__users")
+  incidentSchoolAlerts                         IncidentSchoolAlert[]        @relation("incident_school_alerts_sent_by_user_id__users")
+  traceabilityAnchors                          TraceabilityAnchor[]         @relation("traceability_anchors_created_by_user_id__users")
+
+  @@unique([username])
+  @@unique([email])
+  @@index([schoolId], map: "idx_users_school_id")
+  @@index([supplierId], map: "idx_users_supplier_id", where: raw("supplier_id IS NOT NULL"))
+  @@index([communeFoodSafetyUnitId], map: "idx_users_commune_food_safety_unit_id", where: raw("commune_food_safety_unit_id IS NOT NULL"))
+  @@index([roleId], map: "idx_users_role_id")
+  @@map("users")
+  @@schema("foodprint")
+}
+
+model WeeklyMenu {
+  id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  schoolId          String             @map("school_id") @db.Uuid
+  createdByUserId   String             @map("created_by_user_id") @db.Uuid
+  weekStartDate     DateTime           @map("week_start_date") @db.Date
+  title             String?            @db.VarChar(255)
+  status            WeeklyMenuStatus   @default(DRAFT)
+  submittedAt       DateTime?          @map("submitted_at") @db.Timestamptz(6)
+  approvedAt        DateTime?          @map("approved_at") @db.Timestamptz(6)
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  School            School             @relation("weekly_menus_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  User              User               @relation("weekly_menus_created_by_user_id__users", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  menuDays          MenuDay[]          @relation("menu_days_weekly_menu_id__weekly_menus")
+  menuReviewRecords MenuReviewRecord[] @relation("menu_review_records_weekly_menu_id__weekly_menus")
+
+  @@unique([schoolId, weekStartDate])
+  @@index([schoolId, weekStartDate], map: "idx_weekly_menus_school_week")
+  @@map("weekly_menus")
+  @@schema("foodprint")
+}
+
+enum AccountStatus {
+  UNVERIFIED
+  ACTIVE
+  INACTIVE
+  LOCKED
+  DEACTIVATED
+
+  @@map("account_status")
+  @@schema("foodprint")
+}
+
+enum ApprovalDecision {
+  APPROVE
+  REJECT
+
+  @@map("approval_decision")
+  @@schema("foodprint")
+}
+
+enum BlockchainAnchorStatus {
+  PREPARED
+  SUBMITTED
+  CONFIRMED
+  FAILED
+
+  @@map("blockchain_anchor_status")
+  @@schema("foodprint")
+}
+
+enum BlockchainVerificationStatus {
+  NOT_VERIFIED
+  VERIFIED
+  MISMATCH
+  FAILED
+
+  @@map("blockchain_verification_status")
+  @@schema("foodprint")
+}
+
+enum ComplaintStatus {
+  SUBMITTED
+  IN_REVIEW
+  RESOLVED
+  CLOSED
+
+  @@map("complaint_status")
+  @@schema("foodprint")
+}
+
+enum CookingBatchStatus {
+  UNCONFIRMED
+  CONFIRMED
+  COMPLETED
+
+  @@map("cooking_batch_status")
+  @@schema("foodprint")
+}
+
+enum CookingMode {
+  SEPARATE_BY_LOT
+  COMBINE_LOTS
+
+  @@map("cooking_mode")
+  @@schema("foodprint")
+}
+
+enum DeliveryStatus {
+  CREATED
+  IN_TRANSIT
+  ARRIVED
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  CANCELLED_MEAL
+  RECEIVED
+  CANCELLED
+
+  @@map("delivery_status")
+  @@schema("foodprint")
+}
+
+enum EntityStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("entity_status")
+  @@schema("foodprint")
+}
+
+enum IncidentStatus {
+  OPEN
+  INVESTIGATING
+  RESOLVED
+  CLOSED
+
+  @@map("incident_status")
+  @@schema("foodprint")
+}
+
+enum IngredientHandlingType {
+  DRY_STOCK
+  DIRECT_USE
+
+  @@map("ingredient_handling_type")
+  @@schema("foodprint")
+}
+
+enum IngredientLotStatus {
+  AVAILABLE
+  DEPLETED
+  EXPIRED
+  DISPOSED
+  BLOCKED
+
+  @@map("ingredient_lot_status")
+  @@schema("foodprint")
+}
+
+enum IngredientQualityFeedbackStatus {
+  SUBMITTED
+  RESPONDED
+
+  @@map("ingredient_quality_feedback_status")
+  @@schema("foodprint")
+}
+
+enum InventoryMovementType {
+  RECEIPT
+  COOKING_USAGE
+  ADJUSTMENT_IN
+  ADJUSTMENT_OUT
+  DISPOSAL
+
+  @@map("inventory_movement_type")
+  @@schema("foodprint")
+}
+
+enum MealAllocationStatus {
+  ALLOCATED
+  DISTRIBUTED
+  FINALIZED
+  CANCELLED
+
+  @@map("meal_allocation_status")
+  @@schema("foodprint")
+}
+
+enum MealComplaintType {
+  MEAL_QUALITY
+  FOOD_HYGIENE
+  HEALTH_ISSUE
+  OTHER
+
+  @@map("meal_complaint_type")
+  @@schema("foodprint")
+}
+
+enum MealPortionStatus {
+  DRAFT
+  FINALIZED
+
+  @@map("meal_portion_status")
+  @@schema("foodprint")
+}
+
+enum MealType {
+  LUNCH
+  AFTERNOON
+
+  @@map("meal_type")
+  @@schema("foodprint")
+}
+
+enum MenuReviewDecision {
+  APPROVED
+  REVISION_REQUESTED
+
+  @@map("menu_review_decision")
+  @@schema("foodprint")
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+
+  @@map("notification_status")
+  @@schema("foodprint")
+}
+
+enum RegistrationRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+
+  @@map("registration_request_status")
+  @@schema("foodprint")
+}
+
+enum RegistrationRequestType {
+  SCHOOL
+  SUPPLIER
+
+  @@map("registration_request_type")
+  @@schema("foodprint")
+}
+
+enum RetainedSampleStatus {
+  STORED
+  DISPOSED
+
+  @@map("retained_sample_status")
+  @@schema("foodprint")
+}
+
+enum RoleType {
+  SYSTEM
+  SCHOOL
+  SUPPLIER
+  AUTHORITY
+
+  @@map("role_type")
+  @@schema("foodprint")
+}
+
+enum SchoolSupplierStatus {
+  ACTIVE
+  SUSPENDED
+  UNLINKED
+
+  @@map("school_supplier_status")
+  @@schema("foodprint")
+}
+
+enum SupplyRequestStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+
+  @@map("supply_request_status")
+  @@schema("foodprint")
+}
+
+enum WeeklyMenuStatus {
+  DRAFT
+  PENDING_APPROVAL
+  REVISION_REQUIRED
+  APPROVED
+
+  @@map("weekly_menu_status")
+  @@schema("foodprint")
+}
