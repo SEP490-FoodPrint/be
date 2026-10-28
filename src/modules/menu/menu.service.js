@@ -66,6 +66,7 @@ const getDayDishes = async menuDayId => {
 
     return {
       mealType: placement.meal_type,
+      portionSize: Number(placement.portion_size) || 0,
       servingTime: null,
       sortOrder: placement.display_order || 0,
       item: {
@@ -97,14 +98,15 @@ const getApprovalDetail = async identifier => {
     days.map(async (day, index) => {
       const date = new Date(`${day.menu_date}T00:00:00`)
       const items = await getDayDishes(day.id)
+      const portions = items.reduce((largest, item) => Math.max(largest, item.portionSize), 0)
       return {
         id: day.id,
         shortLabel: DAY_LABELS[date.getDay()],
         dayNumber: String(index + 1),
         date: formatDate(day.menu_date),
-        portions: null,
+        portions,
         lunch: items.filter(item => item.mealType === "LUNCH").map(item => item.item),
-        snack: items.filter(item => item.mealType === "SNACK").map(item => item.item),
+        snack: items.filter(item => item.mealType === "AFTERNOON").map(item => item.item),
       }
     })
   )

@@ -117,8 +117,11 @@ const ensureDatabase = async () => {
   const database = process.env.DB_NAME || "foodprint"
   if (!/^[a-zA-Z0-9_]+$/.test(database)) throw new Error("Tên database không hợp lệ")
 
+  const host = process.env.DB_HOST || "localhost"
+  if (!["localhost", "127.0.0.1", "::1"].includes(host)) return
+
   const client = new Client({
-    host: process.env.DB_HOST || "localhost",
+    host,
     port: Number(process.env.DB_PORT) || 5432,
     user: process.env.DB_USER || "postgres",
     password: process.env.DB_PASS || "123",
@@ -171,8 +174,12 @@ const seed = async () => {
   for (let index = 0; index < roleCodes.length; index += 1) {
     const code = roleCodes[index]
     const id = `21000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`
-    roleIds.set(code, id)
-    await Role.upsert({ id, code, name: code, type: "SYSTEM", description: null })
+    const type = code === "SYSTEM_ADMIN" ? "SYSTEM" : code === "INGREDIENT_SUPPLIER" ? "SUPPLIER" : "SCHOOL"
+    const [role] = await Role.findOrCreate({
+      where: { code },
+      defaults: { id, code, name: code, type, description: null },
+    })
+    roleIds.set(code, role.id)
   }
 
   const users = [
@@ -238,46 +245,54 @@ const seed = async () => {
       const sequence = index + 1
       const dishId = uuidFor("46", day.order, sequence)
       const ingredientId = uuidFor("47", day.order, sequence)
-      const menuDayDishId = uuidFor("48", day.order, sequence)
       const entryId = uuidFor("49", day.order, sequence)
 
-      await Dish.upsert({
-        id: dishId,
-        school_id: IDS.school,
-        name,
-        description,
-        status: "ACTIVE",
+      const [dish] = await Dish.findOrCreate({
+        where: { school_id: IDS.school, name },
+        defaults: { id: dishId, school_id: IDS.school, name, description, status: "ACTIVE" },
       })
-      await Ingredient.upsert({
-        id: ingredientId,
-        supplier_id: suppliersByCode.get(supplierCode),
-        name: `Nguyên liệu chính: ${name}`,
-        category: dishType,
-        default_unit: "kg",
-        description,
-        status: "ACTIVE",
+      await dish.update({ description, status: "ACTIVE" })
+
+      const supplierId = suppliersByCode.get(supplierCode)
+      const ingredientName = `Nguyên liệu chính: ${name}`
+      const [ingredient] = await Ingredient.findOrCreate({
+        where: { supplier_id: supplierId, name: ingredientName },
+        defaults: {
+          id: ingredientId,
+          supplier_id: supplierId,
+          name: ingredientName,
+          category: dishType,
+          default_unit: "kg",
+          description,
+          status: "ACTIVE",
+        },
       })
-      await IngredientEntry.upsert({
-        id: entryId,
-        school_id: IDS.school,
-        ingredient_id: ingredientId,
-        storage_requirements: tag || null,
-        shelf_life_days: 1,
-        handling_type: "FRESH",
-        status: "ACTIVE",
-        created_by_user_id: IDS.adminUser,
+      await ingredient.update({ category: dishType, description, status: "ACTIVE" })
+
+      const [ingredientEntry] = await IngredientEntry.findOrCreate({
+        where: { school_id: IDS.school, ingredient_id: ingredient.id },
+        defaults: {
+          id: entryId,
+          school_id: IDS.school,
+          ingredient_id: ingredient.id,
+          storage_requirements: tag || null,
+          shelf_life_days: 1,
+          handling_type: "DIRECT_USE",
+          status: "ACTIVE",
+          created_by_user_id: IDS.adminUser,
+        },
       })
       await MenuDayDish.upsert({
         menu_day_id: menuDayId,
-        dish_id: dishId,
-        meal_type: mealType,
+        dish_id: dish.id,
+        meal_type: mealType === "SNACK" ? "AFTERNOON" : mealType,
         display_order: sequence,
         portion_size: 1520,
         portion_unit: "suất",
       })
       await DishIngredientEntry.upsert({
-        dish_id: dishId,
-        ingredient_entry_id: entryId,
+        dish_id: dish.id,
+        ingredient_entry_id: ingredientEntry.id,
         required_quantity: 1,
         unit: "định lượng chuẩn",
       })
