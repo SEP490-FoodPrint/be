@@ -20,7 +20,11 @@ Run from the repository root after configuring your own `.env`:
 - `npm run typecheck`: check source and Prisma configuration types.
 - `npm run dev`: watch and run `src/server.ts` with tsx.
 - `npm run build`: generate Prisma Client and compile the application; `npm start` runs `dist/server.js`.
-- `npm run db:check`: check the local connection using Prisma and `SELECT 1`.
+- `npm run db:check`: check database connection (Azure PostgreSQL or local) using Prisma and `SELECT 1`.
+- `npm run db:migrate`: create and apply schema migrations to PostgreSQL using `prisma migrate dev`.
+- `npm run db:push`: push schema changes directly to PostgreSQL without migration files.
+- `npm run db:pull`: introspect and update `prisma/schema.prisma` from PostgreSQL.
+- `npm run db:studio`: open Prisma Studio web interface to inspect and manage data.
 - `docker compose up -d --no-recreate --wait redis`: start the local Redis service without recreating existing containers. Never use `--remove-orphans` or delete volumes to resolve setup issues.
 - `npm run redis:check`: check the local Redis connection with `PING`.
 - `npm run test:rate-limit`: run database-free HTTP tests with the Node test runner; `npm run test:rate-limit:redis` checks the local Docker Redis store using isolated test prefixes.
@@ -53,7 +57,7 @@ Invalidate affected exact keys after database commit; invalidation failures thro
 
 ## Local Database Policy
 
-Each member develops and tests against their own local PostgreSQL using `DATABASE_URL` in an untracked `.env`. The sample contains placeholders; never commit credentials, JWT secrets, or dumps. Do not deploy or connect to remote/shared databases or create SSH database tunnels.
+The backend supports connecting to Azure Database for PostgreSQL (`foodprint_db`) with SSL or local PostgreSQL via `DATABASE_URL` in an untracked `.env`. The sample contains placeholders; never commit credentials, JWT secrets, or dumps. Do not deploy or connect to remote/shared databases or create SSH database tunnels.
 
 Do not create business models or run introspection, DDL, migrations, `prisma db push`, reset, imports, or volume deletion without explicit task authorization. Connection setup and client generation do not authorize schema/data changes. Preserve existing local data and credentials.
 
