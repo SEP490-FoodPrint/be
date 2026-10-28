@@ -152,7 +152,7 @@ refactor(database): extract prisma repository
 docs(backend): update architecture guidelines
 ```
 
-`update code`, `fix bug`, `abc` không hợp lệ. Hooks chỉ áp dụng trên máy đã cài chúng; Phase 1 chưa cấu hình CI, GitHub rules hoặc deployment. Các vi phạm lint/format có sẵn phải được review và sửa trong thay đổi riêng, không coi việc cài tooling là code đã đạt chuẩn.
+`update code`, `fix bug`, `abc` không hợp lệ. Hooks chỉ áp dụng trên máy đã cài chúng; CI GitHub Actions được mô tả ở mục 8. Branch protection là thiết lập riêng trên GitHub; chưa triển khai deployment. Các vi phạm lint/format phải được review và sửa trong thay đổi riêng, không coi việc cài tooling là code đã đạt chuẩn.
 
 ## 6. Redis Docker local và rate limit dùng chung
 
@@ -233,3 +233,36 @@ npm run test:cache:redis
 ```
 
 Unit tests dùng client giả để kiểm tra TTL, đồng thời, invalidation và lỗi; integration tests dùng key ngẫu nhiên riêng rồi chỉ xóa các key test đã tạo. Không thêm package hoặc thay đổi Prisma schema/Docker configuration cho helper này. Tham khảo [Redis cache-aside](https://redis.io/docs/latest/develop/use-cases/cache-aside/).
+
+## 8. Nhánh dev và GitHub Actions CI
+
+Team tạo nhánh `<type>/<kebab-case-description>` từ `dev`, mở PR vào `dev`; khi code đã ổn định, mở PR từ `dev` vào `main`. Chi tiết tại [contribute.md](contribute.md).
+
+[Workflow Backend CI](.github/workflows/ci.yml) chạy khi push lên `main`/`dev` và khi mở/cập nhật PR vào hai nhánh này. Job **Backend quality** thực hiện:
+
+1. Cài Node theo `.nvmrc`, cache npm theo lockfile, cài đúng dependencies bằng `npm ci` với engine checks.
+2. Kiểm tra Conventional Commits: toàn bộ commit của PR hoặc commit cuối của lần push.
+3. Validate schema và generate Prisma Client trước các kiểm tra có type information.
+4. Chạy `npm run validate`: lint, format:check, typecheck và build.
+5. Chạy `npm run test:unit`: toàn bộ 52 test hiện tại cho cache, API module, rate limit và role middleware.
+
+`test:unit` liệt kê rõ các file test không cần hạ tầng; thêm file vào script khi bổ sung unit test. Các script Redis integration hiện hữu tiếp tục chạy local khi có Redis.
+
+Workflow chỉ có quyền đọc repository; các action được pin bằng commit SHA. CI dùng URL PostgreSQL placeholder trên `127.0.0.1:1` và JWT secret dành riêng cho test, không cần GitHub Secrets hoặc `.env` thật. Không kết nối database, dựng PostgreSQL/Redis, chạy DDL/migration hoặc triển khai ứng dụng/database. `HUSKY=0` chỉ áp dụng trong CI vì các bước kiểm tra được chạy trực tiếp.
+
+Để tái hiện kiểm tra trên một checkout sạch, chưa có `.env`:
+
+```bash
+npm ci
+export DATABASE_URL='postgresql://ci_validation@127.0.0.1:1/foodprint_ci?schema=foodprint'
+export NODE_ENV=test
+export JWT_SECRET=foodprint-ci-test-only-secret-not-for-runtime
+npm run prisma:validate
+npm run prisma:generate
+npm run validate
+npm run test:unit
+```
+
+URL trên chỉ dành cho validate/generate; dùng terminal riêng và không dùng nó để chạy `dev`, `start` hoặc `db:check`. Build/test không xác nhận database mới đã triển khai hoặc API đã truy vấn được database thật.
+
+Người quản lý repo bật branch protection/ruleset cho `main` và `dev`, yêu cầu PR/review và check **Backend quality** thành công trước khi merge. CI workflow không tự bật các rule quản trị này. Nhánh `main` nhận workflow sau khi PR `dev` → `main` được merge.

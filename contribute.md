@@ -134,7 +134,12 @@ Biểu thức mô tả cú pháp tên nhánh công việc:
 ^(feat|fix|refactor|perf|docs|test|style|build|ci|chore|revert)/[a-z0-9]+(-[a-z0-9]+)*$
 ```
 
-Quy tắc áp dụng cho nhánh công việc; `main` là nhánh gốc hiện tại và được giữ nguyên. Chọn nhánh gốc và nhánh đích PR theo thống nhất của team; tài liệu này không thiết lập thêm Gitflow hoặc merge strategy.
+Quy tắc tên phía trên áp dụng cho nhánh công việc. Hai nhánh lâu dài được dùng như sau:
+
+- `main`: code ổn định; nhận PR từ `dev` sau khi kiểm thử và review.
+- `dev`: nhánh tích hợp; tạo các nhánh công việc từ đây và mở PR trở lại `dev`.
+
+Luồng hiện tại là `dev` → `<type>/<description>` → PR vào `dev` → PR từ `dev` vào `main`. Chưa quy định nhánh `release/*` hoặc `hotfix/*`; nếu bổ sung Gitflow đầy đủ, team cần cập nhật quy tắc tên và luồng đồng bộ tương ứng.
 
 Đây là quy ước team cần review thủ công: hooks hiện tại chưa kiểm tra tên nhánh. Commitlint chỉ kiểm tra commit message. `git check-ref-format --branch <ten-nhanh>` chỉ kiểm tra cú pháp Git, không xác minh đầy đủ quy ước phía trên.
 
@@ -142,9 +147,11 @@ Quy tắc áp dụng cho nhánh công việc; `main` là nhánh gốc hiện t�
 
 Mỗi commit tập trung vào một thay đổi có thể giải thích và review độc lập. Tạo nhánh công việc theo quy tắc phía trên trước khi bắt đầu thay đổi mới.
 
-Ví dụ cho thay đổi tài liệu, bắt đầu từ nhánh gốc đã thống nhất với team:
+Ví dụ cho thay đổi tài liệu, bắt đầu từ `dev` đã cập nhật:
 
 ```bash
+git switch dev
+git pull --ff-only origin dev
 git switch -c docs/contribution-guide
 # Chỉnh sửa các file liên quan.
 npm exec --no -- prettier --check contribute.md README.md
@@ -156,6 +163,8 @@ git commit -m "docs(team): document contribution workflow"
 git push -u origin HEAD
 ```
 
+Mở PR trên GitHub với **base: `dev`**, **compare: nhánh công việc**. Thành viên chưa có `dev` local chạy `git fetch origin` rồi `git switch --track origin/dev` một lần. Không push công việc trực tiếp lên `main` hoặc `dev`; lần thiết lập ban đầu tạo nhánh `dev` và CI là bước bootstrap của người quản lý repo.
+
 Kiểm tra **toàn bộ nội dung đã stage** trước khi commit, kể cả file đã stage từ công việc khác. Chỉ stage các file thuộc phạm vi thay đổi; không commit credentials, JWT secrets, `.env`, dumps, `node_modules`, `dist` hoặc generated client. Mỗi thành viên dùng database local riêng theo AGENTS.md.
 
 ## 6. Kiểm tra trước khi mở PR
@@ -164,9 +173,10 @@ Với thay đổi source backend, chạy:
 
 ```bash
 npm run validate
+npm run test:unit
 ```
 
-Lệnh này chạy `lint` → `format:check` → `typecheck` → `build`, dừng tại lỗi đầu tiên; không tự chạy tests. Backend phải được kiểm tra typecheck/build. Nếu validate dừng sớm, ghi rõ lỗi và kết quả các kiểm tra chạy riêng, không báo toàn bộ PASS.
+`validate` chạy `lint` → `format:check` → `typecheck` → `build`, dừng tại lỗi đầu tiên; không tự chạy tests. `test:unit` chạy các test cache, module nghiệp vụ, rate limit và role middleware không cần PostgreSQL/Redis. Khi thêm unit test mới, bổ sung file vào script `test:unit` để CI chạy được. Backend phải được kiểm tra typecheck/build. Nếu validate dừng sớm, ghi rõ lỗi và kết quả các kiểm tra chạy riêng, không báo toàn bộ PASS.
 
 Chạy thêm theo phần thay đổi:
 
@@ -179,13 +189,17 @@ Ghi rõ kiểm tra bị BLOCKED và nguyên nhân nếu thiếu hạ tầng. Cá
 
 PR cần có:
 
-- Tên nhánh đúng quy tắc và nhánh đích đã thống nhất với team.
+- Tên nhánh đúng quy tắc và nhánh đích `dev` cho công việc thường ngày; PR phát hành từ `dev` vào `main`.
 - Vấn đề cần giải quyết và hành vi/cấu hình sau thay đổi.
 - Issue liên quan nếu có, cùng phạm vi các thành phần bị ảnh hưởng.
 - Lệnh kiểm tra thực tế và kết quả PASS/FAIL/BLOCKED; nêu lỗi còn tồn tại.
 - Ví dụ request/response đã loại thông tin nhạy cảm nếu thay đổi API; hướng dẫn cấu hình hoặc chuyển đổi nếu cần.
 
-Hooks chỉ là kiểm tra local; repo chưa có CI thực thi các kiểm tra trên. Chất lượng mô tả, phạm vi commit/PR và quy trình nhánh cần team review.
+Hooks kiểm tra local; GitHub Actions tại [.github/workflows/ci.yml](.github/workflows/ci.yml) chạy lại kiểm tra khi push lên `main`/`dev` hoặc mở/cập nhật PR vào hai nhánh này. Job **Backend quality** cài dependencies bằng `npm ci`, kiểm tra Conventional Commits, validate/generate Prisma, chạy `validate` và `test:unit`. PR kiểm tra toàn bộ commit trong khoảng base/head; push kiểm tra commit cuối cùng. Merge/revert messages vẫn theo ngoại lệ của Commitlint hiện tại.
+
+CI lấy Node từ `.nvmrc`, yêu cầu npm theo `package.json`, dùng URL PostgreSQL placeholder local chỉ để tải Prisma config. CI không kết nối database, chạy Redis integration tests, migration, deploy hoặc tải `.env`/secrets thật. Không có dịch vụ PostgreSQL/Redis được dựng trong workflow này. Chất lượng mô tả, phạm vi commit/PR và quy trình nhánh vẫn cần team review.
+
+Người quản lý repo cần bật branch protection/ruleset trên GitHub cho `main` và `dev`, yêu cầu PR, ít nhất một approval, giải quyết thảo luận và status check **Backend quality**, đồng thời chặn force push/xóa nhánh. Workflow tự chạy không tự chặn merge khi chưa có rule yêu cầu check. Các thiết lập GitHub này cần quyền quản trị riêng và không được tạo chỉ bằng file YAML trong repo.
 
 ## 7. Khi commit bị chặn
 
