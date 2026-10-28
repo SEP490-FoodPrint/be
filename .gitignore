@@ -10,7 +10,7 @@ yarn-error.log*
 .vscode
 dist
 coverage
-.sql
+*.sql
 src/generated/prisma/
 *.tsbuildinfo
 .eslintcache

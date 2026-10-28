@@ -40,7 +40,7 @@ export const requireRoles = (
 
 /**
  * Middleware kiểm tra phân hệ tổ chức (Portal Authorization)
- * @param {Array<string>} allowedOrgs - SYSTEM | SCHOOL | SUPPLIER | GOVERNMENT
+ * @param {Array<string>} allowedOrgs - SYSTEM | SCHOOL | SUPPLIER | AUTHORITY
  */
 export const requireOrg = (
   allowedOrgs: readonly string[] = [],

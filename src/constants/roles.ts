@@ -3,7 +3,7 @@ export const ORG_TYPES = {
   SYSTEM: "SYSTEM",
   SCHOOL: "SCHOOL",
   SUPPLIER: "SUPPLIER",
-  GOVERNMENT: "GOVERNMENT",
+  AUTHORITY: "AUTHORITY",
 } as const;
 
 // Vai trò nghiệp vụ của hệ thống FoodPrint (1 account = 1 role)
@@ -16,7 +16,7 @@ export const ROLES = {
   INGREDIENT_SUPPLIER_STAFF: "INGREDIENT_SUPPLIER_STAFF", // Nhân viên nhà cung cấp nguyên liệu
 
   // Nhóm SCHOOL
-  SCHOOL_ADMIN: "SCHOOL_ADMIN",
+  SCHOOL_ADMINISTRATION: "SCHOOL_ADMINISTRATION",
   SCHOOL_MANAGEMENT_BOARD: "SCHOOL_MANAGEMENT_BOARD", // Ban giám hiệu
   SCHOOL_HEALTH_OFFICER: "SCHOOL_HEALTH_OFFICER", // Ban y tế
   SCHOOL_KITCHEN_STAFF: "SCHOOL_KITCHEN_STAFF", // Nhân viên bếp
@@ -24,8 +24,8 @@ export const ROLES = {
   PARENTS_COMMITTEE: "PARENTS_COMMITTEE", // Ban phụ huynh
   INGREDIENT_MANAGEMENT: "INGREDIENT_MANAGEMENT_DEPARTMENT", // Bộ phận quản lý kho/nguyên liệu
 
-  // Nhóm GOVERNMENT
-  HEALTH_OFFICER: "HEALTH_OFFICER", // Cán bộ y tế (cấp xã/phường)
+  // Nhóm AUTHORITY
+  COMMUNE_FOOD_SAFETY_OFFICER: "COMMUNE_FOOD_SAFETY_OFFICER", // Cán bộ an toàn thực phẩm cấp xã
 } as const;
 
 // Tên hiển thị tiếng Việt của các role
@@ -35,12 +35,14 @@ export const ROLE_LABELS = {
     "Quản trị viên Nhà cung cấp Nguyên liệu (Supplier Admin)",
   [ROLES.INGREDIENT_SUPPLIER_STAFF]:
     "Nhân viên Nhà cung cấp Nguyên liệu (Supplier Staff)",
-  [ROLES.SCHOOL_ADMIN]: "Quản trị viên Nhà trường (School Admin)",
+  [ROLES.SCHOOL_ADMINISTRATION]:
+    "Quản trị viên Nhà trường (School Administrator)",
   [ROLES.SCHOOL_MANAGEMENT_BOARD]: "Ban Giám Hiệu",
   [ROLES.SCHOOL_HEALTH_OFFICER]: "Cán bộ Y tế Trường",
   [ROLES.SCHOOL_KITCHEN_STAFF]: "Nhân viên Bếp / Bếp trưởng",
   [ROLES.HOMEROOM_TEACHER]: "Giáo viên Chủ nhiệm",
   [ROLES.PARENTS_COMMITTEE]: "Ban Đại diện Phụ huynh",
   [ROLES.INGREDIENT_MANAGEMENT]: "Bộ phận Quản lý Kho & Nguyên liệu",
-  [ROLES.HEALTH_OFFICER]: "Cán bộ Y tế (cấp quận/huyện)",
+  [ROLES.COMMUNE_FOOD_SAFETY_OFFICER]:
+    "Cán bộ an toàn thực phẩm cấp xã (Commune Food Safety Officer)",
 } as const;

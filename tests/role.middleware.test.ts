@@ -10,6 +10,8 @@ interface Policy {
   claim: "role" | "orgType";
   guard: (allowed: readonly string[]) => RequestHandler;
   allowed: string;
+  claimValue: string;
+  legacyClaim?: string;
   disallowed: string;
   message: string;
   requiredKey: string;
@@ -20,7 +22,9 @@ const policies: Policy[] = [
   {
     claim: "role",
     guard: requireRoles,
-    allowed: ROLES.SCHOOL_ADMIN,
+    allowed: ROLES.SCHOOL_ADMINISTRATION,
+    claimValue: "SCHOOL_ADMINISTRATION",
+    legacyClaim: "SCHOOL_ADMIN",
     disallowed: ROLES.SYSTEM_ADMIN,
     message: "Bạn không có quyền thực hiện thao tác này (403)",
     requiredKey: "requiredRoles",
@@ -30,7 +34,30 @@ const policies: Policy[] = [
     claim: "orgType",
     guard: requireOrg,
     allowed: ORG_TYPES.SCHOOL,
+    claimValue: "SCHOOL",
     disallowed: ORG_TYPES.SUPPLIER,
+    message: "Tài khoản không thuộc phân hệ tổ chức này (403)",
+    requiredKey: "requiredOrgs",
+    currentKey: "currentOrg",
+  },
+  {
+    claim: "role",
+    guard: requireRoles,
+    allowed: ROLES.COMMUNE_FOOD_SAFETY_OFFICER,
+    claimValue: "COMMUNE_FOOD_SAFETY_OFFICER",
+    legacyClaim: "HEALTH_OFFICER",
+    disallowed: ROLES.SCHOOL_ADMINISTRATION,
+    message: "Bạn không có quyền thực hiện thao tác này (403)",
+    requiredKey: "requiredRoles",
+    currentKey: "currentRole",
+  },
+  {
+    claim: "orgType",
+    guard: requireOrg,
+    allowed: ORG_TYPES.AUTHORITY,
+    claimValue: "AUTHORITY",
+    legacyClaim: "GOVERNMENT",
+    disallowed: ORG_TYPES.SCHOOL,
     message: "Tài khoản không thuộc phân hệ tổ chức này (403)",
     requiredKey: "requiredOrgs",
     currentKey: "currentOrg",
@@ -57,7 +84,7 @@ async function fixture(
 }
 
 for (const policy of policies) {
-  void test(`${policy.claim}: unauthenticated requests retain the 401 envelope`, async (context) => {
+  void test(`${policy.claim} ${policy.claimValue}: unauthenticated requests retain the 401 envelope`, async (context) => {
     for (const allowed of [[policy.allowed], []]) {
       const http = await fixture(context, policy, undefined, allowed);
       const response = await http.request("/restricted");
@@ -70,14 +97,14 @@ for (const policy of policies) {
     }
   });
 
-  void test(`${policy.claim}: an allowed string claim reaches the handler`, async (context) => {
+  void test(`${policy.claim} ${policy.claimValue}: an allowed SQL claim reaches the handler`, async (context) => {
     const http = await fixture(context, policy, {
-      [policy.claim]: policy.allowed,
+      [policy.claim]: policy.claimValue,
     });
     assert.equal((await http.request("/restricted")).status, 204);
   });
 
-  void test(`${policy.claim}: malformed, empty, or unmatched claims retain the 403 envelope`, async (context) => {
+  void test(`${policy.claim} ${policy.claimValue}: malformed, legacy, or unmatched claims retain the 403 envelope`, async (context) => {
     for (const value of [
       undefined,
       null,
@@ -91,6 +118,7 @@ for (const policy of policies) {
       { value: policy.allowed },
       "UNKNOWN_CLAIM",
       policy.disallowed,
+      ...(policy.legacyClaim ? [policy.legacyClaim] : []),
     ]) {
       const http = await fixture(context, policy, { [policy.claim]: value });
       const response = await http.request("/restricted");
@@ -108,7 +136,7 @@ for (const policy of policies) {
     }
   });
 
-  void test(`${policy.claim}: an explicit empty allowlist preserves existing unrestricted behavior`, async (context) => {
+  void test(`${policy.claim} ${policy.claimValue}: an explicit empty allowlist preserves existing unrestricted behavior`, async (context) => {
     const http = await fixture(context, policy, {}, []);
     assert.equal((await http.request("/restricted")).status, 204);
   });

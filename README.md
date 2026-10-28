@@ -2,7 +2,7 @@
 
 Backend FoodPrint hiện dùng **TypeScript + CommonJS + Express + PostgreSQL/Prisma**, cùng **Redis Docker local** để lưu bộ đếm rate limit và hỗ trợ cache các query được chọn. Mỗi thành viên kết nối và test với database local của mình; chưa triển khai database lên server.
 
-Phạm vi hiện tại chỉ gồm nền tảng kết nối, HTTP health endpoint và các helper/middleware có sẵn được chuyển sang TypeScript. Các module nghiệp vụ vẫn là thư mục giữ chỗ; chưa thêm model, migration, seed hoặc API nghiệp vụ.
+Phạm vi hiện tại gồm nền tảng kết nối, HTTP health endpoint, helper/middleware, Prisma models từ SQL thiết kế database mới và 31 module có API GET danh sách mẫu. Mỗi module có routes/controller/service/validation; các API mẫu chỉ cho `SYSTEM_ADMIN` thuộc `SYSTEM` truy cập. Xem [danh mục module và API](src/modules/README.md) và [database/SCHEMA_BASELINE.md](database/SCHEMA_BASELINE.md). Chưa triển khai CRUD/lifecycle, migration hoặc seed.
 
 Quy tắc coding cho team và AI được quản lý tại [AGENTS.md](AGENTS.md).
 
@@ -31,12 +31,14 @@ if [ ! -e .env ]; then cp .env.example .env; fi
 Ví dụ cấu trúc URL, cần thay user/password/database/port cho đúng máy:
 
 ```dotenv
-DATABASE_URL="postgresql://your_local_db_user:your_local_db_password@127.0.0.1:5432/foodprint?schema=public"
+DATABASE_URL="postgresql://your_local_db_user:your_local_db_password@127.0.0.1:5432/foodprint?schema=foodprint"
 ```
 
 URL-encode ký tự đặc biệt trong user/password. Source mới đọc `DATABASE_URL`, không dùng `DB_NAME`, `DB_USER`, `DB_PASS`, `DB_HOST`, `DB_PORT` của kết nối Sequelize cũ. Không đổi credentials hoặc xóa database hiện có chỉ để làm setup chạy được.
 
 Database phải được chuẩn bị sẵn trên máy thành viên. Kết nối mới kiểm tra URL local, dùng Prisma PostgreSQL adapter, và không tự tạo database/bảng. Không dùng SSH tunnel hoặc database của người khác. Không commit `.env`, credentials hay dumps.
+
+Các Prisma model/enum ánh xạ vào PostgreSQL schema `foodprint` bằng `@@schema`. `DATABASE_URL` phải trỏ tới database local đã chuẩn bị theo thiết kế SQL mới; kết nối thành công với database cũ chưa chứng minh models mới tương thích. Dùng URL `postgresql://` hoặc `postgres://`; chuỗi `jdbc:postgresql://` dành cho JDBC và bị cấu hình hiện tại từ chối. Tham số `schema=foodprint` cũng đặt schema mặc định cho raw queries. Việc tạo file Prisma không tự áp dụng file SQL, tạo database hoặc cập nhật database cũ.
 
 ## 2. Cài đặt và chạy
 
@@ -82,6 +84,7 @@ be/
 ├── tsconfig.json / tsconfig.build.json
 ├── prisma.config.ts
 ├── prisma/schema.prisma
+├── database/SCHEMA_BASELINE.md  # Thiết kế SQL chuẩn và trạng thái triển khai
 └── src/
     ├── app.ts / server.ts
     ├── config/env.ts
@@ -94,19 +97,21 @@ be/
     ├── types/express.d.ts
     ├── scripts/                # check-db.ts, check-redis.ts
     ├── generated/prisma/       # Generated, không commit
-    └── modules/                # Các module giữ chỗ hiện hữu
+    └── modules/                # 31 module, mỗi module có một GET danh sách mẫu
 
-tests/                         # Rate-limit, cache và Redis integration tests
+tests/                         # Business list, role, rate-limit, cache và Redis tests
 ```
 
 Prisma Client dùng `moduleFormat = "cjs"`; `package.json` dùng `type: commonjs`. Source TypeScript có thể dùng cú pháp `import`/`export`; compiler chuyển sang CommonJS `require`/`exports`. Xem [Prisma generator](https://www.prisma.io/docs/orm/v7/prisma-schema/overview/generators) và [TypeScript module modes](https://www.typescriptlang.org/tsconfig/module.html).
 
 ## 4. Giới hạn bước thiết lập này
 
-- Schema Prisma chưa có business models. Client generation không introspect hoặc thay đổi database.
-- Chưa chạy migrations, `db push`, reset, import SQL, deploy hoặc thêm nghiệp vụ.
+- Schema Prisma phản ánh SQL thiết kế database mới, dùng `@map`/`@@map` để giữ nguyên tên bảng/cột và `@@schema("foodprint")`. Client generation không introspect, tạo hoặc thay đổi database.
+- SQL hiện tại chỉ định nghĩa schema và role seeds, không có function/trigger. Backend services chịu trách nhiệm lifecycle, validation liên bảng và inventory posting; các xử lý này chưa được triển khai chỉ bằng việc tạo Prisma models. Các cột `updated_at` dùng `@updatedAt` cho thao tác qua Prisma, còn ghi bằng raw SQL phải cập nhật timestamp rõ ràng.
+- CHECK constraints và role seeds vẫn do SQL định nghĩa. Việc tạo database local theo SQL cần một task riêng có phạm vi rõ ràng; không kéo schema từ database cũ để ghi đè models mới.
+- Chưa chạy migrations, `db push`, reset, import SQL hoặc deploy. API mẫu chỉ đọc danh sách; chưa thực hiện nghiệp vụ ghi dữ liệu/chuyển trạng thái.
 - Không sửa giá trị các role/nhãn hiện có khi chuyển sang TypeScript.
-- Có các test rate-limit và cache dùng Node test runner; chưa có test nghiệp vụ hoặc coverage threshold. Chỉ ghi PASS khi kiểm tra thực sự thành công.
+- Có test rate-limit, cache, role middleware và API danh sách dùng Node test runner; chưa có coverage threshold hoặc kiểm thử API danh sách trên database thật. Chỉ ghi PASS khi kiểm tra thực sự thành công.
 
 ## 5. Backend Code Quality — Phase 1
 
@@ -173,7 +178,7 @@ Nếu máy đã có PostgreSQL thuộc cùng Compose project, Compose có thể 
 - Vượt quota trả **429** qua `sendError`, kèm `Retry-After`, `RateLimit`, `RateLimit-Policy`; không dùng legacy `X-RateLimit-*` headers.
 - Redis lỗi trả **503** với thông báo chung, không lộ credentials và không fallback sang MemoryStore. Client không giữ queue request vô hạn khi Redis mất kết nối.
 - IP/IPv6 dùng cách xác định mặc định của thư viện, giữ `trust proxy: false`. Không lấy IP trực tiếp từ `X-Forwarded-For`; chưa cấu hình reverse proxy/deployment.
-- Counter tồn tại trong Redis đến khi hết TTL, kể cả khi process API restart. Chưa tạo limiter đăng nhập hoặc API nghiệp vụ mới.
+- Counter tồn tại trong Redis đến khi hết TTL, kể cả khi process API restart. Các API danh sách nghiệp vụ dùng chung limiter `/api`; chưa có API hoặc limiter đăng nhập.
 
 `src/app.ts` export `createApp(limiter)` để test HTTP mà không mở kết nối PostgreSQL. Server thật kết nối Redis trước khi tạo RedisStore/limiter.
 
@@ -189,7 +194,7 @@ Unit tests dùng MemoryStore được inject, không cần Redis hoặc PostgreS
 
 ## 7. Helper cache kết quả query
 
-`src/utils/cache.ts` cung cấp `cache.getOrSet`, `cache.invalidate` và `buildCacheKey`, dùng lại Redis client hiện có. Helper chưa được gắn vào endpoint hoặc Prisma query nào vì repo chưa có business models. Không cần thêm middleware HTTP để sử dụng trong service.
+`src/utils/cache.ts` cung cấp `cache.getOrSet`, `cache.invalidate` và `buildCacheKey`, dùng lại Redis client hiện có. Helper chưa được gắn vào endpoint hoặc Prisma query nghiệp vụ nào. Không cần thêm middleware HTTP để sử dụng trong service.
 
 `getOrSet` kiểm tra cache trước; khi miss, gọi `load`, lưu kết quả với TTL bắt buộc rồi trả dữ liệu. Cache hit không gia hạn TTL. Các lượt gọi đồng thời cùng key chia sẻ một lần nạp trong một helper instance; dùng singleton `cache` trong các service.
 
