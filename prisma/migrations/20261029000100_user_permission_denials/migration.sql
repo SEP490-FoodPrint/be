@@ -1,8 +1,8 @@
--- Additive patch for the Prisma UserPermissionDenial model.
+-- Prisma migration adding scoped UserPermissionDenial records and organization CHECK.
 -- Requires the existing foodprint users, permissions, schools, suppliers,
 -- and commune_food_safety_units tables (RBAC schema from v5.4 or equivalent).
 -- One-time application: an existing target table causes failure; never reset it.
--- This file is reviewed independently of Prisma Migrate; it creates no migration history.
+-- Apply through prisma migrate deploy after the existing database baseline is verified.
 -- Deployment must be explicitly authorized. Do not run the complete database seed SQL.
 
 BEGIN;
