@@ -13,7 +13,7 @@ Baseline lấy phần DDL từ [FoodPrint_PostgreSQL_Database_v5_4_FINAL_with_MO
 
 Baseline SHA-256: `7ea7b81d1da39210180fd9514c792ec7061303e4efc5949de222c41210c5f342`. [prisma/baseline.manifest.json](../prisma/baseline.manifest.json) lưu fingerprint cho chín nhóm catalog: bảng, cột/default/nullability, constraint, index/predicate, enum, extension namespace, trigger, function và policy. Không lưu dữ liệu nghiệp vụ, credentials hoặc bản dump.
 
-## Đối chiếu Azure ngày 29/10/2026
+## Đối chiếu Azure trước triển khai ngày 29/10/2026
 
 Đã đọc catalog của `foodprint_db`, schema `foodprint`, PostgreSQL **18.6** trong transaction read-only. Sau đó replay nguyên baseline trên PostgreSQL **18** tạm và đối chiếu đầy đủ cả chín nhóm metadata; kết quả khớp.
 
@@ -28,11 +28,31 @@ Baseline SHA-256: `7ea7b81d1da39210180fd9514c792ec7061303e4efc5949de222c41210c5f
 
 `pgcrypto` và `citext` thuộc schema `public`, được giữ rõ trong baseline. Baseline chứa DDL và comments; không chạy role/permission seed hay mock data. Database mới sau migrate deploy vẫn cần bước seed được phê duyệt riêng. Hai file SQL thiết kế cũ được giữ nguyên làm tài liệu tham chiếu; không chạy lại file CREATE-from-scratch lên Azure đã có dữ liệu.
 
-**Trạng thái Azure tại lần đối chiếu:** chưa có `_prisma_migrations`, chưa có `user_permission_denials`. Task chuẩn hóa chỉ đọc Azure; chưa đánh dấu baseline applied hoặc thực thi migration trên Azure. Không suy ra trạng thái triển khai từ việc file đã merge hoặc Client đã generate.
+**Trạng thái tại lần đối chiếu ban đầu:** chưa có `_prisma_migrations`, chưa có `user_permission_denials`. Giai đoạn chuẩn hóa chỉ đọc Azure. Trạng thái triển khai tiếp theo được ghi riêng bên dưới; không suy ra từ việc file đã merge hoặc Client đã generate.
+
+## Triển khai Azure ngày 29/10/2026
+
+Đã triển khai theo yêu cầu sau khi [PR #8](https://github.com/SEP490-FoodPrint/be/pull/8) được review/merge vào `dev`, commit `204425115349d6b17fc20ba703b5076eb291e135`. [Backend CI trên commit đã merge](https://github.com/SEP490-FoodPrint/be/actions/runs/40827241450) PASS cả Code quality, PostgreSQL migrations và Backend quality trước bước ghi database.
+
+Database đích: `foodprint_db`, schema `foodprint`, trên Azure PostgreSQL hiện hữu, kết nối SSL.
+
+| Migration                                | Trạng thái                                                          | Hoàn tất (UTC)      |
+| ---------------------------------------- | ------------------------------------------------------------------- | ------------------- |
+| `0_init`                                 | Đã ghi nhận applied bằng migrate resolve; không replay baseline DDL | 2026-10-29 06:10:29 |
+| `20261029000100_user_permission_denials` | Đã áp dụng bằng migrate deploy                                      | 2026-10-29 06:10:34 |
+
+Xác minh sau triển khai lúc **06:11:27 UTC**:
+
+- `migrate status`: Database schema is up to date; cả hai migration hoàn tất, checksum khớp SQL trong Git.
+- `migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code`: No difference detected.
+- Có **44 bảng nghiệp vụ**, không tính `_prisma_migrations`. Bảng mới có CHECK đúng một tổ chức đã validated, sáu FK và ba partial unique index hợp lệ.
+- Số dòng của cả 43 bảng cũ và fingerprint của chín nhóm catalog cũ giữ nguyên so với snapshot ngay trước triển khai. Bảng mới có 0 dòng; không chạy seed, mock data, reset hoặc DML nghiệp vụ.
+
+Azure đã nhận baseline; không chạy lại thủ tục nhận `0_init` trên database này. Dùng `npm run db:migrate:status` để kiểm tra lịch sử hiện tại. `db:baseline:check` chỉ dành cho cấu trúc ban đầu trước migration mở rộng, không dùng làm health check sau triển khai. Đây là lần triển khai thủ công được cho phép; chưa có CD tự deploy.
 
 ## Database đã tồn tại: nhận baseline một lần
 
-Chỉ làm sau khi migration đã được review/merge và việc ghi lịch sử/chạy DDL trên database đích được cho phép. `DATABASE_URL` phải trỏ đúng database dự định triển khai.
+Thủ tục dành cho database chưa nhận baseline; Azure hiện tại đã hoàn tất. Chỉ làm sau khi migration đã được review/merge và việc ghi lịch sử/chạy DDL trên database đích được cho phép. `DATABASE_URL` phải trỏ đúng database dự định triển khai.
 
 ```bash
 npm run db:baseline:check
