@@ -93,6 +93,7 @@ jobs:
       NODE_ENV: test
       NPM_CONFIG_ENGINE_STRICT: "true"
       DATABASE_URL: postgresql://foodprint_test:foodprint_test_only@127.0.0.1:5432/foodprint_migration_test?schema=foodprint
+      JWT_SECRET: foodprint-ci-test-only-secret-not-for-runtime
       MIGRATION_TEST_DATABASE_URL: postgresql://foodprint_test:foodprint_test_only@127.0.0.1:5432/foodprint_migration_test?schema=foodprint
       PRISMA_HIDE_UPDATE_MESSAGE: "true"
     steps:
@@ -113,6 +114,9 @@ jobs:
 
       - name: Verify baseline adoption, migrations and SQL constraints
         run: npm run test:migrations
+
+      - name: Verify dynamic authorization and tenant isolation on PostgreSQL
+        run: npm run test:authorization
 
   quality:
     name: Backend quality

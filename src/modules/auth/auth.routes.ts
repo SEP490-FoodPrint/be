@@ -1,12 +1,22 @@
+import { createSessionController } from "./session.controller";
 import { Router } from "express";
-import { systemAdminOnly } from "../../middlewares/system-admin.middleware";
+import type { RequestHandler } from "express";
+import { authenticate } from "../../middlewares/auth.middleware";
+import { requireResource } from "../../middlewares/permission.middleware";
 import { createAuthController } from "./auth.controller";
 import { authService, type AuthService } from "./auth.service";
 
-export function createAuthRouter(service: AuthService = authService) {
+export function createAuthRouter(
+  service: AuthService = authService,
+  authHandler: RequestHandler = authenticate,
+) {
   const router = Router();
   const controller = createAuthController(service);
-  router.get("/", ...systemAdminOnly, controller.getAll);
+  router.get("/roles", authHandler, requireResource("auth"), controller.getAll);
+  const session = createSessionController();
+  router.post("/login", session.login);
+  router.get("/me", authHandler, session.me);
+  router.get("/me/permissions", authHandler, session.permissions);
   return router;
 }
 

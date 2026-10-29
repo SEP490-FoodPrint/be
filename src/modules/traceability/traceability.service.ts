@@ -1,3 +1,5 @@
+import type { AuthPrincipal } from "../../types/auth";
+import { listScopes } from "../../utils/resource-access";
 import type { Prisma } from "../../generated/prisma/client";
 import { getPrisma } from "../../utils/database";
 import {
@@ -28,7 +30,7 @@ const select = {
 type ListRow = Prisma.TraceabilityAnchorGetPayload<{ select: typeof select }>;
 type ListArguments = Pick<
   Prisma.TraceabilityAnchorFindManyArgs,
-  "skip" | "take" | "orderBy"
+  "skip" | "take" | "orderBy" | "where"
 > & {
   select: typeof select;
 };
@@ -41,9 +43,16 @@ const readFromDatabase: ListReader = async (args) => {
 
 export function createTraceabilityService(read: ListReader = readFromDatabase) {
   return {
-    async getAll(query: ListQuery) {
+    async getAll(query: ListQuery, principal: AuthPrincipal) {
+      const where = listScopes["traceability"](principal);
       const result = await readListPage(
-        () => read({ ...listWindow(query), select, orderBy: [{ id: "asc" }] }),
+        () =>
+          read({
+            ...listWindow(query),
+            where,
+            select,
+            orderBy: [{ id: "asc" }],
+          }),
         query,
       );
       return {

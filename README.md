@@ -2,7 +2,7 @@
 
 Backend FoodPrint hiện dùng **TypeScript + CommonJS + Express + PostgreSQL/Prisma**, cùng **Redis Docker local** để lưu bộ đếm rate limit và hỗ trợ cache các query được chọn. Mỗi thành viên kết nối và test với database local của mình. Database Azure đã nhận baseline và áp dụng migration UserPermissionDenial; trạng thái triển khai và xác minh được ghi trong [baseline](database/SCHEMA_BASELINE.md).
 
-Phạm vi hiện tại gồm nền tảng kết nối, HTTP health endpoint, helper/middleware, Prisma models, lịch sử SQL migration và 31 module có API GET danh sách mẫu. Mỗi module có routes/controller/service/validation; các API mẫu chỉ cho `SYSTEM_ADMIN` thuộc `SYSTEM` truy cập. Xem [danh mục module và API](src/modules/README.md) và [baseline/migration](database/SCHEMA_BASELINE.md). Chưa triển khai CRUD/lifecycle hoặc seed tự động.
+Phạm vi hiện tại gồm nền tảng kết nối, HTTP health endpoint, helper/middleware, Prisma models, lịch sử SQL migration và 31 module có API GET danh sách mẫu. Mỗi module có routes/controller/service/validation; các API kiểm tra permission được gán và phạm vi tổ chức. Đã có login, API quản trị quyền và ràng buộc một admin cho mỗi trường/supplier; xem [phân quyền](docs/AUTHORIZATION.md). Xem [danh mục module và API](src/modules/README.md) và [baseline/migration](database/SCHEMA_BASELINE.md). Chưa triển khai CRUD/lifecycle nghiệp vụ đầy đủ; bootstrap permission là thao tác riêng, không tự chạy trong CD.
 
 Quy tắc coding cho team và AI được quản lý tại [AGENTS.md](AGENTS.md).
 
@@ -113,7 +113,7 @@ Prisma Client dùng `moduleFormat = "cjs"`; `package.json` dùng `type: commonjs
 - CHECK constraints nằm trong SQL migration. Baseline không chứa role/permission seed hoặc mock data; việc seed cần phạm vi được phê duyệt riêng. Không kéo schema từ database cũ để ghi đè models mới.
 - Đã có migration trong Git và kiểm thử trên PostgreSQL tạm; trạng thái áp dụng Azure được ghi trong baseline, không suy ra từ code đã merge. API mẫu chỉ đọc danh sách; chưa thực hiện nghiệp vụ ghi dữ liệu/chuyển trạng thái.
 - Không sửa giá trị các role/nhãn hiện có khi chuyển sang TypeScript.
-- Có test rate-limit, cache, role middleware và API danh sách dùng Node test runner; chưa có coverage threshold hoặc kiểm thử API danh sách trên database thật. Chỉ ghi PASS khi kiểm tra thực sự thành công.
+- Có test rate-limit, cache, role middleware và API danh sách dùng Node test runner; chưa có coverage threshold; đã có kiểm thử phân quyền/phạm vi API trên PostgreSQL tạm. Chỉ ghi PASS khi kiểm tra thực sự thành công.
 
 ## 5. Backend Code Quality — Phase 1
 
@@ -250,7 +250,7 @@ Team tạo nhánh `<type>/<kebab-case-description>` từ `dev`, mở PR vào `de
 
 `test:unit` liệt kê rõ các file test không cần hạ tầng; thêm file vào script khi bổ sung unit test. Các script Redis integration hiện hữu tiếp tục chạy local khi có Redis.
 
-Workflow chỉ có quyền đọc repository; các action được pin bằng commit SHA. Job Code quality dùng URL PostgreSQL placeholder trên `127.0.0.1:1` và JWT secret dành riêng cho test. Job PostgreSQL migrations dựng PostgreSQL 18 tạm và kiểm tra baseline/migration/CHECK bằng `npm run test:migrations`. Check Backend quality tổng hợp cả hai kết quả, nên migration lỗi vẫn chặn check bắt buộc hiện có. Các job quality không cần `.env`/GitHub Secrets thật và không kết nối Azure. Sau khi check Backend quality của push vào `dev` PASS, workflow gọi job CD Azure ở mục 10; PR và `main` không deploy database này. `HUSKY=0` chỉ áp dụng trong CI vì các bước kiểm tra được chạy trực tiếp.
+Workflow chỉ có quyền đọc repository; các action được pin bằng commit SHA. Job Code quality dùng URL PostgreSQL placeholder trên `127.0.0.1:1` và JWT secret dành riêng cho test. Job PostgreSQL migrations dựng PostgreSQL 18 tạm, kiểm tra baseline/migration/CHECK bằng `npm run test:migrations` và login/phân quyền/phạm vi dữ liệu bằng `npm run test:authorization`. Check Backend quality tổng hợp cả hai kết quả, nên migration lỗi vẫn chặn check bắt buộc hiện có. Các job quality không cần `.env`/GitHub Secrets thật và không kết nối Azure. Sau khi check Backend quality của push vào `dev` PASS, workflow gọi job CD Azure ở mục 10; PR và `main` không deploy database này. `HUSKY=0` chỉ áp dụng trong CI vì các bước kiểm tra được chạy trực tiếp.
 
 Để tái hiện kiểm tra trên một checkout sạch, chưa có `.env`:
 
@@ -327,3 +327,24 @@ Preflight chỉ đọc: kiểm tra đúng host, database, schema, SSL và checks
 Nếu thiếu secret, sai host hoặc không kết nối được, sửa cấu hình rồi vào **Actions → Backend CI → run của commit `dev` hiện tại → Re-run failed jobs**. Khi migration lỗi, cần kiểm tra và xử lý thủ công; workflow không tự resolve, reset, seed, rollback hay dùng `db push`. Mọi thay đổi cấu trúc tiếp theo cần SQL migration mới được review.
 
 Schema diff cuối cùng kiểm tra phần Prisma biểu diễn được; CHECK/SQL riêng vẫn cần review migration và kiểm thử PostgreSQL trong CI. File workflow không tự tạo environment secrets hoặc quyền mạng Azure. Theo dõi job **Azure database migration** để xác nhận deployment; check bắt buộc cho PR vẫn là **Backend quality**.
+
+## 11. Login và phân quyền động
+
+Cấu hình `JWT_SECRET` riêng trong `.env`; không còn secret mặc định. Với database local đã áp dụng đủ migration, chạy bootstrap catalog trước khi dùng API quản trị:
+
+```bash
+npm run db:migrate:deploy
+npm run auth:bootstrap
+```
+
+Bootstrap không tạo tài khoản hoặc mock data. Khi chạy lại, nó giữ thay đổi quyền của các role ngoài SYSTEM_ADMIN và giữ các permission đang inactive. Quyền SYSTEM_ADMIN được khởi tạo qua bước operator này, không chỉnh qua API. Hướng dẫn bootstrap Azure có kiểm tra đích và quy trình triển khai nằm trong [tài liệu phân quyền](docs/AUTHORIZATION.md).
+
+`POST /api/auth/login` nhận `{ "identifier": "your-username-or-email", "password": "your-password" }`, trả accessToken để gửi trong `Authorization: Bearer ...`. Các token cũ thiếu UUID sub hoặc sai issuer/audience cần đăng nhập lại. Xem `GET /api/auth/me`, `GET /api/auth/me/permissions` và [hợp đồng API/matrix](docs/AUTHORIZATION.md).
+
+Quyền được đọc lại từ DB mỗi request: role thay đổi áp dụng cho mọi tài khoản thuộc role đó; denial riêng vẫn được giữ. System Admin không có bypass và không được chỉnh quyền role SYSTEM_ADMIN. Admin trường/supplier chỉ quản lý ngoại lệ trong tổ chức mình; ATTP xã không có chức năng quản trị quyền.
+
+```bash
+npm run test:unit
+# Cần PostgreSQL tạm riêng, không dùng database thành viên hoặc Azure:
+MIGRATION_TEST_DATABASE_URL='<disposable-local-test-url>' npm run test:authorization
+```
