@@ -16,3 +16,6 @@ src/generated/prisma/
 *.tsbuildinfo
 .eslintcache
 .husky/_/
+
+# Local notes about the dynamic authorization code flow.
+/docs/AUTHORIZATION_CODE_FLOW.local.md
