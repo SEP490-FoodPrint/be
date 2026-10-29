@@ -11,6 +11,7 @@ yarn-error.log*
 dist
 coverage
 *.sql
+!prisma/migrations/**/migration.sql
 src/generated/prisma/
 *.tsbuildinfo
 .eslintcache

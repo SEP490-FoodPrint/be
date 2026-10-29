@@ -1,0 +1,87 @@
+name: Azure Database CD
+
+on:
+  workflow_call:
+    secrets:
+      AZURE_DATABASE_URL:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Azure database migration
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: azure-dev
+    concurrency:
+      group: foodprint-azure-dev-database
+      cancel-in-progress: false
+    env:
+      CI: "true"
+      HUSKY: "0"
+      NODE_ENV: production
+      NPM_CONFIG_ENGINE_STRICT: "true"
+      NPM_CONFIG_INCLUDE: dev
+      PRISMA_HIDE_UPDATE_MESSAGE: "true"
+      # Installation and client generation never receive the Azure secret.
+      DATABASE_URL: postgresql://ci_validation@127.0.0.1:1/foodprint_ci?schema=foodprint
+    steps:
+      - name: Check out the commit that passed CI
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js from .nvmrc
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Skip a superseded commit
+        id: revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node <<'JS'
+          const fs = require("node:fs");
+          async function main() {
+            const response = await fetch(
+              `${process.env.GITHUB_API_URL}/repos/${process.env.GITHUB_REPOSITORY}/git/ref/heads/dev`,
+              { headers: { Authorization: `Bearer ${process.env.GH_TOKEN}`, Accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(15000) },
+            );
+            if (!response.ok) throw new Error(`Cannot verify dev revision: HTTP ${response.status}`);
+            const latest = await response.json();
+            if (!/^[a-f0-9]{40}$/.test(latest.object?.sha ?? "")) throw new Error("Invalid dev revision returned by GitHub.");
+            const current = latest.object?.sha === process.env.GITHUB_SHA;
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `current=${current}\n`);
+            console.log(current ? "Deploying the current dev revision." : "Skipped: dev has a newer commit; its CI run handles pending migrations.");
+          }
+          main().catch((error) => { console.error(error.message); process.exitCode = 1; });
+          JS
+
+      - name: Install locked dependencies
+        if: steps.revision.outputs.current == 'true'
+        run: npm ci
+
+      - name: Validate schema and generate Prisma Client
+        if: steps.revision.outputs.current == 'true'
+        run: |
+          npm run prisma:validate
+          npm run prisma:generate
+
+      - name: Deploy pending migrations and verify Azure
+        if: steps.revision.outputs.current == 'true'
+        env:
+          DATABASE_URL: ${{ secrets.AZURE_DATABASE_URL }}
+          AZURE_DATABASE_HOST: ${{ vars.AZURE_DATABASE_HOST }}
+        run: |
+          npm run db:deploy:check
+          npm run db:migrate:deploy
+          npm run db:deploy:check
+          npm run db:migrate:status
+          npm exec --no -- prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
