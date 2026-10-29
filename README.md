@@ -1,6 +1,6 @@
 # FoodPrint Backend
 
-Backend FoodPrint hiện dùng **TypeScript + CommonJS + Express + PostgreSQL/Prisma**, cùng **Redis Docker local** để lưu bộ đếm rate limit và hỗ trợ cache các query được chọn. Mỗi thành viên kết nối và test với database local của mình. Database Azure hiện hữu được đối chiếu trong [baseline](database/SCHEMA_BASELINE.md); thay đổi migration mới chưa được triển khai lên Azure.
+Backend FoodPrint hiện dùng **TypeScript + CommonJS + Express + PostgreSQL/Prisma**, cùng **Redis Docker local** để lưu bộ đếm rate limit và hỗ trợ cache các query được chọn. Mỗi thành viên kết nối và test với database local của mình. Database Azure đã nhận baseline và áp dụng migration UserPermissionDenial; trạng thái triển khai và xác minh được ghi trong [baseline](database/SCHEMA_BASELINE.md).
 
 Phạm vi hiện tại gồm nền tảng kết nối, HTTP health endpoint, helper/middleware, Prisma models, lịch sử SQL migration và 31 module có API GET danh sách mẫu. Mỗi module có routes/controller/service/validation; các API mẫu chỉ cho `SYSTEM_ADMIN` thuộc `SYSTEM` truy cập. Xem [danh mục module và API](src/modules/README.md) và [baseline/migration](database/SCHEMA_BASELINE.md). Chưa triển khai CRUD/lifecycle hoặc seed tự động.
 
@@ -282,6 +282,6 @@ Lịch sử SQL chuẩn nằm trong `prisma/migrations/`: `0_init` tái tạo sc
 | `npm run db:migrate:status`                         | Kiểm tra lịch sử/pending migrations                                                             |
 | `npm run test:migrations`                           | Kiểm thử trên PostgreSQL test local mới, nhận URL qua MIGRATION_TEST_DATABASE_URL               |
 
-Database Azure đã có dữ liệu phải qua bước kiểm tra và `migrate resolve --applied 0_init` một lần trước `migrate deploy`; không replay baseline vào database đó. Task chuẩn hóa chỉ chuẩn bị file và đọc catalog Azure, chưa ghi lịch sử hoặc triển khai thay đổi lên Azure.
+Database đã có dữ liệu phải qua bước kiểm tra và `migrate resolve --applied 0_init` một lần trước `migrate deploy`; không replay baseline vào database đó. Azure hiện tại đã hoàn tất cả bước nhận baseline và migration UserPermissionDenial, đã kiểm tra schema diff và dữ liệu cũ. Các lần triển khai tiếp theo dùng `db:migrate:deploy` cho migration mới; không nhận lại baseline. Xem [kết quả triển khai](database/SCHEMA_BASELINE.md#triển-khai-azure-ngày-29102026).
 
 Migration cần commit cả SQL và `migration_lock.toml`; giữ migration đã applied bất biến. CHECK không biểu diễn trong Prisma phải nằm trong SQL migration. `db push` không thay thế lịch sử này. CI kiểm thử migration bằng database tạm, không có CD tự deploy.
