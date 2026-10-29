@@ -1,8 +1,8 @@
 # FoodPrint Backend
 
-Backend FoodPrint hiện dùng **TypeScript + CommonJS + Express + PostgreSQL/Prisma**, cùng **Redis Docker local** để lưu bộ đếm rate limit và hỗ trợ cache các query được chọn. Mỗi thành viên kết nối và test với database local của mình; chưa triển khai database lên server.
+Backend FoodPrint hiện dùng **TypeScript + CommonJS + Express + PostgreSQL/Prisma**, cùng **Redis Docker local** để lưu bộ đếm rate limit và hỗ trợ cache các query được chọn. Mỗi thành viên kết nối và test với database local của mình. Database Azure hiện hữu được đối chiếu trong [baseline](database/SCHEMA_BASELINE.md); thay đổi migration mới chưa được triển khai lên Azure.
 
-Phạm vi hiện tại gồm nền tảng kết nối, HTTP health endpoint, helper/middleware, Prisma models từ SQL thiết kế database mới và 31 module có API GET danh sách mẫu. Mỗi module có routes/controller/service/validation; các API mẫu chỉ cho `SYSTEM_ADMIN` thuộc `SYSTEM` truy cập. Xem [danh mục module và API](src/modules/README.md) và [database/SCHEMA_BASELINE.md](database/SCHEMA_BASELINE.md). Chưa triển khai CRUD/lifecycle, migration hoặc seed.
+Phạm vi hiện tại gồm nền tảng kết nối, HTTP health endpoint, helper/middleware, Prisma models, lịch sử SQL migration và 31 module có API GET danh sách mẫu. Mỗi module có routes/controller/service/validation; các API mẫu chỉ cho `SYSTEM_ADMIN` thuộc `SYSTEM` truy cập. Xem [danh mục module và API](src/modules/README.md) và [baseline/migration](database/SCHEMA_BASELINE.md). Chưa triển khai CRUD/lifecycle hoặc seed tự động.
 
 Quy tắc coding cho team và AI được quản lý tại [AGENTS.md](AGENTS.md).
 
@@ -34,9 +34,9 @@ Ví dụ cấu trúc URL, cần thay user/password/database/port cho đúng máy
 DATABASE_URL="postgresql://your_local_db_user:your_local_db_password@127.0.0.1:5432/foodprint?schema=foodprint"
 ```
 
-URL-encode ký tự đặc biệt trong user/password. Source mới đọc `DATABASE_URL`, không dùng `DB_NAME`, `DB_USER`, `DB_PASS`, `DB_HOST`, `DB_PORT` của kết nối Sequelize cũ. Không đổi credentials hoặc xóa database hiện có chỉ để làm setup chạy được.
+URL-encode ký tự đặc biệt trong user/password. Ưu tiên đặt rõ `DATABASE_URL`; source hiện còn hỗ trợ ghép URL từ các biến `DB_*` khi thiếu URL và có `DB_HOST`. Không đổi credentials hoặc xóa database hiện có chỉ để làm setup chạy được.
 
-Database phải được chuẩn bị sẵn trên máy thành viên. Kết nối mới kiểm tra URL local, dùng Prisma PostgreSQL adapter, và không tự tạo database/bảng. Không dùng SSH tunnel hoặc database của người khác. Không commit `.env`, credentials hay dumps.
+Database phải được chuẩn bị sẵn trên máy thành viên. Kết nối dùng Prisma PostgreSQL adapter, hỗ trợ local hoặc Azure với SSL, và không tự tạo database/bảng. Development migrations chỉ chấp nhận URL local. Không dùng SSH tunnel hoặc database của người khác. Không commit `.env`, credentials hay dumps.
 
 Các Prisma model/enum ánh xạ vào PostgreSQL schema `foodprint` bằng `@@schema`. `DATABASE_URL` phải trỏ tới database local đã chuẩn bị theo thiết kế SQL mới; kết nối thành công với database cũ chưa chứng minh models mới tương thích. Dùng URL `postgresql://` hoặc `postgres://`; chuỗi `jdbc:postgresql://` dành cho JDBC và bị cấu hình hiện tại từ chối. Tham số `schema=foodprint` cũng đặt schema mặc định cho raw queries. Việc tạo file Prisma không tự áp dụng file SQL, tạo database hoặc cập nhật database cũ.
 
@@ -84,7 +84,9 @@ be/
 ├── tsconfig.json / tsconfig.build.json
 ├── prisma.config.ts
 ├── prisma/schema.prisma
-├── database/SCHEMA_BASELINE.md  # Thiết kế SQL chuẩn và trạng thái triển khai
+├── prisma/migrations/          # Baseline và SQL migration có version
+├── prisma/baseline.manifest.json
+├── database/SCHEMA_BASELINE.md  # Đối chiếu baseline và trạng thái triển khai
 └── src/
     ├── app.ts / server.ts
     ├── config/env.ts
@@ -95,11 +97,11 @@ be/
     ├── routes/index.ts
     ├── utils/*.ts              # Bao gồm cache.ts dùng chung
     ├── types/express.d.ts
-    ├── scripts/                # check-db.ts, check-redis.ts
+    ├── scripts/                # Kiểm tra kết nối/baseline và migration local
     ├── generated/prisma/       # Generated, không commit
     └── modules/                # 31 module, mỗi module có một GET danh sách mẫu
 
-tests/                         # Business list, role, rate-limit, cache và Redis tests
+tests/                         # Business list, role, rate-limit, cache, Redis và migration
 ```
 
 Prisma Client dùng `moduleFormat = "cjs"`; `package.json` dùng `type: commonjs`. Source TypeScript có thể dùng cú pháp `import`/`export`; compiler chuyển sang CommonJS `require`/`exports`. Xem [Prisma generator](https://www.prisma.io/docs/orm/v7/prisma-schema/overview/generators) và [TypeScript module modes](https://www.typescriptlang.org/tsconfig/module.html).
@@ -108,8 +110,8 @@ Prisma Client dùng `moduleFormat = "cjs"`; `package.json` dùng `type: commonjs
 
 - Schema Prisma phản ánh SQL thiết kế database mới, dùng `@map`/`@@map` để giữ nguyên tên bảng/cột và `@@schema("foodprint")`. Client generation không introspect, tạo hoặc thay đổi database.
 - SQL hiện tại chỉ định nghĩa schema và role seeds, không có function/trigger. Backend services chịu trách nhiệm lifecycle, validation liên bảng và inventory posting; các xử lý này chưa được triển khai chỉ bằng việc tạo Prisma models. Các cột `updated_at` dùng `@updatedAt` cho thao tác qua Prisma, còn ghi bằng raw SQL phải cập nhật timestamp rõ ràng.
-- CHECK constraints và role seeds vẫn do SQL định nghĩa. Việc tạo database local theo SQL cần một task riêng có phạm vi rõ ràng; không kéo schema từ database cũ để ghi đè models mới.
-- Chưa chạy migrations, `db push`, reset, import SQL hoặc deploy. API mẫu chỉ đọc danh sách; chưa thực hiện nghiệp vụ ghi dữ liệu/chuyển trạng thái.
+- CHECK constraints nằm trong SQL migration. Baseline không chứa role/permission seed hoặc mock data; việc seed cần phạm vi được phê duyệt riêng. Không kéo schema từ database cũ để ghi đè models mới.
+- Đã có migration trong Git và kiểm thử trên PostgreSQL tạm; trạng thái áp dụng Azure được ghi trong baseline, không suy ra từ code đã merge. API mẫu chỉ đọc danh sách; chưa thực hiện nghiệp vụ ghi dữ liệu/chuyển trạng thái.
 - Không sửa giá trị các role/nhãn hiện có khi chuyển sang TypeScript.
 - Có test rate-limit, cache, role middleware và API danh sách dùng Node test runner; chưa có coverage threshold hoặc kiểm thử API danh sách trên database thật. Chỉ ghi PASS khi kiểm tra thực sự thành công.
 
@@ -238,17 +240,17 @@ Unit tests dùng client giả để kiểm tra TTL, đồng thời, invalidation
 
 Team tạo nhánh `<type>/<kebab-case-description>` từ `dev`, mở PR vào `dev`; khi code đã ổn định, mở PR từ `dev` vào `main`. Chi tiết tại [contribute.md](contribute.md).
 
-[Workflow Backend CI](.github/workflows/ci.yml) chạy khi push lên `main`/`dev` và khi mở/cập nhật PR vào hai nhánh này. Job **Backend quality** thực hiện:
+[Workflow Backend CI](.github/workflows/ci.yml) chạy khi push lên `main`/`dev` và khi mở/cập nhật PR vào hai nhánh này. Job **Code quality** thực hiện:
 
 1. Cài Node theo `.nvmrc`, cache npm theo lockfile, cài đúng dependencies bằng `npm ci` với engine checks.
 2. Kiểm tra Conventional Commits: toàn bộ commit của PR hoặc commit cuối của lần push.
 3. Validate schema và generate Prisma Client trước các kiểm tra có type information.
 4. Chạy `npm run validate`: lint, format:check, typecheck và build.
-5. Chạy `npm run test:unit`: toàn bộ 52 test hiện tại cho cache, API module, rate limit và role middleware.
+5. Chạy `npm run test:unit`: các test không cần hạ tầng cho cache, API module, rate limit, role middleware và guard migration local.
 
 `test:unit` liệt kê rõ các file test không cần hạ tầng; thêm file vào script khi bổ sung unit test. Các script Redis integration hiện hữu tiếp tục chạy local khi có Redis.
 
-Workflow chỉ có quyền đọc repository; các action được pin bằng commit SHA. CI dùng URL PostgreSQL placeholder trên `127.0.0.1:1` và JWT secret dành riêng cho test, không cần GitHub Secrets hoặc `.env` thật. Không kết nối database, dựng PostgreSQL/Redis, chạy DDL/migration hoặc triển khai ứng dụng/database. `HUSKY=0` chỉ áp dụng trong CI vì các bước kiểm tra được chạy trực tiếp.
+Workflow chỉ có quyền đọc repository; các action được pin bằng commit SHA. Job Code quality dùng URL PostgreSQL placeholder trên `127.0.0.1:1` và JWT secret dành riêng cho test. Job PostgreSQL migrations dựng PostgreSQL 18 tạm và kiểm tra baseline/migration/CHECK bằng `npm run test:migrations`. Check Backend quality tổng hợp cả hai kết quả, nên migration lỗi vẫn chặn check bắt buộc hiện có. CI không cần `.env`/GitHub Secrets thật, không kết nối hoặc deploy Azure. `HUSKY=0` chỉ áp dụng trong CI vì các bước kiểm tra được chạy trực tiếp.
 
 Để tái hiện kiểm tra trên một checkout sạch, chưa có `.env`:
 
@@ -266,3 +268,20 @@ npm run test:unit
 URL trên chỉ dành cho validate/generate; dùng terminal riêng và không dùng nó để chạy `dev`, `start` hoặc `db:check`. Build/test không xác nhận database mới đã triển khai hoặc API đã truy vấn được database thật.
 
 Người quản lý repo bật branch protection/ruleset cho `main` và `dev`, yêu cầu PR/review và check **Backend quality** thành công trước khi merge. CI workflow không tự bật các rule quản trị này. Nhánh `main` nhận workflow sau khi PR `dev` → `main` được merge.
+
+## 9. Baseline và migration database
+
+Lịch sử SQL chuẩn nằm trong `prisma/migrations/`: `0_init` tái tạo schema v5.4 hiện hữu và migration tiếp theo thêm `user_permission_denials` cùng CHECK đúng một tổ chức. Baseline không seed dữ liệu. Nguồn, fingerprints đã đối chiếu với Azure và cách nhận baseline được ghi tại [database/SCHEMA_BASELINE.md](database/SCHEMA_BASELINE.md).
+
+| Lệnh                                                | Phạm vi                                                                                         |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `npm run db:baseline:check`                         | Chỉ đọc, xác nhận database hiện hữu khớp baseline trước khi nhận lịch sử                        |
+| `npm run db:migrate:create -- --name <description>` | Tạo draft migration để review SQL, chỉ PostgreSQL local                                         |
+| `npm run db:migrate`                                | Tạo/áp dụng migration development, chặn Azure/remote                                            |
+| `npm run db:migrate:deploy`                         | Áp dụng các migration còn thiếu trên DATABASE_URL đã chọn; cần phạm vi triển khai được cho phép |
+| `npm run db:migrate:status`                         | Kiểm tra lịch sử/pending migrations                                                             |
+| `npm run test:migrations`                           | Kiểm thử trên PostgreSQL test local mới, nhận URL qua MIGRATION_TEST_DATABASE_URL               |
+
+Database Azure đã có dữ liệu phải qua bước kiểm tra và `migrate resolve --applied 0_init` một lần trước `migrate deploy`; không replay baseline vào database đó. Task chuẩn hóa chỉ chuẩn bị file và đọc catalog Azure, chưa ghi lịch sử hoặc triển khai thay đổi lên Azure.
+
+Migration cần commit cả SQL và `migration_lock.toml`; giữ migration đã applied bất biến. CHECK không biểu diễn trong Prisma phải nằm trong SQL migration. `db push` không thay thế lịch sử này. CI kiểm thử migration bằng database tạm, không có CD tự deploy.
