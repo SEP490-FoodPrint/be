@@ -97,3 +97,15 @@ DATABASE_URL='postgresql://schema_validation@127.0.0.1:1/foodprint_schema_valida
 URL placeholder chỉ dùng CLI ngoại tuyến, không dùng với `dev`, `start` hoặc `db:check`. Khi kết nối thật, dùng URL `postgresql://`/`postgres://` tới database local đúng thiết kế; không dùng chuỗi JDBC hoặc kết quả SELECT 1 của database cũ để xác nhận models mới.
 
 Chưa tạo, cập nhật hoặc kiểm tra models trên một database mới chạy thực tế trong task này. Không chạy SQL, DDL, migration, reset, db push, seed hoặc deployment. Việc đồng bộ file Prisma không cho phép chạy script CREATE-from-scratch vào database cũ có dữ liệu.
+
+## Bổ sung UserPermissionDenial — chuẩn bị ngày 29/10/2026
+
+[patches/001_user_permission_denials.sql](patches/001_user_permission_denials.sql) là SQL bổ sung cho model `UserPermissionDenial`, ánh xạ `foodprint.user_permission_denials`. Patch cần các bảng `users`, `permissions`, `schools`, `suppliers`, `commune_food_safety_units` đã có trong schema `foodprint`; phần permissions/role_permissions thuộc thiết kế RBAC v5.4, không nằm trong nguồn v5.3.1 thống kê phía trên.
+
+- Patch tạo một bảng mới, ba partial unique index theo user/permission/tổ chức, hai index hỗ trợ và sáu khóa ngoại khớp model Prisma. Không sửa các bảng nghiệp vụ hiện hữu hoặc thêm seed.
+- CHECK `chk_user_permission_denials_exactly_one_organization` bắt buộc `num_nonnulls(school_id, supplier_id, commune_food_safety_unit_id) = 1`: chấp nhận đúng một tổ chức, từ chối cả ba null hoặc nhiều tổ chức. Áp dụng cho cả INSERT và UPDATE.
+- Thao tác nằm trong transaction, có giới hạn chờ lock và thời gian statement. Nếu bảng đích đã tồn tại, patch dừng; cần đối chiếu cấu trúc trước khi chuẩn bị SQL phù hợp, không xóa bảng hoặc dữ liệu để chạy lại.
+- Đây là patch SQL độc lập, không tự thiết lập lịch sử Prisma Migrate. `prisma generate` và `db push` không bổ sung CHECK này; phải áp dụng bản SQL đã review trong bước triển khai được cho phép.
+- Backend vẫn cần kiểm tra user và admin thuộc đúng tổ chức, permission thuộc role và permission đang hoạt động. CHECK này chỉ cưỡng chế số tổ chức trên từng dòng; không tự thực hiện các kiểm tra phân quyền đó.
+
+**Trạng thái:** mới chuẩn bị file để commit/push và review, chưa thực thi patch lên Azure hoặc database local hiện hữu. Hai file SQL thiết kế gốc được giữ nguyên.
