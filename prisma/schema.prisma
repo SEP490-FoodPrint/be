@@ -65,6 +65,7 @@ model CommuneFoodSafetyUnit {
   updatedAt                   DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   users                       User[]                       @relation("users_commune_food_safety_unit_id__commune_food_safety_units")
   foodSafetyReportForwardings FoodSafetyReportForwarding[] @relation("food_safety_report_forwardings_recipient_commune_food_safety_unit_id__commune_food_safety_units")
+  userPermissionDenials       UserPermissionDenial[]       @relation("user_permission_denials_commune_food_safety_unit_id__commune_food_safety_units")
 
   @@unique([code])
   @@map("commune_food_safety_units")
@@ -710,15 +711,16 @@ model Role {
 }
 
 model Permission {
-  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  code            String           @unique @db.VarChar(100)
-  name            String           @db.VarChar(150)
-  module          String           @db.VarChar(80)
-  action          String           @db.VarChar(50)
-  description     String?          @db.Text
-  isActive        Boolean          @default(true) @map("is_active")
-  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
-  rolePermissions RolePermission[] @relation("role_permissions_permission_id__permissions")
+  id                    String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code                  String                 @unique @db.VarChar(100)
+  name                  String                 @db.VarChar(150)
+  module                String                 @db.VarChar(80)
+  action                String                 @db.VarChar(50)
+  description           String?                @db.Text
+  isActive              Boolean                @default(true) @map("is_active")
+  createdAt             DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  rolePermissions       RolePermission[]       @relation("role_permissions_permission_id__permissions")
+  userPermissionDenials UserPermissionDenial[] @relation("user_permission_denials_permission_id__permissions")
 
   @@map("permissions")
   @@schema("foodprint")
@@ -795,6 +797,7 @@ model School {
   dishes                      Dish[]                       @relation("dishes_school_id__schools")
   foodSafetyIncidents         FoodSafetyIncident[]         @relation("food_safety_incidents_school_id__schools")
   incidentSchoolAlerts        IncidentSchoolAlert[]        @relation("incident_school_alerts_target_school_id__schools")
+  userPermissionDenials       UserPermissionDenial[]       @relation("user_permission_denials_school_id__schools")
 
   @@unique([code])
   @@map("schools")
@@ -867,6 +870,7 @@ model Supplier {
   ingredients                 Ingredient[]                 @relation("ingredients_supplier_id__suppliers")
   supplyRequests              SupplyRequest[]              @relation("supply_requests_supplier_id__suppliers")
   deliveries                  Delivery[]                   @relation("deliveries_supplier_id__suppliers")
+  userPermissionDenials       UserPermissionDenial[]       @relation("user_permission_denials_supplier_id__suppliers")
 
   @@unique([taxCode])
   @@map("suppliers")
@@ -1013,6 +1017,8 @@ model User {
   foodAnalysisResults                          FoodAnalysisResult[]         @relation("food_analysis_results_recorded_by_user_id__users")
   incidentSchoolAlerts                         IncidentSchoolAlert[]        @relation("incident_school_alerts_sent_by_user_id__users")
   traceabilityAnchors                          TraceabilityAnchor[]         @relation("traceability_anchors_created_by_user_id__users")
+  permissionDenials                            UserPermissionDenial[]       @relation("user_permission_denials_user_id__users")
+  permissionDenialsAsDisabledBy                UserPermissionDenial[]       @relation("user_permission_denials_disabled_by_user_id__users")
 
   @@unique([username])
   @@unique([email])
@@ -1021,6 +1027,38 @@ model User {
   @@index([communeFoodSafetyUnitId], map: "idx_users_commune_food_safety_unit_id", where: raw("commune_food_safety_unit_id IS NOT NULL"))
   @@index([roleId], map: "idx_users_role_id")
   @@map("users")
+  @@schema("foodprint")
+}
+
+/// User-level denial extension defined in database/patches/001_user_permission_denials.sql.
+/// Deployment status is tracked in database/SCHEMA_BASELINE.md; Client generation does not apply the patch.
+/// A row disables a permission for this user in the recorded organization; deleting it restores role inheritance.
+/// Exactly one of schoolId, supplierId, communeFoodSafetyUnitId must be set.
+/// The SQL patch enforces this with chk_user_permission_denials_exactly_one_organization; Prisma does not represent CHECK constraints.
+/// Services must verify current organization membership and that the permission belongs to the user's role.
+/// This model does not implement authorization checks or retain a history of restored permissions.
+model UserPermissionDenial {
+  id                      String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                  String                 @map("user_id") @db.Uuid
+  permissionId            String                 @map("permission_id") @db.Uuid
+  schoolId                String?                @map("school_id") @db.Uuid
+  supplierId              String?                @map("supplier_id") @db.Uuid
+  communeFoodSafetyUnitId String?                @map("commune_food_safety_unit_id") @db.Uuid
+  disabledByUserId        String                 @map("disabled_by_user_id") @db.Uuid
+  disabledAt              DateTime               @default(now()) @map("disabled_at") @db.Timestamptz(6)
+  user                    User                   @relation("user_permission_denials_user_id__users", fields: [userId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  permission              Permission             @relation("user_permission_denials_permission_id__permissions", fields: [permissionId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  school                  School?                @relation("user_permission_denials_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  supplier                Supplier?              @relation("user_permission_denials_supplier_id__suppliers", fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  communeFoodSafetyUnit   CommuneFoodSafetyUnit? @relation("user_permission_denials_commune_food_safety_unit_id__commune_food_safety_units", fields: [communeFoodSafetyUnitId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  disabledByUser          User                   @relation("user_permission_denials_disabled_by_user_id__users", fields: [disabledByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([userId, permissionId, schoolId], map: "uq_user_permission_denials_school", where: raw("school_id IS NOT NULL"))
+  @@unique([userId, permissionId, supplierId], map: "uq_user_permission_denials_supplier", where: raw("supplier_id IS NOT NULL"))
+  @@unique([userId, permissionId, communeFoodSafetyUnitId], map: "uq_user_permission_denials_commune_unit", where: raw("commune_food_safety_unit_id IS NOT NULL"))
+  @@index([permissionId], map: "idx_user_permission_denials_permission_id")
+  @@index([disabledByUserId], map: "idx_user_permission_denials_disabled_by")
+  @@map("user_permission_denials")
   @@schema("foodprint")
 }
 

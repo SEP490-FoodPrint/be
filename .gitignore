@@ -11,6 +11,7 @@ yarn-error.log*
 dist
 coverage
 *.sql
+!database/patches/001_user_permission_denials.sql
 src/generated/prisma/
 *.tsbuildinfo
 .eslintcache
