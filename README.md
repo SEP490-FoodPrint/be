@@ -154,7 +154,7 @@ refactor(database): extract prisma repository
 docs(backend): update architecture guidelines
 ```
 
-`update code`, `fix bug`, `abc` không hợp lệ. Hooks chỉ áp dụng trên máy đã cài chúng; CI GitHub Actions được mô tả ở mục 8. Branch protection là thiết lập riêng trên GitHub; chưa triển khai deployment. Các vi phạm lint/format phải được review và sửa trong thay đổi riêng, không coi việc cài tooling là code đã đạt chuẩn.
+`update code`, `fix bug`, `abc` không hợp lệ. Hooks chỉ áp dụng trên máy đã cài chúng; CI GitHub Actions được mô tả ở mục 8. Branch protection là thiết lập riêng trên GitHub; CD migration Azure được mô tả ở mục 10. Các vi phạm lint/format phải được review và sửa trong thay đổi riêng, không coi việc cài tooling là code đã đạt chuẩn.
 
 ## 6. Redis Docker local và rate limit dùng chung
 
@@ -250,7 +250,7 @@ Team tạo nhánh `<type>/<kebab-case-description>` từ `dev`, mở PR vào `de
 
 `test:unit` liệt kê rõ các file test không cần hạ tầng; thêm file vào script khi bổ sung unit test. Các script Redis integration hiện hữu tiếp tục chạy local khi có Redis.
 
-Workflow chỉ có quyền đọc repository; các action được pin bằng commit SHA. Job Code quality dùng URL PostgreSQL placeholder trên `127.0.0.1:1` và JWT secret dành riêng cho test. Job PostgreSQL migrations dựng PostgreSQL 18 tạm và kiểm tra baseline/migration/CHECK bằng `npm run test:migrations`. Check Backend quality tổng hợp cả hai kết quả, nên migration lỗi vẫn chặn check bắt buộc hiện có. CI không cần `.env`/GitHub Secrets thật, không kết nối hoặc deploy Azure. `HUSKY=0` chỉ áp dụng trong CI vì các bước kiểm tra được chạy trực tiếp.
+Workflow chỉ có quyền đọc repository; các action được pin bằng commit SHA. Job Code quality dùng URL PostgreSQL placeholder trên `127.0.0.1:1` và JWT secret dành riêng cho test. Job PostgreSQL migrations dựng PostgreSQL 18 tạm và kiểm tra baseline/migration/CHECK bằng `npm run test:migrations`. Check Backend quality tổng hợp cả hai kết quả, nên migration lỗi vẫn chặn check bắt buộc hiện có. Các job quality không cần `.env`/GitHub Secrets thật và không kết nối Azure. Sau khi check Backend quality của push vào `dev` PASS, workflow gọi job CD Azure ở mục 10; PR và `main` không deploy database này. `HUSKY=0` chỉ áp dụng trong CI vì các bước kiểm tra được chạy trực tiếp.
 
 Để tái hiện kiểm tra trên một checkout sạch, chưa có `.env`:
 
@@ -276,6 +276,7 @@ Lịch sử SQL chuẩn nằm trong `prisma/migrations/`: `0_init` tái tạo sc
 | Lệnh                                                | Phạm vi                                                                                         |
 | --------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | `npm run db:baseline:check`                         | Chỉ đọc, xác nhận database hiện hữu khớp baseline trước khi nhận lịch sử                        |
+| `npm run db:deploy:check`                           | Chỉ đọc, kiểm tra đúng Azure host/schema/SSL, baseline và checksum lịch sử trước/sau deploy     |
 | `npm run db:migrate:create -- --name <description>` | Tạo draft migration để review SQL, chỉ PostgreSQL local                                         |
 | `npm run db:migrate`                                | Tạo/áp dụng migration development, chặn Azure/remote                                            |
 | `npm run db:migrate:deploy`                         | Áp dụng các migration còn thiếu trên DATABASE_URL đã chọn; cần phạm vi triển khai được cho phép |
@@ -284,4 +285,45 @@ Lịch sử SQL chuẩn nằm trong `prisma/migrations/`: `0_init` tái tạo sc
 
 Database đã có dữ liệu phải qua bước kiểm tra và `migrate resolve --applied 0_init` một lần trước `migrate deploy`; không replay baseline vào database đó. Azure hiện tại đã hoàn tất cả bước nhận baseline và migration UserPermissionDenial, đã kiểm tra schema diff và dữ liệu cũ. Các lần triển khai tiếp theo dùng `db:migrate:deploy` cho migration mới; không nhận lại baseline. Xem [kết quả triển khai](database/SCHEMA_BASELINE.md#triển-khai-azure-ngày-29102026).
 
-Migration cần commit cả SQL và `migration_lock.toml`; giữ migration đã applied bất biến. CHECK không biểu diễn trong Prisma phải nằm trong SQL migration. `db push` không thay thế lịch sử này. CI kiểm thử migration bằng database tạm, không có CD tự deploy.
+Migration cần commit cả SQL và `migration_lock.toml`; giữ migration đã applied bất biến. CHECK không biểu diễn trong Prisma phải nằm trong SQL migration. `db push` không thay thế lịch sử này. CI kiểm thử migration bằng database tạm; CD chỉ triển khai SQL đã review trong lịch sử migration theo quy trình bên dưới.
+
+## 10. CD migration Azure từ dev
+
+[Workflow CD](.github/workflows/cd.yml) được gọi từ CI của **push vào `dev`**, sau khi `Backend quality` PASS. Workflow checkout đúng commit đã kiểm tra, bỏ qua commit nếu `dev` đã có bản mới hơn, rồi áp dụng các migration đang chờ bằng `prisma migrate deploy`. PR và `main` không triển khai lên database này; workflow chỉ triển khai database.
+
+CD kiểm tra pending migration ở mỗi push hợp lệ, không lọc theo file thay đổi của riêng commit cuối. Nhờ đó, migration chưa triển khai vẫn được áp dụng khi các run đang chờ bị thay thế bởi push mới. Nếu không có pending migration, deploy không thay đổi schema. Chỉ sửa `schema.prisma` mà thiếu SQL tương ứng sẽ bị kiểm tra schema diff trên PostgreSQL tạm trong CI chặn.
+
+### Cấu hình GitHub một lần
+
+Trong **Settings → Environments**, tạo `azure-dev` và giới hạn **Deployment branches and tags** chỉ cho branch `dev`. Để chạy tự động sau review PR, không bật Required reviewers cho environment; nếu bật, deployment sẽ chờ approval. Xem [GitHub Environments](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments).
+
+| Loại                 | Tên                   | Giá trị                                                                                                                                                   |
+| -------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Environment secret   | `AZURE_DATABASE_URL`  | Sao chép URL Azure đã kiểm chứng trong `.env`, bao gồm database `foodprint_db`, `schema=foodprint` và `sslmode=require` hoặc chế độ SSL xác minh chặt hơn |
+| Environment variable | `AZURE_DATABASE_HOST` | `foodprint-pg-dev-2026-hm01.postgres.database.azure.com`                                                                                                  |
+
+Caller truyền riêng secret đã khai báo; environment `azure-dev` cung cấp giá trị cho job CD theo [quy tắc reusable workflow](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows). Chỉ bước deploy nhận URL Azure; bước cài dependencies và generate Client dùng URL placeholder local. Không đưa `.env` vào Git hoặc artifact.
+
+Tài khoản trong URL cần đọc `_prisma_migrations` và có quyền thực thi SQL đã review trong schema `foodprint`. Database phải nhận baseline từ trước; workflow sẽ dừng nếu thiếu baseline thay vì tự tạo lại database.
+
+### Kết nối mạng
+
+Runner phải truy cập được Azure PostgreSQL qua TCP 5432 và được firewall cho phép. Workflow hiện dùng `ubuntu-latest`; IP của runner mặc định thay đổi, nên việc máy cá nhân kết nối thành công không xác nhận runner cũng kết nối được. Cấu hình đường mạng/runner có IP được cho phép trước khi bật CD; workflow không tự chỉnh firewall. Tham khảo [địa chỉ IP GitHub runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#ip-addresses) và [Azure PostgreSQL firewall](https://learn.microsoft.com/en-us/azure/postgresql/security/security-firewall-rules).
+
+### Trình tự và xử lý lỗi
+
+CD chạy lần lượt:
+
+```bash
+npm run db:deploy:check
+npm run db:migrate:deploy
+npm run db:deploy:check
+npm run db:migrate:status
+npm exec --no -- prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
+```
+
+Preflight chỉ đọc: kiểm tra đúng host, database, schema, SSL và checksum/thứ tự lịch sử. CD dừng khi SQL đã applied bị sửa/xóa hoặc có migration chưa hoàn tất. Chỉ có một deployment chạy tại một thời điểm; push mới không tự hủy run `dev` đang chạy migration. Prisma advisory lock vẫn được giữ.
+
+Nếu thiếu secret, sai host hoặc không kết nối được, sửa cấu hình rồi vào **Actions → Backend CI → run của commit `dev` hiện tại → Re-run failed jobs**. Khi migration lỗi, cần kiểm tra và xử lý thủ công; workflow không tự resolve, reset, seed, rollback hay dùng `db push`. Mọi thay đổi cấu trúc tiếp theo cần SQL migration mới được review.
+
+Schema diff cuối cùng kiểm tra phần Prisma biểu diễn được; CHECK/SQL riêng vẫn cần review migration và kiểm thử PostgreSQL trong CI. File workflow không tự tạo environment secrets hoặc quyền mạng Azure. Theo dõi job **Azure database migration** để xác nhận deployment; check bắt buộc cho PR vẫn là **Backend quality**.
