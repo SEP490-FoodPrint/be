@@ -139,6 +139,17 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
           "INSERT INTO foodprint.schools (name) VALUES ('Migration test marker') RETURNING id",
         )
       ).rows[0].id;
+      const legacyRole = (
+        await db.query<{ id: string }>(
+          "INSERT INTO foodprint.roles(code,name,type) VALUES ('MIGRATION_BACKFILL','Backfill','SYSTEM') RETURNING id",
+        )
+      ).rows[0].id;
+      const legacyUser = (
+        await db.query<{ id: string }>(
+          "INSERT INTO foodprint.users(role_id,username,email,password_hash,full_name) VALUES ($1,'backfill_test','backfill@example.test','preserved-test-hash','Backfill test') RETURNING id",
+          [legacyRole],
+        )
+      ).rows[0].id;
       await runPrisma(url, ["migrate", "resolve", "--applied", "0_init"]);
       await readCatalog();
       const files = await readMigrationFiles();
@@ -161,6 +172,20 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
         null,
       );
       await runPrisma(url, ["migrate", "deploy"]);
+      const preserved = await db.query<{
+        role_id: string;
+        role_code: string;
+        password_hash: string;
+      }>(
+        "SELECT role_id,role_code,password_hash FROM foodprint.users WHERE id=$1",
+        [legacyUser],
+      );
+      assert.deepEqual(preserved.rows[0], {
+        role_id: legacyRole,
+        role_code: "MIGRATION_BACKFILL",
+        password_hash: "preserved-test-hash",
+      });
+
       const history = await db.query<{
         migration_name: string;
         finished_at: Date | null;
@@ -213,7 +238,7 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
       ).rows[0].id;
       const user = (
         await db.query<{ id: string }>(
-          "INSERT INTO foodprint.users(role_id,school_id,username,email,password_hash,full_name) VALUES ($1,$2,'migration_test','migration-test@example.test','test-only-not-a-login','Migration test') RETURNING id",
+          "INSERT INTO foodprint.users(role_id,role_code,school_id,username,email,password_hash,full_name) VALUES ($1,'MIGRATION_TEST',$2,'migration_test','migration-test@example.test','test-only-not-a-login','Migration test') RETURNING id",
           [role, schoolId],
         )
       ).rows[0].id;
@@ -281,7 +306,7 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
   );
 
   await context.test(
-    "migrate deploy builds an entirely empty database with both migrations",
+    "migrate deploy builds an entirely empty database with the full migration history",
     async () => {
       const name = `foodprint_migration_test_fresh_${randomUUID().replaceAll("-", "")}`;
       await db.query(`CREATE DATABASE "${name}"`);

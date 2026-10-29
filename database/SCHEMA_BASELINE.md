@@ -50,6 +50,16 @@ Xác minh sau triển khai lúc **06:11:27 UTC**:
 
 Azure đã nhận baseline; không chạy lại thủ tục nhận `0_init` trên database này. Dùng `npm run db:migrate:status` để kiểm tra lịch sử hiện tại. `db:baseline:check` chỉ dành cho cấu trúc ban đầu trước migration mở rộng, không dùng làm health check sau triển khai. Lần triển khai này được chạy thủ công theo yêu cầu. Workflow CD cho các migration tiếp theo được mô tả ở [README mục 10](../README.md#10-cd-migration-azure-từ-dev); việc kích hoạt còn cần environment/secrets và kết nối mạng trên GitHub/Azure.
 
+## Migration phân quyền động đang chuẩn bị
+
+Migration `20261029000200_single_organization_admin` thêm `users.role_code`, backfill theo role hiện có, cập nhật timestamp, và đối chiếu `(role_id, role_code)` với `(roles.id, roles.code)` bằng FK ghép. UUID role, mật khẩu và role được gán cho tài khoản giữ nguyên. Hai partial unique index chỉ giới hạn SCHOOL_ADMINISTRATION theo school_id và INGREDIENT_SUPPLIER_ADMIN theo supplier_id; tài khoản inactive cũng được tính. Các CHECK yêu cầu admin ACTIVE gắn đúng loại tổ chức; tài khoản đăng ký chưa ACTIVE vẫn có thể tạm chưa có tổ chức như thiết kế đăng ký hiện hữu. Không thêm function/trigger hoặc bảng lịch sử.
+
+Migration dừng và rollback nếu có admin trùng, không tự chọn/xóa/chuyển role tài khoản. Cấu trúc ban đầu 0_init và migration denial đã applied giữ nguyên. PostgreSQL integration tests kiểm tra giữ dữ liệu, từ chối admin trùng và unique khi ghi đồng thời.
+
+Bootstrap permission là lệnh riêng `auth:bootstrap`, tách khỏi migration/CD. Catalog lấy từ SQL v5.4 cùng các permission cho endpoint hiện có; không import mock data. Chạy lại giữ quyền role ngoài SYSTEM_ADMIN đã chỉnh và các cờ inactive. System Admin không được sửa role SYSTEM_ADMIN qua API; bootstrap operator cấp quyền khởi tạo cho role này. Xem [quy trình phân quyền](../docs/AUTHORIZATION.md).
+
+**Trạng thái triển khai:** migration mới và bootstrap chưa chạy trên Azure trong lúc triển khai code; cập nhật theo kết quả review/CD và bootstrap riêng.
+
 ## Database đã tồn tại: nhận baseline một lần
 
 Thủ tục dành cho database chưa nhận baseline; Azure hiện tại đã hoàn tất. Chỉ làm sau khi migration đã được review/merge và việc ghi lịch sử/chạy DDL trên database đích được cho phép. `DATABASE_URL` phải trỏ đúng database dự định triển khai.

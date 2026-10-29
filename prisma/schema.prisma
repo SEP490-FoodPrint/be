@@ -706,6 +706,7 @@ model Role {
   rolePermissions   RolePermission[]   @relation("role_permissions_role_id__roles")
 
   @@unique([code])
+  @@unique([id, code], map: "uq_roles_id_code")
   @@map("roles")
   @@schema("foodprint")
 }
@@ -738,7 +739,6 @@ model RolePermission {
   @@map("role_permissions")
   @@schema("foodprint")
 }
-
 
 /// Stores School-Supplier partnership history. SUSPENDED means temporarily paused; UNLINKED means the relationship has ended.
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
@@ -966,6 +966,7 @@ model TraceabilityAnchor {
 model User {
   id                                           String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   roleId                                       String                       @map("role_id") @db.Uuid
+  roleCode                                     String                       @map("role_code") @db.VarChar(60)
   schoolId                                     String?                      @map("school_id") @db.Uuid
   /// Many Supplier users may reference one Supplier; role and organization authorization must be enforced by the application and relevant service logic.
   supplierId                                   String?                      @map("supplier_id") @db.Uuid
@@ -980,7 +981,7 @@ model User {
   lastLoginAt                                  DateTime?                    @map("last_login_at") @db.Timestamptz(6)
   createdAt                                    DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                                    DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  Role                                         Role                         @relation("users_role_id__roles", fields: [roleId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  Role                                         Role                         @relation("users_role_id__roles", fields: [roleId, roleCode], references: [id, code], onDelete: Restrict, onUpdate: NoAction, map: "users_role_id_code_fkey")
   School                                       School?                      @relation("users_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   Supplier                                     Supplier?                    @relation("users_supplier_id__suppliers", fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   communeFoodSafetyUnit                        CommuneFoodSafetyUnit?       @relation("users_commune_food_safety_unit_id__commune_food_safety_units", fields: [communeFoodSafetyUnitId], references: [id], onDelete: Restrict, onUpdate: NoAction)
@@ -1022,6 +1023,8 @@ model User {
 
   @@unique([username])
   @@unique([email])
+  @@unique([schoolId], map: "uq_users_school_admin", where: raw("((role_code)::text = 'SCHOOL_ADMINISTRATION'::text)"))
+  @@unique([supplierId], map: "uq_users_supplier_admin", where: raw("((role_code)::text = 'INGREDIENT_SUPPLIER_ADMIN'::text)"))
   @@index([schoolId], map: "idx_users_school_id")
   @@index([supplierId], map: "idx_users_supplier_id", where: raw("supplier_id IS NOT NULL"))
   @@index([communeFoodSafetyUnitId], map: "idx_users_commune_food_safety_unit_id", where: raw("commune_food_safety_unit_id IS NOT NULL"))
