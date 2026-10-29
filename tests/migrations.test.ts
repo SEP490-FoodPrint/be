@@ -7,6 +7,11 @@ import { test } from "node:test";
 import { promisify } from "node:util";
 import { Client } from "pg";
 import { verifyBaseline } from "../src/utils/migration-baseline";
+import {
+  pendingDeploymentMigrations,
+  readMigrationFiles,
+  type MigrationHistoryRow,
+} from "../src/utils/migration-deployment";
 import { assertLocalMigrationTarget } from "../src/utils/migration-target";
 
 const root = path.resolve(__dirname, "..");
@@ -136,6 +141,17 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
       ).rows[0].id;
       await runPrisma(url, ["migrate", "resolve", "--applied", "0_init"]);
       await readCatalog();
+      const files = await readMigrationFiles();
+      const readHistory = async () =>
+        (
+          await db.query<MigrationHistoryRow>(
+            "SELECT migration_name,checksum,finished_at,rolled_back_at FROM foodprint._prisma_migrations",
+          )
+        ).rows;
+      assert.deepEqual(
+        pendingDeploymentMigrations(files, await readHistory()),
+        migrationNames.slice(1),
+      );
       assert.equal(
         (
           await db.query<{ name: string | null }>(
@@ -156,6 +172,10 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
         migrationNames,
       );
       assert(history.rows.every((row) => row.finished_at !== null));
+      assert.deepEqual(
+        pendingDeploymentMigrations(files, await readHistory()),
+        [],
+      );
       assert.equal(
         (
           await db.query<{ name: string }>(

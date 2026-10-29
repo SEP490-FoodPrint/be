@@ -48,7 +48,7 @@ Xác minh sau triển khai lúc **06:11:27 UTC**:
 - Có **44 bảng nghiệp vụ**, không tính `_prisma_migrations`. Bảng mới có CHECK đúng một tổ chức đã validated, sáu FK và ba partial unique index hợp lệ.
 - Số dòng của cả 43 bảng cũ và fingerprint của chín nhóm catalog cũ giữ nguyên so với snapshot ngay trước triển khai. Bảng mới có 0 dòng; không chạy seed, mock data, reset hoặc DML nghiệp vụ.
 
-Azure đã nhận baseline; không chạy lại thủ tục nhận `0_init` trên database này. Dùng `npm run db:migrate:status` để kiểm tra lịch sử hiện tại. `db:baseline:check` chỉ dành cho cấu trúc ban đầu trước migration mở rộng, không dùng làm health check sau triển khai. Đây là lần triển khai thủ công được cho phép; chưa có CD tự deploy.
+Azure đã nhận baseline; không chạy lại thủ tục nhận `0_init` trên database này. Dùng `npm run db:migrate:status` để kiểm tra lịch sử hiện tại. `db:baseline:check` chỉ dành cho cấu trúc ban đầu trước migration mở rộng, không dùng làm health check sau triển khai. Lần triển khai này được chạy thủ công theo yêu cầu. Workflow CD cho các migration tiếp theo được mô tả ở [README mục 10](../README.md#10-cd-migration-azure-từ-dev); việc kích hoạt còn cần environment/secrets và kết nối mạng trên GitHub/Azure.
 
 ## Database đã tồn tại: nhận baseline một lần
 
@@ -116,4 +116,4 @@ MIGRATION_TEST_DATABASE_URL='<local-test-url>' npm run test:migrations
 
 URL test phải trỏ loopback và database có tên `foodprint_migration_test` hoặc `foodprint_migration_test_<suffix>`, chưa có schema `foodprint`. Test không drop/reset database hoặc xóa volume. Nó kiểm tra replay baseline, phát hiện CHECK bị thiếu, nhận baseline trên database có dữ liệu mẫu để chứng minh dữ liệu được giữ, deploy/redeploy, drift bằng 0, fresh deploy và các tổ hợp tổ chức hợp lệ/không hợp lệ.
 
-CI dựng PostgreSQL 18 tạm cho job migration, tách khỏi database thực. Check bắt buộc `Backend quality` tổng hợp kết quả code quality và migration; một nhánh lỗi hoặc bị bỏ qua sẽ làm check tổng hợp thất bại. Chưa có workflow CD hoặc quyền tự deploy Azure.
+CI dựng PostgreSQL 18 tạm cho job migration, tách khỏi database thực. Check bắt buộc `Backend quality` tổng hợp kết quả code quality và migration; một nhánh lỗi hoặc bị bỏ qua sẽ làm check tổng hợp thất bại. Sau khi CI của push vào `dev` PASS, workflow CD có thể triển khai pending migrations bằng environment `azure-dev` đã cấu hình. `npm run db:deploy:check` chỉ đọc, xác nhận đúng host/database/schema/SSL và đối chiếu checksum mọi migration đã applied. CD dừng nếu chưa nhận baseline, có migration lỗi, file bị sửa/xóa hoặc database đi trước commit. CD không tự nhận baseline hay xử lý lỗi bằng reset/resolve. Xem [cấu hình và vận hành CD](../README.md#10-cd-migration-azure-từ-dev).

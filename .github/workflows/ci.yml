@@ -11,7 +11,8 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Never interrupt an active Azure migration when another dev push arrives.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref != 'refs/heads/dev' }}
 
 jobs:
   code_quality:
@@ -126,3 +127,11 @@ jobs:
         run: |
           test "$CODE_RESULT" = success
           test "$MIGRATION_RESULT" = success
+
+  deploy_database:
+    name: Deploy Azure database
+    needs: quality
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    uses: ./.github/workflows/cd.yml
+    secrets:
+      AZURE_DATABASE_URL: ${{ secrets.AZURE_DATABASE_URL }}
