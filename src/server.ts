@@ -37,8 +37,8 @@ const startServer = async () => {
     );
   });
 
-  server.on("error", () => {
-    console.error("Không thể mở HTTP server. Kiểm tra PORT.");
+  server.on("error", (err) => {
+    console.error("Không thể mở HTTP server. Chi tiết lỗi:", err);
     void closeConnections().finally(() => {
       process.exitCode = 1;
     });
@@ -55,9 +55,10 @@ const startServer = async () => {
   process.once("SIGTERM", shutdown);
 };
 
-void startServer().catch(async () => {
+void startServer().catch(async (err) => {
   console.error(
     "Không thể khởi động API. Kiểm tra cấu hình và PostgreSQL/Redis local.",
+    err,
   );
   process.exitCode = 1;
   await Promise.allSettled([prisma.$disconnect(), disconnectRedis()]);

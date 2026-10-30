@@ -767,6 +767,29 @@ model SchoolSupplierRelationship {
   @@schema("foodprint")
 }
 
+/// Physical table for administrative location hierarchy.
+/// Self-referencing tree supporting Province/City -> Ward/Commune/Special Zone.
+model Location {
+  id        String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code      String     @unique @db.VarChar(50)
+  name      String     @db.VarChar(255)
+  type      String     @db.VarChar(50)
+  level     Int        @db.SmallInt
+  parentId  String?    @map("parent_id") @db.Uuid
+  isActive  Boolean    @default(true) @map("is_active")
+  createdAt DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime   @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  parent    Location?  @relation("locations_hierarchy", fields: [parentId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  children  Location[] @relation("locations_hierarchy")
+  schools   School[]   @relation("schools_location_id__locations")
+
+  @@index([parentId], map: "idx_locations_parent_id")
+  @@index([level], map: "idx_locations_level")
+  @@index([type], map: "idx_locations_type")
+  @@map("locations")
+  @@schema("foodprint")
+}
+
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
 model School {
   id                          String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -774,9 +797,14 @@ model School {
   code                        String?                      @db.VarChar(80)
   email                       String?                      @db.Citext
   phone                       String?                      @db.VarChar(30)
-  address                     String?                      @db.Text
+  locationId                  String?                      @map("location_id") @db.Uuid
+  addressLine                 String?                      @map("address_line") @db.Text
   /// Optional public website URL for the School profile.
   websiteUrl                  String?                      @map("website_url") @db.Text
+  description                 String?                      @db.Text
+  logoUrl                     String?                      @map("logo_url") @db.Text
+  coverImageUrl               String?                      @map("cover_image_url") @db.Text
+  boardingScale               String?                      @map("boarding_scale") @db.VarChar(100)
   /// Configured by authorized school actor; SEPARATE_BY_LOT or COMBINE_LOTS. NULL until configured; kitchen cannot override in CookingBatch.
   cookingMode                 CookingMode?                 @map("cooking_mode")
   /// School local time for lunch service; setup before lunch batch creation.
@@ -786,6 +814,7 @@ model School {
   status                      EntityStatus                 @default(ACTIVE)
   createdAt                   DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                   DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  location                    Location?                    @relation("schools_location_id__locations", fields: [locationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   users                       User[]                       @relation("users_school_id__schools")
   schoolSupplierRelationships SchoolSupplierRelationship[] @relation("school_supplier_relationships_school_id__schools")
   classes                     Class[]                      @relation("classes_school_id__schools")
@@ -797,6 +826,7 @@ model School {
   incidentSchoolAlerts        IncidentSchoolAlert[]        @relation("incident_school_alerts_target_school_id__schools")
 
   @@unique([code])
+  @@index([locationId], map: "idx_schools_location_id")
   @@map("schools")
   @@schema("foodprint")
 }
