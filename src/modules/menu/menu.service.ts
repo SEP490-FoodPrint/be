@@ -1,6 +1,7 @@
 import type { Prisma } from "../../generated/prisma/client";
 import { getPrisma } from "../../utils/database";
 import { HttpError } from "../../utils/http-error";
+import { aggregateDayStatus, decisionTargets } from "./menu-approval";
 import {
   listWindow,
   readListPage,
@@ -35,7 +36,7 @@ const approvalInclude = {
                     include: {
                       Ingredient: {
                         include: {
-                          Supplier: { select: { name: true } },
+                          Supplier: { select: { id: true, name: true } },
                         },
                       },
                     },
@@ -50,7 +51,9 @@ const approvalInclude = {
   },
   menuReviewRecords: {
     orderBy: { reviewedAt: "desc" as const },
-    include: { User: { select: { fullName: true } } },
+    include: {
+      User: { select: { fullName: true, Role: { select: { code: true } } } },
+    },
   },
 } as const satisfies Prisma.WeeklyMenuInclude;
 
@@ -113,7 +116,28 @@ async function getApprovalDetail(menuId: string) {
     select: { fullName: true },
   });
 
-  const days = menu.menuDays.map((day, index) => {
+  const healthReview = menu.menuReviewRecords.find(
+    (review) => review.User.Role.code === "SCHOOL_HEALTH_OFFICER",
+  );
+  const boardReviews = menu.menuReviewRecords.filter(
+    (review) => review.User.Role.code === "SCHOOL_MANAGEMENT_BOARD",
+  );
+  const reviewDto = (review: (typeof boardReviews)[number] | undefined) =>
+    review
+      ? {
+          approver: review.User.fullName,
+          role: "Ban Giám hiệu",
+          note: review.feedback ?? "",
+          reviewedAt: formatDateTime(review.reviewedAt),
+        }
+      : {
+          approver: defaultApprover?.fullName ?? "Ban Giám hiệu",
+          role: "Ban Giám hiệu",
+          note: "",
+          reviewedAt: null,
+        };
+
+  const days = menu.menuDays.map((day) => {
     const placements = day.menuDayDishes.map((placement) => {
       const suppliers = [
         ...new Set(
@@ -142,8 +166,14 @@ async function getApprovalDetail(menuId: string) {
 
     return {
       id: day.id,
+      status: day.approvalStatus,
+      approval: reviewDto(
+        boardReviews.find(
+          (review) => review.menuDayId === day.id || review.menuDayId === null,
+        ),
+      ),
       shortLabel: dayLabels[day.menuDate.getUTCDay()],
-      dayNumber: String(index + 1),
+      dayNumber: String(day.menuDate.getUTCDay() + 1),
       date: formatDate(day.menuDate),
       portions,
       lunch: placements
@@ -155,10 +185,15 @@ async function getApprovalDetail(menuId: string) {
     };
   });
 
-  const latestReview = menu.menuReviewRecords[0];
-  const supplier = days
-    .flatMap((day) => [...day.lunch, ...day.snack])
-    .find((item) => item.supplier)?.supplier;
+  const supplierIds = new Set(
+    menu.menuDays.flatMap((day) =>
+      day.menuDayDishes.flatMap((placement) =>
+        placement.Dish.dishIngredientEntries.map(
+          (link) => link.IngredientEntry.Ingredient.Supplier.id,
+        ),
+      ),
+    ),
+  );
   const firstDate = menu.menuDays[0]?.menuDate ?? menu.weekStartDate;
   const lastDate = menu.menuDays.at(-1)?.menuDate ?? menu.weekStartDate;
 
@@ -168,6 +203,9 @@ async function getApprovalDetail(menuId: string) {
     title: menu.title,
     description: null,
     status: menu.status,
+    canDecide:
+      menu.status !== "DRAFT" &&
+      days.some((day) => day.status === "PENDING_APPROVAL"),
     submittedAt: formatDateTime(menu.submittedAt),
     summary: {
       audience: "Toàn trường",
@@ -176,26 +214,25 @@ async function getApprovalDetail(menuId: string) {
       servingDetail: `${days.length} ngày học bán trú`,
       proposer: "Bộ phận Bếp và Cán bộ Bán trú",
       proposerDetail: menu.School.name,
-      supplier: supplier ?? "Nhiều nhà cung cấp đã phê duyệt",
-      supplierDetail: "Đối chiếu theo nguyên liệu của từng món",
+      supplier: `${supplierIds.size} nhà cung cấp`,
     },
     compliance: [],
     days,
     medicalReview: {
-      status: latestReview ? "Đã thẩm định" : "Chưa thẩm định",
-      reviewer: latestReview?.User.fullName ?? "Chưa phân công",
+      status:
+        healthReview?.decision === "APPROVED"
+          ? "Đã thẩm định"
+          : healthReview
+            ? "Yêu cầu điều chỉnh"
+            : "Chưa thẩm định",
+      isApproved: healthReview?.decision === "APPROVED",
+      reviewer: healthReview?.User.fullName ?? "Chưa phân công",
       role: "Cán bộ Y tế",
-      reviewedAt: formatDateTime(latestReview?.reviewedAt ?? null) ?? "—",
-      note: latestReview?.feedback ?? "Chưa có nhận xét thẩm định.",
+      reviewedAt: formatDateTime(healthReview?.reviewedAt ?? null) ?? "—",
+      note: healthReview?.feedback ?? "Chưa có nhận xét thẩm định.",
       documents: [],
     },
-    approval: {
-      approver:
-        latestReview?.User.fullName ??
-        defaultApprover?.fullName ??
-        "Ban Giám hiệu",
-      role: "Ban Giám hiệu",
-    },
+    approval: reviewDto(boardReviews[0]),
   };
 }
 
@@ -204,14 +241,25 @@ async function recordDecision(
   reviewerId: string | undefined,
   decision: Decision,
   feedback: string | undefined,
+  menuDayId?: string,
 ) {
   const prisma = await getPrisma();
   return prisma.$transaction(async (transaction) => {
+    // Serialize decisions for one week, including concurrent whole-week/day requests.
+    await transaction.$queryRaw`SELECT id FROM foodprint.weekly_menus WHERE id = ${menuId}::uuid FOR UPDATE`;
     const menu = await transaction.weeklyMenu.findUnique({
       where: { id: menuId },
-      select: { id: true, schoolId: true },
+      select: {
+        id: true,
+        schoolId: true,
+        status: true,
+        menuDays: { select: { id: true, approvalStatus: true } },
+      },
     });
     if (!menu) return null;
+    if (menu.status === "DRAFT")
+      throw new HttpError(409, "Thực đơn chưa được gửi duyệt");
+    const targets = decisionTargets(menu.menuDays, menuDayId);
 
     let effectiveReviewerId = reviewerId;
     if (!effectiveReviewerId) {
@@ -231,26 +279,54 @@ async function recordDecision(
         "Chưa cấu hình tài khoản Ban Giám hiệu mặc định",
       );
     }
-
-    const status = decision === "APPROVED" ? "APPROVED" : "REVISION_REQUIRED";
+    const reviewer = await transaction.user.findFirst({
+      where: {
+        id: effectiveReviewerId,
+        schoolId: menu.schoolId,
+        status: "ACTIVE",
+        Role: { code: "SCHOOL_MANAGEMENT_BOARD" },
+      },
+      select: { id: true },
+    });
+    if (!reviewer)
+      throw new HttpError(
+        403,
+        "Người duyệt phải thuộc Ban Giám hiệu của trường",
+      );
+    const dayStatus =
+      decision === "APPROVED" ? "APPROVED" : "REVISION_REQUIRED";
+    const targetIds = new Set(targets.map((day) => day.id));
+    await transaction.menuDay.updateMany({
+      where: { id: { in: [...targetIds] }, weeklyMenuId: menu.id },
+      data: { approvalStatus: dayStatus },
+    });
+    const status = aggregateDayStatus(
+      menu.menuDays.map((day) =>
+        targetIds.has(day.id) ? { ...day, approvalStatus: dayStatus } : day,
+      ),
+    );
     await transaction.weeklyMenu.update({
       where: { id: menu.id },
       data: {
         status,
-        approvedAt: decision === "APPROVED" ? new Date() : null,
+        approvedAt: status === "APPROVED" ? new Date() : null,
       },
     });
-    const review = await transaction.menuReviewRecord.create({
-      data: {
+    await transaction.menuReviewRecord.createMany({
+      data: targets.map((day) => ({
         weeklyMenuId: menu.id,
+        menuDayId: day.id,
         reviewerUserId: effectiveReviewerId,
         decision,
         feedback: feedback?.trim() || null,
-      },
-      select: { id: true },
+      })),
     });
 
-    return { id: menu.id, status, reviewId: review.id };
+    return {
+      id: menu.id,
+      status,
+      days: targets.map((day) => ({ id: day.id, status: dayStatus })),
+    };
   });
 }
 
@@ -272,15 +348,23 @@ export function createMenuService(read: ListReader = readFromDatabase) {
       menuId: string,
       reviewerId: string | undefined,
       notes?: string,
+      menuDayId?: string,
     ) {
-      return recordDecision(menuId, reviewerId, "APPROVED", notes);
+      return recordDecision(menuId, reviewerId, "APPROVED", notes, menuDayId);
     },
     requestRevision(
       menuId: string,
       reviewerId: string | undefined,
       reason: string,
+      menuDayId?: string,
     ) {
-      return recordDecision(menuId, reviewerId, "REVISION_REQUESTED", reason);
+      return recordDecision(
+        menuId,
+        reviewerId,
+        "REVISION_REQUESTED",
+        reason,
+        menuDayId,
+      );
     },
   };
 }

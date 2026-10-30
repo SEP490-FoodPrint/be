@@ -16,6 +16,8 @@
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "db:seed:menu": "tsx src/scripts/seed-menu-approval.ts",
+    "db:upgrade:menu-approval": "tsx src/scripts/upgrade-menu-day-approval.ts",
+    "test:menu:local": "tsx --test tests/menu-approval.local.test.ts",
     "db:check": "tsx src/scripts/check-db.ts",
     "lint": "eslint . --max-warnings=0",
     "lint:fix": "npm run lint -- --fix",

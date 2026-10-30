@@ -1,5 +1,26 @@
 # Baseline thiết kế database và Prisma
 
+## Mở rộng duyệt thực đơn theo ngày (30/10/2026)
+
+Theo yêu cầu duyệt theo tab ngày hoặc cả tuần, ứng dụng bổ sung
+`menu_days.approval_status` (dùng enum `weekly_menu_status` có sẵn) và
+`menu_review_records.menu_day_id` nullable, FK đến `menu_days`.
+Đây là phần mở rộng nghiệp vụ ngoài SQL baseline v5.3.1 bên dưới.
+
+Chạy `npm run db:upgrade:menu-approval` trên database local đã có schema
+baseline. Script chỉ thêm cột/index/FK, giữ quyết định tuần cũ trên các ngày
+hiện có; không reset dữ liệu. Sau đó chạy `npm run prisma:generate`.
+
+API quyết định nhận `menuDayId` tùy chọn: có ID thì xử lý đúng ngày thuộc tuần,
+không có thì xử lý mọi ngày còn `PENDING_APPROVAL`. Ngày đã duyệt/yêu cầu sửa
+không bị ghi đè; xử lý lặp trả 409. Tuần chỉ `APPROVED` khi tất cả ngày đã duyệt;
+có ngày yêu cầu sửa thì tuần là `REVISION_REQUIRED`, các ngày còn chờ vẫn xử lý được.
+Nhận xét Y tế và BGH được phân biệt theo role của người ghi.
+
+`npm run test:menu:local` kiểm tra trên fixture tuần riêng và dọn fixture sau khi
+chạy; cần có các tài khoản của `db:seed:menu`. Chạy lại seed sẽ đưa tuần demo
+về trạng thái chờ duyệt, xóa lịch sử quyết định của riêng tuần demo đó.
+
 ## Nguồn chuẩn
 
 Nguồn hiện tại: [FoodPrint_PostgreSQL_Database_v5.sql](FoodPrint_PostgreSQL_Database_v5.sql), **version v5.3.1 theo header SQL**. Đối chiếu ngày **28/10/2026** bằng PostgreSQL AST ngoại tuyến; không introspect database cũ hoặc thực thi file SQL.

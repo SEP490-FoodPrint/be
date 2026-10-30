@@ -12,7 +12,19 @@ export function validateMenuId(value: string): string {
   return value;
 }
 
-export function validateApprovalPayload(body: unknown): { notes?: string } {
+function readMenuDayId(body: object): { menuDayId?: string } {
+  const value = (body as { menuDayId?: unknown }).menuDayId;
+  if (value === undefined) return {};
+  if (typeof value !== "string" || !uuidPattern.test(value)) {
+    throw new HttpError(400, "Mã ngày thực đơn không hợp lệ");
+  }
+  return { menuDayId: value };
+}
+
+export function validateApprovalPayload(body: unknown): {
+  notes?: string;
+  menuDayId?: string;
+} {
   if (body === undefined || body === null) return {};
   if (typeof body !== "object" || Array.isArray(body)) {
     throw new HttpError(400, "Dữ liệu phê duyệt không hợp lệ");
@@ -24,10 +36,16 @@ export function validateApprovalPayload(body: unknown): { notes?: string } {
   if (typeof notes === "string" && notes.length > 2000) {
     throw new HttpError(400, "Ý kiến không được vượt quá 2000 ký tự");
   }
-  return notes?.trim() ? { notes: notes.trim() } : {};
+  return {
+    ...readMenuDayId(body),
+    ...(notes?.trim() ? { notes: notes.trim() } : {}),
+  };
 }
 
-export function validateRevisionPayload(body: unknown): { reason: string } {
+export function validateRevisionPayload(body: unknown): {
+  reason: string;
+  menuDayId?: string;
+} {
   if (typeof body !== "object" || body === null || Array.isArray(body)) {
     throw new HttpError(400, "Dữ liệu yêu cầu chỉnh sửa không hợp lệ");
   }
@@ -38,5 +56,5 @@ export function validateRevisionPayload(body: unknown): { reason: string } {
   if (reason.trim().length > 2000) {
     throw new HttpError(400, "Lý do không được vượt quá 2000 ký tự");
   }
-  return { reason: reason.trim() };
+  return { reason: reason.trim(), ...readMenuDayId(body) };
 }

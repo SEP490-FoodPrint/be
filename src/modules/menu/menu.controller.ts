@@ -30,11 +30,12 @@ export function createMenuController(service: MenuService = menuService) {
       sendSuccess(res, result, "Lấy hồ sơ phê duyệt thực đơn thành công");
     }),
     approve: asyncHandler(async (req, res) => {
-      const { notes } = validateApprovalPayload(req.body);
+      const { notes, menuDayId } = validateApprovalPayload(req.body);
       const result = await service.approveMenu(
         validateMenuId(req.params.menuId),
         reviewerIdFromRequest(req.user?.sub),
         notes,
+        menuDayId,
       );
       if (!result) {
         sendError(res, "Không tìm thấy thực đơn", 404);
@@ -43,11 +44,12 @@ export function createMenuController(service: MenuService = menuService) {
       sendSuccess(res, result, "Phê duyệt thực đơn thành công");
     }),
     requestRevision: asyncHandler(async (req, res) => {
-      const { reason } = validateRevisionPayload(req.body);
+      const { reason, menuDayId } = validateRevisionPayload(req.body);
       const result = await service.requestRevision(
         validateMenuId(req.params.menuId),
         reviewerIdFromRequest(req.user?.sub),
         reason,
+        menuDayId,
       );
       if (!result) {
         sendError(res, "Không tìm thấy thực đơn", 404);
