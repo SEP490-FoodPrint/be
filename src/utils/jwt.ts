@@ -1,17 +1,23 @@
 import jwt, { type JwtPayload, type SignOptions } from "jsonwebtoken";
 import "../config/env";
-
-const JWT_SECRET = process.env.JWT_SECRET || "foodprint_jwt_secret_key_2026";
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "7d";
-
-export const signToken = (payload: JwtPayload): string => {
-  return jwt.sign(payload, JWT_SECRET, {
-    expiresIn: JWT_EXPIRES_IN as SignOptions["expiresIn"],
+function secret(): string {
+  const value = process.env.JWT_SECRET;
+  if (!value?.trim()) throw new Error("Thiếu JWT_SECRET");
+  return value;
+}
+export const signToken = (payload: JwtPayload): string =>
+  jwt.sign(payload, secret(), {
+    algorithm: "HS256",
+    issuer: "foodprint",
+    audience: "foodprint-api",
+    expiresIn: (process.env.JWT_EXPIRES_IN || "7d") as SignOptions["expiresIn"],
   });
-};
-
 export const verifyToken = (token: string): JwtPayload => {
-  const payload = jwt.verify(token, JWT_SECRET);
+  const payload = jwt.verify(token, secret(), {
+    algorithms: ["HS256"],
+    issuer: "foodprint",
+    audience: "foodprint-api",
+  });
   if (typeof payload === "string") throw new Error("JWT payload không hợp lệ");
   return payload;
 };

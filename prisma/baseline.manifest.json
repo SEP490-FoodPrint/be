@@ -1,0 +1,27 @@
+{
+  "migration": "0_init",
+  "schema": "foodprint",
+  "sqlSha256": "7ea7b81d1da39210180fd9514c792ec7061303e4efc5949de222c41210c5f342",
+  "verifiedPostgresMajor": 18,
+  "verifiedOn": "2026-10-29",
+  "fingerprints": {
+    "tables": "8eb94003d005ee6d4c9ce7d230b71a63a9e91bd4a6d675a9a5b0ca14c967a5da",
+    "columns": "a3d03bc35c90f06f94ecac7221cb27a94117b7c5bcb3672f8f300fca63eb8f77",
+    "constraints": "82d0fdddfdee10a8be64f4b49d87053069d10a60b8a2060a9c554abf418440ec",
+    "indexes": "89d15441a7cfe433eff373d3bcccd10740f2db577fdff155a85187c1842c7000",
+    "enums": "65867435b6fe168fa6a9bff43450607af44958cf38c8e7ea5f963e583bf1ec7c",
+    "extensions": "df8172751548b5a085d593afcd55ad1ed6c3f885d8896ee5337e7c0b30bf1d0c",
+    "triggers": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "functions": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "policies": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+  },
+  "counts": {
+    "tables": 43,
+    "columns": 415,
+    "enums": 27,
+    "checks": 41,
+    "foreignKeys": 100,
+    "indexes": 124,
+    "partialIndexes": 8
+  }
+}

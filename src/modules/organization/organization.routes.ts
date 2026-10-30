@@ -1,5 +1,7 @@
 import { Router } from "express";
-import { systemAdminOnly } from "../../middlewares/system-admin.middleware";
+import type { RequestHandler } from "express";
+import { authenticate } from "../../middlewares/auth.middleware";
+import { requireResource } from "../../middlewares/permission.middleware";
 import { createOrganizationController } from "./organization.controller";
 import {
   organizationService,
@@ -8,6 +10,7 @@ import {
 
 export function createOrganizationRouter(
   service: OrganizationService = organizationService,
+  authHandler: RequestHandler = authenticate,
 ) {
   const router = Router();
   const controller = createOrganizationController(service);
@@ -17,9 +20,12 @@ export function createOrganizationRouter(
   router.get("/public/code/:code", controller.getPublicSchoolByCode);
   router.get("/public/:id", controller.getPublicSchoolById);
 
-  // Internal admin endpoint
-  router.get("/", ...systemAdminOnly, controller.getAll);
-
+  router.get(
+    "/",
+    authHandler,
+    requireResource("organization"),
+    controller.getAll,
+  );
   return router;
 }
 

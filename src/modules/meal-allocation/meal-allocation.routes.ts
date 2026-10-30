@@ -1,5 +1,7 @@
 import { Router } from "express";
-import { systemAdminOnly } from "../../middlewares/system-admin.middleware";
+import type { RequestHandler } from "express";
+import { authenticate } from "../../middlewares/auth.middleware";
+import { requireResource } from "../../middlewares/permission.middleware";
 import { createMealAllocationController } from "./meal-allocation.controller";
 import {
   mealAllocationService,
@@ -8,10 +10,16 @@ import {
 
 export function createMealAllocationRouter(
   service: MealAllocationService = mealAllocationService,
+  authHandler: RequestHandler = authenticate,
 ) {
   const router = Router();
   const controller = createMealAllocationController(service);
-  router.get("/", ...systemAdminOnly, controller.getAll);
+  router.get(
+    "/",
+    authHandler,
+    requireResource("meal-allocation"),
+    controller.getAll,
+  );
   return router;
 }
 

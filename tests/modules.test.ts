@@ -1,3 +1,8 @@
+import {
+  testAdmin,
+  testStaff,
+  testAuthenticate,
+} from "./helpers/authorization";
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import express from "express";
@@ -23,7 +28,7 @@ import { startHttp } from "./helpers/http";
 process.env.NODE_ENV = "test";
 
 const adminHeaders = {
-  Authorization: `Bearer ${signToken({ sub: "test-admin", role: ROLES.SYSTEM_ADMIN, orgType: ORG_TYPES.SYSTEM })}`,
+  Authorization: `Bearer ${signToken({ sub: testAdmin.id, role: ROLES.SYSTEM_ADMIN, orgType: ORG_TYPES.SYSTEM })}`,
 };
 const now = new Date("2026-01-01T00:00:00.000Z");
 const userRow = {
@@ -41,7 +46,7 @@ const userRow = {
 
 async function userApi(context: TestContext, service: UserService) {
   const app = express();
-  app.use("/api/users", createUserRouter(service));
+  app.use("/api/users", createUserRouter(service, testAuthenticate));
   app.use(globalErrorHandler);
   const http = await startHttp(app);
   context.after(() => http.close());
@@ -95,7 +100,7 @@ void test("user list bounds reads, uses stable ordering, projects safe fields an
       { ...userRow, id: "test-user-3" },
     ]);
   });
-  const result = await service.getAll({ page: 2, limit: 2 });
+  const result = await service.getAll({ page: 2, limit: 2 }, testAdmin);
   assert.equal(calls, 1);
   assert.deepEqual(
     result.items.map((item) => item.id),
@@ -106,10 +111,13 @@ void test("user list bounds reads, uses stable ordering, projects safe fields an
 
 void test("a final or empty page has no next page", async () => {
   for (const rows of [[], [userRow]]) {
-    const result = await createUserService(() => Promise.resolve(rows)).getAll({
-      page: 1,
-      limit: 1,
-    });
+    const result = await createUserService(() => Promise.resolve(rows)).getAll(
+      {
+        page: 1,
+        limit: 1,
+      },
+      testAdmin,
+    );
     assert.equal(result.pagination.hasNext, false);
     assert.deepEqual(result.items, rows);
   }
@@ -132,7 +140,8 @@ void test("composite-primary-key lists use both keys for deterministic ordering"
     ]);
   });
   assert.equal(
-    (await service.getAll({ page: 1, limit: 20 })).items[0].affectedCount,
+    (await service.getAll({ page: 1, limit: 20 }, testAdmin)).items[0]
+      .affectedCount,
     2,
   );
 });
@@ -160,7 +169,7 @@ void test("traceability BigInt block numbers are serialized without losing preci
       },
     ]),
   );
-  const result = await service.getAll({ page: 1, limit: 20 });
+  const result = await service.getAll({ page: 1, limit: 20 }, testAdmin);
   assert.equal(result.items[0].blockNumber, "9007199254740993");
   assert.doesNotThrow(() => JSON.stringify(result));
 });
@@ -184,7 +193,7 @@ void test("warehouse Decimal quantities and dates remain JSON-compatible without
       },
     ]),
   );
-  const result = await service.getAll({ page: 1, limit: 20 });
+  const result = await service.getAll({ page: 1, limit: 20 }, testAdmin);
   const body: unknown = JSON.parse(JSON.stringify(result));
   assert.deepEqual(body, {
     items: [
@@ -207,10 +216,13 @@ void test("warehouse Decimal quantities and dates remain JSON-compatible without
   });
 });
 
-void test("every mounted business list authenticates and rejects non-admin or wrong-organization tokens", async (context) => {
+void test("every mounted business list rejects forged role claims when the database principal has no permission", async (context) => {
   const store = new MemoryStore();
   const http = await startHttp(
-    createApp(createApiRateLimiter(store, { windowMs: 60_000, limit: 500 })),
+    createApp(
+      createApiRateLimiter(store, { windowMs: 60_000, limit: 500 }),
+      testAuthenticate,
+    ),
   );
   context.after(async () => {
     await http.close();
@@ -224,7 +236,7 @@ void test("every mounted business list authenticates and rejects non-admin or wr
     { role: ROLES.HOMEROOM_TEACHER, orgType: ORG_TYPES.SYSTEM },
   ];
   const deniedHeaders = deniedClaims.map((claims) => ({
-    Authorization: `Bearer ${signToken(claims)}`,
+    Authorization: `Bearer ${signToken({ ...claims, sub: testStaff.id })}`,
   }));
   const paths = [
     "/api/auth/roles",
