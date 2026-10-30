@@ -1,4 +1,5 @@
 import express, { type RequestHandler } from "express";
+import cookieParser from "cookie-parser";
 import { authenticate } from "./middlewares/auth.middleware";
 import cors from "cors";
 import morgan from "morgan";
@@ -23,6 +24,7 @@ export function createApp(
       credentials: true,
     }),
   );
+  app.use(cookieParser());
   app.use("/api", apiRateLimiter);
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));

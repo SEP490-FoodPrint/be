@@ -4,19 +4,32 @@ import { loadPrincipal } from "../utils/authorization";
 import { verifyToken } from "../utils/jwt";
 import { uuid } from "../utils/auth-validation";
 import { sendError } from "../utils/response";
+import { getCookie } from "../utils/cookie";
+
 export function createAuthenticate(
   load: (id: string) => Promise<AuthPrincipal> = loadPrincipal,
 ): RequestHandler {
   return (req, res, next) => {
     let id: string;
     try {
-      const match = /^Bearer (\S+)$/.exec(req.headers.authorization ?? "");
-      if (!match) throw new Error("Missing bearer token");
-      id = uuid(verifyToken(match[1]).sub);
+      // 1. Ưu tiên đọc Token từ Cookie HttpOnly
+      let token = getCookie(req, "access_token");
+
+      // 2. Fallback đọc từ Header Authorization: Bearer <token>
+      if (!token) {
+        const match = /^Bearer (\S+)$/.exec(req.headers.authorization ?? "");
+        if (match) {
+          token = match[1];
+        }
+      }
+
+      if (!token) throw new Error("Missing authentication token");
+      id = uuid(verifyToken(token).sub);
     } catch {
       sendError(res, "Phiên đăng nhập không hợp lệ hoặc đã hết hạn", 401);
       return;
     }
+
     void load(id)
       .then((principal) => {
         req.auth = principal;
@@ -30,4 +43,5 @@ export function createAuthenticate(
       .catch(next);
   };
 }
+
 export const authenticate = createAuthenticate();

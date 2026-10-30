@@ -15,6 +15,8 @@ export function createAuthRouter(
   router.get("/roles", authHandler, requireResource("auth"), controller.getAll);
   const session = createSessionController();
   router.post("/login", session.login);
+  router.post("/refresh", session.refresh);
+  router.post("/logout", session.logout);
   router.get("/me", authHandler, session.me);
   router.get("/me/permissions", authHandler, session.permissions);
   return router;
