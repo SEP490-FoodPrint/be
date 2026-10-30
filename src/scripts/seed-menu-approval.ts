@@ -1,7 +1,21 @@
 import { requireDatabaseUrl } from "../config/env";
 import { getPrisma } from "../utils/database";
+import bcrypt from "bcryptjs";
+import { assertAzureMigrationTarget } from "../utils/migration-deployment";
 
 function assertLocalDatabase(): void {
+  if (process.argv.includes("--azure")) {
+    assertAzureMigrationTarget(
+      requireDatabaseUrl(),
+      process.env.AZURE_DATABASE_HOST,
+    );
+    if (!process.env.SEED_TEST_PASSWORD) {
+      throw new Error(
+        "Cần SEED_TEST_PASSWORD để tạo tài khoản test trên Azure.",
+      );
+    }
+    return;
+  }
   const target = new URL(requireDatabaseUrl());
   if (!["localhost", "127.0.0.1", "[::1]"].includes(target.hostname)) {
     throw new Error(
@@ -454,16 +468,30 @@ function stableUuid(namespace: number, sequence: number): string {
 
 async function seedMenuApproval(): Promise<void> {
   const prisma = await getPrisma();
+  if (
+    await prisma.weeklyMenu.findUnique({
+      where: { id: ids.menu },
+      select: { id: true },
+    })
+  ) {
+    console.log(
+      "Bộ thực đơn test đã có; giữ nguyên dữ liệu và lịch sử duyệt hiện tại.",
+    );
+    return;
+  }
+  const passwordHash = process.env.SEED_TEST_PASSWORD
+    ? await bcrypt.hash(process.env.SEED_TEST_PASSWORD, 12)
+    : "prototype-seed-no-login";
   await prisma.$transaction(
     async (transaction) => {
       await transaction.school.upsert({
         where: { id: ids.school },
+        select: { id: true },
         update: {
           name: "Trường Tiểu học Cầu Giấy",
           code: "TH-CG-01",
           email: "vanphong@thcaugiay.edu.vn",
           phone: "024 3767 8899",
-          address: "Số 01 Nguyễn Thị Duệ, Cầu Giấy, Hà Nội",
           status: "ACTIVE",
         },
         create: {
@@ -472,7 +500,6 @@ async function seedMenuApproval(): Promise<void> {
           code: "TH-CG-01",
           email: "vanphong@thcaugiay.edu.vn",
           phone: "024 3767 8899",
-          address: "Số 01 Nguyễn Thị Duệ, Cầu Giấy, Hà Nội",
           status: "ACTIVE",
         },
       });
@@ -481,7 +508,7 @@ async function seedMenuApproval(): Promise<void> {
       for (const roleSeed of roles) {
         const role = await transaction.role.upsert({
           where: { code: roleSeed.code },
-          update: { name: roleSeed.name, type: "SCHOOL" },
+          update: {},
           create: { ...roleSeed, type: "SCHOOL" },
           select: { id: true },
         });
@@ -511,7 +538,7 @@ async function seedMenuApproval(): Promise<void> {
             supplierId: null,
             username: userSeed.username,
             email: userSeed.email,
-            passwordHash: "prototype-seed-no-login",
+            passwordHash,
             fullName: userSeed.fullName,
             status: "ACTIVE",
           },
