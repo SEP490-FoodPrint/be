@@ -121,6 +121,9 @@ jobs:
       - name: Verify dynamic authorization and tenant isolation on PostgreSQL
         run: npm run test:authorization
 
+      - name: Verify supplier contracts, private files and concurrent onboarding
+        run: npm run test:supplier-onboarding
+
   quality:
     name: Backend quality
     if: always()

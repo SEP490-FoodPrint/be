@@ -13,6 +13,7 @@ const select = {
   requestNo: true,
   schoolId: true,
   supplierId: true,
+  contractId: true,
   status: true,
   acceptedAt: true,
   createdAt: true,

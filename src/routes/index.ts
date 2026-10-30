@@ -34,6 +34,7 @@ import { createSchoolAlertRouter } from "../modules/school-alert/school-alert.ro
 import { createTraceabilityRouter } from "../modules/traceability/traceability.routes";
 import { createMenuReviewRouter } from "../modules/menu-review/menu-review.routes";
 import { createSchoolOverviewRouter } from "../modules/school-overview/school-overview.routes";
+import { createSupplierOnboardingRouter } from "../modules/supplier-onboarding/supplier-onboarding.routes";
 
 export function createApiRouter(authHandler: RequestHandler = authenticate) {
   const router = Router();
@@ -50,6 +51,7 @@ export function createApiRouter(authHandler: RequestHandler = authenticate) {
   });
 
   router.use(createPermissionRouter(authHandler));
+  router.use(createSupplierOnboardingRouter(authHandler));
   router.use("/school-overview", createSchoolOverviewRouter(authHandler));
   router.use("/auth", createAuthRouter(undefined, authHandler));
   router.use("/users", createUserRouter(undefined, authHandler));
