@@ -1,3 +1,5 @@
+import type { AuthPrincipal } from "../../types/auth";
+import { listScopes } from "../../utils/resource-access";
 import type { Prisma } from "../../generated/prisma/client";
 import { getPrisma } from "../../utils/database";
 import { HttpError } from "../../utils/http-error";
@@ -60,7 +62,7 @@ const approvalInclude = {
 type ListRow = Prisma.WeeklyMenuGetPayload<{ select: typeof listSelect }>;
 type ListArguments = Pick<
   Prisma.WeeklyMenuFindManyArgs,
-  "skip" | "take" | "orderBy"
+  "skip" | "take" | "orderBy" | "where"
 > & {
   select: typeof listSelect;
 };
@@ -99,10 +101,10 @@ const formatDateTime = (value: Date | null): string | null =>
       }).format(value)
     : null;
 
-async function getApprovalDetail(menuId: string) {
+async function getApprovalDetail(menuId: string, principal?: AuthPrincipal) {
   const prisma = await getPrisma();
-  const menu = await prisma.weeklyMenu.findUnique({
-    where: { id: menuId },
+  const menu = await prisma.weeklyMenu.findFirst({
+    where: { id: menuId, ...(principal ? listScopes.menu(principal) : {}) },
     include: approvalInclude,
   });
   if (!menu) return null;
@@ -332,11 +334,13 @@ async function recordDecision(
 
 export function createMenuService(read: ListReader = readFromDatabase) {
   return {
-    getAll(query: ListQuery) {
+    getAll(query: ListQuery, principal: AuthPrincipal) {
+      const where = listScopes["menu"](principal);
       return readListPage(
         () =>
           read({
             ...listWindow(query),
+            where,
             select: listSelect,
             orderBy: [{ id: "asc" }],
           }),

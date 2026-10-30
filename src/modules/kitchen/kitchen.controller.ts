@@ -1,3 +1,4 @@
+import { requirePrincipal } from "../../utils/authorization";
 import { asyncHandler } from "../../utils/async-handler";
 import { sendSuccess } from "../../utils/response";
 import { kitchenService, type KitchenService } from "./kitchen.service";
@@ -9,7 +10,7 @@ export function createKitchenController(
   return {
     getAll: asyncHandler(async (req, res) => {
       const query = validateKitchenListQuery(req.query);
-      const result = await service.getAll(query);
+      const result = await service.getAll(query, requirePrincipal(req));
       sendSuccess(res, result, "Lấy danh sách mẻ nấu thành công");
     }),
   };

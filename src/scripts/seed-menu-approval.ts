@@ -495,6 +495,7 @@ async function seedMenuApproval(): Promise<void> {
           where: { id: userSeed.id },
           update: {
             roleId,
+            roleCode: userSeed.roleCode,
             schoolId: ids.school,
             supplierId: null,
             username: userSeed.username,
@@ -505,6 +506,7 @@ async function seedMenuApproval(): Promise<void> {
           create: {
             id: userSeed.id,
             roleId,
+            roleCode: userSeed.roleCode,
             schoolId: ids.school,
             supplierId: null,
             username: userSeed.username,

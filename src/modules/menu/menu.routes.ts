@@ -1,17 +1,38 @@
 import { Router } from "express";
-import { systemAdminOnly } from "../../middlewares/system-admin.middleware";
+import type { RequestHandler } from "express";
+import { authenticate } from "../../middlewares/auth.middleware";
+import {
+  requirePermission,
+  requireResource,
+} from "../../middlewares/permission.middleware";
 import { createMenuController } from "./menu.controller";
 import { menuService, type MenuService } from "./menu.service";
 
-export function createMenuRouter(service: MenuService = menuService) {
+export function createMenuRouter(
+  service: MenuService = menuService,
+  authHandler: RequestHandler = authenticate,
+) {
   const router = Router();
   const controller = createMenuController(service);
-
-  // Prototype routes remain public until the school RBAC policy is finalized.
-  router.get("/:menuId/approval-detail", controller.getApprovalDetail);
-  router.post("/:menuId/approve", controller.approve);
-  router.post("/:menuId/request-revision", controller.requestRevision);
-  router.get("/", ...systemAdminOnly, controller.getAll);
+  router.get(
+    "/:menuId/approval-detail",
+    authHandler,
+    requireResource("menu"),
+    controller.getApprovalDetail,
+  );
+  router.post(
+    "/:menuId/approve",
+    authHandler,
+    requirePermission("menu.approve"),
+    controller.approve,
+  );
+  router.post(
+    "/:menuId/request-revision",
+    authHandler,
+    requirePermission("menu.review"),
+    controller.requestRevision,
+  );
+  router.get("/", authHandler, requireResource("menu"), controller.getAll);
   return router;
 }
 

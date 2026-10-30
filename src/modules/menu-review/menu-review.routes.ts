@@ -1,5 +1,7 @@
 import { Router } from "express";
-import { systemAdminOnly } from "../../middlewares/system-admin.middleware";
+import type { RequestHandler } from "express";
+import { authenticate } from "../../middlewares/auth.middleware";
+import { requireResource } from "../../middlewares/permission.middleware";
 import { createMenuReviewController } from "./menu-review.controller";
 import {
   menuReviewService,
@@ -8,10 +10,16 @@ import {
 
 export function createMenuReviewRouter(
   service: MenuReviewService = menuReviewService,
+  authHandler: RequestHandler = authenticate,
 ) {
   const router = Router();
   const controller = createMenuReviewController(service);
-  router.get("/", ...systemAdminOnly, controller.getAll);
+  router.get(
+    "/",
+    authHandler,
+    requireResource("menu-review"),
+    controller.getAll,
+  );
   return router;
 }
 

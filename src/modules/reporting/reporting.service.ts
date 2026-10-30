@@ -1,3 +1,5 @@
+import type { AuthPrincipal } from "../../types/auth";
+import { listScopes } from "../../utils/resource-access";
 import type { Prisma } from "../../generated/prisma/client";
 import { getPrisma } from "../../utils/database";
 import {
@@ -23,7 +25,7 @@ type ListRow = Prisma.FoodSafetyReportForwardingGetPayload<{
 }>;
 type ListArguments = Pick<
   Prisma.FoodSafetyReportForwardingFindManyArgs,
-  "skip" | "take" | "orderBy"
+  "skip" | "take" | "orderBy" | "where"
 > & {
   select: typeof select;
 };
@@ -36,9 +38,16 @@ const readFromDatabase: ListReader = async (args) => {
 
 export function createReportingService(read: ListReader = readFromDatabase) {
   return {
-    getAll(query: ListQuery) {
+    getAll(query: ListQuery, principal: AuthPrincipal) {
+      const where = listScopes["reporting"](principal);
       return readListPage(
-        () => read({ ...listWindow(query), select, orderBy: [{ id: "asc" }] }),
+        () =>
+          read({
+            ...listWindow(query),
+            where,
+            select,
+            orderBy: [{ id: "asc" }],
+          }),
         query,
       );
     },

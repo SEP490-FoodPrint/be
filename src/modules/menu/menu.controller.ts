@@ -1,3 +1,4 @@
+import { requirePrincipal } from "../../utils/authorization";
 import { asyncHandler } from "../../utils/async-handler";
 import { sendError, sendSuccess } from "../../utils/response";
 import { menuService, type MenuService } from "./menu.service";
@@ -16,12 +17,13 @@ export function createMenuController(service: MenuService = menuService) {
   return {
     getAll: asyncHandler(async (req, res) => {
       const query = validateMenuListQuery(req.query);
-      const result = await service.getAll(query);
+      const result = await service.getAll(query, requirePrincipal(req));
       sendSuccess(res, result, "Lấy danh sách thực đơn tuần thành công");
     }),
     getApprovalDetail: asyncHandler(async (req, res) => {
       const result = await service.getApprovalDetail(
         validateMenuId(req.params.menuId),
+        requirePrincipal(req),
       );
       if (!result) {
         sendError(res, "Không tìm thấy thực đơn", 404);

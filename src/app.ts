@@ -1,15 +1,19 @@
-import express from "express";
+import express, { type RequestHandler } from "express";
+import { authenticate } from "./middlewares/auth.middleware";
 import cors from "cors";
 import morgan from "morgan";
 import "./config/env";
-import routes from "./routes";
+import { createApiRouter } from "./routes";
 import {
   notFoundHandler,
   globalErrorHandler,
 } from "./middlewares/error.middleware";
 import type { RateLimitRequestHandler } from "express-rate-limit";
 
-export function createApp(apiRateLimiter: RateLimitRequestHandler) {
+export function createApp(
+  apiRateLimiter: RateLimitRequestHandler,
+  authHandler: RequestHandler = authenticate,
+) {
   const app = express();
 
   // 1. Global Middlewares
@@ -28,7 +32,7 @@ export function createApp(apiRateLimiter: RateLimitRequestHandler) {
   }
 
   // 2. Central API Routes
-  app.use("/api", routes);
+  app.use("/api", createApiRouter(authHandler));
 
   // 3. Error Handling
   app.use(notFoundHandler);
