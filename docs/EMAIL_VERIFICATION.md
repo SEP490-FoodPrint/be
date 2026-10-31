@@ -44,6 +44,8 @@ Response signup giữ `user` và `onboardingRequired: true`, bổ sung `emailVer
 
 Response xác minh/gửi mã dùng Cache-Control: no-store. Không trả hoặc log mã, API key, HMAC hay nội dung lỗi provider. Email gửi bằng text, có timeout 10 giây và idempotency key theo nonce. Không tạo queue/worker hoặc thay đổi Prisma schema/migration.
 
+Template `verification-email.ts` gọi [sendMail dùng chung](MAILER.md); phần SDK Resend, timeout và lỗi provider được quản lý tập trung. Sinh mã, challenge Redis và giới hạn gửi vẫn thuộc tính năng xác minh email.
+
 ## Cấu hình và test
 
 Thêm vào `.env` riêng dựa trên `.env.example`:

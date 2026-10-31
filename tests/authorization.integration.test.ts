@@ -36,6 +36,11 @@ import type {
 import { HttpError } from "../src/utils/http-error";
 import { loadSessionUser } from "../src/utils/session-identity";
 import { createProfileService } from "../src/modules/auth/profile.service";
+import {
+  createPasswordService,
+  createPasswordRepository,
+} from "../src/modules/auth/password.service";
+import { createRedisPasswordResetStore } from "../src/utils/password-reset-store";
 
 const run = promisify(execFile);
 const root = path.resolve(__dirname, "..");
@@ -246,6 +251,30 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
     emailPrefix,
   );
   const sentCodes = new Map<string, string>();
+  const resetCodes = new Map<string, string>();
+  const resets = createRedisPasswordResetStore(
+    {
+      get isReady() {
+        return redis.isReady;
+      },
+      sendCommand(args) {
+        if (args[0] === "EVAL")
+          args
+            .slice(3, 3 + Number(args[2]))
+            .forEach((key) => verificationKeys.add(key));
+        else verificationKeys.add(args[1]);
+        return redis.sendCommand(args);
+      },
+    },
+    `foodprint:password-reset:test-${randomUUID()}:`,
+  );
+  const passwords = createPasswordService(resets.codes, resets.grants, {
+    assertConfigured() {},
+    send(email, code) {
+      resetCodes.set(email, code);
+      return Promise.resolve();
+    },
+  });
   let emailProviderDown = false;
   const verification = createEmailVerificationService(emailStore, {
     assertConfigured() {},
@@ -293,6 +322,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         session: sessionService,
         signup: createSignupService(undefined, verification),
         emailVerification: verification,
+        password: passwords,
         onboarding: createOnboardingService(getPrisma, testDocumentStorage),
       },
     ),
@@ -302,6 +332,244 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
     store.shutdown();
   });
   context.mock.method(console, "error", () => undefined);
+  const postPassword = (path: string, body: unknown, cookie?: string) =>
+    http.request("/api/auth/" + path, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Protection": "1",
+        ...(cookie ? { Cookie: cookie } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+  async function passwordLogin(
+    account: { id: string; username: string },
+    value = password,
+  ) {
+    const response = await postPassword("login", {
+      identifier: account.username,
+      password: value,
+    });
+    assert.equal(response.status, 200);
+    const cookie = response.headers
+      .getSetCookie()
+      .map((part) => part.split(";")[0])
+      .join("; ");
+    const refresh = parseCookie(cookie)[REFRESH_COOKIE];
+    assert(refresh);
+    refreshTokens.push(refresh);
+    verificationKeys.add("foodprint:auth:session:user:" + account.id);
+    return cookie;
+  }
+  await context.test(
+    "password change requires the old password, rechecks the account, and revokes every existing session",
+    async () => {
+      const account = await user("SCHOOL_HEALTH_OFFICER", {
+        schoolId: schoolA.id,
+      });
+      const first = await passwordLogin(account);
+      const second = await passwordLogin(account);
+      const next = "Change123!";
+      assert.equal(
+        (
+          await postPassword(
+            "change-password",
+            { currentPassword: "wrong password", newPassword: next },
+            first,
+          )
+        ).status,
+        400,
+      );
+      assert.equal(
+        (await http.request("/api/auth/me", { headers: { Cookie: first } }))
+          .status,
+        200,
+      );
+      const response = await postPassword(
+        "change-password",
+        { currentPassword: password, newPassword: next },
+        first,
+      );
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.getSetCookie().length, 2);
+      for (const cookie of [first, second]) {
+        assert.equal(
+          (await http.request("/api/auth/me", { headers: { Cookie: cookie } }))
+            .status,
+          401,
+        );
+        assert.equal((await postPassword("refresh", {}, cookie)).status, 401);
+      }
+      assert.equal(
+        (
+          await postPassword("login", {
+            identifier: account.username,
+            password,
+          })
+        ).status,
+        401,
+      );
+      await passwordLogin(account, next);
+      const saved = await db.user.findUniqueOrThrow({
+        where: { id: account.id },
+      });
+      assert(await bcrypt.compare(next, saved.passwordHash));
+      assert.equal(bcrypt.getRounds(saved.passwordHash), 12);
+      assert.equal(saved.emailVerifiedAt, account.emailVerifiedAt);
+      assert.equal(saved.status, account.status);
+      assert.equal(saved.roleId, account.roleId);
+    },
+  );
+  await context.test(
+    "real password recovery sends a six-digit code, verifies without changing credentials and consumes the reset grant once",
+    async () => {
+      const account = await user("SCHOOL_HEALTH_OFFICER", {
+        schoolId: schoolA.id,
+      });
+      const old = await passwordLogin(account);
+      const unknown = await postPassword("forgot-password", {
+        email: randomUUID() + "@example.test",
+      });
+      const known = await postPassword("forgot-password", {
+        email: account.email,
+      });
+      assert.equal(known.status, 200);
+      assert.deepEqual(known.body, unknown.body);
+      const code = resetCodes.get(account.email);
+      assert(code && /^[0-9]{6}$/.test(code));
+      assert.equal(
+        (
+          await postPassword("forgot-password/verify", {
+            email: account.email,
+            code: code === "000000" ? "111111" : "000000",
+          })
+        ).status,
+        400,
+      );
+      const verified = await postPassword("forgot-password/verify", {
+        email: account.email,
+        code,
+      });
+      assert.equal(verified.status, 200);
+      assert.equal(verified.headers.getSetCookie().length, 0);
+      assert.equal(
+        (await db.user.findUniqueOrThrow({ where: { id: account.id } }))
+          .passwordHash,
+        account.passwordHash,
+      );
+      assert.equal(
+        (
+          await postPassword("forgot-password/verify", {
+            email: account.email,
+            code,
+          })
+        ).status,
+        400,
+      );
+      const resetToken = record(record(verified.body).data).resetToken;
+      assert.equal(typeof resetToken, "string");
+      const next = "Reset123!";
+      const results = await Promise.all([
+        postPassword("reset-password", { resetToken, newPassword: next }),
+        postPassword("reset-password", { resetToken, newPassword: next }),
+      ]);
+      assert.deepEqual(results.map((r) => r.status).sort(), [200, 400]);
+      assert.equal(
+        (await http.request("/api/auth/me", { headers: { Cookie: old } }))
+          .status,
+        401,
+      );
+      assert.equal((await postPassword("refresh", {}, old)).status, 401);
+      await passwordLogin(account, next);
+      const saved = await db.user.findUniqueOrThrow({
+        where: { id: account.id },
+      });
+      assert.equal(saved.status, account.status);
+      assert.equal(saved.emailVerifiedAt, account.emailVerifiedAt);
+    },
+  );
+  await context.test(
+    "concurrent password replacement and login cannot leave sessions issued with an old password usable",
+    async () => {
+      const account = await user("SCHOOL_HEALTH_OFFICER", {
+        schoolId: schoolA.id,
+      });
+      const cookie = await passwordLogin(account);
+      const next = "Concurrent123!";
+      const [login, change] = await Promise.all([
+        postPassword("login", { identifier: account.username, password }),
+        postPassword(
+          "change-password",
+          { currentPassword: password, newPassword: next },
+          cookie,
+        ),
+      ]);
+      assert.equal(change.status, 200);
+      assert([200, 401].includes(login.status));
+      if (login.status === 200) {
+        const oldCookie = login.headers
+          .getSetCookie()
+          .map((part) => part.split(";")[0])
+          .join("; ");
+        const refresh = parseCookie(oldCookie)[REFRESH_COOKIE];
+        assert(refresh);
+        refreshTokens.push(refresh);
+        assert.equal(
+          (
+            await http.request("/api/auth/me", {
+              headers: { Cookie: oldCookie },
+            })
+          ).status,
+          401,
+        );
+      }
+      await passwordLogin(account, next);
+    },
+  );
+  await context.test(
+    "Redis revocation failure rolls back password replacement and a stale principal cannot change a locked account",
+    async () => {
+      const account = await user("SCHOOL_HEALTH_OFFICER", {
+        schoolId: schoolA.id,
+      });
+      const principal = await loadSessionUser(account.id, db);
+      const failing = createPasswordRepository(getPrisma, {
+        ...authSessions,
+        revokeUser: () =>
+          Promise.reject(new HttpError(503, "Redis test offline")),
+      });
+      const service = createPasswordService(
+        resets.codes,
+        resets.grants,
+        undefined,
+        failing,
+      );
+      await assert.rejects(
+        () => service.change(principal, password, "Rollback123!"),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 503,
+      );
+      assert.equal(
+        (await db.user.findUniqueOrThrow({ where: { id: account.id } }))
+          .passwordHash,
+        account.passwordHash,
+      );
+      await db.user.update({
+        where: { id: account.id },
+        data: { status: "LOCKED" },
+      });
+      await assert.rejects(
+        () => passwords.change(principal, password, "Refused123!"),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 403,
+      );
+      assert.equal(
+        (await db.user.findUniqueOrThrow({ where: { id: account.id } }))
+          .passwordHash,
+        account.passwordHash,
+      );
+    },
+  );
   const headers = (id: string) => ({
     Authorization: "Bearer " + sessionFor(id).accessToken,
     "Content-Type": "application/json",
@@ -570,7 +838,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         const body = {
           username,
           email: username + "@example.test",
-          password: "signup test password strong",
+          password: "Signup123!",
           fullName: `New ${requestType} Applicant`,
           requestType,
         };
@@ -960,7 +1228,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           body: JSON.stringify({
             username,
             email,
-            password: "valid signup password for mail failure",
+            password: "MailFailure123!",
             fullName: "Mail failure",
             requestType: "SCHOOL",
           }),
@@ -984,7 +1252,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
               },
               body: JSON.stringify({
                 identifier: username,
-                password: "valid signup password for mail failure",
+                password: "MailFailure123!",
               }),
             })
           ).status,
@@ -1316,6 +1584,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         },
         body: JSON.stringify({
           name: "Corrected school",
+          address: "Preserved school profile address",
           code: "ONBOARDING-" + randomUUID(),
         }),
       });
@@ -1492,6 +1761,17 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         assert.equal(after.status, "ACTIVE");
         assert.equal(Boolean(after.schoolId), type === "SCHOOL");
         assert.equal(Boolean(after.supplierId), type === "SUPPLIER");
+        if (type === "SCHOOL") {
+          assert(after.schoolId);
+          assert.equal(
+            (
+              await db.school.findUniqueOrThrow({
+                where: { id: after.schoolId },
+              })
+            ).address,
+            "Preserved school profile address",
+          );
+        }
         const self = await http.request("/api/auth/me", {
           headers: applicantHeaders(type),
         });

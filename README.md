@@ -2,11 +2,13 @@
 
 Backend FoodPrint hiện dùng **TypeScript + CommonJS + Express + PostgreSQL/Prisma**, cùng **Redis Docker local** để lưu bộ đếm rate limit và hỗ trợ cache các query được chọn. Mỗi thành viên kết nối và test với database local của mình. Database Azure đã nhận baseline và áp dụng migration UserPermissionDenial; trạng thái triển khai và xác minh được ghi trong [baseline](database/SCHEMA_BASELINE.md).
 
-Phạm vi hiện tại gồm nền tảng kết nối, HTTP health endpoint, helper/middleware, Prisma models, lịch sử SQL migration và 31 module có API GET danh sách mẫu. Mỗi module có routes/controller/service/validation; các API kiểm tra permission được gán và phạm vi tổ chức. Đã có đăng ký tài khoản UNVERIFIED, login bằng cookie HttpOnly, refresh/logout với phiên Redis, nộp/duyệt hồ sơ đơn vị, API quản trị quyền và ràng buộc một admin cho mỗi trường/supplier; xem [phiên đăng nhập](docs/AUTH_SESSIONS.md), [hồ sơ theo Figma](docs/ONBOARDING.md) và [phân quyền](docs/AUTHORIZATION.md). Xem [danh mục module và API](src/modules/README.md) và [baseline/migration](database/SCHEMA_BASELINE.md). Chưa triển khai CRUD/lifecycle nghiệp vụ đầy đủ; bootstrap permission là thao tác riêng, không tự chạy trong CD.
+Phạm vi hiện tại gồm nền tảng kết nối, HTTP health endpoint, helper/middleware, Prisma models, lịch sử SQL migration và 31 module có API GET danh sách mẫu. Mỗi module có routes/controller/service/validation; các API kiểm tra permission được gán và phạm vi tổ chức. Đã có đăng ký tài khoản UNVERIFIED, login bằng cookie HttpOnly, refresh/logout với phiên Redis, nộp/duyệt hồ sơ đơn vị, API quản trị quyền và ràng buộc một admin cho mỗi trường/supplier; xem [phiên đăng nhập](docs/AUTH_SESSIONS.md), [đổi/quên mật khẩu](docs/PASSWORD_RECOVERY.md), [hồ sơ theo Figma](docs/ONBOARDING.md) và [phân quyền](docs/AUTHORIZATION.md). Xem [danh mục module và API](src/modules/README.md) và [baseline/migration](database/SCHEMA_BASELINE.md). Chưa triển khai CRUD/lifecycle nghiệp vụ đầy đủ; bootstrap permission là thao tác riêng, không tự chạy trong CD.
 
 Quy tắc coding cho team và AI được quản lý tại [AGENTS.md](AGENTS.md).
 
 Quy tắc commit, Git hooks và quy trình đóng góp nằm trong [contribute.md](contribute.md).
+
+Các tính năng gửi email dùng hàm `sendMail` chung; xem [cách gọi và hợp đồng mailer](docs/MAILER.md).
 
 ## 1. Cấu hình local
 
@@ -18,18 +20,18 @@ if [ ! -e .env ]; then cp .env.example .env; fi
 
 Điền cấu hình riêng trong `.env`:
 
-| Biến                                     | Ý nghĩa                                                                            |
-| ---------------------------------------- | ---------------------------------------------------------------------------------- |
-| `DATABASE_URL`                           | URL PostgreSQL của chính máy mình, chứa user/password, host, port và database thật |
-| `PORT`                                   | Cổng API, mặc định `5000`                                                          |
-| `NODE_ENV`                               | `development` khi code local                                                       |
-| `CLIENT_URL`                             | Origin frontend local, mặc định `http://localhost:3001`                            |
-| `JWT_SECRET`                             | Secret ngẫu nhiên riêng để ký JWT; thay placeholder trong mẫu                      |
-| `AUTH_ACCESS_TTL_SECONDS`                | Access token: mặc định 900 giây, cho phép 60–3600 giây                             |
-| `AUTH_REFRESH_TTL_SECONDS`               | Phiên refresh: mặc định 604800 giây, tối đa 30 ngày và phải dài hơn access token   |
-| `RESEND_API_KEY`, `RESEND_FROM`          | API key Resend và sender thuộc domain đã verify để gửi mã xác minh email           |
-| `REDIS_URL`, `REDIS_PORT`                | URL Redis local và cổng Docker, mặc định `redis://127.0.0.1:6379/0`, `6379`        |
-| `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX` | Cửa sổ đếm theo milliseconds và số request/IP, mặc định `60000`, `300`             |
+| Biến                                     | Ý nghĩa                                                                                        |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                           | URL PostgreSQL của chính máy mình, chứa user/password, host, port và database thật             |
+| `PORT`                                   | Cổng API, mặc định `5000`                                                                      |
+| `NODE_ENV`                               | `development` khi code local                                                                   |
+| `CLIENT_URL`                             | Origin frontend local, mặc định `http://localhost:3001`                                        |
+| `JWT_SECRET`                             | Secret ngẫu nhiên riêng để ký JWT; thay placeholder trong mẫu                                  |
+| `AUTH_ACCESS_TTL_SECONDS`                | Access token: mặc định 900 giây, cho phép 60–3600 giây                                         |
+| `AUTH_REFRESH_TTL_SECONDS`               | Phiên refresh: mặc định 604800 giây, tối đa 30 ngày và phải dài hơn access token               |
+| `RESEND_API_KEY`, `RESEND_FROM`          | API key Resend và sender thuộc domain đã verify để gửi mã xác minh email và khôi phục mật khẩu |
+| `REDIS_URL`, `REDIS_PORT`                | URL Redis local và cổng Docker, mặc định `redis://127.0.0.1:6379/0`, `6379`                    |
+| `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX` | Cửa sổ đếm theo milliseconds và số request/IP, mặc định `60000`, `300`                         |
 
 Ví dụ cấu trúc URL, cần thay user/password/database/port cho đúng máy:
 
