@@ -1,5 +1,13 @@
 # Baseline database và lịch sử migration
 
+## Dữ liệu kiểm thực của CookingBatch
+
+`20261101000100_cooking_batch_inspection_data` nối tiếp migration định mức thực đơn, thêm cột nullable `foodprint.cooking_batches.inspection_data jsonb`, khớp Prisma `inspectionData Json? @db.JsonB`. Không thêm bảng, enum, quyền hay giá trị mặc định. Các batch cũ giữ NULL; không backfill JSON giả hoặc thay đổi dữ liệu nghiệp vụ.
+
+Nếu cột đã được provision thủ công đúng kiểu jsonb, nullable, không default/generated, migration giữ nguyên dữ liệu hiện có. Nếu cấu trúc khác, migration dừng và rollback để đối chiếu; không tự cast, xóa hay ghi đè. SQL bootstrap local/demo có cùng cột nullable; các INSERT cũ bỏ qua cột này vẫn hợp lệ và giữ NULL.
+
+Migration chỉ được triển khai qua CI/CD sau review và merge vào dev. Phiên làm việc chỉ chuẩn bị source và kiểm tra local, không kết nối Azure.
+
 ## Định mức chính thức theo lần lên thực đơn
 
 Migration mới `20261031000300_menu_meal_ingredient_standards` nối tiếp Cooking Option A, chỉ thêm ba bảng và một unique index. Không sửa migration đã áp dụng, enum, role hoặc permission.
@@ -32,6 +40,7 @@ Lịch sử triển khai schema được quản lý tại `prisma/migrations/`, 
 | `20261031000100_school_profile_baseline`        | Đồng bộ các cột hồ sơ School đã provision và giữ dữ liệu hiện có                                 |
 | `20261031000200_cooking_option_a_expand`        | Phase 1 Cooking Batch: guard lịch sử, backfill lượng còn thiếu, giữ cột legacy để tương thích    |
 | `20261031000300_menu_meal_ingredient_standards` | Định mức chính thức theo thực đơn và phân bổ gia vị dùng chung theo bữa                          |
+| `20261101000100_cooking_batch_inspection_data`  | Thêm inspection_data jsonb nullable, giữ dữ liệu kiểm thực đã có                                 |
 
 Baseline lấy phần DDL từ file gốc `FoodPrint_PostgreSQL_Database_v5_4_FINAL_with_MOCK_DATA.sql`, version v5.4. File SQL ở root FoodPrint hiện đã được đồng bộ sang Phase 1; DDL baseline trong `prisma/migrations/0_init/migration.sql` giữ nguyên. Nguồn SHA-256 gốc tại thời điểm nhận baseline: `770751bf506fa523b50bd6c51d235a6305b584c5e1fb63c3bd4e0eac040f5884`.
 
