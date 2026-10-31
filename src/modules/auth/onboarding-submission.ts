@@ -1,6 +1,7 @@
 import { objectBody, text, uuid } from "../../utils/auth-validation";
 import { HttpError } from "../../utils/http-error";
 import type { OnboardingDocument } from "../../utils/onboarding-documents";
+import { MAX_PROFILE_DOCUMENTS } from "../../utils/onboarding-documents";
 import { validateOnboarding } from "./onboarding.validation";
 
 export interface RetainedDocument {
@@ -30,21 +31,22 @@ export function readSubmission(
           (_, index) => `certificate_${index}`,
         ),
   );
-  if (!Array.isArray(retainedDocuments) || retainedDocuments.length > 20)
+  if (
+    !Array.isArray(retainedDocuments) ||
+    retainedDocuments.length > MAX_PROFILE_DOCUMENTS
+  )
     throw new HttpError(400, "Danh sách tệp giữ lại không hợp lệ");
-  const ids = new Set<string>(),
-    names = new Set<string>();
+  const ids = new Set<string>();
   const retained = retainedDocuments.map((value: unknown): RetainedDocument => {
     const row = objectBody(value, ["id", "field"]);
     const id = uuid(row.id),
       field = text(row.field, 40);
-    if (!allowed.has(field) || ids.has(id) || names.has(field))
+    if (!allowed.has(field) || ids.has(id))
       throw new HttpError(
         400,
         "Tệp giữ lại không thuộc trường hồ sơ hoặc bị lặp",
       );
     ids.add(id);
-    names.add(field);
     return { id, field };
   });
   const expected =
@@ -62,12 +64,15 @@ export function retainDocuments(
   retained: RetainedDocument[],
   files: Express.Multer.File[],
 ): OnboardingDocument[] {
+  if (retained.length + files.length > MAX_PROFILE_DOCUMENTS)
+    throw new HttpError(
+      400,
+      `Hồ sơ chỉ nhận tối đa ${MAX_PROFILE_DOCUMENTS} tệp, gồm cả tệp giữ lại`,
+    );
   return retained.map(({ id, field }) => {
     const document = existing.find((document) => document.id === id);
     if (!document)
       throw new HttpError(400, "Tệp giữ lại không thuộc hồ sơ của bạn");
-    if (files.some((file) => file.fieldname === field))
-      throw new HttpError(400, "Không thể giữ và thay cùng một tệp");
     return { ...document, field };
   });
 }

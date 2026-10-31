@@ -12,13 +12,15 @@
 | `PATCH /api/auth/me`           | Cập nhật fullName/phone của chính tài khoản đang đăng nhập                   |
 | `GET /api/auth/me/permissions` | Quyền hiệu lực khi ACTIVE; UNVERIFIED nhận mảng rỗng                         |
 
+Đổi mật khẩu và khôi phục bằng mã email có các API change-password, forgot-password, forgot-password/verify và reset-password; xem [PASSWORD_RECOVERY.md](PASSWORD_RECOVERY.md) để biết body, ba bước frontend và chính sách thu hồi mọi phiên sau khi đổi mật khẩu.
+
 Request đăng ký tối thiểu:
 
 ```json
 {
   "username": "new_school_admin",
   "email": "school-admin@example.test",
-  "password": "a strong local password",
+  "password": "School123!",
   "fullName": "Nguyễn Văn A",
   "requestType": "SCHOOL"
 }
@@ -26,7 +28,7 @@ Request đăng ký tối thiểu:
 
 `requestType` tương ứng hai tab SCHOOL/SUPPLIER. Backend chọn role SCHOOL_ADMINISTRATION/INGREDIENT_SUPPLIER_ADMIN, không nhận roleId, status hoặc ID tổ chức từ client. Signup tạo tài khoản UNVERIFIED trong transaction, chưa gắn tổ chức, chưa tạo RegistrationRequest và chưa cấp cookie. Sau commit, Resend gửi mã xác minh email. Người dùng xác minh email rồi login để hoàn thiện hồ sơ, không cần chờ System Admin duyệt. Không tự tạo tài khoản SYSTEM_ADMIN hoặc ATTP qua signup.
 
-Username dài 3–120 ký tự, gồm chữ/số/underscore/dấu chấm/gạch ngang và bắt đầu bằng chữ/số. Email được trim/lowercase. Mật khẩu mới tối thiểu 15 ký tự, tối đa 72 byte UTF-8; bcrypt cost 12. Login giữ giới hạn 1–72 byte cho các tài khoản đã tồn tại. `phone` tùy chọn, tối đa 30 ký tự. Signup chỉ nhận các trường tài khoản ở trên và phone; profileData, supportingDocuments hoặc trường lạ đều trả 400.
+Username dài 3–120 ký tự, gồm chữ/số/underscore/dấu chấm/gạch ngang và bắt đầu bằng chữ/số. Email được trim/lowercase. Mật khẩu mới tối thiểu 8 ký tự, có chữ thường, chữ hoa, chữ số (0–9) và ký tự đặc biệt (dấu câu hoặc ký hiệu, ví dụ !, @, #); tối đa 72 byte UTF-8; bcrypt cost 12. Login giữ giới hạn 1–72 byte cho các tài khoản đã tồn tại. `phone` tùy chọn, tối đa 30 ký tự. Signup chỉ nhận các trường tài khoản ở trên và phone; profileData, supportingDocuments hoặc trường lạ đều trả 400.
 
 Response signup chứa `user: { id, username, fullName, status: "UNVERIFIED" }`, `onboardingRequired: true`, `emailVerificationRequired: true` và `verificationEmailSent`. Nếu gửi email lỗi sau khi tạo tài khoản, vẫn trả 201 với verificationEmailSent=false; dùng API gửi lại thay vì đăng ký lại. Username/email trùng trả 409 với thông báo chung; lỗi DB trả 503, không trả URL hoặc lỗi driver. Xem [gửi/nhập mã, Resend và giới hạn](EMAIL_VERIFICATION.md).
 
@@ -78,6 +80,8 @@ Login/refresh chỉ trả `{ user, expiresIn }` bên trong envelope chuẩn; tok
 Access JWT có sub và sid, không dùng role/org/permissions trong JWT để quyết định quyền. Middleware xác minh JWT, kiểm tra phiên Redis còn sống, rồi tải trạng thái user từ DB. Middleware phiên cho phép UNVERIFIED của hai role đăng ký xem thông tin của mình; middleware nghiệp vụ vẫn bắt buộc ACTIVE, membership và quyền hiện tại. Bearer vẫn được hỗ trợ cho client ngoài trình duyệt nhưng phải là access JWT có sid/phiên hợp lệ; token cũ không có sid cần đăng nhập lại. Nếu có access cookie thì cookie là nguồn xác thực được ưu tiên.
 
 Redis chỉ lưu hash refresh token cùng metadata phiên, không chứa refresh token gốc hoặc bộ quyền. Session storage dùng namespace riêng, không dùng cache helper hoặc fallback memory. Redis lỗi làm auth trả 503; phiên hết hạn/đã thu hồi trả 401.
+
+Session có thêm generation để hỗ trợ thu hồi tất cả phiên khi đổi/reset mật khẩu. Generation của user được giữ ở key riêng trong namespace auth và không có TTL; phiên cũ vẫn tự hết hạn theo TTL ban đầu. Login kiểm tra lại password hash trong transaction có khóa hàng để không tạo phiên mới bằng mật khẩu cũ khi có yêu cầu đổi mật khẩu đồng thời.
 
 ## Rotation, replay và đăng xuất
 

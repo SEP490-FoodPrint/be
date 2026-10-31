@@ -1,5 +1,6 @@
 import { objectBody, text } from "../../utils/auth-validation";
 import { HttpError } from "../../utils/http-error";
+import { validateNewPassword } from "./password.validation";
 
 export interface SignupInput {
   username: string;
@@ -26,22 +27,14 @@ export function validateSignup(value: unknown): SignupInput {
     !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
   )
     throw new HttpError(400, "Username hoặc email không hợp lệ");
-  if (
-    typeof body.password !== "string" ||
-    [...body.password].length < 15 ||
-    Buffer.byteLength(body.password, "utf8") > 72
-  )
-    throw new HttpError(
-      400,
-      "Mật khẩu mới cần ít nhất 15 ký tự và tối đa 72 byte UTF-8",
-    );
+  const password = validateNewPassword(body.password);
   const requestType = body.requestType;
   if (requestType !== "SCHOOL" && requestType !== "SUPPLIER")
     throw new HttpError(400, "Chỉ hỗ trợ đăng ký SCHOOL hoặc SUPPLIER");
   return {
     username,
     email,
-    password: body.password,
+    password,
     fullName: text(body.fullName, 255),
     phone:
       body.phone === undefined || body.phone === null

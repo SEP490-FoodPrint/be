@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { redis } from "../config/redis";
 import { HttpError } from "./http-error";
 
@@ -5,12 +6,14 @@ export interface StoredSession {
   userId: string;
   tokenHash: string;
   expiresAt: number;
+  generation?: string;
 }
 export interface AuthSessionStore {
   create(id: string, value: StoredSession): Promise<boolean>;
   get(id: string): Promise<StoredSession | null>;
   rotate(id: string, previousHash: string, nextHash: string): Promise<boolean>;
   revoke(id: string, expectedHash?: string): Promise<void>;
+  revokeUser(userId: string): Promise<void>;
 }
 export interface AuthRedisClient {
   readonly isReady: boolean;
@@ -21,6 +24,8 @@ const rotateScript = `
 local raw = redis.call('GET', KEYS[1])
 if not raw then return 0 end
 local session = cjson.decode(raw)
+local generation = redis.call('GET', ARGV[3] .. session.userId) or ''
+if (session.generation or '') ~= generation then redis.call('DEL', KEYS[1]); return 0 end
 if session.tokenHash ~= ARGV[1] then
   redis.call('DEL', KEYS[1])
   return -1
@@ -28,6 +33,19 @@ end
 session.tokenHash = ARGV[2]
 redis.call('SET', KEYS[1], cjson.encode(session), 'KEEPTTL')
 return 1
+`;
+const createScript = `
+local session = cjson.decode(ARGV[1])
+session.generation = redis.call('GET', ARGV[3] .. session.userId) or ''
+return redis.call('SET', KEYS[1], cjson.encode(session), 'EXAT', ARGV[2], 'NX')
+`;
+const getScript = `
+local raw = redis.call('GET', KEYS[1])
+if not raw then return nil end
+local session = cjson.decode(raw)
+local generation = redis.call('GET', ARGV[1] .. session.userId) or ''
+if (session.generation or '') ~= generation then redis.call('DEL', KEYS[1]); return nil end
+return raw
 `;
 const revokeScript = `
 local raw = redis.call('GET', KEYS[1])
@@ -50,7 +68,11 @@ function isSession(value: unknown): value is StoredSession {
     /^[a-f0-9]{64}$/.test(record.tokenHash) &&
     typeof record.expiresAt === "number" &&
     Number.isSafeInteger(record.expiresAt) &&
-    record.expiresAt > 0
+    record.expiresAt > 0 &&
+    (record.generation === undefined ||
+      record.generation === "" ||
+      (typeof record.generation === "string" &&
+        /^[a-f0-9]{32}$/.test(record.generation)))
   );
 }
 
@@ -81,17 +103,24 @@ export function createRedisAuthSessionStore(
       if (!isSession(value)) throw new Error("Invalid session state");
       return (
         (await command([
-          "SET",
+          "EVAL",
+          createScript,
+          "1",
           key(id),
           JSON.stringify(value),
-          "EXAT",
           String(value.expiresAt),
-          "NX",
+          prefix + "user:",
         ])) === "OK"
       );
     },
     async get(id) {
-      const raw = await command(["GET", key(id)]);
+      const raw = await command([
+        "EVAL",
+        getScript,
+        "1",
+        key(id),
+        prefix + "user:",
+      ]);
       if (raw === null) return null;
       try {
         if (typeof raw !== "string") throw new Error("Invalid Redis response");
@@ -115,6 +144,7 @@ export function createRedisAuthSessionStore(
           key(id),
           previousHash,
           nextHash,
+          prefix + "user:",
         ])) === 1
       );
     },
@@ -122,6 +152,20 @@ export function createRedisAuthSessionStore(
       if (expectedHash !== undefined && !/^[a-f0-9]{64}$/.test(expectedHash))
         throw new Error("Invalid token hash");
       await command(["EVAL", revokeScript, "1", key(id), expectedHash ?? ""]);
+    },
+    async revokeUser(userId) {
+      if (
+        !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(
+          userId,
+        )
+      )
+        throw new Error("Invalid session user");
+      // Keep a durable generation marker; expiring it could revive legacy sessions.
+      await command([
+        "SET",
+        prefix + "user:" + userId,
+        randomBytes(16).toString("hex"),
+      ]);
     },
   };
 }

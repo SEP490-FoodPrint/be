@@ -12,6 +12,7 @@ import {
   readDocuments,
   validateProfileFiles,
   MAX_DOCUMENT_BYTES,
+  MAX_PROFILE_DOCUMENTS,
   documentStorage,
 } from "../src/utils/onboarding-documents";
 import { HttpError } from "../src/utils/http-error";
@@ -69,6 +70,7 @@ void test("Cloudinary download signatures are authenticated and expire; missing 
   assert.match(url.pathname, /\/raw\/download$/);
   assert.equal(url.searchParams.get("type"), "authenticated");
   assert.equal(url.searchParams.get("public_id"), document.publicId);
+  assert.equal(url.searchParams.get("attachment"), "false");
   const ttl =
     Number(url.searchParams.get("expires_at")) - Math.floor(Date.now() / 1000);
   assert(ttl > 0 && ttl <= 60);
@@ -199,10 +201,24 @@ void test("profile files are bounded and bound to one actual certificate; stored
   assert.doesNotThrow(() =>
     validateProfileFiles([file("certificate_0")], profile),
   );
+  assert.doesNotThrow(() =>
+    validateProfileFiles(
+      [file("certificate_0"), file("certificate_0")],
+      profile,
+    ),
+  );
+  assert.doesNotThrow(() =>
+    validateProfileFiles(
+      [file("legalDocument"), file("legalDocument")],
+      validateOnboarding({ name: "School" }, "SCHOOL"),
+    ),
+  );
   for (const files of [
     [file("legalDocument")],
     [file("certificate_1")],
-    [file("certificate_0"), file("certificate_0")],
+    Array.from({ length: MAX_PROFILE_DOCUMENTS + 1 }, () =>
+      file("certificate_0"),
+    ),
     [file("certificate_0", "application/pdf", "<html>fake PDF</html>")],
   ])
     assert.throws(() => validateProfileFiles(files, profile), invalid);
@@ -278,6 +294,11 @@ void test("multipart receives per-certificate files, enforces CSRF and rejects b
     new Blob(["%PDF-1.7\nsecond"], { type: "application/pdf" }),
     "second.pdf",
   );
+  form.append(
+    "certificate_0",
+    new Blob(["%PDF-1.7\nextra"], { type: "application/pdf" }),
+    "extra.pdf",
+  );
   const response = await http.request("/submit", {
     method: "POST",
     headers: { "X-CSRF-Protection": "1" },
@@ -285,9 +306,26 @@ void test("multipart receives per-certificate files, enforces CSRF and rejects b
   });
   assert.equal(response.status, 200);
   assert.deepEqual(response.body, {
-    count: 2,
-    fields: ["certificate_0", "certificate_1"],
+    count: 3,
+    fields: ["certificate_0", "certificate_1", "certificate_0"],
   });
+  for (const count of [MAX_PROFILE_DOCUMENTS, MAX_PROFILE_DOCUMENTS + 1]) {
+    const many = body();
+    for (let index = 0; index < count; index++)
+      many.append(
+        "certificate_0",
+        new Blob(["%PDF-1.7\nmulti-file boundary"], {
+          type: "application/pdf",
+        }),
+        `${index}.pdf`,
+      );
+    const result = await http.request("/submit", {
+      method: "POST",
+      headers: { "X-CSRF-Protection": "1" },
+      body: many,
+    });
+    assert.equal(result.status, count === MAX_PROFILE_DOCUMENTS ? 200 : 400);
+  }
   assert.equal(
     (await http.request("/submit", { method: "POST", body: body() })).status,
     403,
@@ -506,7 +544,7 @@ void test("foreign document IDs and stale form versions fail before any upload o
   }
 });
 
-void test("approved applications remain immutable and conflicting retained/uploaded file fields are rejected", async () => {
+void test("approved applications remain immutable and pending edits append multiple files alongside retained files", async () => {
   const fixture = editFixture("APPROVED");
   await assert.rejects(
     fixture.service.submit(fixture.user, retainedBody(fixture)),
@@ -514,14 +552,49 @@ void test("approved applications remain immutable and conflicting retained/uploa
   );
   assert.equal(fixture.writes(), 0);
   const pending = editFixture();
+  const result = await pending.service.submit(
+    pending.user,
+    retainedBody(pending),
+    [file("certificate_0"), file("certificate_0")],
+  );
+  assert.equal(result.documents.length, 3);
+  assert(
+    result.documents.some((document) => document.id === pending.document.id),
+  );
+  assert.equal(pending.writes(), 1);
+  assert.equal(pending.uploaded.length, 2);
+  assert.deepEqual(pending.removed, []);
+});
+
+void test("retained plus new document limits are checked before uploads or writes", async () => {
+  const fixture = editFixture();
   await assert.rejects(
-    pending.service.submit(pending.user, retainedBody(pending), [
-      file("certificate_0"),
-    ]),
+    () =>
+      fixture.service.submit(
+        fixture.user,
+        retainedBody(fixture),
+        Array.from({ length: MAX_PROFILE_DOCUMENTS }, () =>
+          file("certificate_0"),
+        ),
+      ),
     invalid,
   );
-  assert.equal(pending.writes(), 0);
-  assert.deepEqual(pending.uploaded, []);
+  assert.deepEqual(fixture.uploaded, []);
+  assert.equal(fixture.writes(), 0);
+  assert.deepEqual(fixture.removed, []);
+});
+
+void test("several distinct retained files can share a certificate field", () => {
+  const ids = [randomUUID(), randomUUID()];
+  const result = readSubmission(
+    {
+      name: "Supplier",
+      certifications: [{ certificationType: "ISO", certificateNo: "ISO" }],
+      retainedDocuments: ids.map((id) => ({ id, field: "certificate_0" })),
+    },
+    "SUPPLIER",
+  );
+  assert.equal(result.retained.length, 2);
 });
 
 void test("explicitly removed documents are cleaned after the replacement commits", async () => {

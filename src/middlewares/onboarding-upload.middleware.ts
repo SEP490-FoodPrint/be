@@ -1,17 +1,19 @@
 import type { RequestHandler } from "express";
 import multer from "multer";
 import { HttpError } from "../utils/http-error";
-import { MAX_DOCUMENT_BYTES } from "../utils/onboarding-documents";
-import { MAX_CERTIFICATIONS } from "../modules/auth/onboarding.validation";
+import {
+  MAX_DOCUMENT_BYTES,
+  MAX_PROFILE_DOCUMENTS,
+} from "../utils/onboarding-documents";
 
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
     fileSize: MAX_DOCUMENT_BYTES,
-    files: MAX_CERTIFICATIONS,
+    files: MAX_PROFILE_DOCUMENTS,
     fields: 1,
     fieldSize: 32768,
-    parts: MAX_CERTIFICATIONS + 1,
+    parts: MAX_PROFILE_DOCUMENTS + 1,
   },
   fileFilter: (_req, file, done) => {
     if (["application/pdf", "image/png", "image/jpeg"].includes(file.mimetype))

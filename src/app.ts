@@ -25,6 +25,7 @@ export function createApp(
     cors({
       origin: readAuthConfig().clientOrigin,
       credentials: true,
+      exposedHeaders: ["Retry-After"],
     }),
   );
   app.use("/api", apiRateLimiter);

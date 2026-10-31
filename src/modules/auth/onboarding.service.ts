@@ -21,6 +21,7 @@ import {
 } from "../../utils/onboarding-documents";
 import { validateOnboarding } from "./onboarding.validation";
 import { readSubmission, retainDocuments } from "./onboarding-submission";
+import { registrationApplicantSelect } from "../registration/registration.select";
 
 const select = {
   id: true,
@@ -33,6 +34,12 @@ const select = {
   reviewedAt: true,
   rejectionReason: true,
   updatedAt: true,
+} as const satisfies Prisma.RegistrationRequestSelect;
+const detailSelect = {
+  ...select,
+  reviewedByUserId: true,
+  applicantUser: { select: registrationApplicantSelect },
+  reviewedByUser: { select: { id: true, fullName: true } },
 } as const satisfies Prisma.RegistrationRequestSelect;
 type Application = Prisma.RegistrationRequestGetPayload<{
   select: typeof select;
@@ -261,10 +268,21 @@ export function createOnboardingService(
         );
         const row = await db.registrationRequest.findUnique({
           where: { id },
-          select,
+          select: detailSelect,
         });
         if (!row) throw new HttpError(404, "Không tìm thấy hồ sơ");
-        return view(row);
+        const {
+          applicantUser,
+          reviewedByUserId,
+          reviewedByUser,
+          ...application
+        } = row;
+        return {
+          ...view(application),
+          applicantUser,
+          reviewedByUserId,
+          reviewedByUser,
+        };
       });
     },
     async approve(actor: AuthPrincipal, id: string) {
@@ -377,19 +395,36 @@ export function createOnboardingService(
           where = { id };
         } else if (current.orgType === "SUPPLIER" && current.supplierId) {
           assertPermission(current, "supplier_certification.view");
+          const application = await db.registrationRequest.findFirst({
+            where: { id, status: "APPROVED", requestType: "SUPPLIER" },
+            select,
+          });
+          if (!application) throw new HttpError(404, "Không tìm thấy tài liệu");
+          const documents = readDocuments(
+            application.supportingDocuments,
+            application.applicantUserId,
+          );
+          const requested = documents.find(
+            (document) => document.id === documentId,
+          );
+          if (!requested) throw new HttpError(404, "Không tìm thấy tài liệu");
+          // documentUrl remains the first-file anchor for a certificate. Authorize
+          // every file in that group through the certificate's current supplier owner.
+          const anchors = documents
+            .filter((document) => document.field === requested.field)
+            .map(
+              (document) =>
+                `/api/registration-requests/${id}/documents/${document.id}`,
+            );
           const certificate = await db.supplierCertification.findFirst({
             where: {
               supplierId: current.supplierId,
-              documentUrl: `/api/registration-requests/${id}/documents/${documentId}`,
+              documentUrl: { in: anchors },
             },
             select: { id: true },
           });
           if (!certificate) throw new HttpError(404, "Không tìm thấy tài liệu");
-          where = {
-            id,
-            status: "APPROVED",
-            requestType: "SUPPLIER",
-          };
+          return application;
         } else throw new HttpError(403, "Không có quyền đọc tài liệu này");
         return db.registrationRequest.findFirst({ where, select });
       });

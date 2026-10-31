@@ -43,6 +43,9 @@ export function createAuthSessions(
     };
   }
   return {
+    revokeUser(userId: string) {
+      return store.revokeUser(uuid(userId));
+    },
     async issue(userId: string) {
       userId = uuid(userId);
       const expiresAt =
