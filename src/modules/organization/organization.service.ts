@@ -1,10 +1,13 @@
-import type { Prisma } from "../../generated/prisma/client";
+import type { AuthPrincipal } from "../../types/auth";
+import { listScopes } from "../../utils/resource-access";
+import type { Prisma, PrismaClient } from "../../generated/prisma/client";
 import { getPrisma } from "../../utils/database";
 import {
   listWindow,
   readListPage,
   type ListQuery,
 } from "../../utils/list-query";
+import type { PublicSchoolListQuery } from "./organization.validation";
 
 const select = {
   id: true,
@@ -18,11 +21,11 @@ const select = {
 type ListRow = Prisma.SchoolGetPayload<{ select: typeof select }>;
 type ListArguments = Pick<
   Prisma.SchoolFindManyArgs,
-  "skip" | "take" | "orderBy"
+  "skip" | "take" | "orderBy" | "where"
 > & {
   select: typeof select;
 };
-type ListReader = (args: ListArguments) => Promise<ListRow[]>;
+export type ListReader = (args: ListArguments) => Promise<ListRow[]>;
 
 const readFromDatabase: ListReader = async (args) => {
   const prisma = await getPrisma();
@@ -37,38 +40,7 @@ function formatTimeString(d: Date | null | undefined): string | null {
   return `${hours}:${minutes}:${seconds}`;
 }
 
-export interface PublicSchoolQuery {
-  search?: string;
-  locationId?: string;
-  page?: number;
-  limit?: number;
-}
-
 export interface PublicSchoolDTO {
-  id: string;
-  code: string | null;
-  name: string;
-  email: string | null;
-  phone: string | null;
-  location_id: string | null;
-  address_line: string | null;
-  address: string;
-  district: string | null;
-  city: string;
-  website_url: string | null;
-  description: string | null;
-  logo_url: string | null;
-  cover_image_url: string | null;
-  cooking_mode: string | null;
-  lunch_time: string | null;
-  afternoon_meal_time: string | null;
-  boarding_scale: string;
-  status: string;
-  created_at: Date;
-  updated_at: Date;
-}
-
-function mapSchoolToDTO(school: {
   id: string;
   code: string | null;
   name: string;
@@ -76,6 +48,53 @@ function mapSchoolToDTO(school: {
   phone: string | null;
   locationId: string | null;
   addressLine: string | null;
+  address: string;
+  district: string | null;
+  city: string;
+  websiteUrl: string | null;
+  description: string | null;
+  logoUrl: string | null;
+  coverImageUrl: string | null;
+  cookingMode: string | null;
+  lunchTime: string | null;
+  afternoonMealTime: string | null;
+  boardingScale: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  // Aliases for backward-compatibility with frontend bindings
+  location_id: string | null;
+  address_line: string | null;
+  website_url: string | null;
+  logo_url: string | null;
+  cover_image_url: string | null;
+  cooking_mode: string | null;
+  lunch_time: string | null;
+  afternoon_meal_time: string | null;
+  boarding_scale: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PublicSchoolListResult {
+  items: PublicSchoolDTO[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+    hasNext: boolean;
+  };
+}
+
+type SchoolQueryResult = {
+  id: string;
+  code: string | null;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  locationId: string | null;
+  address: string | null;
   websiteUrl: string | null;
   description: string | null;
   logoUrl: string | null;
@@ -101,13 +120,14 @@ function mapSchoolToDTO(school: {
     } | null;
   } | null;
   classes?: Array<{ registeredMealPortions: number }>;
-}): PublicSchoolDTO {
+};
+
+function mapSchoolToDTO(school: SchoolQueryResult): PublicSchoolDTO {
   const district = school.location?.name || null;
   const city = school.location?.parent?.name || "Hà Nội";
-  const addressParts = [school.addressLine, district, city].filter(Boolean);
+  const addressParts = [school.address, district, city].filter(Boolean);
   const fullAddress = addressParts.join(", ");
 
-  // Hybrid boarding scale: ưu tiên tính tổng học sinh từ bảng classes nếu có
   let boardingScale = school.boardingScale || "Đang cập nhật";
   if (school.classes && school.classes.length > 0) {
     const totalPortions = school.classes.reduce(
@@ -119,62 +139,104 @@ function mapSchoolToDTO(school: {
     }
   }
 
+  const lunchTime = formatTimeString(school.lunchTime);
+  const afternoonMealTime = formatTimeString(school.afternoonMealTime);
+  const createdAtIso = school.createdAt.toISOString();
+  const updatedAtIso = school.updatedAt.toISOString();
+
   return {
     id: school.id,
     code: school.code,
     name: school.name,
     email: school.email,
     phone: school.phone,
-    location_id: school.locationId,
-    address_line: school.addressLine,
+    locationId: school.locationId,
+    addressLine: school.address,
     address: fullAddress,
     district,
     city,
-    website_url: school.websiteUrl,
+    websiteUrl: school.websiteUrl,
     description: school.description,
+    logoUrl: school.logoUrl,
+    coverImageUrl: school.coverImageUrl,
+    cookingMode: school.cookingMode,
+    lunchTime,
+    afternoonMealTime,
+    boardingScale,
+    status: school.status,
+    createdAt: createdAtIso,
+    updatedAt: updatedAtIso,
+    // Aliases
+    location_id: school.locationId,
+    address_line: school.address,
+    website_url: school.websiteUrl,
     logo_url: school.logoUrl,
     cover_image_url: school.coverImageUrl,
     cooking_mode: school.cookingMode,
-    lunch_time: formatTimeString(school.lunchTime),
-    afternoon_meal_time: formatTimeString(school.afternoonMealTime),
+    lunch_time: lunchTime,
+    afternoon_meal_time: afternoonMealTime,
     boarding_scale: boardingScale,
-    status: school.status,
-    created_at: school.createdAt,
-    updated_at: school.updatedAt,
+    created_at: createdAtIso,
+    updated_at: updatedAtIso,
   };
 }
 
-export function createOrganizationService(read: ListReader = readFromDatabase) {
+export type PrismaProvider = () => Promise<PrismaClient>;
+
+export interface OrganizationServiceDeps {
+  readList?: ListReader;
+  prismaProvider?: PrismaProvider;
+}
+
+export function createOrganizationService(
+  deps: ListReader | OrganizationServiceDeps = readFromDatabase,
+) {
+  const read =
+    typeof deps === "function" ? deps : deps.readList || readFromDatabase;
+  const getClient: PrismaProvider =
+    typeof deps === "object" && deps.prismaProvider
+      ? deps.prismaProvider
+      : getPrisma;
+
   return {
-    getAll(query: ListQuery) {
+    getAll(query: ListQuery, principal: AuthPrincipal) {
+      const where = listScopes["organization"](principal);
       return readListPage(
-        () => read({ ...listWindow(query), select, orderBy: [{ id: "asc" }] }),
+        () =>
+          read({
+            ...listWindow(query),
+            where,
+            select,
+            orderBy: [{ id: "asc" }],
+          }),
         query,
       );
     },
 
-    async getPublicSchools(query: PublicSchoolQuery = {}) {
-      const prisma = await getPrisma();
-      const page = Math.max(1, Number(query.page) || 1);
-      const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
+    async getPublicSchools(
+      query: PublicSchoolListQuery,
+    ): Promise<PublicSchoolListResult> {
+      const prisma = await getClient();
+      const page = query.page;
+      const limit = query.limit;
       const skip = (page - 1) * limit;
 
       const where: Prisma.SchoolWhereInput = {
         status: "ACTIVE",
       };
 
-      if (query.search?.trim()) {
-        const s = query.search.trim();
+      if (query.search) {
+        const s = query.search;
         where.OR = [
           { name: { contains: s, mode: "insensitive" } },
           { code: { contains: s, mode: "insensitive" } },
-          { addressLine: { contains: s, mode: "insensitive" } },
+          { address: { contains: s, mode: "insensitive" } },
           { location: { name: { contains: s, mode: "insensitive" } } },
         ];
       }
 
-      if (query.locationId?.trim()) {
-        where.locationId = query.locationId.trim();
+      if (query.locationId) {
+        where.locationId = query.locationId;
       }
 
       const [schools, total] = await Promise.all([
@@ -198,18 +260,24 @@ export function createOrganizationService(read: ListReader = readFromDatabase) {
         prisma.school.count({ where }),
       ]);
 
-      const data = schools.map(mapSchoolToDTO);
+      const items = schools.map(mapSchoolToDTO);
+      const totalPages = Math.ceil(total / limit);
+      const hasNext = page < totalPages;
+
       return {
-        data,
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
+        items,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages,
+          hasNext,
+        },
       };
     },
 
-    async getPublicSchoolByCode(code: string) {
-      const prisma = await getPrisma();
+    async getPublicSchoolByCode(code: string): Promise<PublicSchoolDTO | null> {
+      const prisma = await getClient();
       const school = await prisma.school.findFirst({
         where: {
           code: { equals: code.trim(), mode: "insensitive" },
@@ -232,8 +300,8 @@ export function createOrganizationService(read: ListReader = readFromDatabase) {
       return mapSchoolToDTO(school);
     },
 
-    async getPublicSchoolById(id: string) {
-      const prisma = await getPrisma();
+    async getPublicSchoolById(id: string): Promise<PublicSchoolDTO | null> {
+      const prisma = await getClient();
       const school = await prisma.school.findFirst({
         where: {
           id: id.trim(),

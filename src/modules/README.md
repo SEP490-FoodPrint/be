@@ -51,11 +51,11 @@ Tất cả đường dẫn bên dưới dùng phương thức **GET**.
 | `traceability`                | `/api/traceability-anchors`          | `TraceabilityAnchor`         | —                              |
 | `menu-review`                 | `/api/menu-reviews`                  | `MenuReviewRecord`           | —                              |
 
-`auth` hiện chỉ cung cấp danh sách Role; chưa có login, đăng ký tài khoản hoặc cấp token. `organization` hiện quản lý khung cho School; Supplier và CommuneFoodSafetyUnit có module riêng. API traceability chỉ đọc bản ghi, không gửi transaction blockchain.
+`auth` cung cấp signup, login, refresh, logout bằng cookie HttpOnly/phiên Redis, thông tin tài khoản/quyền hiện tại, cập nhật hồ sơ cá nhân bằng PATCH /auth/me (fullName/phone) và danh sách Role; xem [AUTH_SESSIONS.md](../../docs/AUTH_SESSIONS.md). Signup tạo tài khoản UNVERIFIED chưa có yêu cầu duyệt; người dùng xác minh email bằng mã Resend rồi đăng nhập để nộp/xem hồ sơ của mình, chưa được gọi API nghiệp vụ. `onboarding` trong auth xử lý nộp hồ sơ/tài liệu; registration gắn API chi tiết/duyệt/từ chối vào cùng service để giữ một luồng transaction; xem [ONBOARDING.md](../../docs/ONBOARDING.md). Hợp đồng API quản trị role/permission ở [docs/AUTHORIZATION.md](../../docs/AUTHORIZATION.md). `organization` hiện quản lý khung cho School; Supplier và CommuneFoodSafetyUnit có module riêng. API traceability chỉ đọc bản ghi, không gửi transaction blockchain.
 
 ## Quyền truy cập và phân trang
 
-Các API mẫu yêu cầu JWT hợp lệ với `role: SYSTEM_ADMIN` và `orgType: SYSTEM`. Middleware chạy theo thứ tự authenticate → requireOrg → requireRoles. Chưa mở quyền đọc theo từng school/supplier/authority; cần chốt ma trận quyền và điều kiện phạm vi tổ chức trước khi mở rộng. ID tổ chức từ query không được dùng để tự chọn phạm vi dữ liệu.
+Các API yêu cầu JWT hợp lệ với UUID sub và sid của phiên Redis còn sống. Trình duyệt dùng cookie HttpOnly với credentials include; Bearer vẫn hỗ trợ token được cấp từ phiên hợp lệ. Middleware tải lại user ACTIVE và quyền hiện tại từ DB; service yêu cầu AuthPrincipal và thêm WHERE theo quan hệ sở hữu. Mỗi endpoint kiểm tra permission trong [ma trận phân quyền](../../docs/AUTHORIZATION.md). System Admin chỉ truy cập khi có quyền được gán, không có bypass. ID tổ chức từ query/body không được dùng để tự chọn phạm vi dữ liệu. Bộ lọc này theo tổ chức, không tự suy diễn giới hạn đến từng lớp khi chưa có quan hệ tài khoản-lớp.
 
 ```bash
 curl --fail-with-body \
@@ -63,20 +63,20 @@ curl --fail-with-body \
   'http://localhost:5000/api/ingredients?page=1&limit=20'
 ```
 
-Dùng token do luồng xác thực tin cậy cấp; task này không tạo token production hoặc tài khoản admin. Chạy server cần database local đúng thiết kế và Redis local như hướng dẫn ở README root.
+Dùng token do luồng xác thực tin cậy cấp; bootstrap không tạo tài khoản admin. Chạy server cần database local đúng thiết kế và Redis local như hướng dẫn ở README root.
 
 - `page`: số nguyên dương, mặc định `1`.
 - `limit`: số nguyên dương, mặc định `20`, tối đa `100`.
 - Chỉ hỗ trợ `page` và `limit`; tham số khác, giá trị lặp, mảng/object hoặc offset vượt giới hạn bị trả `400`.
 - Response giữ envelope `{ success, statusCode, message, data }`; `data` là `{ items, pagination: { page, limit, hasNext } }`. Đọc thêm một dòng để xác định `hasNext`, không giả lập `total` hay tải toàn bảng.
 - Sắp xếp khóa chính tăng dần, bao gồm cả hai khóa của ClassAllergy. Đây là phân trang offset; thay đổi dữ liệu giữa hai request có thể làm dịch chuyển trang.
-- Thiếu/sai token trả `401`; sai role hoặc nhóm tổ chức trả `403`; lỗi đọc nguồn dữ liệu trả `503` với thông báo chung. Rate limiter hiện hữu vẫn có thể trả `429`/`503`.
+- Thiếu/sai token hoặc tài khoản không tồn tại trả `401`; thiếu quyền, sai scope hoặc user không ACTIVE trả `403`; lỗi đọc nguồn dữ liệu trả `503` với thông báo chung. Rate limiter hiện hữu vẫn có thể trả `429`/`503`.
 
 Services dùng whitelist `select`, không trả `passwordHash`, hồ sơ JSON đăng ký, tài liệu đính kèm hoặc QR token của lô. Date được xuất JSON dạng ISO, Prisma Decimal dạng chuỗi; `blockNumber` BigInt được chuyển thành chuỗi hoặc null để không mất độ chính xác.
 
 ## Phần triển khai tiếp
 
-Đây là khung đọc danh sách, chưa phải nghiệp vụ hoàn chỉnh. Chưa có tạo/sửa/xóa, truy vấn chi tiết, filter nghiệp vụ, chuyển trạng thái, phê duyệt, tính suất ăn, inventory posting hoặc transaction ghi. Bổ sung các phần này theo yêu cầu đã được xác nhận và các ràng buộc trong SQL/baseline. Chưa tích hợp cache, upload, email hoặc queue vào các API này vì chưa có hợp đồng xử lý tương ứng.
+Các API nghiệp vụ vẫn chủ yếu là khung đọc danh sách; auth có transaction tạo tài khoản UNVERIFIED, onboarding có upload/nộp hồ sơ và xét duyệt tạo tổ chức/chứng nhận, permission có transaction quản trị quyền. Các module danh sách khác chưa có CRUD/lifecycle nghiệp vụ đầy đủ, truy vấn chi tiết, filter nghiệp vụ, phê duyệt, tính suất ăn hoặc inventory posting. Bổ sung các phần này theo yêu cầu đã được xác nhận và các ràng buộc trong SQL/baseline. Email Resend đã dùng cho xác minh tài khoản; chưa tích hợp cache hoặc queue vào các API này vì chưa có hợp đồng xử lý tương ứng.
 
 Không thay đổi Prisma models/SQL hoặc tự triển khai database chỉ để API chạy được. Nếu database local chưa có schema mới, cần task thiết lập database được cho phép riêng; `SELECT 1` không xác nhận các bảng đã khớp thiết kế.
 

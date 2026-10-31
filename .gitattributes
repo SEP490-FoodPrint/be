@@ -1,1 +1,2 @@
 .husky/* text eol=lf
+prisma/migrations/**/migration.sql text eol=lf
