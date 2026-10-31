@@ -17,7 +17,6 @@ const select = {
   cookingModeApplied: true,
   status: true,
   plannedPortions: true,
-  preparedPortions: true,
   confirmedAt: true,
   completedAt: true,
   createdAt: true,
