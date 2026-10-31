@@ -1,18 +1,37 @@
 # Baseline database và lịch sử migration
 
+## Định mức chính thức theo lần lên thực đơn
+
+Migration mới `20261031000300_menu_meal_ingredient_standards` nối tiếp Cooking Option A, chỉ thêm ba bảng và một unique index. Không sửa migration đã áp dụng, enum, role hoặc permission.
+
+- `menu_day_dish_ingredients`: khóa ngày/món/bữa/Ingredient. FK ghép tới MenuDayDish bảo đảm đúng lần đưa món vào thực đơn. Ingredient lấy từ Supplier liên kết; khi có hàng, nối sang IngredientEntry của trường để phân bổ kho.
+- `menu_meal_seasonings`: khóa ngày/bữa/IngredientEntry, định lượng một suất của cả bữa. Backend kiểm tra bữa tồn tại trong thực đơn và gia vị thuộc kho trường.
+- `menu_meal_seasoning_lots`: phân bổ lô dùng chung cho cả bữa, lưu số suất đã chốt và lượng giữ. used_at đánh dấu tiêu hao; inventory reference MENU_MEAL_SEASONING trỏ tới UUID dòng phân bổ. Không đưa lại toàn bộ gia vị vào từng CookingBatch.
+
+Mẻ mới lấy định mức thực đơn thay cho dish_ingredient_entries. Công thức món dùng chung vẫn được giữ làm mẫu. Định mức đã gửi duyệt/được duyệt hoặc có mẻ/phân bổ không được ghi đè bằng API sửa nháp. Nếu số suất FINALIZED thay đổi sau khi lập mẻ, Backend dừng để đối chiếu.
+
+**Lưu ý dữ liệu cũ:** migration không tự sao chép công thức hiện tại thành định mức lịch sử. Thực đơn cũ thiếu định mức riêng sẽ bị chặn lập mẻ mới; nhóm phải rà soát và hoàn tất quy trình chỉnh sửa/duyệt định mức trước. Mẻ đã tồn tại giữ các dòng phân bổ cũ và tiếp tục hoàn thành theo kế hoạch đã lưu. Không tự chuyển nguyên liệu cũ thành gia vị.
+
+**Không trộn lô:** với COMBINE_LOTS, gia vị dùng chung có thể lấy từ nhiều lô. Với SEPARATE_BY_LOT, mỗi gia vị phải có một lô đủ cho cả bữa; nếu không có, giao dịch lập mẻ dừng, không âm thầm trộn lô. Đây là giới hạn của định mức gia vị cấp bữa khi không khai báo cách chia gia vị theo món.
+
+**Thứ tự phát hành:** review và merge migration qua PR vào dev, CI PASS rồi CD áp dụng schema mở rộng. Trong giai đoạn đổi phiên bản phải tạm ngừng luồng lập mẻ/nhập định mức; triển khai hết các Backend mới trước khi sử dụng chức năng. Backend cũ không biết reservation gia vị dùng chung nên không được xử lý song song khi dữ liệu mới bắt đầu được tạo. Workflow hiện tại chỉ deploy database, không deploy ứng dụng. Không chạy bootstrap trên Azure.
+
+SQL bootstrap root được đồng bộ các migration MenuDay/Supplier/School hiện có và ba bảng mới. Mockdata cũ được giữ; định mức nguyên liệu chính của các thực đơn demo được chụp từ chính dữ liệu mẫu đã biết, chỉ trong bootstrap local/demo. Production migration không chứa backfill này.
+
 ## Nguồn chuẩn
 
 Lịch sử triển khai schema được quản lý tại `prisma/migrations/`, với provider PostgreSQL và Prisma CLI/Client theo lockfile hiện tại (**7.10.1**). `prisma/schema.prisma` mô tả trạng thái đích; các CHECK và SQL riêng của PostgreSQL nằm trong migration.
 
-| Migration                                  | Nội dung                                                                                         |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------ |
-| `0_init`                                   | Baseline cấu trúc v5.4 đang có trên Azure, trước UserPermissionDenial                            |
-| `20261029000100_user_permission_denials`   | Thêm bảng quyền bị tắt theo user/tổ chức, FK, partial unique index và CHECK đúng một tổ chức     |
-| `20261029000200_single_organization_admin` | Thêm role_code được FK ghép kiểm tra, CHECK loại tổ chức và unique một admin mỗi school/supplier |
-| `20261030000100_menu_day_approval`         | Đồng bộ phê duyệt MenuDay và tham chiếu người phê duyệt                                          |
-| `20261030000200_supplier_contract_linking` | Đồng bộ liên kết hợp đồng nhà cung ứng và các ràng buộc liên quan                                |
-| `20261031000100_school_profile_baseline`   | Đồng bộ các cột hồ sơ School đã provision và giữ dữ liệu hiện có                                 |
-| `20261031000200_cooking_option_a_expand`   | Phase 1 Cooking Batch: guard lịch sử, backfill lượng còn thiếu, giữ cột legacy để tương thích    |
+| Migration                                       | Nội dung                                                                                         |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `0_init`                                        | Baseline cấu trúc v5.4 đang có trên Azure, trước UserPermissionDenial                            |
+| `20261029000100_user_permission_denials`        | Thêm bảng quyền bị tắt theo user/tổ chức, FK, partial unique index và CHECK đúng một tổ chức     |
+| `20261029000200_single_organization_admin`      | Thêm role_code được FK ghép kiểm tra, CHECK loại tổ chức và unique một admin mỗi school/supplier |
+| `20261030000100_menu_day_approval`              | Đồng bộ phê duyệt MenuDay và tham chiếu người phê duyệt                                          |
+| `20261030000200_supplier_contract_linking`      | Đồng bộ liên kết hợp đồng nhà cung ứng và các ràng buộc liên quan                                |
+| `20261031000100_school_profile_baseline`        | Đồng bộ các cột hồ sơ School đã provision và giữ dữ liệu hiện có                                 |
+| `20261031000200_cooking_option_a_expand`        | Phase 1 Cooking Batch: guard lịch sử, backfill lượng còn thiếu, giữ cột legacy để tương thích    |
+| `20261031000300_menu_meal_ingredient_standards` | Định mức chính thức theo thực đơn và phân bổ gia vị dùng chung theo bữa                          |
 
 Baseline lấy phần DDL từ file gốc `FoodPrint_PostgreSQL_Database_v5_4_FINAL_with_MOCK_DATA.sql`, version v5.4. File SQL ở root FoodPrint hiện đã được đồng bộ sang Phase 1; DDL baseline trong `prisma/migrations/0_init/migration.sql` giữ nguyên. Nguồn SHA-256 gốc tại thời điểm nhận baseline: `770751bf506fa523b50bd6c51d235a6305b584c5e1fb63c3bd4e0eac040f5884`.
 

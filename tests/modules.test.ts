@@ -24,6 +24,10 @@ import { HttpError } from "../src/utils/http-error";
 import { signToken } from "../src/utils/jwt";
 import { parseListQuery } from "../src/utils/list-query";
 import { startHttp } from "./helpers/http";
+import {
+  validateMenuMeal,
+  validateMenuStandards,
+} from "../src/modules/menu/menu.validation";
 
 process.env.NODE_ENV = "test";
 
@@ -343,4 +347,113 @@ void test("database read rejection reaches the error middleware without exposing
     message: "Không thể tải danh sách. Vui lòng thử lại sau.",
   });
   assert(!JSON.stringify(response.body).includes("password"));
+});
+
+void test("menu standards keep per-dish quantities and one shared meal seasoning", () => {
+  const a = "00000000-0000-0000-0000-000000000001";
+  const b = "00000000-0000-0000-0000-000000000002";
+  const parsed = validateMenuStandards({
+    dishes: [
+      {
+        dishId: a,
+        ingredients: [{ ingredientId: a, quantityPerPortion: "80", unit: "g" }],
+      },
+      {
+        dishId: b,
+        ingredients: [{ ingredientId: a, quantityPerPortion: "70", unit: "g" }],
+      },
+    ],
+    seasonings: [{ ingredientEntryId: b, quantityPerPortion: "1", unit: "g" }],
+  });
+  assert.equal(parsed.dishes[0].ingredients[0].quantityPerPortion, "80");
+  assert.equal(parsed.dishes[1].ingredients[0].quantityPerPortion, "70");
+  assert.equal(parsed.seasonings.length, 1);
+  assert.equal(parsed.seasonings[0].quantityPerPortion, "1");
+});
+
+void test("menu standards reject invalid precision, duplicates and kitchen-entered totals", () => {
+  const id = "00000000-0000-0000-0000-000000000001";
+  const line = { ingredientId: id, quantityPerPortion: "1", unit: "g" };
+  const dish = { dishId: id, ingredients: [line] };
+  const seasoning = {
+    ingredientEntryId: id,
+    quantityPerPortion: "1",
+    unit: "g",
+  };
+  for (const quantity of [
+    "0",
+    "-1",
+    "NaN",
+    "Infinity",
+    "0.0001",
+    "100000000000",
+    {},
+    null,
+  ]) {
+    assert.throws(
+      () =>
+        validateMenuStandards({
+          dishes: [
+            {
+              ...dish,
+              ingredients: [{ ...line, quantityPerPortion: quantity }],
+            },
+          ],
+          seasonings: [],
+        }),
+      HttpError,
+    );
+  }
+  assert.throws(
+    () => validateMenuStandards({ dishes: [dish, dish], seasonings: [] }),
+    HttpError,
+  );
+  assert.throws(
+    () =>
+      validateMenuStandards({
+        dishes: [{ ...dish, ingredients: [line, line] }],
+        seasonings: [],
+      }),
+    HttpError,
+  );
+  assert.throws(
+    () =>
+      validateMenuStandards({
+        dishes: [dish],
+        seasonings: [seasoning, seasoning],
+      }),
+    HttpError,
+  );
+  assert.throws(
+    () =>
+      validateMenuStandards({
+        dishes: [dish],
+        seasonings: [],
+        quantityUsed: 99,
+      }),
+    HttpError,
+  );
+  assert.throws(
+    () =>
+      validateMenuStandards({
+        dishes: [dish],
+        seasonings: [],
+        plannedPortions: 120,
+      }),
+    HttpError,
+  );
+  assert.throws(() => validateMenuMeal(id, "BREAKFAST"), HttpError);
+  assert.throws(() => validateMenuMeal("not-a-uuid", "LUNCH"), HttpError);
+  assert.equal(
+    validateMenuStandards({
+      dishes: [
+        {
+          ...dish,
+          ingredients: [{ ...line, quantityPerPortion: "99999999999.999" }],
+        },
+      ],
+      seasonings: [],
+    }).dishes[0].ingredients[0].quantityPerPortion,
+    "99999999999.999",
+  );
 });

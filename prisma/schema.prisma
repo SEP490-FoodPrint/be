@@ -78,7 +78,7 @@ model CookingBatchLot {
   cookingBatchId  String        @map("cooking_batch_id") @db.Uuid
   ingredientLotId String        @map("ingredient_lot_id") @db.Uuid
   /// Legacy database-only column, retained during phase 1 for older Backend versions.
-  plannedQuantity Decimal?      @map("planned_quantity") @db.Decimal(14, 3) @ignore
+  plannedQuantity Decimal?      @map("planned_quantity") @ignore @db.Decimal(14, 3)
   /// Backend-computed allocation. Reserved before completion; inventory usage is posted only on completion.
   quantityUsed    Decimal       @map("quantity_used") @db.Decimal(14, 3)
   unit            String        @db.VarChar(30)
@@ -106,7 +106,7 @@ model CookingBatch {
   /// Backend-computed portions from finalized demand; completion uses this confirmed plan.
   plannedPortions       Int?                  @map("planned_portions") @db.Integer
   /// Legacy database-only column, retained during phase 1 for older Backend versions.
-  preparedPortions      Int?                  @map("prepared_portions") @db.Integer @ignore
+  preparedPortions      Int?                  @map("prepared_portions") @ignore @db.Integer
   note                  String?               @db.Text
   confirmedByUserId     String?               @map("confirmed_by_user_id") @db.Uuid
   /// Time kitchen confirmed the PLAN, BEFORE cooking (not completion time).
@@ -267,6 +267,60 @@ model DishIngredientEntry {
   @@schema("foodprint")
 }
 
+/// Fixed main ingredients for one occurrence of a dish. Stock maps through School IngredientEntry.
+model MenuDayDishIngredient {
+  menuDayId          String      @map("menu_day_id") @db.Uuid
+  dishId             String      @map("dish_id") @db.Uuid
+  mealType           MealType    @map("meal_type")
+  ingredientId       String      @map("ingredient_id") @db.Uuid
+  quantityPerPortion Decimal     @map("quantity_per_portion") @db.Decimal(14, 3)
+  unit               String      @db.VarChar(30)
+  menuDish           MenuDayDish @relation(fields: [menuDayId, dishId, mealType], references: [menuDayId, dishId, mealType], onDelete: Cascade, onUpdate: NoAction, map: "fk_menu_dish_ingredient_menu_dish")
+  ingredient         Ingredient  @relation(fields: [ingredientId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_menu_dish_ingredient_ingredient")
+
+  @@id([menuDayId, dishId, mealType, ingredientId])
+  @@index([ingredientId], map: "idx_menu_dish_ingredient_ingredient")
+  @@map("menu_day_dish_ingredients")
+  @@schema("foodprint")
+}
+
+/// Shared seasoning standard for ONE serving of the whole meal, never once per dish.
+model MenuMealSeasoning {
+  menuDayId          String                 @map("menu_day_id") @db.Uuid
+  mealType           MealType               @map("meal_type")
+  ingredientEntryId  String                 @map("ingredient_entry_id") @db.Uuid
+  quantityPerPortion Decimal                @map("quantity_per_portion") @db.Decimal(14, 3)
+  unit               String                 @db.VarChar(30)
+  menuDay            MenuDay                @relation(fields: [menuDayId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_menu_meal_seasoning_menu_day")
+  ingredientEntry    IngredientEntry        @relation(fields: [ingredientEntryId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_menu_meal_seasoning_entry")
+  lots               MenuMealSeasoningLot[]
+
+  @@id([menuDayId, mealType, ingredientEntryId])
+  @@index([ingredientEntryId], map: "idx_menu_meal_seasoning_entry")
+  @@map("menu_meal_seasonings")
+  @@schema("foodprint")
+}
+
+/// Shared meal reservations; used_at marks consumption when every meal batch is complete.
+model MenuMealSeasoningLot {
+  id                String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  menuDayId         String            @map("menu_day_id") @db.Uuid
+  mealType          MealType          @map("meal_type")
+  ingredientEntryId String            @map("ingredient_entry_id") @db.Uuid
+  ingredientLotId   String            @map("ingredient_lot_id") @db.Uuid
+  plannedPortions   Int               @map("planned_portions") @db.Integer
+  quantityUsed      Decimal           @map("quantity_used") @db.Decimal(14, 3)
+  unit              String            @db.VarChar(30)
+  usedAt            DateTime?         @map("used_at") @db.Timestamptz(6)
+  seasoning         MenuMealSeasoning @relation(fields: [menuDayId, mealType, ingredientEntryId], references: [menuDayId, mealType, ingredientEntryId], onDelete: Restrict, onUpdate: NoAction, map: "fk_menu_meal_seasoning_lot_standard")
+  ingredientLot     IngredientLot     @relation(fields: [ingredientLotId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_menu_meal_seasoning_lot_lot")
+
+  @@unique([menuDayId, mealType, ingredientEntryId, ingredientLotId], map: "uq_menu_meal_seasoning_lot")
+  @@index([ingredientLotId, usedAt], map: "idx_menu_meal_seasoning_lot_reserved")
+  @@map("menu_meal_seasoning_lots")
+  @@schema("foodprint")
+}
+
 model Dish {
   id                    String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   schoolId              String                @map("school_id") @db.Uuid
@@ -420,6 +474,7 @@ model IngredientEntry {
   classAllergies        ClassAllergy[]         @relation("class_allergies_ingredient_entry_id__ingredient_entries")
   supplyRequestItems    SupplyRequestItem[]    @relation("supply_request_items_ingredient_entry_id__ingredient_entries")
   dishIngredientEntries DishIngredientEntry[]  @relation("dish_ingredient_entries_ingredient_entry_id__ingredient_entries")
+  menuMealSeasonings    MenuMealSeasoning[]
 
   @@unique([schoolId, ingredientId])
   @@index([schoolId], map: "idx_ingredient_entries_school_id")
@@ -449,6 +504,7 @@ model IngredientLot {
   SourceFacility            SourceFacility?             @relation("ingredient_lots_source_facility_id__source_facilities", fields: [sourceFacilityId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   inventoryTransactions     InventoryTransaction[]      @relation("inventory_transactions_ingredient_lot_id__ingredient_lots")
   cookingBatchLots          CookingBatchLot[]           @relation("cooking_batch_lots_ingredient_lot_id__ingredient_lots")
+  menuMealSeasoningLots     MenuMealSeasoningLot[]
   ingredientQualityFeedback IngredientQualityFeedback[] @relation("ingredient_quality_feedback_ingredient_lot_id__ingredient_lots")
   foodAnalysisResults       FoodAnalysisResult[]        @relation("food_analysis_results_ingredient_lot_id__ingredient_lots")
   traceabilityAnchors       TraceabilityAnchor[]        @relation("traceability_anchors_ingredient_lot_id__ingredient_lots")
@@ -489,18 +545,19 @@ model IngredientQualityFeedback {
 }
 
 model Ingredient {
-  id                String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  supplierId        String                 @map("supplier_id") @db.Uuid
-  name              String                 @db.VarChar(255)
-  category          String?                @db.VarChar(120)
-  defaultUnit       String                 @map("default_unit") @db.VarChar(30)
-  description       String?                @db.Text
-  status            EntityStatus           @default(ACTIVE)
-  createdAt         DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt         DateTime               @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  Supplier          Supplier               @relation("ingredients_supplier_id__suppliers", fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  ingredientEntries IngredientEntry[]      @relation("ingredient_entries_ingredient_id__ingredients")
-  contractItems     SupplierContractItem[]
+  id                  String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  supplierId          String                  @map("supplier_id") @db.Uuid
+  name                String                  @db.VarChar(255)
+  category            String?                 @db.VarChar(120)
+  defaultUnit         String                  @map("default_unit") @db.VarChar(30)
+  description         String?                 @db.Text
+  status              EntityStatus            @default(ACTIVE)
+  createdAt           DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime                @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  Supplier            Supplier                @relation("ingredients_supplier_id__suppliers", fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  ingredientEntries   IngredientEntry[]       @relation("ingredient_entries_ingredient_id__ingredients")
+  contractItems       SupplierContractItem[]
+  menuDishIngredients MenuDayDishIngredient[]
 
   @@unique([supplierId, name])
   @@index([supplierId], map: "idx_ingredients_supplier_id")
@@ -526,6 +583,7 @@ model InventoryTransaction {
 
   @@unique([ingredientLotId], map: "uq_inventory_initial_receipt_per_lot", where: raw("movement_type = 'RECEIPT'"))
   @@unique([ingredientLotId, referenceId], map: "uq_inventory_usage_per_batch_lot", where: raw("((movement_type = 'COOKING_USAGE'::inventory_movement_type) AND ((reference_type)::text = 'COOKING_BATCH'::text))"))
+  @@unique([referenceId], map: "uq_inventory_meal_seasoning_usage", where: raw("((movement_type = 'COOKING_USAGE'::inventory_movement_type) AND ((reference_type)::text = 'MENU_MEAL_SEASONING'::text))"))
   @@index([ingredientLotId, occurredAt(sort: Desc)], map: "idx_inventory_transactions_lot_time")
   @@map("inventory_transactions")
   @@schema("foodprint")
@@ -597,17 +655,18 @@ model MealComplaint {
 
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
 model MenuDayDish {
-  menuDayId      String         @map("menu_day_id") @db.Uuid
-  dishId         String         @map("dish_id") @db.Uuid
+  menuDayId      String                  @map("menu_day_id") @db.Uuid
+  dishId         String                  @map("dish_id") @db.Uuid
   /// Dish inclusion scoped to meal slot. A Dish can appear in both meal slots of one MenuDay.
-  mealType       MealType       @map("meal_type")
+  mealType       MealType                @map("meal_type")
   /// Optional planned dish portion presentation/size, NOT a recipe multiplier by default. Do not multiply required_quantity by portion_size and serving count again.
-  portionSize    Decimal?       @map("portion_size") @db.Decimal(12, 3)
-  portionUnit    String?        @map("portion_unit") @db.VarChar(30)
-  displayOrder   Int?           @map("display_order") @db.Integer
-  MenuDay        MenuDay        @relation("menu_day_dishes_menu_day_id__menu_days", fields: [menuDayId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  Dish           Dish           @relation("menu_day_dishes_dish_id__dishes", fields: [dishId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  cookingBatches CookingBatch[] @relation("cooking_batches_menu_day_id_dish_id_meal_type__menu_day_dishes")
+  portionSize    Decimal?                @map("portion_size") @db.Decimal(12, 3)
+  portionUnit    String?                 @map("portion_unit") @db.VarChar(30)
+  displayOrder   Int?                    @map("display_order") @db.Integer
+  MenuDay        MenuDay                 @relation("menu_day_dishes_menu_day_id__menu_days", fields: [menuDayId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  Dish           Dish                    @relation("menu_day_dishes_dish_id__dishes", fields: [dishId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  cookingBatches CookingBatch[]          @relation("cooking_batches_menu_day_id_dish_id_meal_type__menu_day_dishes")
+  ingredients    MenuDayDishIngredient[]
 
   @@id([menuDayId, dishId, mealType])
   @@index([menuDayId, mealType], map: "idx_menu_day_dishes_meal")
@@ -616,17 +675,18 @@ model MenuDayDish {
 }
 
 model MenuDay {
-  id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  weeklyMenuId      String             @map("weekly_menu_id") @db.Uuid
-  menuDate          DateTime           @map("menu_date") @db.Date
-  note              String?            @db.Text
-  approvalStatus    WeeklyMenuStatus   @default(PENDING_APPROVAL) @map("approval_status")
-  menuReviewRecords MenuReviewRecord[] @relation("menu_review_records_menu_day")
-  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt         DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  WeeklyMenu        WeeklyMenu         @relation("menu_days_weekly_menu_id__weekly_menus", fields: [weeklyMenuId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  menuDayDishes     MenuDayDish[]      @relation("menu_day_dishes_menu_day_id__menu_days")
-  cookingBatches    CookingBatch[]     @relation("cooking_batches_menu_day_id__menu_days")
+  id                String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  weeklyMenuId      String              @map("weekly_menu_id") @db.Uuid
+  menuDate          DateTime            @map("menu_date") @db.Date
+  note              String?             @db.Text
+  approvalStatus    WeeklyMenuStatus    @default(PENDING_APPROVAL) @map("approval_status")
+  menuReviewRecords MenuReviewRecord[]  @relation("menu_review_records_menu_day")
+  createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  WeeklyMenu        WeeklyMenu          @relation("menu_days_weekly_menu_id__weekly_menus", fields: [weeklyMenuId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  menuDayDishes     MenuDayDish[]       @relation("menu_day_dishes_menu_day_id__menu_days")
+  cookingBatches    CookingBatch[]      @relation("cooking_batches_menu_day_id__menu_days")
+  mealSeasonings    MenuMealSeasoning[]
 
   @@unique([weeklyMenuId, menuDate])
   @@index([weeklyMenuId, menuDate], map: "idx_menu_days_menu_date")

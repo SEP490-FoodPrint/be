@@ -2,6 +2,46 @@
 
 ## Chính sách đã chốt
 
+Định mức thực đơn dùng permission hiện có, không thêm role/grant:
+
+| API dưới `/api/menus`                               | Quyền và phạm vi                                                                                          |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| GET `/ingredient-options/main`                      | `menu.view`, SCHOOL; Ingredient của Supplier ACTIVE có quan hệ ACTIVE với trường                          |
+| GET `/ingredient-options/seasoning`                 | `menu.view`, SCHOOL; IngredientEntry ACTIVE, DRY_STOCK của trường, kể cả đang hết hàng                    |
+| GET `/days/:menuDayId/meals/:mealType/ingredients`  | `menu.view`, SCHOOL sở hữu thực đơn; định mức và các lô gia vị đã giữ/tiêu hao                            |
+| PUT cùng đường dẫn trên                             | `menu.update`, SCHOOL; xác minh lại actor trong transaction, chỉ sửa nháp/được yêu cầu sửa và chưa lập mẻ |
+| GET `/days/:menuDayId/meals/:mealType/requirements` | `menu.view`, SCHOOL; nhu cầu theo số suất FINALIZED, tồn khả dụng và thiếu hụt, không tạo reservation     |
+
+PUT thay thế toàn bộ định mức của bữa trong một transaction:
+
+```json
+{
+  "dishes": [
+    {
+      "dishId": "<uuid>",
+      "ingredients": [
+        {
+          "ingredientId": "<supplier-ingredient-uuid>",
+          "quantityPerPortion": "80",
+          "unit": "g"
+        }
+      ]
+    }
+  ],
+  "seasonings": [
+    {
+      "ingredientEntryId": "<school-entry-uuid>",
+      "quantityPerPortion": "1",
+      "unit": "g"
+    }
+  ]
+}
+```
+
+Phải khai báo đúng mọi món trong bữa. Nguyên liệu chính dùng Ingredient để chọn từ Supplier trước khi nhận hàng; lúc lập mẻ phải có IngredientEntry và lô khả dụng của trường. Gia vị chọn từ danh mục kho trường, không tự phân loại mọi DRY_STOCK thành gia vị. Định mức dương, tối đa ba chữ số thập phân; đơn vị phải quy đổi được. Không nhận số suất hay tiêu hao do bếp nhập.
+
+CookingBatch đọc định mức riêng của lần lên thực đơn, không fallback sang công thức mẫu. Gia vị giữ một lần theo bữa, kiểm tra dị ứng và dùng chung phép tính tồn khả dụng với nguyên liệu chính. Chi tiết CookingBatch có `mealSeasonings` để truy xuất lô gia vị chung. Khi mọi món đủ số suất và tất cả mẻ hoàn thành, transaction của mẻ cuối trừ gia vị, tạo COOKING_USAGE/MENU_MEAL_SEASONING và đánh dấu used_at. Unique index chống ghi trùng khi retry.
+
 Mỗi tài khoản có một role. Quyền hiệu lực là permission active được gán cho role trừ denial của tài khoản trong tổ chức hiện tại. JWT chỉ xác định tài khoản bằng UUID sub; API nghiệp vụ đọc lại user ACTIVE, role, tổ chức và quyền mỗi request. Không cache quyền và không có System Admin bypass. Riêng API thông tin phiên cho phép tài khoản UNVERIFIED của hai loại đăng ký truy cập giới hạn để tiếp tục hoàn thiện hồ sơ; chưa có quyền nghiệp vụ.
 
 System Admin được thêm permission và sửa bộ quyền mọi role khác, áp dụng toàn hệ thống cho tài khoản mang role đó. Role SYSTEM_ADMIN chỉ đọc qua API; mọi yêu cầu sửa trả 403. Quyền gán mới vẫn chịu ràng buộc phạm vi tài nguyên, không tự cấp quyền truy cập khác tổ chức.

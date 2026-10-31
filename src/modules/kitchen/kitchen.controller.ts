@@ -8,22 +8,20 @@ import {
   validateKitchenPlan,
 } from "./kitchen.validation";
 import { uuid } from "../../utils/auth-validation";
-import { kitchenLifecycle, type KitchenLifecycle } from "./kitchen.lifecycle";
 
 export function createKitchenController(
   service: KitchenService = kitchenService,
-  lifecycle: KitchenLifecycle = kitchenLifecycle,
 ) {
   return {
     getOne: asyncHandler(async (req, res) => {
       sendSuccess(
         res,
-        await lifecycle.getOne(uuid(req.params.id), requirePrincipal(req)),
+        await service.getOne(uuid(req.params.id), requirePrincipal(req)),
       );
     }),
     plan: asyncHandler(async (req, res) => {
       const input = validateKitchenPlan(req.body as unknown);
-      const result = await lifecycle.plan(input, requirePrincipal(req));
+      const result = await service.plan(input, requirePrincipal(req));
       sendSuccess(
         res,
         result,
@@ -35,7 +33,7 @@ export function createKitchenController(
       validateKitchenAction(req.body as unknown);
       sendSuccess(
         res,
-        await lifecycle.confirm(uuid(req.params.id), requirePrincipal(req)),
+        await service.confirm(uuid(req.params.id), requirePrincipal(req)),
         "Đã xác nhận kế hoạch",
       );
     }),
@@ -43,7 +41,7 @@ export function createKitchenController(
       validateKitchenAction(req.body as unknown);
       sendSuccess(
         res,
-        await lifecycle.complete(uuid(req.params.id), requirePrincipal(req)),
+        await service.complete(uuid(req.params.id), requirePrincipal(req)),
         "Đã xác nhận hoàn thành theo kế hoạch",
       );
     }),

@@ -7,15 +7,13 @@ import {
 } from "../../middlewares/permission.middleware";
 import { createKitchenController } from "./kitchen.controller";
 import { kitchenService, type KitchenService } from "./kitchen.service";
-import { kitchenLifecycle, type KitchenLifecycle } from "./kitchen.lifecycle";
 
 export function createKitchenRouter(
   service: KitchenService = kitchenService,
   authHandler: RequestHandler = authenticate,
-  lifecycle: KitchenLifecycle = kitchenLifecycle,
 ) {
   const router = Router();
-  const controller = createKitchenController(service, lifecycle);
+  const controller = createKitchenController(service);
   router.get("/", authHandler, requireResource("kitchen"), controller.getAll);
   router.get(
     "/:id",
