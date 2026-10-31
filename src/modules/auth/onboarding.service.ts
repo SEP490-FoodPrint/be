@@ -21,6 +21,7 @@ import {
 } from "../../utils/onboarding-documents";
 import { validateOnboarding } from "./onboarding.validation";
 import { readSubmission, retainDocuments } from "./onboarding-submission";
+import { registrationApplicantSelect } from "../registration/registration.select";
 
 const select = {
   id: true,
@@ -33,6 +34,12 @@ const select = {
   reviewedAt: true,
   rejectionReason: true,
   updatedAt: true,
+} as const satisfies Prisma.RegistrationRequestSelect;
+const detailSelect = {
+  ...select,
+  reviewedByUserId: true,
+  applicantUser: { select: registrationApplicantSelect },
+  reviewedByUser: { select: { id: true, fullName: true } },
 } as const satisfies Prisma.RegistrationRequestSelect;
 type Application = Prisma.RegistrationRequestGetPayload<{
   select: typeof select;
@@ -261,10 +268,21 @@ export function createOnboardingService(
         );
         const row = await db.registrationRequest.findUnique({
           where: { id },
-          select,
+          select: detailSelect,
         });
         if (!row) throw new HttpError(404, "Không tìm thấy hồ sơ");
-        return view(row);
+        const {
+          applicantUser,
+          reviewedByUserId,
+          reviewedByUser,
+          ...application
+        } = row;
+        return {
+          ...view(application),
+          applicantUser,
+          reviewedByUserId,
+          reviewedByUser,
+        };
       });
     },
     async approve(actor: AuthPrincipal, id: string) {

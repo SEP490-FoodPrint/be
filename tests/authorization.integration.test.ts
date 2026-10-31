@@ -840,6 +840,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           email: username + "@example.test",
           password: "Signup123!",
           fullName: `New ${requestType} Applicant`,
+          phone: "0911223344",
           requestType,
         };
         const response = await http.request("/api/auth/signup", {
@@ -861,6 +862,8 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         });
         assert.equal(account.status, "UNVERIFIED");
         assert.equal(account.emailVerifiedAt, null);
+        assert.equal(account.fullName, body.fullName);
+        assert.equal(account.phone, body.phone);
         const receipt = record(record(response.body).data);
         assert.equal(receipt.emailVerificationRequired, true);
         assert.equal(receipt.verificationEmailSent, true);
@@ -1435,6 +1438,50 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         );
         assert.equal(detail.status, 200);
         assert(!JSON.stringify(detail.body).includes("publicId"));
+        const detailData = record(record(detail.body).data);
+        const applicantData = record(detailData.applicantUser);
+        const applicantAccount = await db.user.findUniqueOrThrow({
+          where: { id: String(detailData.applicantUserId) },
+        });
+        assert.deepEqual(applicantData, {
+          id: applicantAccount.id,
+          username: applicantAccount.username,
+          fullName: applicantAccount.fullName,
+          email: applicantAccount.email,
+          phone: applicantAccount.phone,
+          status: applicantAccount.status,
+          emailVerifiedAt:
+            applicantAccount.emailVerifiedAt?.toISOString() ?? null,
+        });
+        assert.equal(applicantData.fullName, `Updated ${type} applicant`);
+        assert.equal(applicantData.phone, "0901234567");
+        const listed = await request(
+          "/api/registration-requests?page=1&limit=5",
+          system.id,
+        );
+        assert.equal(listed.status, 200);
+        const listedRequest = rows(listed.body).find((item) => item.id === id);
+        assert(listedRequest);
+        assert.deepEqual(listedRequest.applicantUser, applicantData);
+        assert(!JSON.stringify(listed.body).includes("passwordHash"));
+        assert(
+          !JSON.stringify(listed.body).includes(applicantAccount.passwordHash),
+        );
+        assert.equal(
+          (
+            await request(
+              "/api/registration-requests?page=1&limit=5",
+              adminA.id,
+            )
+          ).status,
+          403,
+        );
+        assert.equal(detailData.reviewedByUserId, null);
+        assert.equal(detailData.reviewedByUser, null);
+        assert(!JSON.stringify(detail.body).includes("passwordHash"));
+        assert(
+          !JSON.stringify(detail.body).includes(applicantAccount.passwordHash),
+        );
         assert.equal(
           (
             await http.request(`/api/registration-requests/${id}`, {
@@ -1761,6 +1808,18 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         assert.equal(after.status, "ACTIVE");
         assert.equal(Boolean(after.schoolId), type === "SCHOOL");
         assert.equal(Boolean(after.supplierId), type === "SUPPLIER");
+        const reviewedDetail = await request(
+          `/api/registration-requests/${id}`,
+          system.id,
+        );
+        assert.equal(reviewedDetail.status, 200);
+        const reviewedData = record(record(reviewedDetail.body).data);
+        assert.equal(record(reviewedData.applicantUser).status, "ACTIVE");
+        assert.equal(reviewedData.reviewedByUserId, system.id);
+        assert.deepEqual(reviewedData.reviewedByUser, {
+          id: system.id,
+          fullName: system.fullName,
+        });
         if (type === "SCHOOL") {
           assert(after.schoolId);
           assert.equal(

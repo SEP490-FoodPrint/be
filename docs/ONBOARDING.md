@@ -86,6 +86,15 @@ Trình duyệt tự đặt Content-Type cùng boundary; không đặt applicatio
 
 Quyền được đọc lại từ DB, thao tác duyệt/từ chối kiểm tra lại actor/target trong transaction Serializable. Hai lượt duyệt đồng thời chỉ tạo một tổ chức; hồ sơ không còn PENDING trả 409. Mã trường/mã số thuế trùng trả 409 và rollback toàn bộ; không tự gắn tài khoản vào tổ chức cũ. Tài khoản ACTIVE không được nộp lại hồ sơ. Lỗi validation trả 400, thiếu quyền 403, tài liệu không thuộc phạm vi 404, tệp quá lớn 413, dịch vụ không sẵn sàng 503.
 
+`GET /api/registration-requests?page=1&limit=5` trả thông tin người đăng ký tại `data.items[i].applicantUser` với cùng các trường như API chi tiết bên dưới. Hai API dùng chung projection an toàn; thông tin lấy từ tài khoản hiện tại. Danh sách giữ hợp đồng phân trang page/limit/hasNext và chỉ trả các trường tóm tắt hồ sơ cùng applicantUser, không nhúng hồ sơ/tệp đầy đủ.
+
+`GET /api/registration-requests/:id` trả trong `data` thông tin hồ sơ và hai object liên quan:
+
+- `applicantUser`: `id`, `username`, `fullName`, `email`, `phone`, `status`, `emailVerifiedAt`, đọc từ tài khoản được liên kết bằng `applicantUserId`. Đây là thông tin tài khoản hiện tại, bao gồm các lần cập nhật profile cá nhân; không phải bản chụp lúc signup. `phone` và `emailVerifiedAt` có thể null; thời điểm được trả theo ISO 8601.
+- `reviewedByUserId` và `reviewedByUser: { id, fullName }`: người xét duyệt, null khi chưa xét duyệt.
+
+Tên/số điện thoại người đại diện được lưu trong users từ signup. `profileData.name/email/phone` là thông tin tổ chức, độc lập với `applicantUser.fullName/email/phone`. Tài liệu tiếp tục nằm trong `documents` với metadata an toàn. API chi tiết không trả password hash, role grants, token hoặc metadata Cloudinary nội bộ; quyền đọc vẫn yêu cầu SYSTEM_ADMIN có registration.view.
+
 Catalog thêm registration.approve/registration.reject và quyền mặc định SYSTEM_ADMIN tương ứng cùng registration.view. Database đang dùng cần operator cập nhật catalog bằng auth:bootstrap theo chính sách môi trường; ứng dụng/CD không tự bootstrap. Không thay đổi Prisma schema, SQL migration hoặc database thật trong task triển khai API.
 
 ## Lưu tài liệu và kiểm thử
