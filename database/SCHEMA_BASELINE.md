@@ -9,8 +9,9 @@ Lịch sử triển khai schema được quản lý tại `prisma/migrations/`, 
 | `0_init`                                   | Baseline cấu trúc v5.4 đang có trên Azure, trước UserPermissionDenial                            |
 | `20261029000100_user_permission_denials`   | Thêm bảng quyền bị tắt theo user/tổ chức, FK, partial unique index và CHECK đúng một tổ chức     |
 | `20261029000200_single_organization_admin` | Thêm role_code được FK ghép kiểm tra, CHECK loại tổ chức và unique một admin mỗi school/supplier |
+| `20261031000100_cooking_option_a_expand`   | Phase 1 Cooking Batch: guard lịch sử, backfill lượng còn thiếu, giữ cột legacy để tương thích    |
 
-Baseline lấy phần DDL từ [FoodPrint_PostgreSQL_Database_v5_4_FINAL_with_MOCK_DATA.sql](FoodPrint_PostgreSQL_Database_v5_4_FINAL_with_MOCK_DATA.sql), version v5.4 theo header. Nguồn SHA-256: `770751bf506fa523b50bd6c51d235a6305b584c5e1fb63c3bd4e0eac040f5884`.
+Baseline lấy phần DDL từ file gốc `FoodPrint_PostgreSQL_Database_v5_4_FINAL_with_MOCK_DATA.sql`, version v5.4. File SQL ở root FoodPrint hiện đã được đồng bộ sang Phase 1; DDL baseline trong `prisma/migrations/0_init/migration.sql` giữ nguyên. Nguồn SHA-256 gốc tại thời điểm nhận baseline: `770751bf506fa523b50bd6c51d235a6305b584c5e1fb63c3bd4e0eac040f5884`.
 
 Baseline SHA-256: `7ea7b81d1da39210180fd9514c792ec7061303e4efc5949de222c41210c5f342`. [prisma/baseline.manifest.json](../prisma/baseline.manifest.json) lưu fingerprint cho chín nhóm catalog: bảng, cột/default/nullability, constraint, index/predicate, enum, extension namespace, trigger, function và policy. Không lưu dữ liệu nghiệp vụ, credentials hoặc bản dump.
 
@@ -89,6 +90,14 @@ Schema tương ứng được đồng bộ cùng SQL. Kiểm tra drift chỉ đ�
 Bản sửa đã PASS Prisma validate, lint, format, typecheck, build, 105 unit tests, 7 migration tests và 27 authorization tests trên PostgreSQL local dùng một lần. Kiểm thử migration bao gồm nâng cấp baseline có địa chỉ cũ, cấu trúc profile đã provision và trường hợp hai cột địa chỉ xung đột. Kiểm tra Azure chỉ đọc báo lịch sử/checksum hợp lệ, một migration đang chờ và Prisma diff `No difference detected`. Migration School profile mới cần review, merge vào dev và được workflow CD áp dụng; phần này không xác nhận nó đã được deploy.
 
 ## Database đã tồn tại: nhận baseline một lần
+
+### Cooking Batch Phương án A — source ngày 31/10/2026
+
+`20261031000100_cooking_option_a_expand` là migration mới để review, chưa được tác vụ phát triển triển khai hoặc xác minh trên Azure. Không sửa ba migration cũ hoặc manifest baseline. Phase 1 không DROP cột: giữ `prepared_portions`, cho `planned_quantity` nullable, bắt buộc `quantity_used` và điều chỉnh lifecycle CHECK để hoàn thành theo kế hoạch. Dữ liệu lịch sử sai khác làm migration dừng trước backfill; không sửa sai khác hoặc ghi lại inventory usage.
+
+SQL bootstrap root FoodPrint được đồng bộ sang schema chuyển tiếp, chỉ dùng local/demo mới; không dùng để cập nhật database đang hoạt động. Các kết quả Azure ngày 29/10 ở trên vẫn là snapshot lịch sử, không chứng minh migration ngày 31/10 đã chạy.
+
+Phát hành từ nhánh tính năng qua PR vào `dev`, review dữ liệu và migration, đợi CI PASS rồi CD chạy expand. Phạm vi tương thích đã đối chiếu là BE cũ trong repo chỉ có GET; cần đồng bộ mọi client khác còn ghi `quantity_used` NULL hoặc đọc `planned_quantity` dưới kiểu bắt buộc trước khi merge. Chỉ sau xác nhận Backend mới ổn định mới đưa Phase 2 DROP vào lịch sử migration active; không thay thế bằng `db push`, reset hoặc replay bootstrap.
 
 Thủ tục dành cho database chưa nhận baseline; Azure hiện tại đã hoàn tất. Chỉ làm sau khi migration đã được review/merge và việc ghi lịch sử/chạy DDL trên database đích được cho phép. `DATABASE_URL` phải trỏ đúng database dự định triển khai.
 

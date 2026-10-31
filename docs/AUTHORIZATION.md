@@ -44,6 +44,8 @@ Xét duyệt yêu cầu SYSTEM_ADMIN cùng permission được gán: registratio
 
 ## Ma trận API danh sách
 
+Cooking Batch Phương án A bổ sung GET `/api/cooking-batches/:id` với `cooking_batch.view`, giữ scope đọc như danh sách; POST `/api/cooking-batches` dùng `cooking_batch.create`, POST `/:id/confirm` dùng `cooking_batch.confirm`, POST `/:id/complete` dùng `cooking_batch.complete`. Thao tác ghi yêu cầu SCHOOL có schoolId tin cậy, xác minh lại actor/quyền trong transaction; SYSTEM không có bypass. Không thêm role/grant/permission. Plan chỉ nhận menuDayId/dishId/mealType; confirm/complete không nhận số suất hoặc lượng nguyên liệu.
+
 Mọi dòng đều yêu cầu một trong các permission liệt kê. SYSTEM có phạm vi toàn hệ thống **khi được gán quyền**, còn tổ chức khác theo quan hệ sở hữu trong resource-access.ts. Phạm vi dưới đây là org-level, không tự suy diễn lớp được giao cho giáo viên.
 
 | Module                        | Permission (OR)                                                                    | Tổ chức ngoài SYSTEM được mở |
