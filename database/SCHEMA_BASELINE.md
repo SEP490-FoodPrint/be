@@ -9,7 +9,10 @@ Lịch sử triển khai schema được quản lý tại `prisma/migrations/`, 
 | `0_init`                                   | Baseline cấu trúc v5.4 đang có trên Azure, trước UserPermissionDenial                            |
 | `20261029000100_user_permission_denials`   | Thêm bảng quyền bị tắt theo user/tổ chức, FK, partial unique index và CHECK đúng một tổ chức     |
 | `20261029000200_single_organization_admin` | Thêm role_code được FK ghép kiểm tra, CHECK loại tổ chức và unique một admin mỗi school/supplier |
-| `20261031000100_cooking_option_a_expand`   | Phase 1 Cooking Batch: guard lịch sử, backfill lượng còn thiếu, giữ cột legacy để tương thích    |
+| `20261030000100_menu_day_approval`         | Đồng bộ phê duyệt MenuDay và tham chiếu người phê duyệt                                          |
+| `20261030000200_supplier_contract_linking` | Đồng bộ liên kết hợp đồng nhà cung ứng và các ràng buộc liên quan                                |
+| `20261031000100_school_profile_baseline`   | Đồng bộ các cột hồ sơ School đã provision và giữ dữ liệu hiện có                                 |
+| `20261031000200_cooking_option_a_expand`   | Phase 1 Cooking Batch: guard lịch sử, backfill lượng còn thiếu, giữ cột legacy để tương thích    |
 
 Baseline lấy phần DDL từ file gốc `FoodPrint_PostgreSQL_Database_v5_4_FINAL_with_MOCK_DATA.sql`, version v5.4. File SQL ở root FoodPrint hiện đã được đồng bộ sang Phase 1; DDL baseline trong `prisma/migrations/0_init/migration.sql` giữ nguyên. Nguồn SHA-256 gốc tại thời điểm nhận baseline: `770751bf506fa523b50bd6c51d235a6305b584c5e1fb63c3bd4e0eac040f5884`.
 
@@ -93,7 +96,9 @@ Bản sửa đã PASS Prisma validate, lint, format, typecheck, build, 105 unit 
 
 ### Cooking Batch Phương án A — source ngày 31/10/2026
 
-`20261031000100_cooking_option_a_expand` là migration mới để review, chưa được tác vụ phát triển triển khai hoặc xác minh trên Azure. Không sửa ba migration cũ hoặc manifest baseline. Phase 1 không DROP cột: giữ `prepared_portions`, cho `planned_quantity` nullable, bắt buộc `quantity_used` và điều chỉnh lifecycle CHECK để hoàn thành theo kế hoạch. Dữ liệu lịch sử sai khác làm migration dừng trước backfill; không sửa sai khác hoặc ghi lại inventory usage.
+`20261031000200_cooking_option_a_expand` là migration mới để review, chưa được tác vụ phát triển triển khai hoặc xác minh trực tiếp trên Azure. Không sửa các migration đã áp dụng hoặc manifest baseline. Phase 1 không DROP cột: giữ `prepared_portions`, cho `planned_quantity` nullable, bắt buộc `quantity_used` và điều chỉnh lifecycle CHECK để hoàn thành theo kế hoạch. Dữ liệu lịch sử sai khác làm migration dừng trước backfill; không sửa sai khác hoặc ghi lại inventory usage.
+
+Sau khi merge code mới từ `dev`, nhóm cung cấp lịch sử Azure gồm sáu migration đã áp dụng, kết thúc ở `20261031000100_school_profile_baseline`; CookingBatch chưa có trong danh sách. Tên cũ `20261031000100_cooking_option_a_expand` xếp trước School profile nên làm kiểm tra lịch sử trong CD dừng. Đổi tên migration CookingBatch chưa áp dụng sang `20261031000200_cooking_option_a_expand` để nối tiếp lịch sử hiện có; giữ nguyên từng byte SQL và giữ nguyên bộ kiểm tra checksum/thứ tự. Việc đối chiếu này dựa trên danh sách nhóm cung cấp, không phải kết nối Azure từ tác vụ phát triển.
 
 SQL bootstrap root FoodPrint được đồng bộ sang schema chuyển tiếp, chỉ dùng local/demo mới; không dùng để cập nhật database đang hoạt động. Các kết quả Azure ngày 29/10 ở trên vẫn là snapshot lịch sử, không chứng minh migration ngày 31/10 đã chạy.
 
