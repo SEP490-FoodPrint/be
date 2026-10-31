@@ -20,6 +20,7 @@ import {
   type UserService,
 } from "../src/modules/user/user.service";
 import { createWarehouseService } from "../src/modules/warehouse/warehouse.service";
+import { createRegistrationService } from "../src/modules/registration/registration.service";
 import { HttpError } from "../src/utils/http-error";
 import { signToken } from "../src/utils/jwt";
 import { parseListQuery } from "../src/utils/list-query";
@@ -125,6 +126,97 @@ void test("a final or empty page has no next page", async () => {
     assert.equal(result.pagination.hasNext, false);
     assert.deepEqual(result.items, rows);
   }
+});
+
+void test("registration list returns safe applicant contacts with stable pagination and nullable metadata", async () => {
+  let calls = 0;
+  const applicantUser = {
+    id: "applicant-1",
+    username: "school_applicant",
+    fullName: "Nguyễn Văn A",
+    email: "applicant@example.test",
+    phone: "0901234567",
+    status: "UNVERIFIED" as const,
+    emailVerifiedAt: now,
+  };
+  const row = {
+    id: "request-1",
+    applicantUserId: applicantUser.id,
+    applicantUser,
+    requestType: "SCHOOL" as const,
+    status: "PENDING" as const,
+    submittedAt: now,
+    reviewedAt: null,
+    updatedAt: now,
+  };
+  const nullable = {
+    ...row,
+    id: "request-2",
+    applicantUser: { ...applicantUser, phone: null, emailVerifiedAt: null },
+  };
+  const service = createRegistrationService((args) => {
+    calls++;
+    assert.equal(args.skip, 4);
+    assert.equal(args.take, 3);
+    assert.deepEqual(args.where, {});
+    assert.deepEqual(args.orderBy, [{ id: "asc" }]);
+    assert.deepEqual(Object.keys(args.select.applicantUser.select).sort(), [
+      "email",
+      "emailVerifiedAt",
+      "fullName",
+      "id",
+      "phone",
+      "status",
+      "username",
+    ]);
+    return Promise.resolve([row, nullable, { ...row, id: "request-3" }]);
+  });
+  const result = await service.getAll(
+    { page: 3, limit: 2 },
+    { ...testAdmin, permissions: ["registration.view"] },
+  );
+  assert.equal(calls, 1);
+  assert.deepEqual(result.pagination, { page: 3, limit: 2, hasNext: true });
+  assert.deepEqual(
+    result.items.map((item) => item.id),
+    ["request-1", "request-2"],
+  );
+  const json: unknown = JSON.parse(JSON.stringify(result));
+  assert.deepEqual(json, {
+    items: [
+      {
+        ...row,
+        submittedAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+        applicantUser: { ...applicantUser, emailVerifiedAt: now.toISOString() },
+      },
+      {
+        ...nullable,
+        submittedAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+      },
+    ],
+    pagination: { page: 3, limit: 2, hasNext: true },
+  });
+});
+
+void test("registration contact reads still require an assigned permission and System organization scope", () => {
+  let reads = 0;
+  const service = createRegistrationService(() => {
+    reads++;
+    return Promise.resolve([]);
+  });
+  for (const principal of [
+    testAdmin,
+    { ...testStaff, permissions: ["registration.view"] },
+  ]) {
+    assert.throws(
+      () => service.getAll({ page: 1, limit: 5 }, principal),
+      (error: unknown) =>
+        error instanceof HttpError && error.statusCode === 403,
+    );
+  }
+  assert.equal(reads, 0);
 });
 
 void test("composite-primary-key lists use both keys for deterministic ordering", async () => {

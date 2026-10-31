@@ -17,6 +17,8 @@ import { createEmailVerificationController } from "./email-verification.controll
 import type { EmailVerificationService } from "./email-verification.service";
 import { createProfileController } from "./profile.controller";
 import type { ProfileService } from "./profile.service";
+import { createPasswordController } from "./password.controller";
+import type { PasswordService } from "./password.service";
 
 export interface AuthServices {
   session: SessionService;
@@ -25,6 +27,7 @@ export interface AuthServices {
   onboarding?: OnboardingService;
   emailVerification?: EmailVerificationService;
   profile?: ProfileService;
+  password?: PasswordService;
 }
 
 export function createAuthRouter(
@@ -43,6 +46,12 @@ export function createAuthRouter(
   router.post("/signup", session.signup);
   router.post("/refresh", session.refresh);
   router.post("/logout", session.logout);
+  const password = createPasswordController(services.password);
+  router.post("/forgot-password", password.request);
+  router.post("/forgot-password/verify", password.verify);
+  router.post("/reset-password", password.reset);
+  router.post("/change-password/verify", sessionAuth, password.verifyCurrent);
+  router.post("/change-password", sessionAuth, password.change);
   const emailVerification = createEmailVerificationController(
     services.emailVerification,
   );

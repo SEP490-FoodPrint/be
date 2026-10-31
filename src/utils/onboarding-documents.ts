@@ -6,6 +6,7 @@ import { uuid } from "./auth-validation";
 import type { OnboardingProfile } from "../modules/auth/onboarding.validation";
 
 export const MAX_DOCUMENT_BYTES = 5 * 1024 * 1024;
+export const MAX_PROFILE_DOCUMENTS = 20;
 export interface OnboardingDocument {
   id: string;
   field: string;
@@ -79,11 +80,14 @@ export function validateProfileFiles(
       ? ["legalDocument"]
       : profile.profileData.certifications.map((_, i) => `certificate_${i}`),
   );
-  const seen = new Set<string>();
+  if (files.length > MAX_PROFILE_DOCUMENTS)
+    throw new HttpError(
+      400,
+      `Hồ sơ chỉ nhận tối đa ${MAX_PROFILE_DOCUMENTS} tệp`,
+    );
   for (const file of files) {
-    if (!allowed.has(file.fieldname) || seen.has(file.fieldname))
-      throw new HttpError(400, "Tệp không thuộc trường hồ sơ hoặc bị gửi lặp");
-    seen.add(file.fieldname);
+    if (!allowed.has(file.fieldname))
+      throw new HttpError(400, "Tệp không thuộc trường hồ sơ");
     documentFormat(file);
   }
 }
@@ -91,7 +95,7 @@ export function readDocuments(
   value: unknown,
   userId: string,
 ): OnboardingDocument[] {
-  if (!Array.isArray(value))
+  if (!Array.isArray(value) || value.length > MAX_PROFILE_DOCUMENTS)
     throw new HttpError(503, "Metadata tài liệu không hợp lệ");
   return value.map((item: unknown) => {
     if (!item || typeof item !== "object")
@@ -179,7 +183,7 @@ export const documentStorage: DocumentStorage = {
         resource_type: "raw",
         type: "authenticated",
         expires_at: Math.floor(Date.now() / 1000) + 60,
-        attachment: true,
+        attachment: false,
       },
     );
   },
