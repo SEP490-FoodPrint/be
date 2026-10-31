@@ -526,6 +526,20 @@ export const INITIAL_PERMISSIONS = [
     description: "Xem yêu cầu đăng ký",
   },
   {
+    code: "registration.approve",
+    name: "Duyệt yêu cầu đăng ký",
+    module: "registration",
+    action: "approve",
+    description: "System Admin duyệt hồ sơ và kích hoạt tài khoản",
+  },
+  {
+    code: "registration.reject",
+    name: "Từ chối yêu cầu đăng ký",
+    module: "registration",
+    action: "reject",
+    description: "System Admin từ chối hồ sơ kèm lý do",
+  },
+  {
     code: "supplier_relationship.view",
     name: "Xem quan hệ trường supplier",
     module: "supplier_relationship",
@@ -548,6 +562,9 @@ export const INITIAL_PERMISSIONS = [
   },
 ] as const;
 export const INITIAL_ROLE_PERMISSIONS = [
+  ["SYSTEM_ADMIN", "registration.view"],
+  ["SYSTEM_ADMIN", "registration.approve"],
+  ["SYSTEM_ADMIN", "registration.reject"],
   ["SYSTEM_ADMIN", "dashboard.view"],
   ["SYSTEM_ADMIN", "school.manage"],
   ["SYSTEM_ADMIN", "supplier.manage"],

@@ -27,7 +27,7 @@ jobs:
       # Prisma config needs a valid URL; these checks never connect to PostgreSQL.
       DATABASE_URL: postgresql://ci_validation@127.0.0.1:1/foodprint_ci?schema=foodprint
       JWT_SECRET: foodprint-ci-test-only-secret-not-for-runtime
-      JWT_EXPIRES_IN: 1h
+      AUTH_ACCESS_TTL_SECONDS: "900"
       PRISMA_HIDE_UPDATE_MESSAGE: "true"
     steps:
       - name: Check out repository
@@ -74,6 +74,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
       postgres:
         image: postgres:18
         env:
@@ -95,6 +104,7 @@ jobs:
       DATABASE_URL: postgresql://foodprint_test:foodprint_test_only@127.0.0.1:5432/foodprint_migration_test?schema=foodprint
       JWT_SECRET: foodprint-ci-test-only-secret-not-for-runtime
       MIGRATION_TEST_DATABASE_URL: postgresql://foodprint_test:foodprint_test_only@127.0.0.1:5432/foodprint_migration_test?schema=foodprint
+      REDIS_URL: redis://127.0.0.1:6379/0
       PRISMA_HIDE_UPDATE_MESSAGE: "true"
     steps:
       - name: Check out repository
@@ -120,6 +130,9 @@ jobs:
 
       - name: Verify dynamic authorization and tenant isolation on PostgreSQL
         run: npm run test:authorization
+
+      - name: Verify atomic refresh rotation and session expiry on Redis
+        run: npm run test:auth:redis
 
   quality:
     name: Backend quality
