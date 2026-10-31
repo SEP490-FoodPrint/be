@@ -136,7 +136,7 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
     async () => {
       schoolId = (
         await db.query<{ id: string }>(
-          "INSERT INTO foodprint.schools (name) VALUES ('Migration test marker') RETURNING id",
+          "INSERT INTO foodprint.schools (name,address) VALUES ('Migration test marker','Preserved legacy address') RETURNING id",
         )
       ).rows[0].id;
       const legacyRole = (
@@ -210,6 +210,15 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
         ).rows[0].name,
         "Migration test marker",
       );
+      assert.equal(
+        (
+          await db.query<{ address_line: string }>(
+            "SELECT address_line FROM foodprint.schools WHERE id=$1",
+            [schoolId],
+          )
+        ).rows[0].address_line,
+        "Preserved legacy address",
+      );
       await runPrisma(url, ["migrate", "deploy"]);
       await runPrisma(url, ["migrate", "status"]);
       await runPrisma(url, [
@@ -220,6 +229,67 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
         "prisma/schema.prisma",
         "--exit-code",
       ]);
+    },
+  );
+
+  await context.test(
+    "School profile adoption preserves provisioned data and refuses ambiguous address columns",
+    async () => {
+      const name = `foodprint_migration_test_school_${randomUUID().replaceAll("-", "")}`;
+      await db.query(`CREATE DATABASE "${name}"`);
+      const fresh = new URL(url);
+      fresh.pathname = `/${name}`;
+      await runPrisma(fresh.toString(), ["migrate", "deploy"]);
+      const profileDb = new Client({ connectionString: fresh.toString() });
+      await profileDb.connect();
+      try {
+        const migration = await readFile(
+          path.join(
+            root,
+            "prisma/migrations/20261031000100_school_profile_baseline/migration.sql",
+          ),
+          "utf8",
+        );
+        const row = (
+          await profileDb.query<{ id: string }>(
+            "INSERT INTO foodprint.schools(name,address_line,description,logo_url,cover_image_url,boarding_scale) VALUES ('Provisioned school','Current address','Keep description','https://example.test/logo.png','https://example.test/cover.png','500') RETURNING id",
+          )
+        ).rows[0];
+        const read = async () =>
+          (
+            await profileDb.query<Record<string, unknown>>(
+              "SELECT * FROM foodprint.schools WHERE id=$1",
+              [row.id],
+            )
+          ).rows[0];
+        const before = await read();
+        await profileDb.query(migration);
+        assert.deepEqual(
+          await read(),
+          before,
+          "Re-adopting provisioned columns must not alter profile data or timestamps",
+        );
+        await profileDb.query(
+          "ALTER TABLE foodprint.schools ADD COLUMN address text",
+        );
+        await profileDb.query(
+          "UPDATE foodprint.schools SET address='Conflicting legacy address' WHERE id=$1",
+          [row.id],
+        );
+        const conflict = await read();
+        await assert.rejects(
+          () => profileDb.query(migration),
+          /both address and address_line/,
+        );
+        await profileDb.query("ROLLBACK");
+        assert.deepEqual(
+          await read(),
+          conflict,
+          "Ambiguous address sources must remain untouched for manual review",
+        );
+      } finally {
+        await profileDb.end();
+      }
     },
   );
 

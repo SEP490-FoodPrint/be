@@ -1316,6 +1316,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         },
         body: JSON.stringify({
           name: "Corrected school",
+          address: "Preserved school profile address",
           code: "ONBOARDING-" + randomUUID(),
         }),
       });
@@ -1492,6 +1493,17 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         assert.equal(after.status, "ACTIVE");
         assert.equal(Boolean(after.schoolId), type === "SCHOOL");
         assert.equal(Boolean(after.supplierId), type === "SUPPLIER");
+        if (type === "SCHOOL") {
+          assert(after.schoolId);
+          assert.equal(
+            (
+              await db.school.findUniqueOrThrow({
+                where: { id: after.schoolId },
+              })
+            ).address,
+            "Preserved school profile address",
+          );
+        }
         const self = await http.request("/api/auth/me", {
           headers: applicantHeaders(type),
         });

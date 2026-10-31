@@ -70,6 +70,24 @@ Sau CD, đã chạy riêng bootstrap được phê duyệt từ đúng commit đ
 
 Các con số là snapshot tại lần kiểm tra này; kiểm tra lại lịch sử và quyền thực tế khi vận hành. Bootstrap vẫn là thao tác operator riêng, không được thêm vào CD.
 
+## Đồng bộ lịch sử và School profile ngày 31/10/2026
+
+CD của `dev` tại `6a8a4e6` dừng vì Git thiếu hai migration đã applied trên Azure. Truy vấn chỉ đọc xác nhận năm migration hoàn tất, không có bản ghi lỗi/rollback. Ba SQL cũ vẫn khớp checksum; hai file gốc được khôi phục nguyên byte từ commit `45aaccdd51d848fb6f91529e5409a854ce1fac23` của `feat/supplier-contract-linking`:
+
+| Migration                                  | SHA-256 trùng lịch sử Azure                                        |
+| ------------------------------------------ | ------------------------------------------------------------------ |
+| `20261030000100_menu_day_approval`         | `a7b4782950c14db864473eff9448f4e6869536489041d648c08df6329bda6238` |
+| `20261030000200_supplier_contract_linking` | `4c714ba825e20150df08433ad51fa5783d1837c830c31f057ba6823dbf91f9a9` |
+
+Schema tương ứng được đồng bộ cùng SQL. Kiểm tra drift chỉ đọc phát hiện thêm cấu trúc School đã có trên Azure nhưng chưa được version hóa: address_line, location_id, description, logo_url, cover_image_url và boarding_scale. Migration mới `20261031000100_school_profile_baseline` ghi nhận cấu trúc này để database mới và Azure cùng hội tụ:
+
+- Database còn address sẽ rename sang address_line, giữ nguyên nội dung. Nếu cả hai cột cùng tồn tại, migration dừng để review, không tự chọn/xóa dữ liệu.
+- Các cột profile đã provision đúng kiểu, nullable và không có default được giữ nguyên; cột thiếu được bổ sung. FK/index location giữ nguyên khi đã có.
+- Prisma vẫn dùng trường `School.address` nhưng map sang address_line; API và payload đăng ký hiện tại tiếp tục dùng address.
+- Migration không seed, update dữ liệu hồ sơ hay thay quyền. SQL đã applied được giữ bất biến; không sửa/xóa `_prisma_migrations` để bỏ qua kiểm tra.
+
+Bản sửa đã PASS Prisma validate, lint, format, typecheck, build, 105 unit tests, 7 migration tests và 27 authorization tests trên PostgreSQL local dùng một lần. Kiểm thử migration bao gồm nâng cấp baseline có địa chỉ cũ, cấu trúc profile đã provision và trường hợp hai cột địa chỉ xung đột. Kiểm tra Azure chỉ đọc báo lịch sử/checksum hợp lệ, một migration đang chờ và Prisma diff `No difference detected`. Migration School profile mới cần review, merge vào dev và được workflow CD áp dụng; phần này không xác nhận nó đã được deploy.
+
 ## Database đã tồn tại: nhận baseline một lần
 
 Thủ tục dành cho database chưa nhận baseline; Azure hiện tại đã hoàn tất. Chỉ làm sau khi migration đã được review/merge và việc ghi lịch sử/chạy DDL trên database đích được cho phép. `DATABASE_URL` phải trỏ đúng database dự định triển khai.
