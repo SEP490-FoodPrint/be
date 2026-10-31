@@ -108,6 +108,8 @@ model CookingBatch {
   /// Legacy database-only column, retained during phase 1 for older Backend versions.
   preparedPortions      Int?                  @map("prepared_portions") @db.Integer @ignore
   note                  String?               @db.Text
+  /// JSON record for Decision 1246/QĐ-BYT 3-step food safety inspection (temperatures, sensory, hygiene checks).
+  inspectionData        Json?                 @map("inspection_data")
   confirmedByUserId     String?               @map("confirmed_by_user_id") @db.Uuid
   /// Time kitchen confirmed the PLAN, BEFORE cooking (not completion time).
   confirmedAt           DateTime?             @map("confirmed_at") @db.Timestamptz(6)
