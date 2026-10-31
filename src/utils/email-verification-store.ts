@@ -79,7 +79,11 @@ export function createRedisEmailVerificationStore(
   client: AuthRedisClient = redis,
   prefix = "foodprint:email-verification:",
 ): EmailVerificationStore {
-  if (!/^foodprint:email-verification:(?:[a-z0-9_-]+:)*$/i.test(prefix))
+  if (
+    !/^foodprint:(?:email-verification|password-reset):(?:[a-z0-9_-]+:)*$/i.test(
+      prefix,
+    )
+  )
     throw new Error("Email verification prefix không hợp lệ");
   function key(kind: string, digest: string) {
     if (!/^[a-f0-9]{64}$/.test(digest))

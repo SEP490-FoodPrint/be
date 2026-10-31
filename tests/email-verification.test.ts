@@ -223,7 +223,7 @@ void test("signup preserves the committed account and reports email failure inst
   const result = await signup.signup({
     username: "applicant",
     email: "a@example.test",
-    password: "a valid password for signup",
+    password: "Food123!",
     fullName: "Applicant",
     requestType: "SCHOOL",
     phone: null,
