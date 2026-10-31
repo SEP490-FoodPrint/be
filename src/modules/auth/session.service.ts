@@ -27,11 +27,13 @@ export function createSessionService(
           take: 2,
           select: { id: true, passwordHash: true },
         });
+
         const candidate = rows.length === 1 ? rows[0] : undefined;
         const valid = await bcrypt.compare(
           password,
           candidate?.passwordHash ?? dummyHash,
         );
+
         if (!candidate || !valid)
           throw new HttpError(
             401,
@@ -69,5 +71,6 @@ export function createSessionService(
     },
   };
 }
+
 export const sessionService = createSessionService();
 export type SessionService = ReturnType<typeof createSessionService>;
