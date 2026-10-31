@@ -489,17 +489,18 @@ model IngredientQualityFeedback {
 }
 
 model Ingredient {
-  id                String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  supplierId        String            @map("supplier_id") @db.Uuid
-  name              String            @db.VarChar(255)
-  category          String?           @db.VarChar(120)
-  defaultUnit       String            @map("default_unit") @db.VarChar(30)
-  description       String?           @db.Text
-  status            EntityStatus      @default(ACTIVE)
-  createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt         DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  Supplier          Supplier          @relation("ingredients_supplier_id__suppliers", fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  ingredientEntries IngredientEntry[] @relation("ingredient_entries_ingredient_id__ingredients")
+  id                String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  supplierId        String                 @map("supplier_id") @db.Uuid
+  name              String                 @db.VarChar(255)
+  category          String?                @db.VarChar(120)
+  defaultUnit       String                 @map("default_unit") @db.VarChar(30)
+  description       String?                @db.Text
+  status            EntityStatus           @default(ACTIVE)
+  createdAt         DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime               @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  Supplier          Supplier               @relation("ingredients_supplier_id__suppliers", fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  ingredientEntries IngredientEntry[]      @relation("ingredient_entries_ingredient_id__ingredients")
+  contractItems     SupplierContractItem[]
 
   @@unique([supplierId, name])
   @@index([supplierId], map: "idx_ingredients_supplier_id")
@@ -615,15 +616,17 @@ model MenuDayDish {
 }
 
 model MenuDay {
-  id             String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  weeklyMenuId   String         @map("weekly_menu_id") @db.Uuid
-  menuDate       DateTime       @map("menu_date") @db.Date
-  note           String?        @db.Text
-  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt      DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  WeeklyMenu     WeeklyMenu     @relation("menu_days_weekly_menu_id__weekly_menus", fields: [weeklyMenuId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  menuDayDishes  MenuDayDish[]  @relation("menu_day_dishes_menu_day_id__menu_days")
-  cookingBatches CookingBatch[] @relation("cooking_batches_menu_day_id__menu_days")
+  id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  weeklyMenuId      String             @map("weekly_menu_id") @db.Uuid
+  menuDate          DateTime           @map("menu_date") @db.Date
+  note              String?            @db.Text
+  approvalStatus    WeeklyMenuStatus   @default(PENDING_APPROVAL) @map("approval_status")
+  menuReviewRecords MenuReviewRecord[] @relation("menu_review_records_menu_day")
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  WeeklyMenu        WeeklyMenu         @relation("menu_days_weekly_menu_id__weekly_menus", fields: [weeklyMenuId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  menuDayDishes     MenuDayDish[]      @relation("menu_day_dishes_menu_day_id__menu_days")
+  cookingBatches    CookingBatch[]     @relation("cooking_batches_menu_day_id__menu_days")
 
   @@unique([weeklyMenuId, menuDate])
   @@index([weeklyMenuId, menuDate], map: "idx_menu_days_menu_date")
@@ -636,6 +639,8 @@ model MenuDay {
 model MenuReviewRecord {
   id             String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   weeklyMenuId   String             @map("weekly_menu_id") @db.Uuid
+  menuDayId      String?            @map("menu_day_id") @db.Uuid
+  MenuDay        MenuDay?           @relation("menu_review_records_menu_day", fields: [menuDayId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   reviewerUserId String             @map("reviewer_user_id") @db.Uuid
   decision       MenuReviewDecision
   feedback       String?            @db.Text
@@ -645,6 +650,7 @@ model MenuReviewRecord {
   User           User               @relation("menu_review_records_reviewer_user_id__users", fields: [reviewerUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@index([weeklyMenuId, reviewedAt(sort: Desc)], map: "idx_menu_review_records_menu_time")
+  @@index([menuDayId], map: "idx_menu_review_records_menu_day")
   @@map("menu_review_records")
   @@schema("foodprint")
 }
@@ -744,26 +750,28 @@ model RolePermission {
 /// Stores School-Supplier partnership history. SUSPENDED means temporarily paused; UNLINKED means the relationship has ended.
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
 model SchoolSupplierRelationship {
-  id                String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  schoolId          String               @map("school_id") @db.Uuid
-  supplierId        String               @map("supplier_id") @db.Uuid
-  status            SchoolSupplierStatus @default(ACTIVE)
-  linkedByUserId    String?              @map("linked_by_user_id") @db.Uuid
-  unlinkedByUserId  String?              @map("unlinked_by_user_id") @db.Uuid
-  suspendedByUserId String?              @map("suspended_by_user_id") @db.Uuid
-  linkNote          String?              @map("link_note") @db.Text
-  unlinkReason      String?              @map("unlink_reason") @db.Text
-  suspensionReason  String?              @map("suspension_reason") @db.Text
-  linkedAt          DateTime             @default(now()) @map("linked_at") @db.Timestamptz(6)
-  unlinkedAt        DateTime?            @map("unlinked_at") @db.Timestamptz(6)
-  suspendedAt       DateTime?            @map("suspended_at") @db.Timestamptz(6)
-  createdAt         DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt         DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  School            School               @relation("school_supplier_relationships_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  Supplier          Supplier             @relation("school_supplier_relationships_supplier_id__suppliers", fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  linkedByUser      User?                @relation("school_supplier_relationships_linked_by_user_id__users", fields: [linkedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  unlinkedByUser    User?                @relation("school_supplier_relationships_unlinked_by_user_id__users", fields: [unlinkedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  suspendedByUser   User?                @relation("school_supplier_relationships_suspended_by_user_id__users", fields: [suspendedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  id                String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  schoolId          String                      @map("school_id") @db.Uuid
+  supplierId        String                      @map("supplier_id") @db.Uuid
+  status            SchoolSupplierStatus        @default(ACTIVE)
+  linkedByUserId    String?                     @map("linked_by_user_id") @db.Uuid
+  unlinkedByUserId  String?                     @map("unlinked_by_user_id") @db.Uuid
+  suspendedByUserId String?                     @map("suspended_by_user_id") @db.Uuid
+  linkNote          String?                     @map("link_note") @db.Text
+  unlinkReason      String?                     @map("unlink_reason") @db.Text
+  suspensionReason  String?                     @map("suspension_reason") @db.Text
+  linkedAt          DateTime                    @default(now()) @map("linked_at") @db.Timestamptz(6)
+  unlinkedAt        DateTime?                   @map("unlinked_at") @db.Timestamptz(6)
+  suspendedAt       DateTime?                   @map("suspended_at") @db.Timestamptz(6)
+  createdAt         DateTime                    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime                    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  School            School                      @relation("school_supplier_relationships_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  Supplier          Supplier                    @relation("school_supplier_relationships_supplier_id__suppliers", fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  linkedByUser      User?                       @relation("school_supplier_relationships_linked_by_user_id__users", fields: [linkedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  unlinkedByUser    User?                       @relation("school_supplier_relationships_unlinked_by_user_id__users", fields: [unlinkedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  suspendedByUser   User?                       @relation("school_supplier_relationships_suspended_by_user_id__users", fields: [suspendedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  contracts         SupplierContract[]
+  events            SupplierRelationshipEvent[]
 
   @@unique([schoolId, supplierId], map: "uq_school_supplier_current", where: raw("(status = ANY (ARRAY['ACTIVE'::school_supplier_status, 'SUSPENDED'::school_supplier_status]))"))
   @@map("school_supplier_relationships")
@@ -777,7 +785,13 @@ model School {
   code                        String?                      @db.VarChar(80)
   email                       String?                      @db.Citext
   phone                       String?                      @db.VarChar(30)
-  address                     String?                      @db.Text
+  address                     String?                      @map("address_line") @db.Text
+  locationId                  String?                      @map("location_id") @db.Uuid
+  location                    Location?                    @relation(fields: [locationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  description                 String?                      @db.Text
+  logoUrl                     String?                      @map("logo_url") @db.Text
+  coverImageUrl               String?                      @map("cover_image_url") @db.Text
+  boardingScale               String?                      @map("boarding_scale") @db.VarChar(100)
   /// Optional public website URL for the School profile.
   websiteUrl                  String?                      @map("website_url") @db.Text
   /// Configured by authorized school actor; SEPARATE_BY_LOT or COMBINE_LOTS. NULL until configured; kitchen cannot override in CookingBatch.
@@ -791,6 +805,7 @@ model School {
   updatedAt                   DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   users                       User[]                       @relation("users_school_id__schools")
   schoolSupplierRelationships SchoolSupplierRelationship[] @relation("school_supplier_relationships_school_id__schools")
+  supplierContracts           SupplierContract[]
   classes                     Class[]                      @relation("classes_school_id__schools")
   ingredientEntries           IngredientEntry[]            @relation("ingredient_entries_school_id__schools")
   supplyRequests              SupplyRequest[]              @relation("supply_requests_school_id__schools")
@@ -801,6 +816,7 @@ model School {
   userPermissionDenials       UserPermissionDenial[]       @relation("user_permission_denials_school_id__schools")
 
   @@unique([code])
+  @@index([locationId], map: "idx_schools_location_id")
   @@map("schools")
   @@schema("foodprint")
 }
@@ -836,17 +852,18 @@ model SourceFacility {
 
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
 model SupplierCertification {
-  id                String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  supplierId        String       @map("supplier_id") @db.Uuid
-  certificationType String       @map("certification_type") @db.VarChar(120)
-  certificateNo     String       @map("certificate_no") @db.VarChar(120)
-  issuedDate        DateTime?    @map("issued_date") @db.Date
-  expiryDate        DateTime?    @map("expiry_date") @db.Date
-  documentUrl       String?      @map("document_url") @db.Text
-  status            EntityStatus @default(ACTIVE)
-  createdAt         DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt         DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  Supplier          Supplier     @relation("supplier_certifications_supplier_id__suppliers", fields: [supplierId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  supplierId        String             @map("supplier_id") @db.Uuid
+  certificationType String             @map("certification_type") @db.VarChar(120)
+  certificateNo     String             @map("certificate_no") @db.VarChar(120)
+  issuedDate        DateTime?          @map("issued_date") @db.Date
+  expiryDate        DateTime?          @map("expiry_date") @db.Date
+  documentUrl       String?            @map("document_url") @db.Text
+  status            EntityStatus       @default(ACTIVE)
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  Supplier          Supplier           @relation("supplier_certifications_supplier_id__suppliers", fields: [supplierId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  contracts         SupplierContract[]
 
   @@unique([supplierId, certificateNo])
   @@index([supplierId], map: "idx_supplier_certifications_supplier")
@@ -861,6 +878,10 @@ model Supplier {
   email                       String?                      @db.Citext
   phone                       String?                      @db.VarChar(30)
   address                     String?                      @db.Text
+  locationId                  String?                      @map("location_id") @db.Uuid
+  location                    Location?                    @relation(fields: [locationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  serviceAreas                SupplierServiceArea[]
+  contracts                   SupplierContract[]
   status                      EntityStatus                 @default(ACTIVE)
   createdAt                   DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                   DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -901,6 +922,9 @@ model SupplyRequest {
   requestNo             String              @map("request_no") @db.VarChar(80)
   schoolId              String              @map("school_id") @db.Uuid
   supplierId            String              @map("supplier_id") @db.Uuid
+  contractId            String?             @map("contract_id") @db.Uuid
+  contractSnapshot      Json?               @map("contract_snapshot") @db.JsonB
+  contract              SupplierContract?   @relation(fields: [contractId, schoolId, supplierId], references: [id, schoolId, supplierId], onDelete: Restrict, onUpdate: NoAction)
   createdByUserId       String              @map("created_by_user_id") @db.Uuid
   status                SupplyRequestStatus @default(DRAFT)
   requestedDeliveryDate DateTime?           @map("requested_delivery_date") @db.Date
@@ -983,6 +1007,10 @@ model User {
   createdAt                                    DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                                    DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   Role                                         Role                         @relation("users_role_id__roles", fields: [roleId, roleCode], references: [id, code], onDelete: Restrict, onUpdate: NoAction, map: "users_role_id_code_fkey")
+  supplierContractsCreated                     SupplierContract[]           @relation("contract_creator")
+  supplierContractsActivated                   SupplierContract[]           @relation("contract_activator")
+  supplierContractDocuments                    SupplierContractDocument[]
+  supplierRelationshipEvents                   SupplierRelationshipEvent[]
   School                                       School?                      @relation("users_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   Supplier                                     Supplier?                    @relation("users_supplier_id__suppliers", fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   communeFoodSafetyUnit                        CommuneFoodSafetyUnit?       @relation("users_commune_food_safety_unit_id__commune_food_safety_units", fields: [communeFoodSafetyUnitId], references: [id], onDelete: Restrict, onUpdate: NoAction)
@@ -1085,6 +1113,129 @@ model WeeklyMenu {
   @@unique([schoolId, weekStartDate])
   @@index([schoolId, weekStartDate], map: "idx_weekly_menus_school_week")
   @@map("weekly_menus")
+  @@schema("foodprint")
+}
+
+model Location {
+  id           String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code         String                @unique @db.VarChar(50)
+  name         String                @db.VarChar(255)
+  type         String                @db.VarChar(50)
+  level        Int                   @db.SmallInt
+  parentId     String?               @map("parent_id") @db.Uuid
+  isActive     Boolean               @default(true) @map("is_active")
+  createdAt    DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  parent       Location?             @relation("location_tree", fields: [parentId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  children     Location[]            @relation("location_tree")
+  schools      School[]
+  suppliers    Supplier[]
+  serviceAreas SupplierServiceArea[]
+
+  @@index([parentId], map: "idx_locations_parent_id")
+  @@index([level], map: "idx_locations_level")
+  @@index([type], map: "idx_locations_type")
+  @@map("locations")
+  @@schema("foodprint")
+}
+
+model SupplierServiceArea {
+  supplierId String   @map("supplier_id") @db.Uuid
+  locationId String   @map("location_id") @db.Uuid
+  supplier   Supplier @relation(fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([supplierId, locationId])
+  @@index([locationId])
+  @@map("supplier_service_areas")
+  @@schema("foodprint")
+}
+
+model SupplierContract {
+  id                String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  schoolId          String                      @map("school_id") @db.Uuid
+  supplierId        String                      @map("supplier_id") @db.Uuid
+  relationshipId    String?                     @map("relationship_id") @db.Uuid
+  number            String?                     @db.VarChar(120)
+  signedOn          DateTime?                   @map("signed_on") @db.Date
+  startsOn          DateTime?                   @map("starts_on") @db.Date
+  endsOn            DateTime?                   @map("ends_on") @db.Date
+  scopeNote         String?                     @map("scope_note") @db.Text
+  certificationId   String?                     @map("certification_id") @db.Uuid
+  exemptionNote     String?                     @map("exemption_note") @db.Text
+  status            String                      @default("DRAFT") @db.VarChar(20)
+  revision          Int                         @default(1)
+  snapshot          Json?                       @db.JsonB
+  createdByUserId   String                      @map("created_by_user_id") @db.Uuid
+  activatedByUserId String?                     @map("activated_by_user_id") @db.Uuid
+  activatedAt       DateTime?                   @map("activated_at") @db.Timestamptz(6)
+  closedAt          DateTime?                   @map("closed_at") @db.Timestamptz(6)
+  closeReason       String?                     @map("close_reason") @db.Text
+  createdAt         DateTime                    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime                    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  school            School                      @relation(fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  supplier          Supplier                    @relation(fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  relationship      SchoolSupplierRelationship? @relation(fields: [relationshipId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  certification     SupplierCertification?      @relation(fields: [certificationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  createdBy         User                        @relation("contract_creator", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  activatedBy       User?                       @relation("contract_activator", fields: [activatedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  items             SupplierContractItem[]
+  documents         SupplierContractDocument[]
+  events            SupplierRelationshipEvent[]
+  supplyRequests    SupplyRequest[]
+
+  @@unique([id, schoolId, supplierId])
+  @@unique([schoolId, supplierId, number])
+  @@index([schoolId, supplierId, status])
+  @@map("supplier_contracts")
+  @@schema("foodprint")
+}
+
+model SupplierContractItem {
+  contractId   String           @map("contract_id") @db.Uuid
+  ingredientId String           @map("ingredient_id") @db.Uuid
+  contract     SupplierContract @relation(fields: [contractId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  ingredient   Ingredient       @relation(fields: [ingredientId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([contractId, ingredientId])
+  @@map("supplier_contract_items")
+  @@schema("foodprint")
+}
+
+model SupplierContractDocument {
+  id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  contractId       String           @map("contract_id") @db.Uuid
+  kind             String           @db.VarChar(30)
+  fileName         String           @map("file_name") @db.VarChar(255)
+  mimeType         String           @map("mime_type") @db.VarChar(80)
+  size             Int
+  sha256           String           @db.VarChar(64)
+  content          Bytes            @db.ByteA
+  uploadedByUserId String           @map("uploaded_by_user_id") @db.Uuid
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  contract         SupplierContract @relation(fields: [contractId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  uploadedBy       User             @relation(fields: [uploadedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([contractId])
+  @@map("supplier_contract_documents")
+  @@schema("foodprint")
+}
+
+model SupplierRelationshipEvent {
+  id             String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  relationshipId String                     @map("relationship_id") @db.Uuid
+  contractId     String?                    @map("contract_id") @db.Uuid
+  actorId        String                     @map("actor_id") @db.Uuid
+  actorName      String                     @map("actor_name") @db.VarChar(255)
+  action         String                     @db.VarChar(40)
+  reason         String                     @db.Text
+  createdAt      DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+  relationship   SchoolSupplierRelationship @relation(fields: [relationshipId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  contract       SupplierContract?          @relation(fields: [contractId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  actor          User                       @relation(fields: [actorId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([relationshipId, createdAt])
+  @@map("supplier_relationship_events")
   @@schema("foodprint")
 }
 

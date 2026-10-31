@@ -1,16 +1,22 @@
 import bcrypt from "bcryptjs";
 import type { PrismaClient } from "../../generated/prisma/client";
 import { getPrisma } from "../../utils/database";
-import { databaseOperation, loadPrincipal } from "../../utils/authorization";
+import { databaseOperation } from "../../utils/authorization";
+import { loadSessionUser } from "../../utils/session-identity";
 import { HttpError } from "../../utils/http-error";
-import { signToken } from "../../utils/jwt";
+import { authSessions, type AuthSessions } from "../../utils/auth-sessions";
 const dummyHash =
-  "$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy";
+  "$2b$12$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy";
 export function createSessionService(
   connect: () => Promise<PrismaClient> = getPrisma,
+  sessions: AuthSessions = authSessions,
 ) {
   return {
-    async login(identifier: string, password: string) {
+    async login(
+      identifier: string,
+      password: string,
+      previousRefreshToken?: string,
+    ) {
       return databaseOperation(async () => {
         const db = await connect();
         const rows = await db.user.findMany({
@@ -28,10 +34,21 @@ export function createSessionService(
             401,
             "Tên đăng nhập/email hoặc mật khẩu không đúng",
           );
-        const principal = await loadPrincipal(candidate.id, db);
-        const accessToken = signToken({ sub: principal.id });
-        return { accessToken, tokenType: "Bearer", user: principal };
+        const principal = await loadSessionUser(candidate.id, db);
+        if (previousRefreshToken) await sessions.logout(previousRefreshToken);
+        return { ...(await sessions.issue(principal.id)), user: principal };
       });
+    },
+    refresh(refreshToken: string | undefined) {
+      return sessions.refresh(refreshToken, async (userId) =>
+        loadSessionUser(userId, await connect()),
+      );
+    },
+    logout(refreshToken?: string, accessToken?: string) {
+      return sessions.logout(refreshToken, accessToken);
+    },
+    async currentUser(userId: string) {
+      return loadSessionUser(userId, await connect());
     },
   };
 }

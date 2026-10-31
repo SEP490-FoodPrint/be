@@ -3,6 +3,7 @@ import type { RequestHandler } from "express";
 import { authenticate } from "../middlewares/auth.middleware";
 import { Router } from "express";
 import { createAuthRouter } from "../modules/auth/auth.routes";
+import type { AuthServices } from "../modules/auth/auth.routes";
 import { createUserRouter } from "../modules/user/user.routes";
 import { createOrganizationRouter } from "../modules/organization/organization.routes";
 import { createIngredientRouter } from "../modules/ingredient/ingredient.routes";
@@ -34,7 +35,10 @@ import { createSchoolAlertRouter } from "../modules/school-alert/school-alert.ro
 import { createTraceabilityRouter } from "../modules/traceability/traceability.routes";
 import { createMenuReviewRouter } from "../modules/menu-review/menu-review.routes";
 
-export function createApiRouter(authHandler: RequestHandler = authenticate) {
+export function createApiRouter(
+  authHandler: RequestHandler = authenticate,
+  authServices?: AuthServices,
+) {
   const router = Router();
 
   // Health check endpoint
@@ -49,7 +53,7 @@ export function createApiRouter(authHandler: RequestHandler = authenticate) {
   });
 
   router.use(createPermissionRouter(authHandler));
-  router.use("/auth", createAuthRouter(undefined, authHandler));
+  router.use("/auth", createAuthRouter(undefined, authHandler, authServices));
   router.use("/users", createUserRouter(undefined, authHandler));
   router.use("/schools", createOrganizationRouter(undefined, authHandler));
   router.use("/ingredients", createIngredientRouter(undefined, authHandler));
@@ -85,7 +89,7 @@ export function createApiRouter(authHandler: RequestHandler = authenticate) {
   );
   router.use(
     "/registration-requests",
-    createRegistrationRouter(undefined, authHandler),
+    createRegistrationRouter(undefined, authHandler, authServices?.onboarding),
   );
   router.use(
     "/school-supplier-relationships",

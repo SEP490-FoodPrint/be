@@ -162,6 +162,27 @@ export function assertOrganizationManager(principal: AuthPrincipal): void {
       "Tài khoản không có chức năng quản trị quyền tổ chức",
     );
 }
+function transactionConflict(error: unknown): boolean {
+  if (!error || typeof error !== "object" || !("code" in error)) return false;
+  if (error.code === "P2034") return true;
+  if (error.code !== "P2010" || !("meta" in error)) return false;
+  const meta: unknown = error.meta;
+  if (!meta || typeof meta !== "object" || !("driverAdapterError" in meta))
+    return false;
+  const adapter: unknown = meta.driverAdapterError;
+  if (!adapter || typeof adapter !== "object" || !("cause" in adapter))
+    return false;
+  const cause: unknown = adapter.cause;
+  // PostgreSQL raw row locks report serialization failures through the pg adapter as P2010.
+  return Boolean(
+    cause &&
+    typeof cause === "object" &&
+    "kind" in cause &&
+    cause.kind === "TransactionWriteConflict" &&
+    "originalCode" in cause &&
+    cause.originalCode === "40001",
+  );
+}
 export async function authorizationTransaction<T>(
   client: PrismaClient,
   operation: (tx: AuthorizationClient) => Promise<T>,
@@ -175,14 +196,7 @@ export async function authorizationTransaction<T>(
           timeout: 20000,
         });
       } catch (error) {
-        if (
-          attempt < 2 &&
-          error &&
-          typeof error === "object" &&
-          "code" in error &&
-          error.code === "P2034"
-        )
-          continue;
+        if (attempt < 2 && transactionConflict(error)) continue;
         throw error;
       }
     }
