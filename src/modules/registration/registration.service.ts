@@ -2,6 +2,7 @@ import type { AuthPrincipal } from "../../types/auth";
 import { listScopes } from "../../utils/resource-access";
 import type { Prisma } from "../../generated/prisma/client";
 import { getPrisma } from "../../utils/database";
+import { registrationApplicantSelect } from "./registration.select";
 import {
   listWindow,
   readListPage,
@@ -11,6 +12,7 @@ import {
 const select = {
   id: true,
   applicantUserId: true,
+  applicantUser: { select: registrationApplicantSelect },
   requestType: true,
   status: true,
   submittedAt: true,
