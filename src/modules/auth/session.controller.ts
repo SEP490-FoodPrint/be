@@ -84,6 +84,7 @@ export function createSessionController(
       sendSuccess(res, requireSessionUser(req));
       return Promise.resolve();
     }),
+
     permissions: asyncHandler((req, res) => {
       res.setHeader("Cache-Control", "no-store");
       const p = requireSessionUser(req);
