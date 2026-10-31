@@ -395,19 +395,36 @@ export function createOnboardingService(
           where = { id };
         } else if (current.orgType === "SUPPLIER" && current.supplierId) {
           assertPermission(current, "supplier_certification.view");
+          const application = await db.registrationRequest.findFirst({
+            where: { id, status: "APPROVED", requestType: "SUPPLIER" },
+            select,
+          });
+          if (!application) throw new HttpError(404, "Không tìm thấy tài liệu");
+          const documents = readDocuments(
+            application.supportingDocuments,
+            application.applicantUserId,
+          );
+          const requested = documents.find(
+            (document) => document.id === documentId,
+          );
+          if (!requested) throw new HttpError(404, "Không tìm thấy tài liệu");
+          // documentUrl remains the first-file anchor for a certificate. Authorize
+          // every file in that group through the certificate's current supplier owner.
+          const anchors = documents
+            .filter((document) => document.field === requested.field)
+            .map(
+              (document) =>
+                `/api/registration-requests/${id}/documents/${document.id}`,
+            );
           const certificate = await db.supplierCertification.findFirst({
             where: {
               supplierId: current.supplierId,
-              documentUrl: `/api/registration-requests/${id}/documents/${documentId}`,
+              documentUrl: { in: anchors },
             },
             select: { id: true },
           });
           if (!certificate) throw new HttpError(404, "Không tìm thấy tài liệu");
-          where = {
-            id,
-            status: "APPROVED",
-            requestType: "SUPPLIER",
-          };
+          return application;
         } else throw new HttpError(403, "Không có quyền đọc tài liệu này");
         return db.registrationRequest.findFirst({ where, select });
       });
