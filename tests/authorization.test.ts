@@ -201,7 +201,10 @@ void test("the same token observes revoked grants on the next request and ignore
   const app = express();
   app.get(
     "/menu",
-    createAuthenticate(() => Promise.resolve(principalFromIdentity(user))),
+    createAuthenticate(
+      () => Promise.resolve(principalFromIdentity(user)),
+      () => Promise.resolve(),
+    ),
     requirePermission("menu.view"),
     (_req, res) => res.sendStatus(204),
   );

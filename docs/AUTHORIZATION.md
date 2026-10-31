@@ -2,7 +2,7 @@
 
 ## Chính sách đã chốt
 
-Mỗi tài khoản có một role. Quyền hiệu lực là permission active được gán cho role trừ denial của tài khoản trong tổ chức hiện tại. JWT chỉ xác định tài khoản bằng UUID sub; backend đọc lại user ACTIVE, role, tổ chức và quyền mỗi request. Không cache quyền và không có System Admin bypass.
+Mỗi tài khoản có một role. Quyền hiệu lực là permission active được gán cho role trừ denial của tài khoản trong tổ chức hiện tại. JWT chỉ xác định tài khoản bằng UUID sub; API nghiệp vụ đọc lại user ACTIVE, role, tổ chức và quyền mỗi request. Không cache quyền và không có System Admin bypass. Riêng API thông tin phiên cho phép tài khoản UNVERIFIED của hai loại đăng ký truy cập giới hạn để tiếp tục hoàn thiện hồ sơ; chưa có quyền nghiệp vụ.
 
 System Admin được thêm permission và sửa bộ quyền mọi role khác, áp dụng toàn hệ thống cho tài khoản mang role đó. Role SYSTEM_ADMIN chỉ đọc qua API; mọi yêu cầu sửa trả 403. Quyền gán mới vẫn chịu ràng buộc phạm vi tài nguyên, không tự cấp quyền truy cập khác tổ chức.
 
@@ -12,25 +12,35 @@ Admin tổ chức chỉ bật/tắt quyền role đã có cho tài khoản ACTIV
 
 ## HTTP API
 
-Dùng envelope hiện có. Thiếu/sai token: 401; không ACTIVE/thiếu quyền: 403; tài khoản đích ngoài phạm vi: 404; DTO sai: 400; permission trùng: 409; DB không sẵn sàng: 503.
+Dùng envelope hiện có. Thiếu/sai token: 401; không ACTIVE khi gọi API nghiệp vụ hoặc thiếu quyền: 403; tài khoản đích ngoài phạm vi: 404; DTO sai: 400; permission trùng: 409; DB không sẵn sàng: 503.
 
-| API                                                        | Điều kiện/nội dung                                                                                                                      |
-| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| POST /api/auth/login                                       | Body identifier (username/email), password (1–72 byte UTF-8); trả accessToken, tokenType và user; không phân biệt lỗi sai user/password |
-| GET /api/auth/me                                           | Hồ sơ tin cậy và phạm vi của tài khoản hiện tại                                                                                         |
-| GET /api/auth/me/permissions                               | Danh sách mã quyền hiệu lực hiện tại                                                                                                    |
-| GET /api/auth/roles                                        | System, role.view; giữ nguyên đường dẫn cũ                                                                                              |
-| GET /api/permissions                                       | System, permission.view; page/limit                                                                                                     |
-| POST /api/permissions                                      | System, permission.create; body code, name, module, action, description tùy chọn                                                        |
-| GET /api/roles/:roleId/permissions                         | System, role_permission.manage; SYSTEM_ADMIN có editable=false                                                                          |
-| PUT /api/roles/:roleId/permissions                         | System, role_permission.manage; body permissionIds là mảng UUID không trùng, chỉ permission active; role SYSTEM_ADMIN luôn bị chặn      |
-| GET /api/users/:userId/permissions                         | System có user.manage hoặc admin cùng tổ chức có quyền quản lý tương ứng                                                                |
-| PUT /api/users/:userId/permission-denials/:permissionId    | Tắt; school admin có school_user.manage hoặc supplier admin có supplier_staff.manage                                                    |
-| DELETE /api/users/:userId/permission-denials/:permissionId | Bật lại quyền kế thừa; cùng điều kiện và phạm vi như PUT                                                                                |
+| API                                                        | Điều kiện/nội dung                                                                                                                          |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST /api/auth/signup                                      | Tạo user UNVERIFIED, chưa tạo hồ sơ PENDING; Resend gửi mã sau commit; JSON báo verificationEmailSent, không cấp token                      |
+| POST /api/auth/email-verification/request                  | Body email; gửi/gửi lại mã 6 số qua Resend; giới hạn theo email/IP, thông báo chung                                                         |
+| POST /api/auth/email-verification/verify                   | Body email/code; cập nhật emailVerifiedAt, giữ UNVERIFIED; không cấp cookie hoặc quyền                                                      |
+| POST /api/auth/login                                       | Body identifier/password; cho phép ACTIVE hợp lệ hoặc UNVERIFIED đã xác minh email; đặt cookie HttpOnly, JSON trả user và expiresIn         |
+| POST /api/auth/refresh                                     | Đọc refresh cookie, kiểm tra hash/TTL và trạng thái user từ DB, đổi refresh token; không tự kích hoạt tài khoản                             |
+| POST /api/auth/logout                                      | Thu hồi phiên Redis và xóa cookie                                                                                                           |
+| GET /api/auth/me                                           | Thông tin tài khoản, status/onboardingRequired và trạng thái hồ sơ; UNVERIFIED không có permissions                                         |
+| PATCH /api/auth/me                                         | Sửa fullName/phone của chính tài khoản ACTIVE hoặc UNVERIFIED đã xác minh email; không cần user.manage, không sửa email/role/status/tổ chức |
+| GET /api/auth/me/permissions                               | Danh sách mã quyền hiệu lực khi ACTIVE; UNVERIFIED nhận mảng rỗng                                                                           |
+| GET /api/auth/roles                                        | System, role.view; giữ nguyên đường dẫn cũ                                                                                                  |
+| GET /api/permissions                                       | System, permission.view; page/limit                                                                                                         |
+| POST /api/permissions                                      | System, permission.create; body code, name, module, action, description tùy chọn                                                            |
+| GET /api/roles/:roleId/permissions                         | System, role_permission.manage; SYSTEM_ADMIN có editable=false                                                                              |
+| PUT /api/roles/:roleId/permissions                         | System, role_permission.manage; body permissionIds là mảng UUID không trùng, chỉ permission active; role SYSTEM_ADMIN luôn bị chặn          |
+| GET /api/users/:userId/permissions                         | System có user.manage hoặc admin cùng tổ chức có quyền quản lý tương ứng                                                                    |
+| PUT /api/users/:userId/permission-denials/:permissionId    | Tắt; school admin có school_user.manage hoặc supplier admin có supplier_staff.manage                                                        |
+| DELETE /api/users/:userId/permission-denials/:permissionId | Bật lại quyền kế thừa; cùng điều kiện và phạm vi như PUT                                                                                    |
 
 Các thao tác ghi xác minh lại actor và target trong transaction Serializable, có retry giới hạn cho serialization conflict. PUT/DELETE denial lặp lại an toàn; partial unique index và transaction ngăn tạo bản ghi trùng. Thêm permission vào catalog chưa tự tạo chức năng/API: endpoint phải kiểm tra mã quyền đó.
 
-JWT dùng HS256, issuer foodprint, audience foodprint-api; JWT_SECRET là bắt buộc. Client cần đăng nhập lại nếu token cũ thiếu UUID sub hoặc sai issuer/audience. Không đưa role/permissions vào JWT làm nguồn quyết định quyền. Token vẫn có hạn theo JWT_EXPIRES_IN; mỗi request còn kiểm tra trạng thái tài khoản trong DB. Chưa thêm refresh token, đăng ký hoặc User CRUD trong phạm vi này.
+JWT access dùng HS256, issuer foodprint, audience foodprint-api; JWT_SECRET là bắt buộc. Token mang UUID sub và sid của phiên Redis còn sống; token cũ thiếu sid cần đăng nhập lại. Không đưa role/permissions vào JWT làm nguồn quyết định quyền. Mỗi request kiểm tra phiên Redis rồi tải trạng thái tài khoản và quyền hiện tại từ DB. Redis chứa metadata phiên và hash refresh token, không cache quyền. Xem [cookie, CSRF, TTL, rotation và hợp đồng đăng ký](AUTH_SESSIONS.md). [API hồ sơ theo Figma](ONBOARDING.md) gồm nộp/xem hồ sơ, tài liệu riêng và System Admin duyệt/từ chối. Sau khi nộp vẫn UNVERIFIED; chỉ duyệt thành công mới tạo tổ chức và chuyển ACTIVE. Chưa bổ sung User CRUD tổng quát.
+
+[Xác minh email](EMAIL_VERIFICATION.md) dùng challenge Redis riêng, HMAC-SHA256, hạn 10 phút, tối đa 5 lần thử, tiêu thụ mã nguyên tử. Đây là bằng chứng sở hữu email, không phải trạng thái ACTIVE hay permission. UNVERIFIED chưa xác minh email bị chặn login/refresh/hồ sơ; tài khoản ACTIVE cũ không bị khóa tự động do emailVerifiedAt=null.
+
+Xét duyệt yêu cầu SYSTEM_ADMIN cùng permission được gán: registration.view để xem chi tiết, registration.approve để duyệt, registration.reject để từ chối. Không dùng quyền xem để thay quyền ghi. Các thao tác kiểm tra lại actor/target trong transaction; xung đột serialization PostgreSQL qua Prisma P2034 hoặc P2010/SQLSTATE 40001 được retry giới hạn. Catalog/bootstrap được cập nhật trong code; database đang dùng cần operator bootstrap riêng theo chính sách, không tự thay đổi khi khởi động hay CD.
 
 ## Ma trận API danh sách
 

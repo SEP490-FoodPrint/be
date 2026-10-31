@@ -29,8 +29,12 @@ export const testStaff: AuthPrincipal = {
   schoolId: "00000000-0000-4000-8000-000000000004",
   permissions: [],
 };
-export const testAuthenticate = createAuthenticate((id) => {
-  if (id === testAdmin.id) return Promise.resolve(testAdmin);
-  if (id === testStaff.id) return Promise.resolve(testStaff);
-  return Promise.reject(new HttpError(401, "Tài khoản không tồn tại"));
-});
+// These tests isolate authorization; session lifecycle is covered by auth-session tests.
+export const testAuthenticate = createAuthenticate(
+  (id) => {
+    if (id === testAdmin.id) return Promise.resolve(testAdmin);
+    if (id === testStaff.id) return Promise.resolve(testStaff);
+    return Promise.reject(new HttpError(401, "Tài khoản không tồn tại"));
+  },
+  () => Promise.resolve(),
+);

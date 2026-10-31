@@ -9,21 +9,26 @@ import {
   globalErrorHandler,
 } from "./middlewares/error.middleware";
 import type { RateLimitRequestHandler } from "express-rate-limit";
+import { readAuthConfig } from "./config/auth";
+import { createCsrfProtection } from "./middlewares/csrf.middleware";
+import type { AuthServices } from "./modules/auth/auth.routes";
 
 export function createApp(
   apiRateLimiter: RateLimitRequestHandler,
   authHandler: RequestHandler = authenticate,
+  authServices?: AuthServices,
 ) {
   const app = express();
 
   // 1. Global Middlewares
   app.use(
     cors({
-      origin: process.env.CLIENT_URL || "http://localhost:3001",
+      origin: readAuthConfig().clientOrigin,
       credentials: true,
     }),
   );
   app.use("/api", apiRateLimiter);
+  app.use("/api", createCsrfProtection());
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
 
@@ -32,7 +37,7 @@ export function createApp(
   }
 
   // 2. Central API Routes
-  app.use("/api", createApiRouter(authHandler));
+  app.use("/api", createApiRouter(authHandler, authServices));
 
   // 3. Error Handling
   app.use(notFoundHandler);
