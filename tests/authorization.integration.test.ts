@@ -1366,19 +1366,36 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           new Blob(["%PDF-1.7\ncertificate two"], { type: "application/pdf" }),
           "two.pdf",
         );
+        if (type === "SCHOOL") {
+          form.set(
+            "profile",
+            JSON.stringify({
+              name: "New school from Figma",
+              code: "ONBOARDING-" + randomUUID(),
+            }),
+          );
+          form.delete("certificate_0");
+          form.delete("certificate_1");
+          for (const name of ["school-one.pdf", "school-two.pdf"])
+            form.append(
+              "legalDocument",
+              new Blob(["%PDF-1.7\nschool legal file"], {
+                type: "application/pdf",
+              }),
+              name,
+            );
+        } else
+          form.append(
+            "certificate_0",
+            new Blob(["%PDF-1.7\nextra certificate"], {
+              type: "application/pdf",
+            }),
+            "extra.pdf",
+          );
         const response = await http.request("/api/auth/onboarding", {
           method: "POST",
-          headers:
-            type === "SCHOOL"
-              ? { ...ownHeaders, "Content-Type": "application/json" }
-              : ownHeaders,
-          body:
-            type === "SCHOOL"
-              ? JSON.stringify({
-                  name: "New school from Figma",
-                  code: "ONBOARDING-" + randomUUID(),
-                })
-              : form,
+          headers: ownHeaders,
+          body: form,
         });
         assert.equal(response.status, 201);
         const data = record(record(response.body).data);
@@ -1502,7 +1519,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         ).data,
       ).documents;
       assert(Array.isArray(supplierDocuments));
-      assert.equal(supplierDocuments.length, 2);
+      assert.equal(supplierDocuments.length, 3);
       const documentId = String(record(supplierDocuments[0]).id);
       assert.equal(
         (
@@ -1668,7 +1685,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         where: { id },
       });
       const oldIds = [...uploadedFiles.keys()];
-      assert.equal(oldIds.length, 2);
+      assert.equal(oldIds.length, 3);
       function replacementForm() {
         const form = new FormData();
         form.set(
@@ -1692,6 +1709,13 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             new Blob(["%PDF-1.7\nreplacement"], { type: "application/pdf" }),
             `replacement-${index}.pdf`,
           );
+        form.append(
+          "certificate_0",
+          new Blob(["%PDF-1.7\nextra replacement"], {
+            type: "application/pdf",
+          }),
+          "extra-replacement.pdf",
+        );
         return form;
       }
       failedUploadField = "certificate_1";
@@ -1725,7 +1749,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       });
       assert.equal(succeeded.status, 201);
       assert.equal(record(record(succeeded.body).data).id, id);
-      assert.equal(uploadedFiles.size, 2);
+      assert.equal(uploadedFiles.size, 3);
       assert(oldIds.every((documentId) => !uploadedFiles.has(documentId)));
       const after = await db.registrationRequest.findUniqueOrThrow({
         where: { id },
@@ -1858,6 +1882,18 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           );
           const documentId = certificates[0].documentUrl!.split("/").at(-1);
           assert(documentId);
+          const groupedDocuments = record(
+            record(reviewedDetail.body).data,
+          ).documents;
+          assert(Array.isArray(groupedDocuments));
+          const sibling = groupedDocuments
+            .map(record)
+            .find(
+              (document) =>
+                document.field === "certificate_0" &&
+                document.id !== documentId,
+            );
+          assert(sibling);
           const sameTenantStaff = await user("INGREDIENT_SUPPLIER_STAFF", {
             supplierId: after.supplierId!,
           });
@@ -1878,6 +1914,24 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             data: { roleId: sameTenantStaff.roleId, permissionId: grant.id },
           });
           try {
+            assert.equal(
+              (
+                await request(
+                  `/api/registration-requests/${id}/documents/${String(sibling.id)}`,
+                  sameTenantStaff.id,
+                )
+              ).status,
+              200,
+            );
+            assert.equal(
+              (
+                await request(
+                  `/api/registration-requests/${id}/documents/${String(sibling.id)}`,
+                  supplierStaffA.id,
+                )
+              ).status,
+              404,
+            );
             assert.equal(
               (
                 await request(
