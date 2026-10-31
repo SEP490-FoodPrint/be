@@ -1,7 +1,10 @@
 import bcrypt from "bcryptjs";
 import type { PrismaClient } from "../../generated/prisma/client";
 import { getPrisma } from "../../utils/database";
-import { databaseOperation } from "../../utils/authorization";
+import {
+  authorizationTransaction,
+  databaseOperation,
+} from "../../utils/authorization";
 import { loadSessionUser } from "../../utils/session-identity";
 import { HttpError } from "../../utils/http-error";
 import { authSessions, type AuthSessions } from "../../utils/auth-sessions";
@@ -36,9 +39,23 @@ export function createSessionService(
             401,
             "Tên đăng nhập/email hoặc mật khẩu không đúng",
           );
-        const principal = await loadSessionUser(candidate.id, db);
-        if (previousRefreshToken) await sessions.logout(previousRefreshToken);
-        return { ...(await sessions.issue(principal.id)), user: principal };
+        // Serialize session issuance with password replacement. A login that checked
+        // an old password must never acquire the new Redis session generation.
+        return authorizationTransaction(db, async (tx) => {
+          await tx.$queryRaw`SELECT id FROM foodprint.users WHERE id = ${candidate.id}::uuid FOR UPDATE`;
+          const current = await tx.user.findUnique({
+            where: { id: candidate.id },
+            select: { passwordHash: true },
+          });
+          if (current?.passwordHash !== candidate.passwordHash)
+            throw new HttpError(
+              401,
+              "Tên đăng nhập/email hoặc mật khẩu không đúng",
+            );
+          const principal = await loadSessionUser(candidate.id, tx);
+          if (previousRefreshToken) await sessions.logout(previousRefreshToken);
+          return { ...(await sessions.issue(principal.id)), user: principal };
+        });
       });
     },
     refresh(refreshToken: string | undefined) {

@@ -28,7 +28,7 @@
     "test:cache": "tsx --test tests/cache.test.ts",
     "test:cache:redis": "tsx --test tests/cache.redis.test.ts",
     "test:modules": "tsx --test tests/modules.test.ts",
-    "test:unit": "tsx --test tests/cache.test.ts tests/modules.test.ts tests/rate-limit.test.ts tests/role.middleware.test.ts tests/migration-target.test.ts tests/migration-deployment.test.ts tests/authorization.test.ts tests/auth-session.test.ts tests/onboarding.test.ts tests/email-verification.test.ts",
+    "test:unit": "tsx --test tests/cache.test.ts tests/modules.test.ts tests/rate-limit.test.ts tests/role.middleware.test.ts tests/migration-target.test.ts tests/migration-deployment.test.ts tests/authorization.test.ts tests/auth-session.test.ts tests/onboarding.test.ts tests/email-verification.test.ts tests/password.test.ts tests/mailer.test.ts",
     "test:migrations": "tsx --test tests/migrations.test.ts",
     "db:migrate": "tsx src/scripts/migrate-local.ts",
     "db:migrate:create": "tsx src/scripts/migrate-local.ts --create-only",
@@ -44,7 +44,9 @@
     "test:auth": "tsx --test tests/auth-session.test.ts",
     "test:auth:redis": "tsx --test tests/auth-session.redis.test.ts",
     "test:onboarding": "tsx --test tests/onboarding.test.ts",
-    "test:email": "tsx --test tests/email-verification.test.ts"
+    "test:email": "tsx --test tests/email-verification.test.ts",
+    "test:password": "tsx --test tests/password.test.ts",
+    "test:mailer": "tsx --test tests/mailer.test.ts"
   },
   "dependencies": {
     "@prisma/adapter-pg": "7.10.1",

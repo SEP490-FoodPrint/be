@@ -13,6 +13,8 @@ Mỗi thư mục có bốn file:
 
 Các router được đăng ký tại [routes/index.ts](../routes/index.ts). Client được lấy khi service thực sự đọc dữ liệu, nên import app để test HTTP không mở kết nối DB.
 
+Module auth còn hỗ trợ đổi mật khẩu bằng mật khẩu cũ và khôi phục qua mã email 6 chữ số; xem [PASSWORD_RECOVERY.md](../../docs/PASSWORD_RECOVERY.md) cho API và luồng frontend.
+
 ## Danh sách API
 
 Tất cả đường dẫn bên dưới dùng phương thức **GET**.

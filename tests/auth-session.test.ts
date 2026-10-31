@@ -47,7 +47,7 @@ process.env.NODE_ENV = "test";
 const signupBody = {
   username: "school_applicant",
   email: "School@Example.test",
-  password: "valid password for signup",
+  password: "Food123!",
   fullName: "Nguyễn Văn A",
   requestType: "SCHOOL",
 };

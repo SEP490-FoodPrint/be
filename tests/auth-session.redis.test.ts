@@ -101,4 +101,42 @@ void test("auth session storage on local Redis uses isolated keys and atomic rot
     await setTimeout(1100);
     assert.equal(await store.get(id), null);
   });
+  await context.test(
+    "user revocation rejects legacy and current sessions, preserves other users and permits new logins",
+    async () => {
+      const old = await issue();
+      const id = old.refreshToken.slice(0, 32);
+      const record = await store.get(id);
+      assert(record);
+      delete record.generation;
+      await redis.set(prefix + id, JSON.stringify(record), {
+        EXAT: record.expiresAt,
+      });
+      const second = await issue();
+      const otherId = randomUUID();
+      const other = await sessions.issue(otherId);
+      keys.add(prefix + other.refreshToken.slice(0, 32));
+      keys.add(prefix + "user:" + testAdmin.id);
+      await sessions.assertAccess(verifyToken(old.accessToken));
+      await sessions.revokeUser(testAdmin.id);
+      for (const token of [old, second]) {
+        await assert.rejects(
+          () => sessions.assertAccess(verifyToken(token.accessToken)),
+          (error: unknown) =>
+            error instanceof HttpError && error.statusCode === 401,
+        );
+        await assert.rejects(
+          () =>
+            sessions.refresh(token.refreshToken, () =>
+              Promise.resolve(testAdmin),
+            ),
+          (error: unknown) =>
+            error instanceof HttpError && error.statusCode === 401,
+        );
+      }
+      await sessions.assertAccess(verifyToken(other.accessToken));
+      const next = await issue();
+      await sessions.assertAccess(verifyToken(next.accessToken));
+    },
+  );
 });
