@@ -41,6 +41,26 @@ import {
   createPasswordRepository,
 } from "../src/modules/auth/password.service";
 import { createRedisPasswordResetStore } from "../src/utils/password-reset-store";
+import { createMenuService } from "../src/modules/menu/menu.service";
+import {
+  validateMenuWrite,
+  validateMenuReview,
+  validateMenuPortionGroups,
+} from "../src/modules/menu/menu.validation";
+import { createKitchenService } from "../src/modules/kitchen/kitchen.service";
+import {
+  validateKitchenComplete,
+  validateKitchenFilters,
+  validateKitchenUpdate,
+} from "../src/modules/kitchen/kitchen.validation";
+import { createRetainedSampleService } from "../src/modules/retained-sample/retained-sample.service";
+import { createMealAttendanceService } from "../src/modules/meal-attendance/meal-attendance.service";
+import { validateDailyPortionGroups } from "../src/modules/meal-attendance/meal-attendance.validation";
+import { createMealAllocationService } from "../src/modules/meal-allocation/meal-allocation.service";
+import {
+  validateFoodSample,
+  validateSampleDisposal,
+} from "../src/modules/retained-sample/retained-sample.validation";
 
 const run = promisify(execFile);
 const root = path.resolve(__dirname, "..");
@@ -332,6 +352,652 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
     store.shutdown();
   });
   context.mock.method(console, "error", () => undefined);
+  await context.test(
+    "menu cooking API reserves stock, completes once under concurrency and retains samples",
+    async () => {
+      const school = await db.school.create({
+        data: {
+          name: "Cooking API school",
+          cookingMode: "COMBINE_LOTS",
+          lunchTime: new Date("1970-01-01T11:30:00Z"),
+          afternoonMealTime: new Date("1970-01-01T15:00:00Z"),
+        },
+      });
+      const healthAccount = await user("SCHOOL_HEALTH_OFFICER", {
+        schoolId: school.id,
+      });
+      const chefAccount = await user("SCHOOL_KITCHEN_STAFF", {
+        schoolId: school.id,
+      });
+      const reviewerAccount = await user("SCHOOL_MANAGEMENT_BOARD", {
+        schoolId: school.id,
+      });
+      const teacher = await user("HOMEROOM_TEACHER", { schoolId: school.id });
+      const health = await loadPrincipal(healthAccount.id, db);
+      const chef = await loadPrincipal(chefAccount.id, db);
+      const reviewer = await loadPrincipal(reviewerAccount.id, db);
+      const menus = createMenuService(undefined, () => Promise.resolve(db));
+      const batches = createKitchenService(undefined, () =>
+        Promise.resolve(db),
+      );
+      const samples = createRetainedSampleService(undefined, () =>
+        Promise.resolve(db),
+      );
+      const supplier = await db.supplier.create({
+        data: { name: "Cooking API supplier" },
+      });
+      const supplierUser = await user("INGREDIENT_SUPPLIER_ADMIN", {
+        supplierId: supplier.id,
+      });
+      await db.schoolSupplierRelationship.create({
+        data: {
+          schoolId: school.id,
+          supplierId: supplier.id,
+          linkedByUserId: health.id,
+        },
+      });
+      const request = await db.supplyRequest.create({
+        data: {
+          schoolId: school.id,
+          supplierId: supplier.id,
+          requestNo: randomUUID(),
+          createdByUserId: health.id,
+          status: "IN_PROGRESS",
+          acceptedByUserId: supplierUser.id,
+          acceptedAt: new Date(),
+          sentAt: new Date(),
+        },
+      });
+      const delivery = await db.delivery.create({
+        data: {
+          supplyRequestId: request.id,
+          supplierId: supplier.id,
+          deliveryNo: randomUUID(),
+          status: "RECEIVED",
+          receivedByUserId: chef.id,
+          receivedAt: new Date(),
+          createdByUserId: supplierUser.id,
+        },
+      });
+      async function stock(name: string, quantities: number[]) {
+        const ingredient = await db.ingredient.create({
+          data: { supplierId: supplier.id, name, defaultUnit: "kg" },
+        });
+        const entry = await db.ingredientEntry.create({
+          data: {
+            schoolId: school.id,
+            ingredientId: ingredient.id,
+            handlingType: "DRY_STOCK",
+            createdByUserId: health.id,
+          },
+        });
+        const total = quantities.reduce((a, b) => a + b, 0).toFixed(3);
+        const line = await db.supplyRequestItem.create({
+          data: {
+            supplyRequestId: request.id,
+            ingredientEntryId: entry.id,
+            requestedQuantity: total,
+            unit: "kg",
+          },
+        });
+        const received = await db.deliveryItem.create({
+          data: {
+            deliveryId: delivery.id,
+            supplyRequestItemId: line.id,
+            actualQuantity: total,
+            unit: "kg",
+          },
+        });
+        const lots = [];
+        for (const [i, quantity] of quantities.entries())
+          lots.push(
+            await db.ingredientLot.create({
+              data: {
+                deliveryItemId: received.id,
+                lotCode: name + i,
+                receivedQuantity: quantity,
+                availableQuantity: quantity,
+                unit: "kg",
+                status: "AVAILABLE",
+                createdAt: new Date(Date.now() - 10000 + i * 1000),
+              },
+            }),
+          );
+        return { ingredient, entry, lots };
+      }
+      const rice = await stock("API rice", [6, 3.6, 1.2]);
+      const seasoning = await stock("API seasoning", [1]);
+      const dish = (name: string, quantityPerPortion: number) => ({
+        name,
+        ingredients: [
+          { ingredientId: rice.ingredient.id, quantityPerPortion, unit: "g" },
+        ],
+      });
+      const meal = {
+        mealType: "LUNCH",
+        dishes: [dish("API main", 80), dish("API side", 10)],
+        seasonings: [
+          {
+            ingredientEntryId: seasoning.entry.id,
+            quantityPerPortion: 1,
+            unit: "g",
+          },
+        ],
+      };
+      const menu = await menus.create(
+        validateMenuWrite({
+          weekStartDate: "2030-01-07",
+          days: [
+            {
+              menuDate: "2030-01-07",
+              meals: [
+                meal,
+                { ...meal, mealType: "AFTERNOON", dishes: [meal.dishes[0]] },
+              ],
+            },
+          ],
+        }),
+        health,
+      );
+      const day = menu.menuDays[0];
+      const classroom = await db.class.create({
+        data: {
+          schoolId: school.id,
+          name: "API class",
+          registeredMealPortions: 120,
+        },
+      });
+      for (const mealType of ["LUNCH", "AFTERNOON"] as const)
+        await db.dailyMealPortion.create({
+          data: {
+            classId: classroom.id,
+            confirmedByUserId: teacher.id,
+            mealDate: day.menuDate,
+            mealType,
+            totalPortions: 120,
+            status: "FINALIZED",
+            finalizedAt: new Date(),
+          },
+        });
+      await menus.submit(menu.id, health);
+      await menus.review(
+        menu.id,
+        validateMenuReview({ decision: "APPROVED" }),
+        reviewer,
+      );
+      const mainDish = day.menuDayDishes.find(
+        (d) => d.Dish.name === "API main",
+      )!;
+      const sideDish = day.menuDayDishes.find(
+        (d) => d.Dish.name === "API side",
+      )!;
+      const key = {
+        menuDayId: day.id,
+        dishId: mainDish.dishId,
+        mealType: "LUNCH" as const,
+      };
+      // Real PostgreSQL verifies the serializable retry and row-lock behavior.
+      const plans = await Promise.all([
+        batches.plan(key, chef),
+        batches.plan(key, chef),
+      ]);
+      assert.equal(plans.filter((p) => p.created).length, 1);
+      assert.equal(await db.cookingBatch.count({ where: key }), 1);
+      const batch = plans[0].batches[0];
+      assert.equal(batch.plannedPortions, 120);
+      const allocated = new Map(
+        batch.cookingBatchLots.map((l) => [l.ingredientLotId, l.quantityUsed]),
+      );
+      assert.equal(allocated.get(rice.lots[0].id), "6");
+      assert.equal(allocated.get(rice.lots[1].id), "3.6");
+      await assert.rejects(
+        () => batches.plan({ ...key, mealType: "AFTERNOON" }, chef),
+        (e: unknown) => e instanceof HttpError && e.statusCode === 409,
+      );
+      const side = (
+        await batches.plan({ ...key, dishId: sideDish.dishId }, chef)
+      ).batches[0];
+      assert.equal(
+        await db.menuMealSeasoningLot.count({
+          where: { menuDayId: day.id, mealType: "LUNCH" },
+        }),
+        1,
+      );
+      assert(
+        (
+          await menus.getRequirements(
+            { menuDayId: day.id, mealType: "LUNCH" },
+            health,
+          )
+        ).items.every((i) => i.shortageQuantity === "0"),
+      );
+      await batches.confirm(batch.id, chef);
+      await batches.confirm(side.id, chef);
+      await assert.rejects(
+        () => batches.complete(batch.id, chef),
+        (e: unknown) => e instanceof HttpError && e.statusCode === 422,
+      );
+      const inspection = validateKitchenComplete({
+        inspectionData: {
+          step2_Cooking: {
+            startTime: "08:00",
+            endTime: "10:00",
+            method: "Boiled",
+            cookStaff: "Chef",
+          },
+          step3_Serving: {
+            servingTime: "10:30",
+            servingTemperature: 72,
+            tempPass: true,
+            sensoryEvaluation: "Passed",
+            sensoryPass: true,
+            hygieneStaff: true,
+            hygieneUtensils: true,
+            inspectedBy: "Chef",
+            inspectedAt: new Date().toISOString(),
+            notes: "",
+          },
+        },
+      })!;
+      const completed = await Promise.all([
+        batches.complete(batch.id, chef, inspection),
+        batches.complete(batch.id, chef, inspection),
+      ]);
+      assert(
+        completed.every(
+          (c) => c.inventoryDeducted && !c.mealSeasoningsConsumed,
+        ),
+      );
+      assert.equal(
+        await db.inventoryTransaction.count({
+          where: { referenceType: "COOKING_BATCH", referenceId: batch.id },
+        }),
+        2,
+      );
+      assert.equal(
+        (
+          await db.ingredientLot.findUniqueOrThrow({
+            where: { id: rice.lots[0].id },
+          })
+        ).availableQuantity.toString(),
+        "0",
+      );
+      assert.equal(
+        (
+          await batches.complete(side.id, chef, {
+            ...inspection,
+            step3_Serving: {
+              ...inspection.step3_Serving,
+              inspectedAt: new Date().toISOString(),
+            },
+          })
+        ).mealSeasoningsConsumed,
+        true,
+      );
+      const shared = await db.menuMealSeasoningLot.findMany({
+        where: { menuDayId: day.id, mealType: "LUNCH" },
+      });
+      assert.equal(
+        await db.inventoryTransaction.count({
+          where: {
+            referenceType: "MENU_MEAL_SEASONING",
+            referenceId: { in: shared.map((s) => s.id) },
+          },
+        }),
+        1,
+      );
+      const sampleInput = validateFoodSample({
+        quantity: 150,
+        unit: "g",
+        storageLocation: "Fridge 1",
+        sampledAt: new Date().toISOString(),
+      });
+      const saved = await samples.create(batch.id, sampleInput, chef);
+      assert.equal(
+        (await samples.create(batch.id, sampleInput, chef)).created,
+        false,
+      );
+      assert.equal(+saved.expiresAt - +saved.sampledAt, 86400000);
+      const disposal = validateSampleDisposal({
+        disposedAt: new Date(Date.now() + 86400000).toISOString(),
+        disposalNote: "Future date must not bypass retention",
+      });
+      await assert.rejects(
+        () => samples.dispose(saved.id, disposal, chef),
+        (e: unknown) => e instanceof HttpError && e.statusCode === 422,
+      );
+      assert.deepEqual(
+        (await batches.inspectionSheet(batch.id, chef)).inspectionData,
+        inspection,
+      );
+      assert.equal(
+        (
+          await batches.stats(
+            validateKitchenFilters({ menuDayId: day.id }),
+            chef,
+          )
+        ).pendingSamples,
+        1,
+      );
+
+      const attendance = createMealAttendanceService(undefined, () =>
+        Promise.resolve(db),
+      );
+      const allocationService = createMealAllocationService(undefined, () =>
+        Promise.resolve(db),
+      );
+      const teacherPrincipal = await loadPrincipal(teacher.id, db);
+      const grRice = await stock("Group rice", [6, 3.6]),
+        grMilk = await stock("Group milk", [2]),
+        grPeanut = await stock("Group peanut", [1]),
+        grBeef = await stock("Group beef", [1]),
+        grSpice = await stock("Group spice", [1]);
+      const grMenu = await menus.create(
+        validateMenuWrite({
+          weekStartDate: "2032-01-05",
+          days: [
+            {
+              menuDate: "2032-01-05",
+              meals: [
+                {
+                  mealType: "LUNCH",
+                  dishes: [
+                    {
+                      name: "Group common",
+                      ingredients: [
+                        {
+                          ingredientId: grRice.ingredient.id,
+                          quantityPerPortion: 80,
+                          unit: "g",
+                        },
+                      ],
+                    },
+                    {
+                      name: "Group regular",
+                      ingredients: [
+                        {
+                          ingredientId: grMilk.ingredient.id,
+                          quantityPerPortion: 10,
+                          unit: "g",
+                        },
+                        {
+                          ingredientId: grPeanut.ingredient.id,
+                          quantityPerPortion: 5,
+                          unit: "g",
+                        },
+                      ],
+                    },
+                    {
+                      name: "Group manual alternative",
+                      ingredients: [
+                        {
+                          ingredientId: grBeef.ingredient.id,
+                          quantityPerPortion: 20,
+                          unit: "g",
+                        },
+                      ],
+                    },
+                  ],
+                  seasonings: [
+                    {
+                      ingredientEntryId: grSpice.entry.id,
+                      quantityPerPortion: 1,
+                      unit: "g",
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        }),
+        health,
+      );
+      const grDay = grMenu.menuDays[0],
+        grCommon = grDay.menuDayDishes.find(
+          (d) => d.Dish.name === "Group common",
+        )!.dishId,
+        grRegular = grDay.menuDayDishes.find(
+          (d) => d.Dish.name === "Group regular",
+        )!.dishId,
+        grAlt = grDay.menuDayDishes.find(
+          (d) => d.Dish.name === "Group manual alternative",
+        )!.dishId;
+      const grKey = { menuDayId: grDay.id, mealType: "LUNCH" as const };
+      const grDefinition = validateMenuPortionGroups({
+        groups: [
+          {
+            name: "Regular",
+            isDefault: true,
+            dishIds: [grCommon, grRegular],
+            avoidedIngredientEntryIds: [],
+          },
+          {
+            name: "Milk",
+            isDefault: false,
+            dishIds: [grCommon, grAlt],
+            avoidedIngredientEntryIds: [grMilk.entry.id],
+          },
+          {
+            name: "Peanut",
+            isDefault: false,
+            dishIds: [grCommon, grAlt],
+            avoidedIngredientEntryIds: [grPeanut.entry.id],
+          },
+          {
+            name: "Both",
+            isDefault: false,
+            dishIds: [grCommon, grAlt],
+            avoidedIngredientEntryIds: [grMilk.entry.id, grPeanut.entry.id],
+          },
+        ],
+      });
+      const grGroups = (
+        await menus.savePortionGroups(grKey, grDefinition, health)
+      ).groups;
+      const grUnsafe = structuredClone(grDefinition);
+      grUnsafe.groups[1].dishIds = [grRegular];
+      await assert.rejects(
+        () => menus.savePortionGroups(grKey, grUnsafe, health),
+        (e: unknown) => e instanceof HttpError && e.statusCode === 422,
+      );
+      await menus.submit(grMenu.id, health);
+      await menus.review(
+        grMenu.id,
+        validateMenuReview({ decision: "APPROVED" }),
+        reviewer,
+      );
+      const grClass = await db.class.create({
+        data: {
+          schoolId: school.id,
+          name: "Group class",
+          registeredMealPortions: 120,
+        },
+      });
+      await db.classAllergy.createMany({
+        data: [
+          {
+            classId: grClass.id,
+            ingredientEntryId: grMilk.entry.id,
+            affectedCount: 10,
+            updatedByUserId: health.id,
+          },
+          {
+            classId: grClass.id,
+            ingredientEntryId: grPeanut.entry.id,
+            affectedCount: 5,
+            updatedByUserId: health.id,
+          },
+        ],
+      });
+      const grDaily = await db.dailyMealPortion.create({
+        data: {
+          classId: grClass.id,
+          confirmedByUserId: teacher.id,
+          mealDate: grDay.menuDate,
+          mealType: "LUNCH",
+          totalPortions: 120,
+          status: "FINALIZED",
+          finalizedAt: new Date(),
+        },
+      });
+      await db.dailyAllergyPortion.createMany({
+        data: [
+          {
+            dailyMealPortionId: grDaily.id,
+            classId: grClass.id,
+            ingredientEntryId: grMilk.entry.id,
+            portionCount: 10,
+          },
+          {
+            dailyMealPortionId: grDaily.id,
+            classId: grClass.id,
+            ingredientEntryId: grPeanut.entry.id,
+            portionCount: 5,
+          },
+        ],
+      });
+      await assert.rejects(
+        () => batches.plan({ ...grKey, dishId: grCommon }, chef),
+        (e: unknown) => e instanceof HttpError && e.statusCode === 409,
+      );
+      const grCounts: Record<string, number> = {
+        Regular: 107,
+        Milk: 8,
+        Peanut: 3,
+        Both: 2,
+      };
+      const grInput = validateDailyPortionGroups({
+        menuDayId: grDay.id,
+        groups: grGroups.map((g) => ({
+          portionGroupId: g.id,
+          portionCount: grCounts[g.name],
+        })),
+      });
+      await attendance.savePortionGroups(grDaily.id, grInput, teacherPrincipal);
+      assert.equal(
+        (
+          await attendance.savePortionGroups(
+            grDaily.id,
+            grInput,
+            teacherPrincipal,
+          )
+        ).unchanged,
+        true,
+      );
+      const grRequired = new Map(
+        (await menus.getRequirements(grKey, health)).items.map((i) => [
+          i.ingredientId,
+          i.requiredQuantity,
+        ]),
+      );
+      assert.equal(grRequired.get(grRice.ingredient.id), "9.6");
+      assert.equal(grRequired.get(grMilk.ingredient.id), "1.07");
+      assert.equal(grRequired.get(grPeanut.ingredient.id), "0.535");
+      assert.equal(grRequired.get(grBeef.ingredient.id), "0.26");
+      await db.school.update({
+        where: { id: school.id },
+        data: { cookingMode: "SEPARATE_BY_LOT" },
+      });
+      let grPlan = await batches.plan({ ...grKey, dishId: grCommon }, chef);
+      assert.deepEqual(
+        grPlan.batches.map((b) => b.plannedPortions).sort((a, b) => a! - b!),
+        [45, 75],
+      );
+      const grDeleted = grPlan.batches.find((b) => b.plannedPortions === 75)!;
+      assert.equal(
+        (
+          await batches.update(
+            grDeleted.id,
+            validateKitchenUpdate({ note: "Before confirmation" }),
+            chef,
+          )
+        ).note,
+        "Before confirmation",
+      );
+      assert.equal(
+        (await batches.remove(grDeleted.id, chef))
+          .mealSeasoningReservationsReleased,
+        false,
+      );
+      grPlan = await batches.plan({ ...grKey, dishId: grCommon }, chef);
+      assert.equal(
+        grPlan.batches.reduce((n, b) => n + b.plannedPortions!, 0),
+        120,
+      );
+      await batches.confirm(grPlan.batches[0].id, chef);
+      await assert.rejects(
+        () => batches.update(grPlan.batches[0].id, { note: "Too late" }, chef),
+        (e: unknown) => e instanceof HttpError && e.statusCode === 409,
+      );
+      await assert.rejects(
+        () => batches.remove(grPlan.batches[0].id, chef),
+        (e: unknown) => e instanceof HttpError && e.statusCode === 409,
+      );
+      const grNormal = (
+          await batches.plan({ ...grKey, dishId: grRegular }, chef)
+        ).batches,
+        grAlternative = (await batches.plan({ ...grKey, dishId: grAlt }, chef))
+          .batches;
+      assert.equal(grNormal[0].plannedPortions, 107);
+      assert.equal(grAlternative[0].plannedPortions, 13);
+      const grAll = [...grPlan.batches, ...grNormal, ...grAlternative];
+      for (const grBatch of grAll) await batches.confirm(grBatch.id, chef);
+      await assert.rejects(
+        () =>
+          allocationService.create(
+            { dailyMealPortionId: grDaily.id, menuDayId: grDay.id },
+            chef,
+          ),
+        (e: unknown) => e instanceof HttpError && e.statusCode === 409,
+      );
+      for (const [index, grBatch] of grAll.entries()) {
+        const grComplete = await batches.complete(grBatch.id, chef, {
+          ...inspection,
+          step3_Serving: {
+            ...inspection.step3_Serving,
+            inspectedAt: new Date().toISOString(),
+          },
+        });
+        assert.equal(
+          grComplete.mealSeasoningsConsumed,
+          index === grAll.length - 1,
+        );
+      }
+      assert.equal(
+        await db.menuMealSeasoningLot.count({
+          where: { ...grKey, usedAt: { not: null } },
+        }),
+        1,
+      );
+      const grAllocation = await allocationService.create(
+        { dailyMealPortionId: grDaily.id, menuDayId: grDay.id },
+        chef,
+      );
+      const grDistributed = new Map<string, number>();
+      for (const row of grAllocation.mealAllocationBatches)
+        grDistributed.set(
+          row.CookingBatch.dishId,
+          (grDistributed.get(row.CookingBatch.dishId) ?? 0) +
+            row.allocatedPortions,
+        );
+      assert.equal(grDistributed.get(grCommon), 120);
+      assert.equal(grDistributed.get(grRegular), 107);
+      assert.equal(grDistributed.get(grAlt), 13);
+      assert.equal(
+        (
+          await allocationService.create(
+            { dailyMealPortionId: grDaily.id, menuDayId: grDay.id },
+            chef,
+          )
+        ).created,
+        false,
+      );
+      assert.equal(
+        (await allocationService.distribute(grAllocation.id, chef)).status,
+        "DISTRIBUTED",
+      );
+    },
+  );
   const postPassword = (path: string, body: unknown, cookie?: string) =>
     http.request("/api/auth/" + path, {
       method: "POST",

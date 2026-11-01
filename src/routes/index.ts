@@ -136,6 +136,21 @@ export function createApiRouter(
   );
   router.use("/menu-reviews", createMenuReviewRouter(undefined, authHandler));
 
+  router.use("/v1/menus", createMenuRouter(undefined, authHandler, true));
+  router.use("/v1/kitchen", createKitchenRouter(undefined, authHandler, true));
+  router.use(
+    "/v1/meal-allocations",
+    createMealAllocationRouter(undefined, authHandler),
+  );
+  router.use(
+    "/v1/daily-meal-portions",
+    createMealAttendanceRouter(undefined, authHandler, true),
+  );
+  router.use(
+    "/v1/food-samples",
+    createRetainedSampleRouter(undefined, authHandler),
+  );
+
   return router;
 }
 export default createApiRouter;

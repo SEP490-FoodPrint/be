@@ -124,6 +124,41 @@ export function requirePrincipal(req: Request): AuthPrincipal {
   if (!req.auth) throw new HttpError(401, "Chưa xác thực người dùng");
   return req.auth;
 }
+
+/** Serialize school business writes and re-read live identity/permissions inside the transaction. */
+export async function withSchoolTransaction<T>(
+  db: PrismaClient,
+  principal: AuthPrincipal,
+  permission: string,
+  operation: (
+    tx: Prisma.TransactionClient,
+    actor: AuthPrincipal,
+    schoolId: string,
+  ) => Promise<T>,
+): Promise<T> {
+  assertPermission(principal, permission);
+  if (principal.orgType !== "SCHOOL" || !principal.schoolId)
+    throw new HttpError(403, "Thao tác yêu cầu phạm vi trường đã xác thực");
+  return authorizationTransaction(db, async (tx) => {
+    const actor = await loadPrincipal(principal.id, tx);
+    assertPermission(actor, permission);
+    if (
+      actor.orgType !== "SCHOOL" ||
+      !actor.schoolId ||
+      actor.schoolId !== principal.schoolId
+    )
+      throw new HttpError(403, "Phạm vi tài khoản đã thay đổi");
+    await tx.$queryRaw`SELECT id FROM foodprint.schools WHERE id = ${actor.schoolId}::uuid FOR UPDATE`;
+    const school = await tx.school.findUnique({
+      where: { id: actor.schoolId },
+      select: { status: true },
+    });
+    if (school?.status !== "ACTIVE")
+      throw new HttpError(409, "Trường không còn hoạt động");
+    return operation(tx, actor, actor.schoolId);
+  });
+}
+
 export function assertPermission(
   principal: AuthPrincipal,
   ...codes: string[]
@@ -167,6 +202,13 @@ function transactionConflict(error: unknown): boolean {
   if (error.code === "P2034") return true;
   if (error.code !== "P2010" || !("meta" in error)) return false;
   const meta: unknown = error.meta;
+  if (
+    meta &&
+    typeof meta === "object" &&
+    "code" in meta &&
+    (meta.code === "40001" || meta.code === "40P01")
+  )
+    return true;
   if (!meta || typeof meta !== "object" || !("driverAdapterError" in meta))
     return false;
   const adapter: unknown = meta.driverAdapterError;
@@ -180,7 +222,7 @@ function transactionConflict(error: unknown): boolean {
     "kind" in cause &&
     cause.kind === "TransactionWriteConflict" &&
     "originalCode" in cause &&
-    cause.originalCode === "40001",
+    (cause.originalCode === "40001" || cause.originalCode === "40P01"),
   );
 }
 export async function authorizationTransaction<T>(
