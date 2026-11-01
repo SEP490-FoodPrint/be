@@ -74,6 +74,20 @@ function rows(value: unknown): Record<string, unknown>[] {
   return data.items.map((item: unknown) => record(item));
 }
 
+function schoolWeek<T extends { menuDate: string }>(monday: T): T[] {
+  const start = new Date(`${monday.menuDate}T00:00:00.000Z`);
+  assert.equal(
+    start.getUTCDay(),
+    1,
+    "School-week fixture must start on Monday",
+  );
+  return Array.from({ length: 5 }, (_, offset) => {
+    const date = new Date(start);
+    date.setUTCDate(start.getUTCDate() + offset);
+    return { ...monday, menuDate: date.toISOString().slice(0, 10) };
+  });
+}
+
 void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent admin writes", async (context) => {
   const base = process.env.MIGRATION_TEST_DATABASE_URL;
   assert(
@@ -484,22 +498,47 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           },
         ],
       };
+      const firstDay = {
+        menuDate: "2030-01-07",
+        meals: [
+          meal,
+          { ...meal, mealType: "AFTERNOON", dishes: [meal.dishes[0]] },
+        ],
+      };
       const menu = await menus.create(
         validateMenuWrite({
-          weekStartDate: "2030-01-07",
-          days: [
-            {
-              menuDate: "2030-01-07",
-              meals: [
-                meal,
-                { ...meal, mealType: "AFTERNOON", dishes: [meal.dishes[0]] },
-              ],
-            },
-          ],
+          weekStartDate: firstDay.menuDate,
+          days: [firstDay],
         }),
         health,
       );
-      const day = menu.menuDays[0];
+      await assert.rejects(
+        () => menus.submit(menu.id, health),
+        (error: unknown) =>
+          error instanceof HttpError &&
+          error.statusCode === 422 &&
+          error.message.includes("Thứ Ba (08/01)") &&
+          error.message.includes("Thứ Sáu (11/01)"),
+      );
+      const rejectedWeek = await menus.getOne(menu.id, health);
+      assert.equal(rejectedWeek.status, "DRAFT");
+      assert.equal(rejectedWeek.submittedAt, null);
+      assert.equal(rejectedWeek.menuDays[0].approvalStatus, "DRAFT");
+      const completeWeek = await menus.create(
+        validateMenuWrite({
+          weekStartDate: firstDay.menuDate,
+          days: schoolWeek(firstDay),
+        }),
+        health,
+      );
+      assert.equal(completeWeek.id, menu.id);
+      assert.deepEqual(
+        completeWeek.menuDays.map((entry) =>
+          entry.menuDate.toISOString().slice(0, 10),
+        ),
+        ["2030-01-07", "2030-01-08", "2030-01-09", "2030-01-10", "2030-01-11"],
+      );
+      const day = completeWeek.menuDays[0];
       const classroom = await db.class.create({
         data: {
           schoolId: school.id,
@@ -519,7 +558,14 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             finalizedAt: new Date(),
           },
         });
-      await menus.submit(menu.id, health);
+      const submittedWeek = await menus.submit(menu.id, health);
+      assert.equal(submittedWeek.status, "PENDING_APPROVAL");
+      assert.equal(submittedWeek.menuDays.length, 5);
+      assert(
+        submittedWeek.menuDays.every(
+          (entry) => entry.approvalStatus === "PENDING_APPROVAL",
+        ),
+      );
       await menus.review(
         menu.id,
         validateMenuReview({ decision: "APPROVED" }),
@@ -695,60 +741,58 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       const grMenu = await menus.create(
         validateMenuWrite({
           weekStartDate: "2032-01-05",
-          days: [
-            {
-              menuDate: "2032-01-05",
-              meals: [
-                {
-                  mealType: "LUNCH",
-                  dishes: [
-                    {
-                      name: "Group common",
-                      ingredients: [
-                        {
-                          ingredientId: grRice.ingredient.id,
-                          quantityPerPortion: 80,
-                          unit: "g",
-                        },
-                      ],
-                    },
-                    {
-                      name: "Group regular",
-                      ingredients: [
-                        {
-                          ingredientId: grMilk.ingredient.id,
-                          quantityPerPortion: 10,
-                          unit: "g",
-                        },
-                        {
-                          ingredientId: grPeanut.ingredient.id,
-                          quantityPerPortion: 5,
-                          unit: "g",
-                        },
-                      ],
-                    },
-                    {
-                      name: "Group manual alternative",
-                      ingredients: [
-                        {
-                          ingredientId: grBeef.ingredient.id,
-                          quantityPerPortion: 20,
-                          unit: "g",
-                        },
-                      ],
-                    },
-                  ],
-                  seasonings: [
-                    {
-                      ingredientEntryId: grSpice.entry.id,
-                      quantityPerPortion: 1,
-                      unit: "g",
-                    },
-                  ],
-                },
-              ],
-            },
-          ],
+          days: schoolWeek({
+            menuDate: "2032-01-05",
+            meals: [
+              {
+                mealType: "LUNCH",
+                dishes: [
+                  {
+                    name: "Group common",
+                    ingredients: [
+                      {
+                        ingredientId: grRice.ingredient.id,
+                        quantityPerPortion: 80,
+                        unit: "g",
+                      },
+                    ],
+                  },
+                  {
+                    name: "Group regular",
+                    ingredients: [
+                      {
+                        ingredientId: grMilk.ingredient.id,
+                        quantityPerPortion: 10,
+                        unit: "g",
+                      },
+                      {
+                        ingredientId: grPeanut.ingredient.id,
+                        quantityPerPortion: 5,
+                        unit: "g",
+                      },
+                    ],
+                  },
+                  {
+                    name: "Group manual alternative",
+                    ingredients: [
+                      {
+                        ingredientId: grBeef.ingredient.id,
+                        quantityPerPortion: 20,
+                        unit: "g",
+                      },
+                    ],
+                  },
+                ],
+                seasonings: [
+                  {
+                    ingredientEntryId: grSpice.entry.id,
+                    quantityPerPortion: 1,
+                    unit: "g",
+                  },
+                ],
+              },
+            ],
+          }),
         }),
         health,
       );
@@ -762,6 +806,12 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         grAlt = grDay.menuDayDishes.find(
           (d) => d.Dish.name === "Group manual alternative",
         )!.dishId;
+      assert.deepEqual(
+        grMenu.menuDays.map((entry) =>
+          entry.menuDate.toISOString().slice(0, 10),
+        ),
+        ["2032-01-05", "2032-01-06", "2032-01-07", "2032-01-08", "2032-01-09"],
+      );
       const grKey = { menuDayId: grDay.id, mealType: "LUNCH" as const };
       const grDefinition = validateMenuPortionGroups({
         groups: [
