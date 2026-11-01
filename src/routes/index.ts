@@ -34,6 +34,7 @@ import { createFoodAnalysisRouter } from "../modules/food-analysis/food-analysis
 import { createSchoolAlertRouter } from "../modules/school-alert/school-alert.routes";
 import { createTraceabilityRouter } from "../modules/traceability/traceability.routes";
 import { createMenuReviewRouter } from "../modules/menu-review/menu-review.routes";
+import { createSchoolOverviewRouter } from "../modules/school-overview/school-overview.routes";
 
 export function createApiRouter(
   authHandler: RequestHandler = authenticate,
@@ -53,6 +54,7 @@ export function createApiRouter(
   });
 
   router.use(createPermissionRouter(authHandler));
+  router.use("/school-overview", createSchoolOverviewRouter(authHandler));
   router.use("/auth", createAuthRouter(undefined, authHandler, authServices));
   router.use("/users", createUserRouter(undefined, authHandler));
   router.use("/schools", createOrganizationRouter(undefined, authHandler));
