@@ -53,6 +53,18 @@ Tất cả đường dẫn bên dưới dùng phương thức **GET**.
 | `traceability`                | `/api/traceability-anchors`          | `TraceabilityAnchor`         | —                              |
 | `menu-review`                 | `/api/menu-reviews`                  | `MenuReviewRecord`           | —                              |
 
+## Phân công giáo viên chủ nhiệm
+
+Bảng `class_homeroom_assignments` lưu GVCN của từng lớp. Mỗi dòng `classes` đã thuộc một niên khóa, nên phân công đi theo năm học; đổi GVCN đóng dòng hiện tại (`ended_at`) và giữ làm lịch sử.
+
+- `GET /api/classes?academicYear=2026-2027`: danh sách lớp kèm `homeroomTeacher` hiện tại và `canAssign` (`class.view`).
+- `GET /api/classes/academic-years`: niên khóa có lớp trong trường và niên khóa hiện tại (`class.view`).
+- `GET /api/classes/eligible-teachers?academicYear=`: tài khoản `HOMEROOM_TEACHER` ACTIVE cùng trường, kèm lớp đang chủ nhiệm trong năm (`class_assignment.manage`).
+- `PUT /api/classes/:classId/homeroom-teacher` body `{ "teacherUserId": "..." }`: gán hoặc đổi GVCN (`class_assignment.manage`).
+- `DELETE /api/classes/:classId/homeroom-teacher`: bỏ GVCN hiện tại (`class_assignment.manage`).
+
+Quy tắc trong transaction: một lớp một GVCN; một GVCN chỉ chủ nhiệm một lớp mỗi niên khóa; chỉ lớp ACTIVE ở niên khóa hiện tại hoặc sắp tới (năm học từ tháng 9, giờ Việt Nam) được thay đổi; trường lấy từ principal. GVCN cũ mất phân công ngay khi bị thay.
+
 ## API duyệt thực đơn mẫu
 
 Module `menu` giữ API danh sách chuẩn của `main` và bổ sung ba endpoint phục vụ màn hình duyệt thực đơn:
