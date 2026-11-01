@@ -1,5 +1,7 @@
 import { Router } from "express";
-import { systemAdminOnly } from "../../middlewares/system-admin.middleware";
+import type { RequestHandler } from "express";
+import { authenticate } from "../../middlewares/auth.middleware";
+import { requireResource } from "../../middlewares/permission.middleware";
 import { createIngredientQualityFeedbackController } from "./ingredient-quality-feedback.controller";
 import {
   ingredientQualityFeedbackService,
@@ -8,10 +10,16 @@ import {
 
 export function createIngredientQualityFeedbackRouter(
   service: IngredientQualityFeedbackService = ingredientQualityFeedbackService,
+  authHandler: RequestHandler = authenticate,
 ) {
   const router = Router();
   const controller = createIngredientQualityFeedbackController(service);
-  router.get("/", ...systemAdminOnly, controller.getAll);
+  router.get(
+    "/",
+    authHandler,
+    requireResource("ingredient-quality-feedback"),
+    controller.getAll,
+  );
   return router;
 }
 

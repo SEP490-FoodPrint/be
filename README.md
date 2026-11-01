@@ -2,11 +2,13 @@
 
 Backend FoodPrint hiện dùng **TypeScript + CommonJS + Express + PostgreSQL/Prisma**, cùng **Redis Docker local** để lưu bộ đếm rate limit và hỗ trợ cache các query được chọn. Mỗi thành viên kết nối và test với database local của mình. Database Azure đã nhận baseline và áp dụng migration UserPermissionDenial; trạng thái triển khai và xác minh được ghi trong [baseline](database/SCHEMA_BASELINE.md).
 
-Phạm vi hiện tại gồm nền tảng kết nối, HTTP health endpoint, helper/middleware, Prisma models, lịch sử SQL migration và 31 module có API GET danh sách mẫu. Mỗi module có routes/controller/service/validation; các API mẫu chỉ cho `SYSTEM_ADMIN` thuộc `SYSTEM` truy cập. Xem [danh mục module và API](src/modules/README.md) và [baseline/migration](database/SCHEMA_BASELINE.md). Chưa triển khai CRUD/lifecycle hoặc seed tự động.
+Phạm vi hiện tại gồm nền tảng kết nối, HTTP health endpoint, helper/middleware, Prisma models, lịch sử SQL migration và 31 module có API GET danh sách mẫu. Mỗi module có routes/controller/service/validation; các API kiểm tra permission được gán và phạm vi tổ chức. Đã có đăng ký tài khoản UNVERIFIED, login bằng cookie HttpOnly, refresh/logout với phiên Redis, nộp/duyệt hồ sơ đơn vị, API quản trị quyền và ràng buộc một admin cho mỗi trường/supplier; xem [phiên đăng nhập](docs/AUTH_SESSIONS.md), [đổi/quên mật khẩu](docs/PASSWORD_RECOVERY.md), [hồ sơ theo Figma](docs/ONBOARDING.md) và [phân quyền](docs/AUTHORIZATION.md). Xem [danh mục module và API](src/modules/README.md) và [baseline/migration](database/SCHEMA_BASELINE.md). Chưa triển khai CRUD/lifecycle nghiệp vụ đầy đủ; bootstrap permission là thao tác riêng, không tự chạy trong CD.
 
 Quy tắc coding cho team và AI được quản lý tại [AGENTS.md](AGENTS.md).
 
 Quy tắc commit, Git hooks và quy trình đóng góp nằm trong [contribute.md](contribute.md).
+
+Các tính năng gửi email dùng hàm `sendMail` chung; xem [cách gọi và hợp đồng mailer](docs/MAILER.md).
 
 ## 1. Cấu hình local
 
@@ -18,15 +20,18 @@ if [ ! -e .env ]; then cp .env.example .env; fi
 
 Điền cấu hình riêng trong `.env`:
 
-| Biến                                     | Ý nghĩa                                                                            |
-| ---------------------------------------- | ---------------------------------------------------------------------------------- |
-| `DATABASE_URL`                           | URL PostgreSQL của chính máy mình, chứa user/password, host, port và database thật |
-| `PORT`                                   | Cổng API, mặc định `5000`                                                          |
-| `NODE_ENV`                               | `development` khi code local                                                       |
-| `CLIENT_URL`                             | Origin frontend local, mặc định `http://localhost:3001`                            |
-| `JWT_SECRET`, `JWT_EXPIRES_IN`           | Secret riêng và thời hạn token; thay placeholder trong mẫu                         |
-| `REDIS_URL`, `REDIS_PORT`                | URL Redis local và cổng Docker, mặc định `redis://127.0.0.1:6379/0`, `6379`        |
-| `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX` | Cửa sổ đếm theo milliseconds và số request/IP, mặc định `60000`, `300`             |
+| Biến                                     | Ý nghĩa                                                                                        |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                           | URL PostgreSQL của chính máy mình, chứa user/password, host, port và database thật             |
+| `PORT`                                   | Cổng API, mặc định `5000`                                                                      |
+| `NODE_ENV`                               | `development` khi code local                                                                   |
+| `CLIENT_URL`                             | Origin frontend local, mặc định `http://localhost:3001`                                        |
+| `JWT_SECRET`                             | Secret ngẫu nhiên riêng để ký JWT; thay placeholder trong mẫu                                  |
+| `AUTH_ACCESS_TTL_SECONDS`                | Access token: mặc định 900 giây, cho phép 60–3600 giây                                         |
+| `AUTH_REFRESH_TTL_SECONDS`               | Phiên refresh: mặc định 604800 giây, tối đa 30 ngày và phải dài hơn access token               |
+| `RESEND_API_KEY`, `RESEND_FROM`          | API key Resend và sender thuộc domain đã verify để gửi mã xác minh email và khôi phục mật khẩu |
+| `REDIS_URL`, `REDIS_PORT`                | URL Redis local và cổng Docker, mặc định `redis://127.0.0.1:6379/0`, `6379`                    |
+| `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX` | Cửa sổ đếm theo milliseconds và số request/IP, mặc định `60000`, `300`                         |
 
 Ví dụ cấu trúc URL, cần thay user/password/database/port cho đúng máy:
 
@@ -113,7 +118,7 @@ Prisma Client dùng `moduleFormat = "cjs"`; `package.json` dùng `type: commonjs
 - CHECK constraints nằm trong SQL migration. Baseline không chứa role/permission seed hoặc mock data; việc seed cần phạm vi được phê duyệt riêng. Không kéo schema từ database cũ để ghi đè models mới.
 - Đã có migration trong Git và kiểm thử trên PostgreSQL tạm; trạng thái áp dụng Azure được ghi trong baseline, không suy ra từ code đã merge. API mẫu chỉ đọc danh sách; chưa thực hiện nghiệp vụ ghi dữ liệu/chuyển trạng thái.
 - Không sửa giá trị các role/nhãn hiện có khi chuyển sang TypeScript.
-- Có test rate-limit, cache, role middleware và API danh sách dùng Node test runner; chưa có coverage threshold hoặc kiểm thử API danh sách trên database thật. Chỉ ghi PASS khi kiểm tra thực sự thành công.
+- Có test rate-limit, cache, role middleware và API danh sách dùng Node test runner; chưa có coverage threshold; đã có kiểm thử phân quyền/phạm vi API trên PostgreSQL tạm. Chỉ ghi PASS khi kiểm tra thực sự thành công.
 
 ## 5. Backend Code Quality — Phase 1
 
@@ -250,7 +255,7 @@ Team tạo nhánh `<type>/<kebab-case-description>` từ `dev`, mở PR vào `de
 
 `test:unit` liệt kê rõ các file test không cần hạ tầng; thêm file vào script khi bổ sung unit test. Các script Redis integration hiện hữu tiếp tục chạy local khi có Redis.
 
-Workflow chỉ có quyền đọc repository; các action được pin bằng commit SHA. Job Code quality dùng URL PostgreSQL placeholder trên `127.0.0.1:1` và JWT secret dành riêng cho test. Job PostgreSQL migrations dựng PostgreSQL 18 tạm và kiểm tra baseline/migration/CHECK bằng `npm run test:migrations`. Check Backend quality tổng hợp cả hai kết quả, nên migration lỗi vẫn chặn check bắt buộc hiện có. Các job quality không cần `.env`/GitHub Secrets thật và không kết nối Azure. Sau khi check Backend quality của push vào `dev` PASS, workflow gọi job CD Azure ở mục 10; PR và `main` không deploy database này. `HUSKY=0` chỉ áp dụng trong CI vì các bước kiểm tra được chạy trực tiếp.
+Workflow chỉ có quyền đọc repository; các action được pin bằng commit SHA. Job Code quality dùng URL PostgreSQL placeholder trên `127.0.0.1:1` và JWT secret dành riêng cho test. Job PostgreSQL migrations dựng PostgreSQL 18 và Redis 7 tạm, kiểm tra baseline/migration/CHECK bằng `npm run test:migrations`, signup/login/phân quyền bằng `npm run test:authorization`, rotation/TTL bằng `npm run test:auth:redis`. Check Backend quality tổng hợp cả hai kết quả, nên migration lỗi vẫn chặn check bắt buộc hiện có. Các job quality không cần `.env`/GitHub Secrets thật và không kết nối Azure. Sau khi check Backend quality của push vào `dev` PASS, workflow gọi job CD Azure ở mục 10; PR và `main` không deploy database này. `HUSKY=0` chỉ áp dụng trong CI vì các bước kiểm tra được chạy trực tiếp.
 
 Để tái hiện kiểm tra trên một checkout sạch, chưa có `.env`:
 
@@ -327,3 +332,31 @@ Preflight chỉ đọc: kiểm tra đúng host, database, schema, SSL và checks
 Nếu thiếu secret, sai host hoặc không kết nối được, sửa cấu hình rồi vào **Actions → Backend CI → run của commit `dev` hiện tại → Re-run failed jobs**. Khi migration lỗi, cần kiểm tra và xử lý thủ công; workflow không tự resolve, reset, seed, rollback hay dùng `db push`. Mọi thay đổi cấu trúc tiếp theo cần SQL migration mới được review.
 
 Schema diff cuối cùng kiểm tra phần Prisma biểu diễn được; CHECK/SQL riêng vẫn cần review migration và kiểm thử PostgreSQL trong CI. File workflow không tự tạo environment secrets hoặc quyền mạng Azure. Theo dõi job **Azure database migration** để xác nhận deployment; check bắt buộc cho PR vẫn là **Backend quality**.
+
+## 11. Login và phân quyền động
+
+Cấu hình `JWT_SECRET` riêng trong `.env`; không còn secret mặc định. Với database local đã áp dụng đủ migration, chạy bootstrap catalog trước khi dùng API quản trị:
+
+```bash
+npm run db:migrate:deploy
+npm run auth:bootstrap
+```
+
+Bootstrap không tạo tài khoản hoặc mock data. Khi chạy lại, nó giữ thay đổi quyền của các role ngoài SYSTEM_ADMIN và giữ các permission đang inactive. Quyền SYSTEM_ADMIN được khởi tạo qua bước operator này, không chỉnh qua API. Hướng dẫn bootstrap Azure có kiểm tra đích và quy trình triển khai nằm trong [tài liệu phân quyền](docs/AUTHORIZATION.md).
+
+`POST /api/auth/signup` tạo tài khoản UNVERIFIED cho SCHOOL/SUPPLIER, chưa tạo hồ sơ PENDING. Resend gửi mã xác minh email sau commit; người dùng xác minh email rồi đăng nhập để hoàn thiện hồ sơ. Xem [gửi/gửi lại mã và xác minh email](docs/EMAIL_VERIFICATION.md). `/api/auth/me` trả status, emailVerifiedAt, onboardingRequired và trạng thái hồ sơ, nhưng tài khoản UNVERIFIED chưa truy cập API nghiệp vụ. `POST /api/auth/onboarding` nộp hồ sơ theo hai form Figma, giữ UNVERIFIED; System Admin có registration.approve mới duyệt và tạo tổ chức/kích hoạt trong một transaction. Có API từ chối kèm lý do và nộp lại. Xem [hợp đồng hồ sơ, chứng nhận và tài liệu](docs/ONBOARDING.md); upload tệp cần cấu hình CLOUDINARY_CLOUD_NAME/API_KEY/API_SECRET trong `.env` riêng. Các permission mới cần operator bootstrap riêng, không tự áp dụng lên database thật.
+
+`POST /api/auth/login` đặt access token và refresh token vào cookie HttpOnly, không trả token trong JSON. Redis chỉ lưu hash refresh token, userId và hạn phiên. Xem `POST /api/auth/refresh`, `POST /api/auth/logout`, `GET /api/auth/me` và [hướng dẫn frontend/Postman](docs/AUTH_SESSIONS.md).
+
+`PATCH /api/auth/me` cập nhật fullName và phone của người đang đăng nhập; GET /me trả thêm email/phone. Hỗ trợ cập nhật từng trường, phone=null để xóa số điện thoại; không cho client đổi ID, email, role, status hoặc tổ chức. Xem phần hồ sơ cá nhân trong [hợp đồng API phiên](docs/AUTH_SESSIONS.md#hồ-sơ-cá-nhân).
+
+Frontend gửi `credentials: "include"`; các request POST/PUT/PATCH/DELETE cần `X-CSRF-Protection: 1` và Origin khớp CLIENT_URL khi trình duyệt cung cấp Origin. Token cũ thiếu sid hoặc không có phiên Redis phải đăng nhập lại. Thời hạn mới dùng AUTH_ACCESS_TTL_SECONDS/AUTH_REFRESH_TTL_SECONDS; JWT_EXPIRES_IN cũ không còn được dùng.
+
+Quyền được đọc lại từ DB mỗi request: role thay đổi áp dụng cho mọi tài khoản thuộc role đó; denial riêng vẫn được giữ. System Admin không có bypass và không được chỉnh quyền role SYSTEM_ADMIN. Admin trường/supplier chỉ quản lý ngoại lệ trong tổ chức mình; ATTP xã không có chức năng quản trị quyền.
+
+```bash
+npm run test:unit
+npm run test:auth:redis
+# Cần PostgreSQL tạm riêng và Redis local, không dùng database thành viên hoặc Azure:
+MIGRATION_TEST_DATABASE_URL='<disposable-local-test-url>' npm run test:authorization
+```

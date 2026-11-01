@@ -1,3 +1,4 @@
+import { requirePrincipal } from "../../utils/authorization";
 import { asyncHandler } from "../../utils/async-handler";
 import { sendSuccess } from "../../utils/response";
 import { supplierService, type SupplierService } from "./supplier.service";
@@ -9,7 +10,7 @@ export function createSupplierController(
   return {
     getAll: asyncHandler(async (req, res) => {
       const query = validateSupplierListQuery(req.query);
-      const result = await service.getAll(query);
+      const result = await service.getAll(query, requirePrincipal(req));
       sendSuccess(res, result, "Lấy danh sách nhà cung cấp thành công");
     }),
   };

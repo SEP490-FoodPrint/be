@@ -1,3 +1,4 @@
+import { requirePrincipal } from "../../utils/authorization";
 import { asyncHandler } from "../../utils/async-handler";
 import { sendSuccess } from "../../utils/response";
 import { userService, type UserService } from "./user.service";
@@ -7,7 +8,7 @@ export function createUserController(service: UserService = userService) {
   return {
     getAll: asyncHandler(async (req, res) => {
       const query = validateUserListQuery(req.query);
-      const result = await service.getAll(query);
+      const result = await service.getAll(query, requirePrincipal(req));
       sendSuccess(res, result, "Lấy danh sách người dùng thành công");
     }),
   };

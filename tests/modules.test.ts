@@ -1,3 +1,8 @@
+import {
+  testAdmin,
+  testStaff,
+  testAuthenticate,
+} from "./helpers/authorization";
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import express from "express";
@@ -15,15 +20,20 @@ import {
   type UserService,
 } from "../src/modules/user/user.service";
 import { createWarehouseService } from "../src/modules/warehouse/warehouse.service";
+import { createRegistrationService } from "../src/modules/registration/registration.service";
 import { HttpError } from "../src/utils/http-error";
 import { signToken } from "../src/utils/jwt";
 import { parseListQuery } from "../src/utils/list-query";
 import { startHttp } from "./helpers/http";
+import {
+  validateMenuMeal,
+  validateMenuStandards,
+} from "../src/modules/menu/menu.validation";
 
 process.env.NODE_ENV = "test";
 
 const adminHeaders = {
-  Authorization: `Bearer ${signToken({ sub: "test-admin", role: ROLES.SYSTEM_ADMIN, orgType: ORG_TYPES.SYSTEM })}`,
+  Authorization: `Bearer ${signToken({ sub: testAdmin.id, role: ROLES.SYSTEM_ADMIN, orgType: ORG_TYPES.SYSTEM })}`,
 };
 const now = new Date("2026-01-01T00:00:00.000Z");
 const userRow = {
@@ -41,7 +51,7 @@ const userRow = {
 
 async function userApi(context: TestContext, service: UserService) {
   const app = express();
-  app.use("/api/users", createUserRouter(service));
+  app.use("/api/users", createUserRouter(service, testAuthenticate));
   app.use(globalErrorHandler);
   const http = await startHttp(app);
   context.after(() => http.close());
@@ -95,7 +105,7 @@ void test("user list bounds reads, uses stable ordering, projects safe fields an
       { ...userRow, id: "test-user-3" },
     ]);
   });
-  const result = await service.getAll({ page: 2, limit: 2 });
+  const result = await service.getAll({ page: 2, limit: 2 }, testAdmin);
   assert.equal(calls, 1);
   assert.deepEqual(
     result.items.map((item) => item.id),
@@ -106,13 +116,107 @@ void test("user list bounds reads, uses stable ordering, projects safe fields an
 
 void test("a final or empty page has no next page", async () => {
   for (const rows of [[], [userRow]]) {
-    const result = await createUserService(() => Promise.resolve(rows)).getAll({
-      page: 1,
-      limit: 1,
-    });
+    const result = await createUserService(() => Promise.resolve(rows)).getAll(
+      {
+        page: 1,
+        limit: 1,
+      },
+      testAdmin,
+    );
     assert.equal(result.pagination.hasNext, false);
     assert.deepEqual(result.items, rows);
   }
+});
+
+void test("registration list returns safe applicant contacts with stable pagination and nullable metadata", async () => {
+  let calls = 0;
+  const applicantUser = {
+    id: "applicant-1",
+    username: "school_applicant",
+    fullName: "Nguyễn Văn A",
+    email: "applicant@example.test",
+    phone: "0901234567",
+    status: "UNVERIFIED" as const,
+    emailVerifiedAt: now,
+  };
+  const row = {
+    id: "request-1",
+    applicantUserId: applicantUser.id,
+    applicantUser,
+    requestType: "SCHOOL" as const,
+    status: "PENDING" as const,
+    submittedAt: now,
+    reviewedAt: null,
+    updatedAt: now,
+  };
+  const nullable = {
+    ...row,
+    id: "request-2",
+    applicantUser: { ...applicantUser, phone: null, emailVerifiedAt: null },
+  };
+  const service = createRegistrationService((args) => {
+    calls++;
+    assert.equal(args.skip, 4);
+    assert.equal(args.take, 3);
+    assert.deepEqual(args.where, {});
+    assert.deepEqual(args.orderBy, [{ id: "asc" }]);
+    assert.deepEqual(Object.keys(args.select.applicantUser.select).sort(), [
+      "email",
+      "emailVerifiedAt",
+      "fullName",
+      "id",
+      "phone",
+      "status",
+      "username",
+    ]);
+    return Promise.resolve([row, nullable, { ...row, id: "request-3" }]);
+  });
+  const result = await service.getAll(
+    { page: 3, limit: 2 },
+    { ...testAdmin, permissions: ["registration.view"] },
+  );
+  assert.equal(calls, 1);
+  assert.deepEqual(result.pagination, { page: 3, limit: 2, hasNext: true });
+  assert.deepEqual(
+    result.items.map((item) => item.id),
+    ["request-1", "request-2"],
+  );
+  const json: unknown = JSON.parse(JSON.stringify(result));
+  assert.deepEqual(json, {
+    items: [
+      {
+        ...row,
+        submittedAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+        applicantUser: { ...applicantUser, emailVerifiedAt: now.toISOString() },
+      },
+      {
+        ...nullable,
+        submittedAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+      },
+    ],
+    pagination: { page: 3, limit: 2, hasNext: true },
+  });
+});
+
+void test("registration contact reads still require an assigned permission and System organization scope", () => {
+  let reads = 0;
+  const service = createRegistrationService(() => {
+    reads++;
+    return Promise.resolve([]);
+  });
+  for (const principal of [
+    testAdmin,
+    { ...testStaff, permissions: ["registration.view"] },
+  ]) {
+    assert.throws(
+      () => service.getAll({ page: 1, limit: 5 }, principal),
+      (error: unknown) =>
+        error instanceof HttpError && error.statusCode === 403,
+    );
+  }
+  assert.equal(reads, 0);
 });
 
 void test("composite-primary-key lists use both keys for deterministic ordering", async () => {
@@ -132,7 +236,8 @@ void test("composite-primary-key lists use both keys for deterministic ordering"
     ]);
   });
   assert.equal(
-    (await service.getAll({ page: 1, limit: 20 })).items[0].affectedCount,
+    (await service.getAll({ page: 1, limit: 20 }, testAdmin)).items[0]
+      .affectedCount,
     2,
   );
 });
@@ -160,7 +265,7 @@ void test("traceability BigInt block numbers are serialized without losing preci
       },
     ]),
   );
-  const result = await service.getAll({ page: 1, limit: 20 });
+  const result = await service.getAll({ page: 1, limit: 20 }, testAdmin);
   assert.equal(result.items[0].blockNumber, "9007199254740993");
   assert.doesNotThrow(() => JSON.stringify(result));
 });
@@ -184,7 +289,7 @@ void test("warehouse Decimal quantities and dates remain JSON-compatible without
       },
     ]),
   );
-  const result = await service.getAll({ page: 1, limit: 20 });
+  const result = await service.getAll({ page: 1, limit: 20 }, testAdmin);
   const body: unknown = JSON.parse(JSON.stringify(result));
   assert.deepEqual(body, {
     items: [
@@ -207,10 +312,13 @@ void test("warehouse Decimal quantities and dates remain JSON-compatible without
   });
 });
 
-void test("every mounted business list authenticates and rejects non-admin or wrong-organization tokens", async (context) => {
+void test("every mounted business list rejects forged role claims when the database principal has no permission", async (context) => {
   const store = new MemoryStore();
   const http = await startHttp(
-    createApp(createApiRateLimiter(store, { windowMs: 60_000, limit: 500 })),
+    createApp(
+      createApiRateLimiter(store, { windowMs: 60_000, limit: 500 }),
+      testAuthenticate,
+    ),
   );
   context.after(async () => {
     await http.close();
@@ -224,7 +332,7 @@ void test("every mounted business list authenticates and rejects non-admin or wr
     { role: ROLES.HOMEROOM_TEACHER, orgType: ORG_TYPES.SYSTEM },
   ];
   const deniedHeaders = deniedClaims.map((claims) => ({
-    Authorization: `Bearer ${signToken(claims)}`,
+    Authorization: `Bearer ${signToken({ ...claims, sub: testStaff.id })}`,
   }));
   const paths = [
     "/api/auth/roles",
@@ -331,4 +439,113 @@ void test("database read rejection reaches the error middleware without exposing
     message: "Không thể tải danh sách. Vui lòng thử lại sau.",
   });
   assert(!JSON.stringify(response.body).includes("password"));
+});
+
+void test("menu standards keep per-dish quantities and one shared meal seasoning", () => {
+  const a = "00000000-0000-0000-0000-000000000001";
+  const b = "00000000-0000-0000-0000-000000000002";
+  const parsed = validateMenuStandards({
+    dishes: [
+      {
+        dishId: a,
+        ingredients: [{ ingredientId: a, quantityPerPortion: "80", unit: "g" }],
+      },
+      {
+        dishId: b,
+        ingredients: [{ ingredientId: a, quantityPerPortion: "70", unit: "g" }],
+      },
+    ],
+    seasonings: [{ ingredientEntryId: b, quantityPerPortion: "1", unit: "g" }],
+  });
+  assert.equal(parsed.dishes[0].ingredients[0].quantityPerPortion, "80");
+  assert.equal(parsed.dishes[1].ingredients[0].quantityPerPortion, "70");
+  assert.equal(parsed.seasonings.length, 1);
+  assert.equal(parsed.seasonings[0].quantityPerPortion, "1");
+});
+
+void test("menu standards reject invalid precision, duplicates and kitchen-entered totals", () => {
+  const id = "00000000-0000-0000-0000-000000000001";
+  const line = { ingredientId: id, quantityPerPortion: "1", unit: "g" };
+  const dish = { dishId: id, ingredients: [line] };
+  const seasoning = {
+    ingredientEntryId: id,
+    quantityPerPortion: "1",
+    unit: "g",
+  };
+  for (const quantity of [
+    "0",
+    "-1",
+    "NaN",
+    "Infinity",
+    "0.0001",
+    "100000000000",
+    {},
+    null,
+  ]) {
+    assert.throws(
+      () =>
+        validateMenuStandards({
+          dishes: [
+            {
+              ...dish,
+              ingredients: [{ ...line, quantityPerPortion: quantity }],
+            },
+          ],
+          seasonings: [],
+        }),
+      HttpError,
+    );
+  }
+  assert.throws(
+    () => validateMenuStandards({ dishes: [dish, dish], seasonings: [] }),
+    HttpError,
+  );
+  assert.throws(
+    () =>
+      validateMenuStandards({
+        dishes: [{ ...dish, ingredients: [line, line] }],
+        seasonings: [],
+      }),
+    HttpError,
+  );
+  assert.throws(
+    () =>
+      validateMenuStandards({
+        dishes: [dish],
+        seasonings: [seasoning, seasoning],
+      }),
+    HttpError,
+  );
+  assert.throws(
+    () =>
+      validateMenuStandards({
+        dishes: [dish],
+        seasonings: [],
+        quantityUsed: 99,
+      }),
+    HttpError,
+  );
+  assert.throws(
+    () =>
+      validateMenuStandards({
+        dishes: [dish],
+        seasonings: [],
+        plannedPortions: 120,
+      }),
+    HttpError,
+  );
+  assert.throws(() => validateMenuMeal(id, "BREAKFAST"), HttpError);
+  assert.throws(() => validateMenuMeal("not-a-uuid", "LUNCH"), HttpError);
+  assert.equal(
+    validateMenuStandards({
+      dishes: [
+        {
+          ...dish,
+          ingredients: [{ ...line, quantityPerPortion: "99999999999.999" }],
+        },
+      ],
+      seasonings: [],
+    }).dishes[0].ingredients[0].quantityPerPortion,
+    "99999999999.999",
+  );
 });

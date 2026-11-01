@@ -1,5 +1,7 @@
 import { Router } from "express";
-import { systemAdminOnly } from "../../middlewares/system-admin.middleware";
+import type { RequestHandler } from "express";
+import { authenticate } from "../../middlewares/auth.middleware";
+import { requireResource } from "../../middlewares/permission.middleware";
 import { createTraceabilityController } from "./traceability.controller";
 import {
   traceabilityService,
@@ -8,10 +10,16 @@ import {
 
 export function createTraceabilityRouter(
   service: TraceabilityService = traceabilityService,
+  authHandler: RequestHandler = authenticate,
 ) {
   const router = Router();
   const controller = createTraceabilityController(service);
-  router.get("/", ...systemAdminOnly, controller.getAll);
+  router.get(
+    "/",
+    authHandler,
+    requireResource("traceability"),
+    controller.getAll,
+  );
   return router;
 }
 

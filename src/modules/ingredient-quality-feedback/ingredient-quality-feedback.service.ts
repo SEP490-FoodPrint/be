@@ -1,3 +1,5 @@
+import type { AuthPrincipal } from "../../types/auth";
+import { listScopes } from "../../utils/resource-access";
 import type { Prisma } from "../../generated/prisma/client";
 import { getPrisma } from "../../utils/database";
 import {
@@ -24,7 +26,7 @@ type ListRow = Prisma.IngredientQualityFeedbackGetPayload<{
 }>;
 type ListArguments = Pick<
   Prisma.IngredientQualityFeedbackFindManyArgs,
-  "skip" | "take" | "orderBy"
+  "skip" | "take" | "orderBy" | "where"
 > & {
   select: typeof select;
 };
@@ -39,9 +41,16 @@ export function createIngredientQualityFeedbackService(
   read: ListReader = readFromDatabase,
 ) {
   return {
-    getAll(query: ListQuery) {
+    getAll(query: ListQuery, principal: AuthPrincipal) {
+      const where = listScopes["ingredient-quality-feedback"](principal);
       return readListPage(
-        () => read({ ...listWindow(query), select, orderBy: [{ id: "asc" }] }),
+        () =>
+          read({
+            ...listWindow(query),
+            where,
+            select,
+            orderBy: [{ id: "asc" }],
+          }),
         query,
       );
     },

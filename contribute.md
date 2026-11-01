@@ -184,6 +184,7 @@ Chạy thêm theo phần thay đổi:
 - Rate limit: `npm run test:rate-limit`; có Redis local thì chạy `npm run test:rate-limit:redis`.
 - Kết nối PostgreSQL/Redis: chạy `npm run db:check` hoặc `npm run redis:check` tương ứng khi hạ tầng sẵn sàng.
 - Thay đổi schema/model database: tạo migration local bằng `npm run db:migrate:create -- --name <description>`, review SQL và CHECK, áp dụng local bằng `npm run db:migrate`, rồi chạy `npm run test:migrations` trên PostgreSQL test mới. Không dùng `db push` hoặc `migrate dev` để cập nhật Azure. Xem [quy trình baseline/migration](database/SCHEMA_BASELINE.md).
+- Thay đổi xác thực/phân quyền: chạy `npm run test:unit` và `npm run test:authorization` với `MIGRATION_TEST_DATABASE_URL` trỏ PostgreSQL test local riêng; xem [hợp đồng và ma trận quyền](docs/AUTHORIZATION.md).
 - Chỉ sửa tài liệu: kiểm tra Prettier các file Markdown đã sửa. Không cần mở kết nối database để kiểm tra tài liệu.
 
 Ghi rõ kiểm tra bị BLOCKED và nguyên nhân nếu thiếu hạ tầng. Các lệnh kiểm tra/generate không cho phép tự chạy DDL, migrations, reset, deploy hoặc xóa volume; tuân thủ phạm vi được phê duyệt trong AGENTS.md.
@@ -198,7 +199,7 @@ PR cần có:
 
 Hooks kiểm tra local; GitHub Actions tại [.github/workflows/ci.yml](.github/workflows/ci.yml) chạy lại kiểm tra khi push lên `main`/`dev` hoặc mở/cập nhật PR vào hai nhánh này. Job **Code quality** cài dependencies bằng `npm ci`, kiểm tra Conventional Commits, validate/generate Prisma, chạy `validate` và `test:unit`. PR kiểm tra toàn bộ commit trong khoảng base/head; push kiểm tra commit cuối cùng. Merge/revert messages vẫn theo ngoại lệ của Commitlint hiện tại.
 
-CI lấy Node từ `.nvmrc`, yêu cầu npm theo `package.json`. Job Code quality dùng URL placeholder local; job PostgreSQL migrations dùng service PostgreSQL 18 tạm để kiểm tra baseline, migration và CHECK thực tế. Job Backend quality tổng hợp hai kết quả và thất bại nếu một job lỗi hoặc bị bỏ qua, giữ nguyên tên check bắt buộc hiện tại. Các job quality không kết nối Azure, chạy Redis integration hoặc tải `.env`/secrets thật. Sau khi CI của push vào `dev` PASS, job CD được gọi để triển khai các migration còn thiếu lên Azure; PR và `main` không deploy database này. Chất lượng mô tả, phạm vi commit/PR và quy trình nhánh vẫn cần team review.
+CI lấy Node từ `.nvmrc`, yêu cầu npm theo `package.json`. Job Code quality dùng URL placeholder local; job PostgreSQL migrations dùng service PostgreSQL 18 tạm để kiểm tra baseline, migration, CHECK và phân quyền/phạm vi dữ liệu bằng `test:authorization`. Job Backend quality tổng hợp hai kết quả và thất bại nếu một job lỗi hoặc bị bỏ qua, giữ nguyên tên check bắt buộc hiện tại. Các job quality không kết nối Azure, chạy Redis integration hoặc tải `.env`/secrets thật. Sau khi CI của push vào `dev` PASS, job CD được gọi để triển khai các migration còn thiếu lên Azure; PR và `main` không deploy database này. Chất lượng mô tả, phạm vi commit/PR và quy trình nhánh vẫn cần team review.
 
 PR thay đổi database phải chứa cả SQL migration mới và schema đích phù hợp. Review SQL trước khi merge vào `dev`, vì bản merge sẽ được CD triển khai khi CI PASS. Giữ SQL đã applied bất biến; CD kiểm tra checksum và từ chối lịch sử lỗi/thiếu baseline. Cấu hình environment, secrets, kết nối runner và cách chạy lại được ghi ở [README mục CD](README.md#10-cd-migration-azure-từ-dev).
 

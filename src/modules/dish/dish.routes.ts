@@ -1,12 +1,17 @@
 import { Router } from "express";
-import { systemAdminOnly } from "../../middlewares/system-admin.middleware";
+import type { RequestHandler } from "express";
+import { authenticate } from "../../middlewares/auth.middleware";
+import { requireResource } from "../../middlewares/permission.middleware";
 import { createDishController } from "./dish.controller";
 import { dishService, type DishService } from "./dish.service";
 
-export function createDishRouter(service: DishService = dishService) {
+export function createDishRouter(
+  service: DishService = dishService,
+  authHandler: RequestHandler = authenticate,
+) {
   const router = Router();
   const controller = createDishController(service);
-  router.get("/", ...systemAdminOnly, controller.getAll);
+  router.get("/", authHandler, requireResource("dish"), controller.getAll);
   return router;
 }
 
