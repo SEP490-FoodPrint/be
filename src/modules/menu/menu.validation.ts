@@ -149,6 +149,13 @@ export function validateMenuWrite(value: unknown) {
   const days = array(body.days, 7).map((value) => {
     const day = objectBody(value, ["menuDate", "note", "meals"]);
     const menuDate = calendarDate(day.menuDate);
+    const dayOfWeek = menuDate.getUTCDay();
+    if (dayOfWeek === 0 || dayOfWeek === 6) {
+      throw new HttpError(
+        400,
+        `Ngày ${menuDate.toISOString().slice(0, 10)} là cuối tuần (${dayOfWeek === 6 ? "Thứ Bảy" : "Chủ Nhật"}). Thực đơn bán trú chỉ áp dụng từ Thứ Hai đến Thứ Sáu (T2 - T6).`,
+      );
+    }
     if (
       menuDate < weekStartDate ||
       menuDate.getTime() >= weekStartDate.getTime() + 7 * 86400000

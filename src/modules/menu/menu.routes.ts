@@ -28,6 +28,12 @@ export function createMenuRouter(
     controller.allergyCheck,
   );
   router.get(
+    "/week-schedule",
+    authHandler,
+    requirePermission("menu.view"),
+    controller.getWeekSchedule,
+  );
+  router.get(
     "/ingredient-options/:kind",
     authHandler,
     requirePermission("menu.view"),

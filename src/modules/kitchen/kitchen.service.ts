@@ -1463,6 +1463,9 @@ export function createKitchenService(
     query: KitchenFilters,
     principal: AuthPrincipal,
   ): Prisma.CookingBatchWhereInput {
+    const search = query.search;
+    const searchPortions =
+      search && /^[0-9]+$/.test(search) ? Number(search) : undefined;
     return {
       AND: [
         listScopes.kitchen(principal),
@@ -1471,7 +1474,30 @@ export function createKitchenService(
           mealType: query.mealType,
           menuDayId: query.menuDayId,
           dishId: query.dishId,
+          cookingModeApplied: query.cookingModeApplied,
           ...(query.date ? { MenuDay: { menuDate: query.date } } : {}),
+          ...(search
+            ? {
+                OR: [
+                  {
+                    batchCode: {
+                      contains: search,
+                      mode: "insensitive" as const,
+                    },
+                  },
+                  {
+                    Dish: {
+                      name: { contains: search, mode: "insensitive" as const },
+                    },
+                  },
+                  ...(searchPortions !== undefined &&
+                  Number.isSafeInteger(searchPortions) &&
+                  searchPortions <= 2147483647
+                    ? [{ plannedPortions: searchPortions }]
+                    : []),
+                ],
+              }
+            : {}),
         },
       ],
     };
@@ -1486,12 +1512,25 @@ export function createKitchenService(
           items: (
             await tx.cookingBatch.findMany({
               where,
-              select: detailSelect,
+              select: {
+                ...detailSelect,
+                RetainedFoodSample: {
+                  select: {
+                    id: true,
+                    status: true,
+                    sampledAt: true,
+                    disposedAt: true,
+                  },
+                },
+              },
               skip: (query.page - 1) * query.limit,
               take: query.limit,
               orderBy: [{ createdAt: "desc" }, { id: "asc" }],
             })
-          ).map(dto),
+          ).map((batch) => ({
+            ...dto(batch),
+            retainedFoodSample: batch.RetainedFoodSample,
+          })),
           pagination: {
             page: query.page,
             limit: query.limit,

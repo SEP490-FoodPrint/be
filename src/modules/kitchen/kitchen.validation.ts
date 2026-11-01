@@ -137,6 +137,8 @@ export function validateKitchenFilters(query: Record<string, unknown>) {
           "status",
           "menuDayId",
           "dishId",
+          "cookingModeApplied",
+          "search",
         ].includes(key),
     )
   )
@@ -157,12 +159,28 @@ export function validateKitchenFilters(query: Record<string, unknown>) {
       !["UNCONFIRMED", "CONFIRMED", "COMPLETED"].includes(query.status))
   )
     throw new HttpError(400, "Trạng thái mẻ không hợp lệ");
+  if (
+    query.cookingModeApplied !== undefined &&
+    query.cookingModeApplied !== "COMBINE_LOTS" &&
+    query.cookingModeApplied !== "SEPARATE_BY_LOT"
+  )
+    throw new HttpError(400, "Phương thức chế biến không hợp lệ");
+  if (
+    query.search !== undefined &&
+    (typeof query.search !== "string" || query.search.trim().length > 100)
+  )
+    throw new HttpError(400, "Từ khóa tìm kiếm tối đa 100 ký tự");
   return {
     ...page,
     date: query.date === undefined ? undefined : calendarDate(query.date),
     mealType: query.mealType,
     status: query.status as
       "UNCONFIRMED" | "CONFIRMED" | "COMPLETED" | undefined,
+    cookingModeApplied: query.cookingModeApplied,
+    search:
+      typeof query.search === "string"
+        ? query.search.trim() || undefined
+        : undefined,
     menuDayId:
       query.menuDayId === undefined ? undefined : uuid(query.menuDayId),
     dishId: query.dishId === undefined ? undefined : uuid(query.dishId),

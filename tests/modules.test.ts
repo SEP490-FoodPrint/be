@@ -51,6 +51,138 @@ import { validateDailyPortionGroups } from "../src/modules/meal-attendance/meal-
 
 process.env.NODE_ENV = "test";
 
+void test("kitchen filters use persisted lot modes and bounded search without tenant overrides", () => {
+  const query = validateKitchenFilters({
+    cookingModeApplied: "SEPARATE_BY_LOT",
+    search: "  Cơm  ",
+    status: "UNCONFIRMED",
+  });
+  assert.equal(query.cookingModeApplied, "SEPARATE_BY_LOT");
+  assert.equal(query.search, "Cơm");
+  assert.equal(
+    validateKitchenFilters({ cookingModeApplied: "COMBINE_LOTS" })
+      .cookingModeApplied,
+    "COMBINE_LOTS",
+  );
+  assert.equal(validateKitchenFilters({ search: "  " }).search, undefined);
+  for (const input of [
+    { cookingModeApplied: "ALLERGY" },
+    { cookingModeApplied: "COMMON" },
+    { cookingModeApplied: { equals: "COMBINE_LOTS" } },
+    { search: ["Cơm"] },
+    { search: "x".repeat(101) },
+    { schoolId: testAdmin.id },
+    { status: "DRAFT" },
+  ])
+    assert.throws(() => validateKitchenFilters(input), HttpError);
+});
+
+void test("kitchen list and statistics share school-scoped database filters and expose actual sample state", async () => {
+  const calls: { operation: string; args: Record<string, unknown> }[] = [];
+  let countCalls = 0;
+  const row = {
+    id: testStaff.id,
+    batchCode: "CB-actual",
+    status: "COMPLETED",
+    cookingModeApplied: "SEPARATE_BY_LOT",
+    plannedPortions: 120,
+    cookingBatchLots: [
+      {
+        ingredientLotId: testAdmin.id,
+        quantityUsed: new Prisma.Decimal("6"),
+        unit: "kg",
+      },
+    ],
+    RetainedFoodSample: {
+      id: testAdmin.id,
+      status: "STORED",
+      sampledAt: new Date("2026-11-02T05:00:00Z"),
+      disposedAt: null,
+    },
+  };
+  const tx = {
+    cookingBatch: {
+      findMany: (args: Record<string, unknown>) => {
+        calls.push({ operation: "list", args });
+        return Promise.resolve([row]);
+      },
+      count: (args: Record<string, unknown>) => {
+        calls.push({ operation: "count", args });
+        return Promise.resolve(++countCalls === 1 ? 3 : 1);
+      },
+      groupBy: (args: Record<string, unknown>) => {
+        calls.push({ operation: "states", args });
+        return Promise.resolve([{ status: "COMPLETED", _count: 3 }]);
+      },
+    },
+    retainedFoodSample: {
+      groupBy: (args: Record<string, unknown>) => {
+        calls.push({ operation: "samples", args });
+        return Promise.resolve([
+          { status: "STORED", _count: 1 },
+          { status: "DISPOSED", _count: 1 },
+        ]);
+      },
+    },
+  };
+  const db = {
+    $transaction: (operation: (client: typeof tx) => Promise<unknown>) =>
+      operation(tx),
+  };
+  const service = createKitchenService(
+    () => Promise.resolve([]),
+    () => Promise.resolve(db as never),
+  );
+  const principal = { ...testStaff, permissions: ["cooking_batch.view"] };
+  const query = validateKitchenFilters({
+    page: "2",
+    limit: "2",
+    date: "2026-11-02",
+    mealType: "LUNCH",
+    cookingModeApplied: "SEPARATE_BY_LOT",
+    status: "COMPLETED",
+    search: "120",
+  });
+  const result = await service.list(query, principal);
+  const stats = await service.stats(query, principal);
+  const list = calls.find((call) => call.operation === "list")!.args;
+  const where = list.where as { AND: [unknown, Record<string, unknown>] };
+  assert.deepEqual(where.AND[0], {
+    MenuDay: { WeeklyMenu: { schoolId: testStaff.schoolId } },
+  });
+  assert.equal(where.AND[1].cookingModeApplied, "SEPARATE_BY_LOT");
+  assert.equal(where.AND[1].status, "COMPLETED");
+  assert.deepEqual(where.AND[1].OR, [
+    { batchCode: { contains: "120", mode: "insensitive" } },
+    { Dish: { name: { contains: "120", mode: "insensitive" } } },
+    { plannedPortions: 120 },
+  ]);
+  assert.equal(list.skip, 2);
+  assert.equal(list.take, 2);
+  assert.ok((list.select as Record<string, unknown>).RetainedFoodSample);
+  assert.deepEqual(
+    calls.find((call) => call.operation === "states")!.args.where,
+    where,
+  );
+  assert.deepEqual(
+    calls.find((call) => call.operation === "samples")!.args.where,
+    { CookingBatch: where },
+  );
+  assert.equal(result.items[0].cookingModeApplied, "SEPARATE_BY_LOT");
+  assert.equal(result.items[0].retainedFoodSample?.status, "STORED");
+  assert.equal(result.items[0].cookingBatchLots[0].quantityUsed, "6");
+  assert.equal(result.pagination.totalItems, 3);
+  assert.deepEqual(stats, {
+    total: 3,
+    unconfirmed: 0,
+    confirmed: 0,
+    completed: 3,
+    storedSamples: 1,
+    disposedSamples: 1,
+    pendingSamples: 1,
+  });
+});
+
 void test("batch edits accept only notes; plans and inventory quantities stay server owned", () => {
   assert.deepEqual(validateKitchenUpdate({ note: "  Ghi chú  " }), {
     note: "Ghi chú",

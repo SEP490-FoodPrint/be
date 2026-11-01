@@ -17,6 +17,16 @@ import {
 
 export function createMenuController(service: MenuService = menuService) {
   return {
+    getWeekSchedule: asyncHandler(async (req, res) => {
+      const date =
+        typeof req.query.date === "string"
+          ? req.query.date
+          : new Date().toISOString().slice(0, 10);
+      sendSuccess(
+        res,
+        await service.getWeekSchedule(date, requirePrincipal(req)),
+      );
+    }),
     getPortionGroups: asyncHandler(async (req, res) => {
       sendSuccess(
         res,
