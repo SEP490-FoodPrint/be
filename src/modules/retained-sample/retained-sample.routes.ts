@@ -1,7 +1,10 @@
 import { Router } from "express";
 import type { RequestHandler } from "express";
 import { authenticate } from "../../middlewares/auth.middleware";
-import { requireResource } from "../../middlewares/permission.middleware";
+import {
+  requireResource,
+  requirePermission,
+} from "../../middlewares/permission.middleware";
 import { createRetainedSampleController } from "./retained-sample.controller";
 import {
   retainedSampleService,
@@ -14,6 +17,12 @@ export function createRetainedSampleRouter(
 ) {
   const router = Router();
   const controller = createRetainedSampleController(service);
+  router.post(
+    "/:sampleId/dispose",
+    authHandler,
+    requirePermission("retained_sample.dispose"),
+    controller.dispose,
+  );
   router.get(
     "/",
     authHandler,
