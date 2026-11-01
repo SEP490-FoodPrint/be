@@ -134,6 +134,9 @@ jobs:
       - name: Verify atomic refresh rotation and session expiry on Redis
         run: npm run test:auth:redis
 
+      - name: Verify supplier contracts and tenant isolation
+        run: npm run test:supplier-onboarding
+
   quality:
     name: Backend quality
     if: always()
