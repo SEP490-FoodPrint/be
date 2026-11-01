@@ -26,6 +26,29 @@ Mẻ mới lấy định mức thực đơn thay cho dish_ingredient_entries. C�
 
 SQL bootstrap root được đồng bộ các migration MenuDay/Supplier/School hiện có và ba bảng mới. Mockdata cũ được giữ; định mức nguyên liệu chính của các thực đơn demo được chụp từ chính dữ liệu mẫu đã biết, chỉ trong bootstrap local/demo. Production migration không chứa backfill này.
 
+## Mở rộng duyệt thực đơn theo ngày (30/10/2026)
+
+Theo yêu cầu duyệt theo tab ngày hoặc cả tuần, ứng dụng bổ sung
+`menu_days.approval_status` (dùng enum `weekly_menu_status` có sẵn) và
+`menu_review_records.menu_day_id` nullable, FK đến `menu_days`.
+Đây là phần mở rộng nghiệp vụ ngoài SQL baseline v5.3.1 bên dưới.
+
+Thay đổi được triển khai bằng migration versioned
+`20261030000100_menu_day_approval`. Migration thêm cột/index/FK và backfill
+trạng thái quyết định tuần cũ xuống các ngày hiện có, không reset dữ liệu.
+Chạy `npm run db:migrate` trên database local hoặc `npm run db:migrate:deploy`
+trong luồng triển khai đã được phê duyệt, sau đó chạy `npm run prisma:generate`.
+
+API quyết định nhận `menuDayId` tùy chọn: có ID thì xử lý đúng ngày thuộc tuần,
+không có thì xử lý mọi ngày còn `PENDING_APPROVAL`. Ngày đã duyệt/yêu cầu sửa
+không bị ghi đè; xử lý lặp trả 409. Tuần chỉ `APPROVED` khi tất cả ngày đã duyệt;
+có ngày yêu cầu sửa thì tuần là `REVISION_REQUIRED`, các ngày còn chờ vẫn xử lý được.
+Nhận xét Y tế và BGH được phân biệt theo role của người ghi.
+
+`npm run test:menu:local` kiểm tra trên fixture tuần riêng và dọn fixture sau khi
+chạy; cần có các tài khoản của `db:seed:menu`. Chạy lại seed sẽ đưa tuần demo
+về trạng thái chờ duyệt, xóa lịch sử quyết định của riêng tuần demo đó.
+
 ## Nguồn chuẩn
 
 Lịch sử triển khai schema được quản lý tại `prisma/migrations/`, với provider PostgreSQL và Prisma CLI/Client theo lockfile hiện tại (**7.10.1**). `prisma/schema.prisma` mô tả trạng thái đích; các CHECK và SQL riêng của PostgreSQL nằm trong migration.

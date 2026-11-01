@@ -1,10 +1,13 @@
 import { requirePrincipal } from "../../utils/authorization";
 import { asyncHandler } from "../../utils/async-handler";
-import { sendSuccess } from "../../utils/response";
+import { sendError, sendSuccess } from "../../utils/response";
 import { uuid, objectBody } from "../../utils/auth-validation";
 import { menuService, type MenuService } from "./menu.service";
 import {
+  validateApprovalPayload,
+  validateMenuId,
   validateMenuListQuery,
+  validateRevisionPayload,
   validateMenuMeal,
   validateMenuStandards,
   validateMenuIngredientKind,
@@ -14,6 +17,10 @@ import {
   validateAllergyCheck,
   validateMenuPortionGroups,
 } from "./menu.validation";
+
+function reviewerIdFromRequest(subject: unknown): string | undefined {
+  return typeof subject === "string" ? subject : undefined;
+}
 
 export function createMenuController(service: MenuService = menuService) {
   return {
@@ -185,6 +192,45 @@ export function createMenuController(service: MenuService = menuService) {
         ),
         "Nhu cầu nguyên liệu theo định mức đã nhập",
       );
+    }),
+    getApprovalDetail: asyncHandler(async (req, res) => {
+      const result = await service.getApprovalDetail(
+        validateMenuId(req.params.menuId),
+        requirePrincipal(req),
+      );
+      if (!result) {
+        sendError(res, "Không tìm thấy thực đơn", 404);
+        return;
+      }
+      sendSuccess(res, result, "Lấy hồ sơ phê duyệt thực đơn thành công");
+    }),
+    approve: asyncHandler(async (req, res) => {
+      const { notes, menuDayId } = validateApprovalPayload(req.body);
+      const result = await service.approveMenu(
+        validateMenuId(req.params.menuId),
+        reviewerIdFromRequest(req.user?.sub),
+        notes,
+        menuDayId,
+      );
+      if (!result) {
+        sendError(res, "Không tìm thấy thực đơn", 404);
+        return;
+      }
+      sendSuccess(res, result, "Phê duyệt thực đơn thành công");
+    }),
+    requestRevision: asyncHandler(async (req, res) => {
+      const { reason, menuDayId } = validateRevisionPayload(req.body);
+      const result = await service.requestRevision(
+        validateMenuId(req.params.menuId),
+        reviewerIdFromRequest(req.user?.sub),
+        reason,
+        menuDayId,
+      );
+      if (!result) {
+        sendError(res, "Không tìm thấy thực đơn", 404);
+        return;
+      }
+      sendSuccess(res, result, "Gửi yêu cầu chỉnh sửa thực đơn thành công");
     }),
   };
 }

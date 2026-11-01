@@ -53,6 +53,16 @@ Tất cả đường dẫn bên dưới dùng phương thức **GET**.
 | `traceability`                | `/api/traceability-anchors`          | `TraceabilityAnchor`         | —                              |
 | `menu-review`                 | `/api/menu-reviews`                  | `MenuReviewRecord`           | —                              |
 
+## API duyệt thực đơn mẫu
+
+Module `menu` giữ API danh sách chuẩn của `main` và bổ sung ba endpoint phục vụ màn hình duyệt thực đơn:
+
+- `GET /api/menus/:menuId/approval-detail`: đọc hồ sơ thực đơn, món ăn, nhà cung cấp và lần thẩm định gần nhất.
+- `POST /api/menus/:menuId/approve`: phê duyệt thực đơn; body tùy chọn `{ "notes": "..." }`.
+- `POST /api/menus/:menuId/request-revision`: yêu cầu chỉnh sửa; body bắt buộc `{ "reason": "..." }`.
+
+Ba endpoint yêu cầu JWT hợp lệ. Endpoint đọc yêu cầu quyền `menu.view`, phê duyệt yêu cầu `menu.approve`, và yêu cầu chỉnh sửa cần `menu.review`. Dữ liệu được giới hạn theo trường của tài khoản; người duyệt phải là tài khoản `SCHOOL_MANAGEMENT_BOARD` đang hoạt động thuộc cùng trường.
+
 `auth` cung cấp signup, login, refresh, logout bằng cookie HttpOnly/phiên Redis, thông tin tài khoản/quyền hiện tại, cập nhật hồ sơ cá nhân bằng PATCH /auth/me (fullName/phone) và danh sách Role; xem [AUTH_SESSIONS.md](../../docs/AUTH_SESSIONS.md). Signup tạo tài khoản UNVERIFIED chưa có yêu cầu duyệt; người dùng xác minh email bằng mã Resend rồi đăng nhập để nộp/xem hồ sơ của mình, chưa được gọi API nghiệp vụ. `onboarding` trong auth xử lý nộp hồ sơ/tài liệu; registration gắn API chi tiết/duyệt/từ chối vào cùng service để giữ một luồng transaction; xem [ONBOARDING.md](../../docs/ONBOARDING.md). Hợp đồng API quản trị role/permission ở [docs/AUTHORIZATION.md](../../docs/AUTHORIZATION.md). `organization` hiện quản lý khung cho School; Supplier và CommuneFoodSafetyUnit có module riêng. API traceability chỉ đọc bản ghi, không gửi transaction blockchain.
 
 ## Quyền truy cập và phân trang

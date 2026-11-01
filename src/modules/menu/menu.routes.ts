@@ -112,6 +112,24 @@ export function createMenuRouter(
     requirePermission("menu.view"),
     controller.getReviews,
   );
+  router.get(
+    "/:menuId/approval-detail",
+    authHandler,
+    requireResource("menu"),
+    controller.getApprovalDetail,
+  );
+  router.post(
+    "/:menuId/approve",
+    authHandler,
+    requirePermission("menu.approve"),
+    controller.approve,
+  );
+  router.post(
+    "/:menuId/request-revision",
+    authHandler,
+    requirePermission("menu.review"),
+    controller.requestRevision,
+  );
   return router;
 }
 export default createMenuRouter();
