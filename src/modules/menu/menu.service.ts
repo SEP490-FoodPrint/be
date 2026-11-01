@@ -786,6 +786,122 @@ const menuDetail = {
   },
 } as const satisfies Prisma.WeeklyMenuInclude;
 
+const menuListInclude = {
+  menuDays: {
+    orderBy: { menuDate: "asc" },
+    include: {
+      menuDayDishes: {
+        orderBy: [
+          { mealType: "asc" },
+          { displayOrder: "asc" },
+          { dishId: "asc" },
+        ],
+        include: {
+          Dish: {
+            select: { id: true, name: true, description: true, status: true },
+          },
+          ingredients: {
+            orderBy: { ingredientId: "asc" },
+            take: 3,
+            include: {
+              ingredient: {
+                select: {
+                  id: true,
+                  name: true,
+                },
+              },
+            },
+          },
+        },
+      },
+      portionGroups: {
+        select: {
+          id: true,
+          name: true,
+          isDefault: true,
+          mealType: true,
+        },
+      },
+      mealSeasonings: {
+        orderBy: [{ mealType: "asc" }, { ingredientEntryId: "asc" }],
+        include: {
+          ingredientEntry: {
+            select: {
+              ingredientId: true,
+              Ingredient: { select: { name: true, defaultUnit: true } },
+            },
+          },
+        },
+      },
+    },
+  },
+} as const satisfies Prisma.WeeklyMenuInclude;
+
+/* ========================================================
+   CÁC HÀM TIỆN ÍCH XỬ LÝ TUẦN & THỨ BÁN TRÚ (T2 - T6)
+   ======================================================== */
+export const SCHOOL_DAY_LABELS = [
+  "Chủ Nhật",
+  "Thứ Hai",
+  "Thứ Ba",
+  "Thứ Tư",
+  "Thứ Năm",
+  "Thứ Sáu",
+  "Thứ Bảy",
+] as const;
+
+export function getISOWeekNumber(d: Date): number {
+  const date = new Date(
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()),
+  );
+  const dayNum = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  return Math.ceil(((date.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+}
+
+export function getSchoolMonday(d: Date): Date {
+  const date = new Date(
+    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()),
+  );
+  const day = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() - day + 1);
+  return date;
+}
+
+export function getSchoolWeekSchedule(targetDate: Date) {
+  const monday = getSchoolMonday(targetDate);
+  const weekNumber = getISOWeekNumber(monday);
+  const schoolDays: {
+    date: string;
+    dayOfWeek: number;
+    dayLabel: string;
+    isSchoolDay: boolean;
+  }[] = [];
+
+  for (let i = 0; i < 5; i++) {
+    const d = new Date(monday);
+    d.setUTCDate(monday.getUTCDate() + i);
+    const dateStr = d.toISOString().slice(0, 10);
+    schoolDays.push({
+      date: dateStr,
+      dayOfWeek: i + 1, // 1: T2, 2: T3, 3: T4, 4: T5, 5: T6
+      dayLabel: SCHOOL_DAY_LABELS[i + 1],
+      isSchoolDay: true,
+    });
+  }
+
+  const friday = new Date(monday);
+  friday.setUTCDate(monday.getUTCDate() + 4);
+
+  return {
+    weekStartDate: monday.toISOString().slice(0, 10),
+    weekEndDate: friday.toISOString().slice(0, 10),
+    weekNumber,
+    schoolDays,
+  };
+}
+
 function createMenuOperations(connect: () => Promise<PrismaClient>) {
   async function owned(tx: Tx, id: string, schoolId: string) {
     const menu = await tx.weeklyMenu.findFirst({
@@ -1086,22 +1202,23 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
           },
         ],
       };
-      return db.$transaction(
-        async (tx) => ({
-          items: await tx.weeklyMenu.findMany({
-            where,
-            include: menuDetail,
-            skip: (query.page - 1) * query.limit,
-            take: query.limit,
-            orderBy: [{ weekStartDate: "desc" }, { id: "asc" }],
-          }),
-          pagination: {
-            ...query,
-            totalItems: await tx.weeklyMenu.count({ where }),
-          },
+      const [items, totalItems] = await Promise.all([
+        db.weeklyMenu.findMany({
+          where,
+          include: menuListInclude,
+          skip: (query.page - 1) * query.limit,
+          take: query.limit,
+          orderBy: [{ weekStartDate: "desc" }, { id: "asc" }],
         }),
-        { isolationLevel: "RepeatableRead" },
-      );
+        db.weeklyMenu.count({ where }),
+      ]);
+      return {
+        items,
+        pagination: {
+          ...query,
+          totalItems,
+        },
+      };
     },
     async getOne(id: string, principal: AuthPrincipal) {
       const db = await connect(),
@@ -1119,12 +1236,113 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
         principal,
         "menu.create",
         async (tx, actor, schoolId) => {
-          if (
-            await tx.weeklyMenu.count({
-              where: { schoolId, weekStartDate: input.weekStartDate },
-            })
-          )
-            throw new HttpError(409, "Tuần này đã có thực đơn");
+          const existingWeekly = await tx.weeklyMenu.findFirst({
+            where: { schoolId, weekStartDate: input.weekStartDate },
+            include: menuDetail,
+          });
+
+          if (existingWeekly) {
+            if (
+              !["DRAFT", "REVISION_REQUIRED"].includes(existingWeekly.status)
+            ) {
+              throw new HttpError(
+                409,
+                `Thực đơn tuần này (${input.weekStartDate.toISOString().slice(0, 10)}) đã ở trạng thái ${existingWeekly.status}, không thể thêm ngày mới.`,
+              );
+            }
+            const incomingDates = new Set(input.days.map((d) => +d.menuDate));
+            const retainedDays: typeof input.days = existingWeekly.menuDays
+              .filter((d) => !incomingDates.has(+d.menuDate))
+              .map((d) => ({
+                menuDate: d.menuDate,
+                note: d.note,
+                meals: [
+                  ...new Set(d.menuDayDishes.map((mdd) => mdd.mealType)),
+                ].map((mealType) => ({
+                  mealType,
+                  dishes: d.menuDayDishes
+                    .filter((mdd) => mdd.mealType === mealType)
+                    .map((mdd) => ({
+                      dishId: mdd.dishId,
+                      name: undefined,
+                      ingredients: mdd.ingredients.map((i) => ({
+                        ingredientId: i.ingredientId,
+                        quantityPerPortion: i.quantityPerPortion.toString(),
+                        unit: i.unit,
+                      })),
+                    })),
+                  seasonings: d.mealSeasonings
+                    .filter((s) => s.mealType === mealType)
+                    .map((s) => ({
+                      ingredientEntryId: s.ingredientEntryId,
+                      quantityPerPortion: s.quantityPerPortion.toString(),
+                      unit: s.unit,
+                    })),
+                })),
+              }));
+
+            // A create request from the day editor writes only one meal. Merge it
+            // with other meals already stored on that date before writeDays,
+            // which replaces all meal rows for each supplied day.
+            const mergedIncomingDays = input.days.map((incomingDay) => {
+              const oldDay = existingWeekly.menuDays.find(
+                (day) => +day.menuDate === +incomingDay.menuDate,
+              );
+              if (!oldDay) return incomingDay;
+
+              const incomingMealTypes = new Set(
+                incomingDay.meals.map((meal) => meal.mealType),
+              );
+              const retainedMeals = [
+                ...new Set(oldDay.menuDayDishes.map((row) => row.mealType)),
+              ]
+                .filter((mealType) => !incomingMealTypes.has(mealType))
+                .map((mealType) => ({
+                  mealType,
+                  dishes: oldDay.menuDayDishes
+                    .filter((row) => row.mealType === mealType)
+                    .map((row) => ({
+                      dishId: row.dishId,
+                      name: undefined,
+                      ingredients: row.ingredients.map((ingredient) => ({
+                        ingredientId: ingredient.ingredientId,
+                        quantityPerPortion:
+                          ingredient.quantityPerPortion.toString(),
+                        unit: ingredient.unit,
+                      })),
+                    })),
+                  seasonings: oldDay.mealSeasonings
+                    .filter((row) => row.mealType === mealType)
+                    .map((row) => ({
+                      ingredientEntryId: row.ingredientEntryId,
+                      quantityPerPortion: row.quantityPerPortion.toString(),
+                      unit: row.unit,
+                    })),
+                }));
+
+              return {
+                ...incomingDay,
+                note: incomingDay.note ?? oldDay.note,
+                meals: [...retainedMeals, ...incomingDay.meals],
+              };
+            });
+
+            const mergedInput: MenuWrite = {
+              weekStartDate: input.weekStartDate,
+              title: input.title || existingWeekly.title,
+              days: [...retainedDays, ...mergedIncomingDays],
+            };
+
+            await writeDays(tx, existingWeekly.id, mergedInput, schoolId);
+            if (input.title) {
+              await tx.weeklyMenu.update({
+                where: { id: existingWeekly.id },
+                data: { title: input.title },
+              });
+            }
+            return owned(tx, existingWeekly.id, schoolId);
+          }
+
           const menu = await tx.weeklyMenu.create({
             data: {
               schoolId,
@@ -1192,6 +1410,29 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
               "Thực đơn không thể gửi duyệt ở trạng thái này",
             );
           await ready(tx, menu, schoolId);
+
+          // Kiểm tra xem tuần này đã có đủ 5 ngày T2 - T6 chưa
+          const weekSchedule = getSchoolWeekSchedule(menu.weekStartDate);
+          const existingDateStrs = new Set(
+            menu.menuDays.map((d) => d.menuDate.toISOString().slice(0, 10)),
+          );
+          const missingSchoolDays = weekSchedule.schoolDays.filter(
+            (sd) => !existingDateStrs.has(sd.date),
+          );
+
+          if (missingSchoolDays.length > 0) {
+            const missingNames = missingSchoolDays
+              .map(
+                (d) =>
+                  `${d.dayLabel} (${d.date.slice(8, 10)}/${d.date.slice(5, 7)})`,
+              )
+              .join(", ");
+            throw new HttpError(
+              422,
+              `Thực đơn tuần ${weekSchedule.weekNumber} chưa đầy đủ các ngày trong tuần (T2 - T6). Còn thiếu: ${missingNames}. Vui lòng tạo đủ 5 ngày trước khi gửi Ban Giám Hiệu duyệt.`,
+            );
+          }
+
           await tx.menuDay.updateMany({
             where: {
               weeklyMenuId: id,
@@ -1276,6 +1517,86 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
         },
       );
     },
+    async getWeekSchedule(inputDate: string | Date, principal: AuthPrincipal) {
+      const scope = listScopes.menu(principal);
+      const db = await connect();
+      const date =
+        typeof inputDate === "string"
+          ? new Date(
+              inputDate.includes("T")
+                ? inputDate
+                : inputDate + "T00:00:00.000Z",
+            )
+          : inputDate;
+      const weekInfo = getSchoolWeekSchedule(date);
+
+      const weeklyMenu = await db.weeklyMenu.findFirst({
+        where: {
+          AND: [
+            scope,
+            {
+              weekStartDate: new Date(
+                weekInfo.weekStartDate + "T00:00:00.000Z",
+              ),
+            },
+          ],
+        },
+        select: {
+          id: true,
+          status: true,
+          title: true,
+          menuDays: {
+            select: {
+              id: true,
+              menuDate: true,
+              approvalStatus: true,
+              note: true,
+              menuDayDishes: {
+                select: { id: true, mealType: true },
+              },
+            },
+            orderBy: { menuDate: "asc" },
+          },
+        },
+      });
+
+      const existingDays = weeklyMenu?.menuDays ?? [];
+      const days = weekInfo.schoolDays.map((sd) => {
+        const found = existingDays.find(
+          (ed) => ed.menuDate.toISOString().slice(0, 10) === sd.date,
+        );
+        return {
+          ...sd,
+          hasMenu: !!found,
+          menuDayId: found?.id ?? null,
+          status: found?.approvalStatus ?? "MISSING",
+          dishCount: found?.menuDayDishes?.length ?? 0,
+        };
+      });
+
+      const completedDays = days.filter((d) => d.hasMenu).length;
+      const missingDays = days.filter((d) => !d.hasMenu).map((d) => d.date);
+
+      const targetDayNum = date.getUTCDay();
+      return {
+        targetDate: date.toISOString().slice(0, 10),
+        targetDayOfWeek: targetDayNum === 0 ? 7 : targetDayNum,
+        targetDayLabel: SCHOOL_DAY_LABELS[targetDayNum],
+        isTargetSchoolDay: targetDayNum >= 1 && targetDayNum <= 5,
+        weekNumber: weekInfo.weekNumber,
+        weekStartDate: weekInfo.weekStartDate,
+        weekEndDate: weekInfo.weekEndDate,
+        weeklyMenuId: weeklyMenu?.id ?? null,
+        weeklyMenuStatus: weeklyMenu?.status ?? null,
+        weeklyMenuTitle: weeklyMenu?.title ?? null,
+        days,
+        totalSchoolDays: 5,
+        completedDays,
+        missingDays,
+        isWeekComplete: completedDays === 5,
+      };
+    },
+
     async getReviews(id: string, principal: AuthPrincipal, query: ListQuery) {
       const scope = listScopes.menu(principal),
         db = await connect();
