@@ -42,17 +42,17 @@ async function main() {
           {
             status: "APPROVED",
             date: "2026-10-12",
-            title: "[TEST] Thực đơn tuần 42",
+            title: "Thực đơn tuần 42",
           },
           {
             status: "REVISION_REQUIRED",
             date: "2026-10-19",
-            title: "[TEST] Thực đơn tuần 43",
+            title: "Thực đơn tuần 43",
           },
           {
             status: "PENDING_APPROVAL",
             date: "2026-11-02",
-            title: "[TEST] Thực đơn tuần 45",
+            title: "Thực đơn tuần 45",
           },
         ] as const;
         for (const [index, week] of weeks.entries()) {
@@ -115,8 +115,8 @@ async function main() {
                         : "REVISION_REQUESTED",
                     feedback:
                       week.status === "APPROVED"
-                        ? "[TEST] Đã phê duyệt thực đơn."
-                        : "[TEST] Đề nghị cân đối lại khẩu phần.",
+                        ? "Đã phê duyệt thực đơn."
+                        : "Đề nghị cân đối lại khẩu phần.",
                     reviewedAt: new Date(`${week.date}T02:00:00Z`),
                   },
                 ],
@@ -130,7 +130,7 @@ async function main() {
             {
               id: stableId(73, 1),
               schoolId,
-              name: "[TEST] Lớp 3A1",
+              name: "Lớp 3A1",
               academicYear: "2026-2027",
               registeredMealPortions: 35,
             },
@@ -162,7 +162,7 @@ async function main() {
               allocatedAt: new Date("2026-10-28T03:00:00Z"),
               distributedAt: new Date("2026-10-28T04:00:00Z"),
               distributedByUserId: adminId,
-              note: "[TEST] Suất ăn phục vụ kiểm thử Tổng quan",
+              note: "Suất ăn phục vụ kiểm thử Tổng quan",
             },
           ],
           skipDuplicates: true,
@@ -171,17 +171,17 @@ async function main() {
           {
             complaintType: "MEAL_QUALITY",
             status: "SUBMITTED",
-            description: "[TEST] Cần kiểm tra độ mềm của cơm.",
+            description: "Cần kiểm tra độ mềm của cơm.",
           },
           {
             complaintType: "FOOD_HYGIENE",
             status: "IN_REVIEW",
-            description: "[TEST] Kiểm tra khâu vệ sinh khay ăn.",
+            description: "Kiểm tra khâu vệ sinh khay ăn.",
           },
           {
             complaintType: "OTHER",
             status: "RESOLVED",
-            description: "[TEST] Đề nghị điều chỉnh thời gian phát suất ăn.",
+            description: "Đề nghị điều chỉnh thời gian phát suất ăn.",
           },
         ] as const;
         for (const [index, complaint] of complaints.entries()) {
@@ -196,7 +196,7 @@ async function main() {
                 ...(complaint.status === "RESOLVED"
                   ? {
                       handledByUserId: boardId,
-                      resolution: "[TEST] Đã điều chỉnh lịch phục vụ.",
+                      resolution: "Đã điều chỉnh lịch phục vụ.",
                       resolvedAt: new Date("2026-10-29T05:00:00Z"),
                     }
                   : {}),
@@ -211,7 +211,7 @@ async function main() {
               id: stableId(77, 1),
               schoolId,
               reportedByUserId: boardId,
-              title: "[TEST] Kiểm tra điều kiện bảo quản",
+              title: "Kiểm tra điều kiện bảo quản",
               description: "Tình huống giả lập phục vụ kiểm thử.",
               status: "INVESTIGATING",
               occurredAt: new Date("2026-10-28T03:00:00Z"),
@@ -220,7 +220,7 @@ async function main() {
               id: stableId(77, 2),
               schoolId,
               reportedByUserId: boardId,
-              title: "[TEST] Kiểm tra khu vực chia suất",
+              title: "Kiểm tra khu vực chia suất",
               description: "Tình huống giả lập đã xử lý.",
               status: "RESOLVED",
               occurredAt: new Date("2026-09-15T03:00:00Z"),
