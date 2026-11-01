@@ -124,6 +124,76 @@ Mọi dòng đều yêu cầu một trong các permission liệt kê. SYSTEM có
 
 School xem supplier qua quan hệ ACTIVE/SUSPENDED; ingredient qua IngredientEntry của trường. Supplier xem tài nguyên supplier-owned hoặc delivery của supplier khi có permission phù hợp. ATTP xã chỉ thấy incident/report chuyển tới đơn vị mình; traceability chỉ mở phần liên quan trực tiếp. Với ingredient_quality_feedback.view_own, thêm điều kiện submittedByUserId; view_details vẫn giới hạn tổ chức. Các API cũ giữ phân trang, safe select và serialization Date/Decimal/BigInt.
 
+## API Menu và CookingBatch v1
+
+Các route `/api/v1/menus`, `/api/v1/kitchen`, `/api/v1/daily-meal-portions` và `/api/v1/food-samples` dùng cùng session cookie, CSRF header, permission runtime và phạm vi trường của API hiện tại. Request ghi cần `X-CSRF-Protection: 1`; trình duyệt gửi cookie với credentials. Không dùng tên role `SCHOOL_ADMIN`/`CHEF` trong tài liệu giao diện để tạo thêm role: mã thực tế là `SCHOOL_ADMINISTRATION` và `SCHOOL_KITCHEN_STAFF`.
+
+| Thao tác                                   | Permission                                                                                        |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| Xem thực đơn, định mức, nhu cầu kho        | `menu.view`                                                                                       |
+| Đối soát dị ứng theo lớp                   | Cả `menu.view` và `class_allergy.view` để giữ hiệu lực denial trên dữ liệu dị ứng                 |
+| Tạo thực đơn                               | `menu.create`                                                                                     |
+| Sửa, xóa bản nháp, lưu định mức, gửi duyệt | `menu.update`                                                                                     |
+| Duyệt chấp thuận                           | `menu.approve`                                                                                    |
+| Yêu cầu chỉnh sửa                          | `menu.review`                                                                                     |
+| Xem mẻ, thống kê, dữ liệu in kiểm thực     | `cooking_batch.view`                                                                              |
+| Lập, xác nhận, hoàn thành mẻ               | `cooking_batch.create`, `cooking_batch.confirm`, `cooking_batch.complete` tương ứng               |
+| Xem, tạo, tiêu hủy mẫu                     | `retained_sample.view`, `retained_sample.create`, `retained_sample.dispose` tương ứng             |
+| Tổng hợp số suất đã chốt                   | Một trong `daily_meal_portion.view`, `cooking_batch.view`, `menu.view`; chỉ tổng hợp trong trường |
+
+`POST /api/v1/menus` và `PUT /api/v1/menus/:menuId` nhận cùng cấu trúc dưới đây. `dishId` chọn món của trường; `name` thay thế `dishId` khi nhập tên món. Tên đã tồn tại trong trường dùng lại món đó. Không nhận `schoolId`, trạng thái hoặc tổng số suất từ client. Bản nháp được phép chưa có định mức; gửi duyệt yêu cầu đầy đủ định mức hợp lệ.
+
+```json
+{
+  "weekStartDate": "2030-01-07",
+  "title": "Thực đơn tuần",
+  "days": [
+    {
+      "menuDate": "2030-01-07",
+      "note": null,
+      "meals": [
+        {
+          "mealType": "LUNCH",
+          "dishes": [
+            {
+              "name": "Cơm trắng",
+              "ingredients": [
+                {
+                  "ingredientId": "11111111-1111-4111-8111-111111111111",
+                  "quantityPerPortion": "80",
+                  "unit": "g"
+                }
+              ]
+            }
+          ],
+          "seasonings": [
+            {
+              "ingredientEntryId": "22222222-2222-4222-8222-222222222222",
+              "quantityPerPortion": "1",
+              "unit": "g"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+Ngày phải nằm trong 7 ngày từ `weekStartDate`; tối đa 7 ngày và hai ca `LUNCH`/`AFTERNOON` trong mỗi ngày. PUT gửi đầy đủ các ngày, bữa, món và định mức. Không đổi tuần sau khi tạo. Chỉ ngày nháp chưa từng gửi duyệt mới được bỏ khỏi payload; ngày có lịch sử duyệt phải giữ lại. Khi tuần cần chỉnh sửa, những ngày đã duyệt hoặc đang chờ duyệt phải giữ nguyên, dùng `dishId` từ GET chi tiết. Gửi duyệt lại giữ nguyên các ngày đã duyệt. Yêu cầu chỉnh sửa một ngày không ngăn BGH xử lý các ngày khác còn chờ duyệt. Quyết định `REVISION_REQUESTED` ghi nhật ký duyệt và chuyển trạng thái thực đơn/ngày tương ứng sang `REVISION_REQUIRED`.
+
+GET danh sách menus hỗ trợ `page`, `limit`, `date`, `weekStartDate`, `status`. GET kitchen và kitchen/stats hỗ trợ `date`, `mealType`, `status`, `menuDayId`, `dishId` và phân trang; stats đếm toàn bộ phạm vi bộ lọc. GET daily-meal-portions yêu cầu `date=YYYY-MM-DD` và `mealType`, chỉ cộng bản ghi `FINALIZED`. Danh mục nguyên liệu có `pagination.totalItems`; gia vị dùng IngredientEntry ID, nguyên liệu chính dùng Ingredient ID. UUID trong ví dụ phải thay bằng ID thực lấy từ API danh mục.
+
+POST kitchen trả `batches` đầy đủ; nếu chỉ có một mẻ, trả thêm các trường mẻ ở cấp data để khớp màn hình tạo mẻ. `SEPARATE_BY_LOT` có thể sinh nhiều mẻ; client phải dùng toàn bộ mảng. Gia vị cấp bữa được giữ một lần và tiêu hao khi mọi món/mẻ trong bữa hoàn tất.
+
+Hoàn thành mẻ yêu cầu `inspectionData.step2_Cooking` và `step3_Serving` theo API FINAL. Backend kiểm tra nhiệt độ thực tế tối thiểu 65°C theo yêu cầu ứng dụng và mọi cờ đạt trước khi ghi. Biên bản, trạng thái, tồn kho và inventory transaction commit cùng nhau. Gọi lại cùng biên bản không trừ kho thêm; không cho ghi đè biên bản đã hoàn thành. Body rỗng chỉ dùng để retry mẻ đã COMPLETED, gồm cả lịch sử cũ có inspectionData NULL; không cho hoàn thành lần đầu thiếu kiểm thực qua route cũ.
+
+Mỗi mẻ COMPLETED có tối đa một mẫu. Tạo lại cùng thông tin trả mẫu đã có, không tạo trùng; thông tin khác trả 409. Thời điểm lấy mẫu phải từ lúc hoàn thành mẻ đến hiện tại. `expiresAt` tính từ `sampledAt + 24h`, không phải cột mới. Hủy mẫu yêu cầu cả thời gian server và `disposedAt` đã đủ 24h, không cho thời điểm tương lai; mẫu liên quan sự cố OPEN/INVESTIGATING qua kết quả phân tích hoặc phân phối bữa ăn phải giữ lại. Không tự động hủy khi đủ 48h. Thống kê `pendingSamples` cho biết mẻ hoàn thành chưa lưu mẫu.
+
+Schema hiện tại không có Student, student_allergies hoặc bảng allergens. Allergy-check dùng ClassAllergy/IngredientEntry/Class, trả số lượng theo từng nguyên liệu và lớp; chỉ kết luận có/không có xung đột trong dữ liệu đã ghi nhận. Khi nhiều nguyên liệu có thể trùng học sinh, `totalAffectedStudents` là null và trả `totalAffectedStudentsBounds`, `requiresIndividualDeduplication`. Trường `allergen` null kèm `allergenDataAvailable: false` nghĩa là chưa có dữ liệu phân loại, không xác nhận nguyên liệu an toàn. Không có chức năng gợi ý hoặc suy đoán món/nguyên liệu thay thế. Khi có xung đột, API trả `requiresMenuAdjustment: true`; nhân viên y tế tự quyết định điều chỉnh thực đơn. Chưa triển khai chia suất/mẻ cho món thay thế vì schema chưa có quan hệ phân bổ nhóm dị ứng; planner tiếp tục chặn nhu cầu có dị ứng liên quan để tránh nấu/trừ kho sai.
+
+Phản hồi lỗi v1 bổ sung `code` theo API FINAL; envelope và các route cũ được giữ. Phần API này không thêm migration, seed hay thay đổi role/permission. Backend triển khai phải có migration inspection_data và menu standards đã áp dụng; không chạy SQL bootstrap trên Azure.
+
 ## Bootstrap và triển khai
 
 ```bash

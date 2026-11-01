@@ -28,9 +28,404 @@ import { startHttp } from "./helpers/http";
 import {
   validateMenuMeal,
   validateMenuStandards,
+  validateMenuWrite,
+  validateMenuReview,
+  validateAllergyCheck,
+  validateMenuPortionGroups,
 } from "../src/modules/menu/menu.validation";
+import {
+  validateKitchenComplete,
+  validateKitchenFilters,
+  validateKitchenUpdate,
+} from "../src/modules/kitchen/kitchen.validation";
+import {
+  validateFoodSample,
+  validateSampleDisposal,
+} from "../src/modules/retained-sample/retained-sample.validation";
+import { createKitchenRouter } from "../src/modules/kitchen/kitchen.routes";
+import { createKitchenService } from "../src/modules/kitchen/kitchen.service";
+import { createMenuRouter } from "../src/modules/menu/menu.routes";
+import { createMenuService } from "../src/modules/menu/menu.service";
+import { calendarDate, isoTimestamp } from "../src/utils/auth-validation";
+import { validateDailyPortionGroups } from "../src/modules/meal-attendance/meal-attendance.validation";
 
 process.env.NODE_ENV = "test";
+
+void test("batch edits accept only notes; plans and inventory quantities stay server owned", () => {
+  assert.deepEqual(validateKitchenUpdate({ note: "  Ghi chú  " }), {
+    note: "Ghi chú",
+  });
+  assert.deepEqual(validateKitchenUpdate({ note: null }), { note: null });
+  for (const body of [
+    {},
+    { note: "x", plannedPortions: 120 },
+    { note: "x", quantityUsed: 6 },
+    { status: "UNCONFIRMED" },
+    { note: "x", dishId: testStaff.id },
+  ])
+    assert.throws(() => validateKitchenUpdate(body), HttpError);
+});
+void test("manually selected portion groups require one normal group and explicit avoidance for separate meals", () => {
+  const common = {
+    name: "Thường",
+    isDefault: true,
+    dishIds: [testStaff.id],
+    avoidedIngredientEntryIds: [],
+  };
+  const special = {
+    name: "Riêng",
+    isDefault: false,
+    dishIds: [testAdmin.id],
+    avoidedIngredientEntryIds: [testStaff.id],
+  };
+  assert.equal(
+    validateMenuPortionGroups({ groups: [common, special] }).groups.length,
+    2,
+  );
+  for (const groups of [
+    [special],
+    [common, { ...special, isDefault: true }],
+    [{ ...common, dishIds: [] }],
+    [common, { ...special, avoidedIngredientEntryIds: [] }],
+    [common, { ...special, dishIds: [testAdmin.id, testAdmin.id] }],
+  ])
+    assert.throws(() => validateMenuPortionGroups({ groups }), HttpError);
+  assert.throws(
+    () =>
+      validateMenuPortionGroups({ groups: [common], suggestedIngredients: [] }),
+    HttpError,
+  );
+});
+void test("teacher group confirmations reject duplicates, fractional counts and kitchen-entered allocations", () => {
+  const input = {
+    menuDayId: testStaff.id,
+    groups: [{ portionGroupId: testAdmin.id, portionCount: 120 }],
+  };
+  assert.equal(validateDailyPortionGroups(input).groups[0].portionCount, 120);
+  assert.equal(
+    validateDailyPortionGroups({
+      ...input,
+      groups: [{ ...input.groups[0], portionCount: 0 }],
+    }).groups[0].portionCount,
+    0,
+  );
+  for (const portionCount of [-1, 1.5, Infinity, 2147483648, "120"])
+    assert.throws(
+      () =>
+        validateDailyPortionGroups({
+          ...input,
+          groups: [{ ...input.groups[0], portionCount }],
+        }),
+      HttpError,
+    );
+  assert.throws(
+    () =>
+      validateDailyPortionGroups({
+        ...input,
+        groups: [input.groups[0], input.groups[0]],
+      }),
+    HttpError,
+  );
+  assert.throws(
+    () => validateDailyPortionGroups({ ...input, quantityUsed: 9.6 }),
+    HttpError,
+  );
+});
+
+void test("menu writes enforce real dates, weekly boundaries and server-owned lifecycle fields", () => {
+  const input = {
+    weekStartDate: "2030-01-07",
+    days: [
+      {
+        menuDate: "2030-01-07",
+        meals: [{ mealType: "LUNCH", dishes: [{ name: "Món mới" }] }],
+      },
+    ],
+  };
+  assert.equal(
+    validateMenuWrite(input).days[0].meals[0].dishes[0].name,
+    "Món mới",
+  );
+  for (const extra of [
+    { schoolId: testStaff.schoolId },
+    { status: "APPROVED" },
+    { plannedPortions: 120 },
+  ])
+    assert.throws(() => validateMenuWrite({ ...input, ...extra }), HttpError);
+  assert.throws(
+    () =>
+      validateMenuWrite({
+        ...input,
+        days: [{ ...input.days[0], menuDate: "2030-01-14" }],
+      }),
+    HttpError,
+  );
+  assert.throws(
+    () => validateMenuWrite({ ...input, days: [input.days[0], input.days[0]] }),
+    HttpError,
+  );
+  for (const value of ["2026-02-29", "2026-04-31", "2026-1-01"])
+    assert.throws(() => calendarDate(value), HttpError);
+  for (const value of [
+    "2026-02-30T00:00:00Z",
+    "2026-01-01T24:00:00Z",
+    "2026-01-01T12:00:00",
+  ])
+    assert.throws(() => isoTimestamp(value), HttpError);
+  assert.equal(
+    calendarDate("2028-02-29").toISOString(),
+    "2028-02-29T00:00:00.000Z",
+  );
+});
+
+void test("menu reviews require a revision reason and reject mass assignment or duplicate allergy IDs", () => {
+  assert.equal(validateMenuReview({ decision: "APPROVED" }).menuDayId, null);
+  assert.equal(
+    validateMenuReview({
+      decision: "REVISION_REQUESTED",
+      feedback: "Sửa định mức",
+    }).decision,
+    "REVISION_REQUESTED",
+  );
+  for (const input of [
+    { decision: "REVISION_REQUESTED" },
+    { decision: "REVISION_REQUIRED" },
+    { decision: "APPROVED", reviewerUserId: testStaff.id },
+  ])
+    assert.throws(() => validateMenuReview(input), HttpError);
+  assert.throws(
+    () => validateAllergyCheck({ ingredientIds: [testStaff.id, testStaff.id] }),
+    HttpError,
+  );
+  assert.throws(() => validateAllergyCheck({ ingredientIds: [] }), HttpError);
+});
+
+function validInspection() {
+  return {
+    inspectionData: {
+      step2_Cooking: {
+        startTime: "08:15",
+        endTime: "10:15",
+        method: "Nấu chín",
+        cookStaff: "Bếp trưởng",
+      },
+      step3_Serving: {
+        servingTime: "10:45",
+        servingTemperature: 65,
+        tempPass: true,
+        sensoryEvaluation: "Đạt",
+        sensoryPass: true,
+        hygieneStaff: true,
+        hygieneUtensils: true,
+        inspectedBy: "Bếp trưởng",
+        inspectedAt: "2026-11-01T10:30:00+07:00",
+        notes: "",
+      },
+    },
+  };
+}
+void test("inspection enforces the actual temperature and every pass flag; totals cannot be entered manually", () => {
+  assert.equal(
+    validateKitchenComplete(validInspection())?.step3_Serving
+      .servingTemperature,
+    65,
+  );
+  assert.equal(
+    validateKitchenComplete(validInspection())?.step3_Serving.inspectedAt,
+    "2026-11-01T03:30:00.000Z",
+  );
+  for (const failure of [
+    { servingTemperature: 64.999 },
+    { tempPass: false },
+    { sensoryPass: false },
+    { hygieneStaff: false },
+    { hygieneUtensils: false },
+  ]) {
+    const input = validInspection();
+    Object.assign(input.inspectionData.step3_Serving, failure);
+    assert.throws(
+      () => validateKitchenComplete(input),
+      (e: unknown) => e instanceof HttpError && e.statusCode === 422,
+    );
+  }
+  for (const extra of [{ preparedPortions: 120 }, { quantityUsed: 9.6 }])
+    assert.throws(
+      () => validateKitchenComplete({ ...validInspection(), ...extra }),
+      HttpError,
+    );
+  assert.throws(
+    () => validateKitchenComplete({ inspectionData: {} }),
+    HttpError,
+  );
+  // The service alone decides whether an empty body is an idempotent completed retry.
+  assert.equal(validateKitchenComplete({}), undefined);
+});
+
+void test("retained samples and kitchen filters reject malformed quantities, timestamps and tenant selectors", () => {
+  const input = {
+    quantity: 150,
+    unit: "g",
+    storageLocation: "Tủ 1",
+    sampledAt: "2026-11-01T10:30:00Z",
+  };
+  assert.equal(validateFoodSample(input).quantity, "150");
+  for (const quantity of [0, -1, 0.0001, Infinity, { toString: "bad" }])
+    assert.throws(() => validateFoodSample({ ...input, quantity }), HttpError);
+  assert.throws(() => validateFoodSample({ ...input, unit: "kg" }), HttpError);
+  assert.throws(
+    () =>
+      validateSampleDisposal({
+        disposedAt: input.sampledAt,
+        disposalNote: " ",
+      }),
+    HttpError,
+  );
+  assert.throws(
+    () => validateKitchenFilters({ schoolId: testStaff.schoolId }),
+    HttpError,
+  );
+  assert.throws(
+    () => validateKitchenFilters({ status: { value: "COMPLETED" } }),
+    HttpError,
+  );
+  assert.throws(
+    () => validateKitchenFilters({ date: "2026-02-30" }),
+    HttpError,
+  );
+});
+
+void test("v1 routes enforce permissions and emit versioned error codes before any database access", async (context) => {
+  const app = createApp(
+    createApiRateLimiter(new MemoryStore()),
+    testAuthenticate,
+  );
+  const http = await startHttp(app);
+  context.after(() => http.close());
+  const headers = {
+    Authorization: `Bearer ${signToken({ sub: testStaff.id })}`,
+    "X-CSRF-Protection": "1",
+    "Content-Type": "application/json",
+  };
+  for (const [method, path] of [
+    ["GET", "/menus"],
+    ["POST", "/menus"],
+    ["GET", `/menus/${testStaff.id}`],
+    ["PUT", `/menus/${testStaff.id}`],
+    ["DELETE", `/menus/${testStaff.id}`],
+    ["POST", `/menus/${testStaff.id}/submit`],
+    ["POST", `/menus/${testStaff.id}/reviews`],
+    ["GET", `/menus/${testStaff.id}/reviews`],
+    ["POST", "/menus/allergy-check"],
+    ["GET", "/kitchen"],
+    ["GET", "/kitchen/stats"],
+    ["PUT", `/kitchen/${testStaff.id}`],
+    ["DELETE", `/kitchen/${testStaff.id}`],
+    ["GET", `/menus/days/${testStaff.id}/meals/LUNCH/portion-groups`],
+    ["PUT", `/menus/days/${testStaff.id}/meals/LUNCH/portion-groups`],
+    ["GET", `/daily-meal-portions/${testStaff.id}/portion-groups`],
+    ["PUT", `/daily-meal-portions/${testStaff.id}/portion-groups`],
+    ["GET", `/meal-allocations/${testStaff.id}`],
+    ["POST", "/meal-allocations"],
+    ["POST", `/meal-allocations/${testStaff.id}/distribute`],
+    ["GET", `/kitchen/${testStaff.id}/inspection-sheet`],
+    ["POST", `/kitchen/${testStaff.id}/food-samples`],
+    ["GET", `/kitchen/${testStaff.id}/food-samples`],
+    ["POST", `/food-samples/${testStaff.id}/dispose`],
+    ["GET", "/daily-meal-portions"],
+  ]) {
+    const response = await http.request("/api/v1" + path, { method, headers });
+    assert.equal(response.status, 403, `${method} ${path}`);
+    assert.equal(
+      (response.body as { code: string }).code,
+      "ACCESS_DENIED_WRONG_SCHOOL",
+    );
+  }
+  const anonymous = await http.request("/api/v1/kitchen");
+  assert.equal(anonymous.status, 401);
+  assert.equal(
+    (anonymous.body as { code: string }).code,
+    "AUTHENTICATION_REQUIRED",
+  );
+});
+
+void test("v1 complete rejects forged inspection before calling inventory services", async (context) => {
+  let databaseCalls = 0;
+  const service = createKitchenService(undefined, () => {
+    databaseCalls++;
+    throw new Error("Database must not be called");
+  });
+  const app = express();
+  app.use(express.json());
+  app.use(
+    "/api/v1/kitchen",
+    createKitchenRouter(
+      service,
+      (req, _res, next) => {
+        req.auth = { ...testStaff, permissions: ["cooking_batch.complete"] };
+        next();
+      },
+      true,
+    ),
+  );
+  app.use(globalErrorHandler);
+  const http = await startHttp(app);
+  context.after(() => http.close());
+  const input = validInspection();
+  input.inspectionData.step3_Serving.servingTemperature = 64;
+  const result = await http.request(
+    `/api/v1/kitchen/${testStaff.id}/complete`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+  assert.equal(result.status, 422);
+  assert.equal(
+    (result.body as { code: string }).code,
+    "BUSINESS_RULE_VIOLATION",
+  );
+  assert.equal(databaseCalls, 0);
+});
+
+void test("allergy-check honors the class allergy permission separately from menu access", async (context) => {
+  let databaseCalls = 0;
+  const service = createMenuService(undefined, () => {
+    databaseCalls++;
+    throw new Error("Denied requests must not connect");
+  });
+  const app = express();
+  app.use(express.json());
+  app.use(
+    "/api/v1/menus",
+    createMenuRouter(
+      service,
+      (req, _res, next) => {
+        req.auth = { ...testStaff, permissions: ["menu.view"] };
+        next();
+      },
+      true,
+    ),
+  );
+  app.use(globalErrorHandler);
+  const http = await startHttp(app);
+  context.after(() => http.close());
+  const response = await http.request("/api/v1/menus/allergy-check", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ingredientIds: [testStaff.id] }),
+  });
+  assert.equal(response.status, 403);
+  assert.equal(databaseCalls, 0);
+  await assert.rejects(
+    () =>
+      service.allergyCheck([testStaff.id], {
+        ...testStaff,
+        permissions: ["menu.view"],
+      }),
+    (e: unknown) => e instanceof HttpError && e.statusCode === 403,
+  );
+});
 
 const adminHeaders = {
   Authorization: `Bearer ${signToken({ sub: testAdmin.id, role: ROLES.SYSTEM_ADMIN, orgType: ORG_TYPES.SYSTEM })}`,
