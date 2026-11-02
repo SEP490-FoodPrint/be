@@ -34,7 +34,7 @@ Hàm trả `{ id }` khi Resend chấp nhận yêu cầu. Kết quả này không
 - Helper quản lý client Resend, sender, timeout, idempotency header và lỗi gửi mail.
 - Tính năng quản lý người nhận, tiêu đề/template, sinh mã, hash, TTL Redis, giới hạn gửi và phản hồi nghiệp vụ.
 - `verification-email.ts` và `password-reset-email.ts` là các template adapter gọi `sendMail`; các service hiện tại vẫn inject mailer để test.
-- Với email thông báo sau một thao tác DB, gửi sau commit và xử lý lỗi theo nghiệp vụ. Lỗi gửi email không có nghĩa thao tác DB đã thất bại. Không gọi trực tiếp SDK Resend ở service mới.
+- Với email thông báo sau một thao tác DB, chọn gửi sau commit và xử lý lỗi theo nghiệp vụ. Riêng email kết quả xét duyệt hồ sơ dùng `EmailOutbox` ghi cùng transaction và worker BullMQ/Resend riêng; không gửi trực tiếp trong request xét duyệt. Xem [hợp đồng và vận hành outbox](ONBOARDING.md#thông-báo-kết-quả-xét-duyệt). Lỗi gửi email không có nghĩa thao tác DB đã thất bại. Không gọi trực tiếp SDK Resend ở service mới.
 
 ## Kiểm thử
 

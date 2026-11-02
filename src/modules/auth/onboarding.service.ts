@@ -21,7 +21,12 @@ import {
 } from "../../utils/onboarding-documents";
 import { validateOnboarding } from "./onboarding.validation";
 import { readSubmission, retainDocuments } from "./onboarding-submission";
-import { registrationApplicantSelect } from "../registration/registration.select";
+import {
+  reviewSelect,
+  reviewVersion,
+  type ReviewRow,
+} from "./registration-review";
+import { reviewEmail } from "./registration-review-email";
 
 const select = {
   id: true,
@@ -35,12 +40,7 @@ const select = {
   rejectionReason: true,
   updatedAt: true,
 } as const satisfies Prisma.RegistrationRequestSelect;
-const detailSelect = {
-  ...select,
-  reviewedByUserId: true,
-  applicantUser: { select: registrationApplicantSelect },
-  reviewedByUser: { select: { id: true, fullName: true } },
-} as const satisfies Prisma.RegistrationRequestSelect;
+const detailSelect = reviewSelect;
 type Application = Prisma.RegistrationRequestGetPayload<{
   select: typeof select;
 }>;
@@ -75,6 +75,17 @@ function view(row: Application) {
     ),
   };
 }
+function reviewView(row: ReviewRow) {
+  const { applicantUser, reviewedByUserId, reviewedByUser, ...application } =
+    row;
+  return {
+    ...view(application),
+    applicantUser,
+    reviewedByUserId,
+    reviewedByUser,
+    reviewVersion: reviewVersion(row),
+  };
+}
 async function createOrganization<T>(operation: () => Promise<T>): Promise<T> {
   try {
     return await operation();
@@ -88,6 +99,7 @@ async function createOrganization<T>(operation: () => Promise<T>): Promise<T> {
       throw new HttpError(
         409,
         "Mã trường hoặc mã số thuế đã tồn tại; cần kiểm tra hồ sơ",
+        "ORGANIZATION_CONFLICT",
       );
     throw error;
   }
@@ -131,6 +143,7 @@ export function createOnboardingService(
     actor: AuthPrincipal,
     id: string,
     permission: string,
+    expectedVersion: string,
   ) {
     assertSystemManager(await loadPrincipal(actor.id, tx), permission);
     // Lock order matches submission: applicant first, then registration row updates.
@@ -142,10 +155,20 @@ export function createOnboardingService(
     const user = await lockApplicant(tx, header.applicantUserId);
     const row = await tx.registrationRequest.findUniqueOrThrow({
       where: { id },
-      select,
+      select: detailSelect,
     });
     if (row.status !== "PENDING")
-      throw new HttpError(409, "Hồ sơ không còn chờ duyệt");
+      throw new HttpError(
+        409,
+        "Hồ sơ không còn chờ duyệt",
+        "REGISTRATION_ALREADY_REVIEWED",
+      );
+    if (reviewVersion(row) !== expectedVersion)
+      throw new HttpError(
+        409,
+        "Hồ sơ đã thay đổi; vui lòng xem lại trước khi xét duyệt",
+        "REGISTRATION_STALE",
+      );
     const requestType = applicant(user);
     if (row.requestType !== requestType)
       throw new HttpError(409, "Loại hồ sơ không khớp tài khoản");
@@ -271,21 +294,10 @@ export function createOnboardingService(
           select: detailSelect,
         });
         if (!row) throw new HttpError(404, "Không tìm thấy hồ sơ");
-        const {
-          applicantUser,
-          reviewedByUserId,
-          reviewedByUser,
-          ...application
-        } = row;
-        return {
-          ...view(application),
-          applicantUser,
-          reviewedByUserId,
-          reviewedByUser,
-        };
+        return reviewView(row);
       });
     },
-    async approve(actor: AuthPrincipal, id: string) {
+    async approve(actor: AuthPrincipal, id: string, expectedVersion: string) {
       const db = await connect();
       return authorizationTransaction(db, async (tx) => {
         const row = await reviewedApplication(
@@ -293,6 +305,7 @@ export function createOnboardingService(
           actor,
           id,
           "registration.approve",
+          expectedVersion,
         );
         const profile = validateOnboarding(row.profileData, row.requestType);
         const documents = readDocuments(
@@ -350,19 +363,35 @@ export function createOnboardingService(
             reviewedAt: new Date(),
             rejectionReason: null,
           },
-          select,
+          select: detailSelect,
+        });
+        const notification = await tx.emailOutbox.create({
+          data: { registrationId: id, ...reviewEmail(row) },
+          select: { id: true, status: true },
         });
         return {
-          ...view(result),
+          ...reviewView(result),
           accountStatus: "ACTIVE" as const,
           ...membership,
+          emailNotification: notification,
         };
       });
     },
-    async reject(actor: AuthPrincipal, id: string, rejectionReason: string) {
+    async reject(
+      actor: AuthPrincipal,
+      id: string,
+      expectedVersion: string,
+      rejectionReason: string,
+    ) {
       const db = await connect();
       return authorizationTransaction(db, async (tx) => {
-        await reviewedApplication(tx, actor, id, "registration.reject");
+        const original = await reviewedApplication(
+          tx,
+          actor,
+          id,
+          "registration.reject",
+          expectedVersion,
+        );
         const row = await tx.registrationRequest.update({
           where: { id },
           data: {
@@ -371,9 +400,20 @@ export function createOnboardingService(
             reviewedAt: new Date(),
             rejectionReason,
           },
-          select,
+          select: detailSelect,
         });
-        return { ...view(row), accountStatus: "UNVERIFIED" as const };
+        const notification = await tx.emailOutbox.create({
+          data: {
+            registrationId: id,
+            ...reviewEmail(original, rejectionReason),
+          },
+          select: { id: true, status: true },
+        });
+        return {
+          ...reviewView(row),
+          accountStatus: "UNVERIFIED" as const,
+          emailNotification: notification,
+        };
       });
     },
     async ownDocument(user: SessionUser, documentId: string) {
