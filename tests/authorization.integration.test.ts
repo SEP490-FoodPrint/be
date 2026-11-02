@@ -14,6 +14,14 @@ import { createApiRateLimiter } from "../src/middlewares/rate-limit.middleware";
 import { bootstrapAuthorization } from "../src/utils/authorization-bootstrap";
 import { loadPrincipal } from "../src/utils/authorization";
 import { getPrisma } from "../src/utils/database";
+import {
+  closeEmailQueue,
+  closeEmailWorker,
+  createEmailQueue,
+  createEmailWorker,
+  dispatchEmailOutbox,
+  processEmailOutbox,
+} from "../src/utils/email-outbox";
 import { assertLocalMigrationTarget } from "../src/utils/migration-target";
 import { signToken, verifyToken } from "../src/utils/jwt";
 import { startHttp } from "./helpers/http";
@@ -1297,6 +1305,14 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       headers: headers(id),
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
+  const reviewVersion = async (id: string) => {
+    const response = await request(
+      `/api/registration-requests/${id}`,
+      system.id,
+    );
+    assert.equal(response.status, 200);
+    return String(record(record(response.body).data).reviewVersion);
+  };
   async function grantIds(roleId: string) {
     return (await db.rolePermission.findMany({ where: { roleId } })).map(
       (row) => row.permissionId,
@@ -2268,6 +2284,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
     "registration approval requires an assigned permission and rejection/resubmission keeps the existing account and application",
     async () => {
       const id = applicationId("SCHOOL");
+      const originalVersion = await reviewVersion(id);
       const approvePermission = await permission("registration.approve");
       await db.rolePermission.delete({
         where: {
@@ -2284,7 +2301,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
               `/api/registration-requests/${id}/approve`,
               system.id,
               "POST",
-              {},
+              { expectedReviewVersion: await reviewVersion(id) },
             )
           ).status,
           403,
@@ -2305,7 +2322,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
               `/api/registration-requests/${id}/approve`,
               adminA.id,
               "POST",
-              {},
+              { expectedReviewVersion: await reviewVersion(id) },
             )
           ).status,
           403,
@@ -2320,28 +2337,78 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           },
         });
       }
+      for (const body of [
+        { rejectionReason: " " },
+        { expectedReviewVersion: await reviewVersion(id) },
+        { expectedReviewVersion: "not-a-version", rejectionReason: "Lý do" },
+        {
+          expectedReviewVersion: await reviewVersion(id),
+          rejectionReason: "x".repeat(4001),
+        },
+      ])
+        assert.equal(
+          (
+            await request(
+              `/api/registration-requests/${id}/reject`,
+              system.id,
+              "POST",
+              body,
+            )
+          ).status,
+          400,
+        );
       assert.equal(
         (
           await request(
-            `/api/registration-requests/${id}/reject`,
+            `/api/registration-requests/${id}/approve`,
             system.id,
             "POST",
-            { rejectionReason: " " },
+            {},
           )
         ).status,
         400,
       );
+      const missingId = randomUUID();
+      assert.equal(
+        (await request(`/api/registration-requests/${missingId}`, system.id))
+          .status,
+        404,
+      );
       assert.equal(
         (
           await request(
-            `/api/registration-requests/${id}/reject`,
+            `/api/registration-requests/${missingId}/approve`,
             system.id,
             "POST",
-            { rejectionReason: "Bổ sung mã trường" },
+            { expectedReviewVersion: "a".repeat(64) },
           )
         ).status,
-        200,
+        404,
       );
+      assert.equal(
+        (await http.request(`/api/registration-requests/${id}`)).status,
+        401,
+      );
+      const rejected = await request(
+        `/api/registration-requests/${id}/reject`,
+        system.id,
+        "POST",
+        {
+          expectedReviewVersion: await reviewVersion(id),
+          rejectionReason: "Bổ sung mã trường",
+        },
+      );
+      assert.equal(rejected.status, 200);
+      const rejectedData = record(record(rejected.body).data);
+      assert.equal(rejectedData.status, "REJECTED");
+      assert.equal(rejectedData.accountStatus, "UNVERIFIED");
+      assert.equal(rejectedData.rejectionReason, "Bổ sung mã trường");
+      assert.match(String(rejectedData.reviewVersion), /^[a-f0-9]{64}$/);
+      const rejectedEmail = record(rejectedData.emailNotification);
+      assert.match(String(rejectedEmail.id), /^[0-9a-f-]{36}$/);
+      assert.equal(rejectedEmail.status, "PENDING");
+      assert.equal(rejectedData.schoolId, undefined);
+      assert.equal(rejectedData.supplierId, undefined);
       const account = onboardingAccounts.get("SCHOOL");
       assert(account);
       assert.equal(
@@ -2374,6 +2441,21 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       assert.equal(data.status, "PENDING");
       assert.equal(data.rejectionReason, null);
       assert.equal(data.reviewedAt, null);
+      const staleReview = await request(
+        `/api/registration-requests/${id}/approve`,
+        system.id,
+        "POST",
+        { expectedReviewVersion: originalVersion },
+      );
+      assert.equal(staleReview.status, 409);
+      assert.equal(
+        record(record(staleReview.body).error).code,
+        "REGISTRATION_STALE",
+      );
+      assert.equal(
+        await db.emailOutbox.count({ where: { registrationId: id } }),
+        1,
+      );
       assert.equal(
         await db.registrationRequest.count({
           where: { applicantUserId: account.id },
@@ -2392,7 +2474,10 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             `/api/registration-requests/${id}/reject`,
             system.id,
             "POST",
-            { rejectionReason: "Thay tài liệu" },
+            {
+              expectedReviewVersion: await reviewVersion(id),
+              rejectionReason: "Thay tài liệu",
+            },
           )
         ).status,
         200,
@@ -2478,28 +2563,51 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
     "duplicate organization identifiers roll approval back and preserve the pending account",
     async () => {
       const id = applicationId("SCHOOL");
+      const versionBeforeContactChange = await reviewVersion(id);
+      const notificationCount = await db.emailOutbox.count({
+        where: { registrationId: id },
+      });
       const row = await db.registrationRequest.findUniqueOrThrow({
         where: { id },
       });
+      await db.user.update({
+        where: { id: row.applicantUserId },
+        data: { phone: "0909876543" },
+      });
+      const staleContact = await request(
+        `/api/registration-requests/${id}/approve`,
+        system.id,
+        "POST",
+        { expectedReviewVersion: versionBeforeContactChange },
+      );
+      assert.equal(staleContact.status, 409);
+      assert.equal(
+        record(record(staleContact.body).error).code,
+        "REGISTRATION_STALE",
+      );
       const code = String(record(row.profileData).code);
       await db.school.update({ where: { id: schoolA.id }, data: { code } });
       try {
+        const organizationConflict = await request(
+          `/api/registration-requests/${id}/approve`,
+          system.id,
+          "POST",
+          { expectedReviewVersion: await reviewVersion(id) },
+        );
+        assert.equal(organizationConflict.status, 409);
         assert.equal(
-          (
-            await request(
-              `/api/registration-requests/${id}/approve`,
-              system.id,
-              "POST",
-              {},
-            )
-          ).status,
-          409,
+          record(record(organizationConflict.body).error).code,
+          "ORGANIZATION_CONFLICT",
         );
         const unchanged = await db.registrationRequest.findUniqueOrThrow({
           where: { id },
         });
         assert.equal(unchanged.status, "PENDING");
         assert.equal(unchanged.reviewedAt, null);
+        assert.equal(
+          await db.emailOutbox.count({ where: { registrationId: id } }),
+          notificationCount,
+        );
         const applicant = await db.user.findUniqueOrThrow({
           where: { id: row.applicantUserId },
         });
@@ -2527,18 +2635,42 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             `/api/registration-requests/${id}/approve`,
             system.id,
             "POST",
-            {},
+            { expectedReviewVersion: await reviewVersion(id) },
           ),
           request(
             `/api/registration-requests/${id}/approve`,
             system.id,
             "POST",
-            {},
+            { expectedReviewVersion: await reviewVersion(id) },
           ),
         ]);
         assert.deepEqual(
           results.map((result) => result.status).sort(),
           [200, 409],
+        );
+        const approvedResponse = results.find(
+          (result) => result.status === 200,
+        );
+        assert(approvedResponse);
+        const approvedData = record(record(approvedResponse.body).data);
+        assert.equal(approvedData.status, "APPROVED");
+        assert.equal(approvedData.accountStatus, "ACTIVE");
+        assert.equal(record(approvedData.applicantUser).status, "ACTIVE");
+        const approvedEmail = record(approvedData.emailNotification);
+        assert.match(String(approvedEmail.id), /^[0-9a-f-]{36}$/);
+        assert.equal(approvedEmail.status, "PENDING");
+        assert.match(String(approvedData.reviewVersion), /^[a-f0-9]{64}$/);
+        assert.equal(Boolean(approvedData.schoolId), type === "SCHOOL");
+        assert.equal(Boolean(approvedData.supplierId), type === "SUPPLIER");
+        const conflict = results.find((result) => result.status === 409);
+        assert(conflict);
+        assert.equal(
+          record(record(conflict.body).error).code,
+          "REGISTRATION_ALREADY_REVIEWED",
+        );
+        assert.equal(
+          await db.emailOutbox.count({ where: { registrationId: id } }),
+          2,
         );
         const account = onboardingAccounts.get(type);
         assert(account);
@@ -2555,6 +2687,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         assert.equal(reviewedDetail.status, 200);
         const reviewedData = record(record(reviewedDetail.body).data);
         assert.equal(record(reviewedData.applicantUser).status, "ACTIVE");
+        assert.equal(reviewedData.reviewVersion, approvedData.reviewVersion);
         assert.equal(reviewedData.reviewedByUserId, system.id);
         assert.deepEqual(reviewedData.reviewedByUser, {
           id: system.id,
@@ -2713,7 +2846,10 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
               `/api/registration-requests/${id}/reject`,
               system.id,
               "POST",
-              { rejectionReason: "Too late" },
+              {
+                expectedReviewVersion: await reviewVersion(id),
+                rejectionReason: "Too late",
+              },
             )
           ).status,
           409,
@@ -2740,6 +2876,108 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         await db.supplier.count({ where: { name: "New supplier from Figma" } }),
         1,
       );
+    },
+  );
+  await context.test(
+    "review email outbox survives send failure, retries with a stable key, and dispatches through BullMQ",
+    async () => {
+      const row = await db.emailOutbox.findFirstOrThrow({
+        where: { registrationId: applicationId("SCHOOL"), status: "PENDING" },
+        orderBy: { createdAt: "asc" },
+      });
+      await assert.rejects(() =>
+        processEmailOutbox(db, row.id, () =>
+          Promise.reject(new Error("fake provider offline")),
+        ),
+      );
+      const failed = await db.emailOutbox.findUniqueOrThrow({
+        where: { id: row.id },
+      });
+      assert.equal(failed.status, "PENDING");
+      assert.equal(failed.attempts, 1);
+      assert(failed.firstAttemptAt);
+      let calls = 0;
+      await processEmailOutbox(db, row.id, (mail) => {
+        calls++;
+        assert.equal(mail.idempotencyKey, `registration-review/${row.id}`);
+        return Promise.resolve({ id: "resend-test-accepted" });
+      });
+      await processEmailOutbox(db, row.id, () => {
+        calls++;
+        return Promise.resolve({ id: "duplicate" });
+      });
+      assert.equal(calls, 1);
+      const accepted = await db.emailOutbox.findUniqueOrThrow({
+        where: { id: row.id },
+      });
+      assert.equal(accepted.status, "ACCEPTED");
+      assert.equal(accepted.attempts, 2);
+      assert.equal(accepted.providerMessageId, "resend-test-accepted");
+      assert.deepEqual(accepted.firstAttemptAt, failed.firstAttemptAt);
+
+      const exhausted = await db.emailOutbox.create({
+        data: {
+          registrationId: applicationId("SCHOOL"),
+          recipientEmail: "outbox-test@example.test",
+          subject: "Test notification",
+          text: "Test notification",
+          html: "<p>Test notification</p>",
+        },
+      });
+      for (let attempt = 0; attempt < 5; attempt++)
+        await assert.rejects(() =>
+          processEmailOutbox(db, exhausted.id, () =>
+            Promise.reject(new Error("fake provider offline")),
+          ),
+        );
+      const terminal = await db.emailOutbox.findUniqueOrThrow({
+        where: { id: exhausted.id },
+      });
+      assert.equal(terminal.status, "FAILED");
+      assert.equal(terminal.attempts, 5);
+
+      const namespace = `foodprint:queue:test:${randomUUID()}`;
+      const queue = createEmailQueue(namespace);
+      let worker: ReturnType<typeof createEmailWorker> | undefined;
+      try {
+        const pending = await db.emailOutbox.findFirstOrThrow({
+          where: { status: "PENDING" },
+          select: { id: true },
+        });
+        await dispatchEmailOutbox(db, queue);
+        const removed = await queue.getJob(pending.id);
+        assert(removed);
+        await removed.remove();
+        await dispatchEmailOutbox(db, queue);
+        assert(await queue.getJob(pending.id));
+        await dispatchEmailOutbox(db, queue);
+        assert.equal(
+          (await queue.getWaiting()).filter((job) => job.id === pending.id)
+            .length,
+          1,
+        );
+        worker = createEmailWorker(
+          db,
+          (mail) => {
+            assert.match(mail.idempotencyKey ?? "", /^registration-review\//);
+            return Promise.resolve({ id: "resend-test-queue" });
+          },
+          namespace,
+        );
+        const deadline = Date.now() + 8000;
+        while (
+          (await db.emailOutbox.count({ where: { status: "PENDING" } })) > 0 &&
+          Date.now() < deadline
+        )
+          await setTimeout(50);
+        assert.equal(
+          await db.emailOutbox.count({ where: { status: "PENDING" } }),
+          0,
+        );
+      } finally {
+        if (worker) await closeEmailWorker(worker);
+        await closeEmailQueue(queue);
+      }
     },
   );
   await context.test(

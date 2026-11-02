@@ -8,6 +8,12 @@ Nếu cột đã được provision thủ công đúng kiểu jsonb, nullable, k
 
 Migration chỉ được triển khai qua CI/CD sau review và merge vào dev. Phiên làm việc chỉ chuẩn bị source và kiểm tra local, không kết nối Azure.
 
+## Email outbox cho kết quả xét duyệt
+
+`20261102000100_registration_review_outbox` thêm bảng `foodprint.email_outbox` để lưu yêu cầu gửi email kết quả xét duyệt trong cùng transaction với quyết định. Mỗi dòng giữ người nhận, tiêu đề, nội dung text/HTML, trạng thái, số lần thử, thời điểm thử đầu tiên, khóa xử lý có hạn, thời điểm thử kế tiếp và mã email provider. Bảng có FK `registration_id` tới `registration_requests` với `ON DELETE RESTRICT`, CHECK trạng thái `PENDING|PROCESSING|ACCEPTED|FAILED`, CHECK số lần thử từ 0 đến 5 và index `(status, next_attempt_at)` cho dispatcher.
+
+Migration chỉ thêm bảng/index/constraint, không sửa bảng cũ, không backfill và không tạo seed/mock data. Không gửi bù email cho quyết định cũ; bản ghi đã `ACCEPTED` không được gửi lại. Bảng được tạo bằng migration đã review, không dùng `db push` hoặc tạo thủ công trên Azure.
+
 ## Định mức chính thức theo lần lên thực đơn
 
 Migration mới `20261031000300_menu_meal_ingredient_standards` nối tiếp Cooking Option A, chỉ thêm ba bảng và một unique index. Không sửa migration đã áp dụng, enum, role hoặc permission.
@@ -42,6 +48,7 @@ Lịch sử triển khai schema được quản lý tại `prisma/migrations/`, 
 | `20261031000300_menu_meal_ingredient_standards` | Định mức chính thức theo thực đơn và phân bổ gia vị dùng chung theo bữa                          |
 | `20261101000100_cooking_batch_inspection_data`  | Thêm inspection_data jsonb nullable, giữ dữ liệu kiểm thực đã có                                 |
 | `20261101000200_meal_portion_groups`            | Suất ăn riêng theo nhóm lớp, đối soát dị ứng và phân bổ món thay thế                             |
+| `20261102000100_registration_review_outbox`     | Thêm email_outbox bền vững cho thông báo kết quả duyệt/từ chối, không backfill dữ liệu cũ        |
 
 Baseline lấy phần DDL từ file gốc `FoodPrint_PostgreSQL_Database_v5_4_FINAL_with_MOCK_DATA.sql`, version v5.4. File SQL ở root FoodPrint hiện đã được đồng bộ sang Phase 1; DDL baseline trong `prisma/migrations/0_init/migration.sql` giữ nguyên. Nguồn SHA-256 gốc tại thời điểm nhận baseline: `770751bf506fa523b50bd6c51d235a6305b584c5e1fb63c3bd4e0eac040f5884`.
 
