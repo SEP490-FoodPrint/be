@@ -46,5 +46,10 @@ export function createOrganizationController(
       }
       sendSuccess(res, school, "Lấy chi tiết trường học thành công");
     }),
+
+    getPublicLocations: asyncHandler(async (_req, res) => {
+      const locations = await service.getPublicLocations();
+      sendSuccess(res, locations, "Lấy danh mục địa điểm thành công");
+    }),
   };
 }
