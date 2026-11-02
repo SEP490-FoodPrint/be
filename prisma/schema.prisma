@@ -157,22 +157,23 @@ model DailyAllergyPortion {
 
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
 model DailyMealPortion {
-  id                   String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  classId              String                @map("class_id") @db.Uuid
-  confirmedByUserId    String                @map("confirmed_by_user_id") @db.Uuid
-  mealDate             DateTime              @map("meal_date") @db.Date
+  id                   String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  classId              String                  @map("class_id") @db.Uuid
+  confirmedByUserId    String                  @map("confirmed_by_user_id") @db.Uuid
+  mealDate             DateTime                @map("meal_date") @db.Date
   /// Demand scoped to LUNCH or AFTERNOON; unique per Class/date/meal.
-  mealType             MealType              @map("meal_type")
-  totalPortions        Int                   @map("total_portions") @db.Integer
-  allergyNotes         String?               @map("allergy_notes") @db.Text
-  status               MealPortionStatus     @default(DRAFT)
-  finalizedAt          DateTime?             @map("finalized_at") @db.Timestamptz(6)
-  createdAt            DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt            DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  Class                Class                 @relation("daily_meal_portions_class_id__classes", fields: [classId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  User                 User                  @relation("daily_meal_portions_confirmed_by_user_id__users", fields: [confirmedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  dailyAllergyPortions DailyAllergyPortion[] @relation("daily_allergy_portions_daily_meal_portion_id__daily_meal_portions")
-  MealAllocation       MealAllocation?       @relation("meal_allocations_daily_meal_portion_id__daily_meal_portions")
+  mealType             MealType                @map("meal_type")
+  totalPortions        Int                     @map("total_portions") @db.Integer
+  allergyNotes         String?                 @map("allergy_notes") @db.Text
+  status               MealPortionStatus       @default(DRAFT)
+  finalizedAt          DateTime?               @map("finalized_at") @db.Timestamptz(6)
+  createdAt            DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime                @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  Class                Class                   @relation("daily_meal_portions_class_id__classes", fields: [classId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  User                 User                    @relation("daily_meal_portions_confirmed_by_user_id__users", fields: [confirmedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  dailyAllergyPortions DailyAllergyPortion[]   @relation("daily_allergy_portions_daily_meal_portion_id__daily_meal_portions")
+  MealAllocation       MealAllocation?         @relation("meal_allocations_daily_meal_portion_id__daily_meal_portions")
+  portionGroups        DailyMealPortionGroup[]
 
   @@unique([classId, mealDate, mealType])
   @@index([mealDate], map: "idx_daily_meal_portions_date")
@@ -459,24 +460,25 @@ model IncidentSchoolAlert {
 
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
 model IngredientEntry {
-  id                    String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  schoolId              String                 @map("school_id") @db.Uuid
-  ingredientId          String                 @map("ingredient_id") @db.Uuid
-  storageRequirements   String?                @map("storage_requirements") @db.Text
-  shelfLifeDays         Int?                   @map("shelf_life_days") @db.Integer
+  id                     String                          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  schoolId               String                          @map("school_id") @db.Uuid
+  ingredientId           String                          @map("ingredient_id") @db.Uuid
+  storageRequirements    String?                         @map("storage_requirements") @db.Text
+  shelfLifeDays          Int?                            @map("shelf_life_days") @db.Integer
   /// School-specific handling method: DRY_STOCK = dry goods kept across days (rice, salt, spices); DIRECT_USE = fresh ingredients received and prepared the same day. Both types retain lots and inventory movement/traceability records.
-  handlingType          IngredientHandlingType @map("handling_type")
-  status                EntityStatus           @default(ACTIVE)
-  createdByUserId       String?                @map("created_by_user_id") @db.Uuid
-  createdAt             DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt             DateTime               @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  School                School                 @relation("ingredient_entries_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  Ingredient            Ingredient             @relation("ingredient_entries_ingredient_id__ingredients", fields: [ingredientId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  User                  User?                  @relation("ingredient_entries_created_by_user_id__users", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  classAllergies        ClassAllergy[]         @relation("class_allergies_ingredient_entry_id__ingredient_entries")
-  supplyRequestItems    SupplyRequestItem[]    @relation("supply_request_items_ingredient_entry_id__ingredient_entries")
-  dishIngredientEntries DishIngredientEntry[]  @relation("dish_ingredient_entries_ingredient_entry_id__ingredient_entries")
-  menuMealSeasonings    MenuMealSeasoning[]
+  handlingType           IngredientHandlingType          @map("handling_type")
+  status                 EntityStatus                    @default(ACTIVE)
+  createdByUserId        String?                         @map("created_by_user_id") @db.Uuid
+  createdAt              DateTime                        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime                        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  School                 School                          @relation("ingredient_entries_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  Ingredient             Ingredient                      @relation("ingredient_entries_ingredient_id__ingredients", fields: [ingredientId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  User                   User?                           @relation("ingredient_entries_created_by_user_id__users", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  classAllergies         ClassAllergy[]                  @relation("class_allergies_ingredient_entry_id__ingredient_entries")
+  supplyRequestItems     SupplyRequestItem[]             @relation("supply_request_items_ingredient_entry_id__ingredient_entries")
+  dishIngredientEntries  DishIngredientEntry[]           @relation("dish_ingredient_entries_ingredient_entry_id__ingredient_entries")
+  menuMealSeasonings     MenuMealSeasoning[]
+  portionGroupAvoidances MenuMealPortionGroupAvoidance[]
 
   @@unique([schoolId, ingredientId])
   @@index([schoolId], map: "idx_ingredient_entries_school_id")
@@ -657,18 +659,19 @@ model MealComplaint {
 
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
 model MenuDayDish {
-  menuDayId      String                  @map("menu_day_id") @db.Uuid
-  dishId         String                  @map("dish_id") @db.Uuid
+  menuDayId      String                     @map("menu_day_id") @db.Uuid
+  dishId         String                     @map("dish_id") @db.Uuid
   /// Dish inclusion scoped to meal slot. A Dish can appear in both meal slots of one MenuDay.
-  mealType       MealType                @map("meal_type")
+  mealType       MealType                   @map("meal_type")
   /// Optional planned dish portion presentation/size, NOT a recipe multiplier by default. Do not multiply required_quantity by portion_size and serving count again.
-  portionSize    Decimal?                @map("portion_size") @db.Decimal(12, 3)
-  portionUnit    String?                 @map("portion_unit") @db.VarChar(30)
-  displayOrder   Int?                    @map("display_order") @db.Integer
-  MenuDay        MenuDay                 @relation("menu_day_dishes_menu_day_id__menu_days", fields: [menuDayId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  Dish           Dish                    @relation("menu_day_dishes_dish_id__dishes", fields: [dishId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  cookingBatches CookingBatch[]          @relation("cooking_batches_menu_day_id_dish_id_meal_type__menu_day_dishes")
+  portionSize    Decimal?                   @map("portion_size") @db.Decimal(12, 3)
+  portionUnit    String?                    @map("portion_unit") @db.VarChar(30)
+  displayOrder   Int?                       @map("display_order") @db.Integer
+  MenuDay        MenuDay                    @relation("menu_day_dishes_menu_day_id__menu_days", fields: [menuDayId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  Dish           Dish                       @relation("menu_day_dishes_dish_id__dishes", fields: [dishId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  cookingBatches CookingBatch[]             @relation("cooking_batches_menu_day_id_dish_id_meal_type__menu_day_dishes")
   ingredients    MenuDayDishIngredient[]
+  portionGroups  MenuMealPortionGroupDish[]
 
   @@id([menuDayId, dishId, mealType])
   @@index([menuDayId, mealType], map: "idx_menu_day_dishes_meal")
@@ -677,18 +680,19 @@ model MenuDayDish {
 }
 
 model MenuDay {
-  id                String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  weeklyMenuId      String              @map("weekly_menu_id") @db.Uuid
-  menuDate          DateTime            @map("menu_date") @db.Date
-  note              String?             @db.Text
-  approvalStatus    WeeklyMenuStatus    @default(PENDING_APPROVAL) @map("approval_status")
-  menuReviewRecords MenuReviewRecord[]  @relation("menu_review_records_menu_day")
-  createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt         DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  WeeklyMenu        WeeklyMenu          @relation("menu_days_weekly_menu_id__weekly_menus", fields: [weeklyMenuId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  menuDayDishes     MenuDayDish[]       @relation("menu_day_dishes_menu_day_id__menu_days")
-  cookingBatches    CookingBatch[]      @relation("cooking_batches_menu_day_id__menu_days")
+  id                String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  weeklyMenuId      String                 @map("weekly_menu_id") @db.Uuid
+  menuDate          DateTime               @map("menu_date") @db.Date
+  note              String?                @db.Text
+  approvalStatus    WeeklyMenuStatus       @default(PENDING_APPROVAL) @map("approval_status")
+  menuReviewRecords MenuReviewRecord[]     @relation("menu_review_records_menu_day")
+  createdAt         DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime               @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  WeeklyMenu        WeeklyMenu             @relation("menu_days_weekly_menu_id__weekly_menus", fields: [weeklyMenuId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  menuDayDishes     MenuDayDish[]          @relation("menu_day_dishes_menu_day_id__menu_days")
+  cookingBatches    CookingBatch[]         @relation("cooking_batches_menu_day_id__menu_days")
   mealSeasonings    MenuMealSeasoning[]
+  portionGroups     MenuMealPortionGroup[]
 
   @@unique([weeklyMenuId, menuDate])
   @@index([weeklyMenuId, menuDate], map: "idx_menu_days_menu_date")
@@ -1111,6 +1115,7 @@ model User {
   traceabilityAnchors                          TraceabilityAnchor[]         @relation("traceability_anchors_created_by_user_id__users")
   permissionDenials                            UserPermissionDenial[]       @relation("user_permission_denials_user_id__users")
   permissionDenialsAsDisabledBy                UserPermissionDenial[]       @relation("user_permission_denials_disabled_by_user_id__users")
+  confirmedMealPortionGroups                   DailyMealPortionGroup[]
 
   @@unique([username])
   @@unique([email])
@@ -1554,5 +1559,68 @@ enum WeeklyMenuStatus {
   APPROVED
 
   @@map("weekly_menu_status")
+  @@schema("foodprint")
+}
+
+model MenuMealPortionGroup {
+  id            String                          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  menuDayId     String                          @map("menu_day_id") @db.Uuid
+  mealType      MealType                        @map("meal_type")
+  name          String                          @db.VarChar(120)
+  isDefault     Boolean                         @default(false) @map("is_default")
+  createdAt     DateTime                        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime                        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  menuDay       MenuDay                         @relation(fields: [menuDayId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  dishes        MenuMealPortionGroupDish[]
+  avoidances    MenuMealPortionGroupAvoidance[]
+  dailyPortions DailyMealPortionGroup[]
+
+  @@unique([id, menuDayId, mealType], map: "uq_portion_group_meal")
+  @@unique([menuDayId, mealType, name], map: "uq_portion_group_name")
+  @@unique([menuDayId, mealType], map: "uq_menu_meal_default_group", where: raw("is_default"))
+  @@map("menu_meal_portion_groups")
+  @@schema("foodprint")
+}
+
+model MenuMealPortionGroupDish {
+  portionGroupId String               @map("portion_group_id") @db.Uuid
+  menuDayId      String               @map("menu_day_id") @db.Uuid
+  mealType       MealType             @map("meal_type")
+  dishId         String               @map("dish_id") @db.Uuid
+  portionGroup   MenuMealPortionGroup @relation(fields: [portionGroupId, menuDayId, mealType], references: [id, menuDayId, mealType], onDelete: Cascade, onUpdate: NoAction, map: "fk_portion_group_dish_group")
+  menuDayDish    MenuDayDish          @relation(fields: [menuDayId, dishId, mealType], references: [menuDayId, dishId, mealType], onDelete: Restrict, onUpdate: NoAction, map: "fk_portion_group_dish_menu")
+
+  @@id([portionGroupId, dishId])
+  @@index([menuDayId, mealType, dishId], map: "idx_portion_group_dish_meal")
+  @@map("menu_meal_portion_group_dishes")
+  @@schema("foodprint")
+}
+
+model MenuMealPortionGroupAvoidance {
+  portionGroupId    String               @map("portion_group_id") @db.Uuid
+  ingredientEntryId String               @map("ingredient_entry_id") @db.Uuid
+  portionGroup      MenuMealPortionGroup @relation(fields: [portionGroupId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  ingredientEntry   IngredientEntry      @relation(fields: [ingredientEntryId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([portionGroupId, ingredientEntryId])
+  @@index([ingredientEntryId], map: "idx_portion_group_avoidance_entry")
+  @@map("menu_meal_portion_group_avoidances")
+  @@schema("foodprint")
+}
+
+/// Teacher-confirmed, disjoint class counts. No individual Student records are introduced.
+model DailyMealPortionGroup {
+  dailyMealPortionId String               @map("daily_meal_portion_id") @db.Uuid
+  portionGroupId     String               @map("portion_group_id") @db.Uuid
+  portionCount       Int                  @map("portion_count")
+  confirmedByUserId  String               @map("confirmed_by_user_id") @db.Uuid
+  confirmedAt        DateTime             @default(now()) @map("confirmed_at") @db.Timestamptz(6)
+  dailyMealPortion   DailyMealPortion     @relation(fields: [dailyMealPortionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  portionGroup       MenuMealPortionGroup @relation(fields: [portionGroupId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  confirmedByUser    User                 @relation(fields: [confirmedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([dailyMealPortionId, portionGroupId])
+  @@index([portionGroupId], map: "idx_daily_meal_portion_group")
+  @@map("daily_meal_portion_groups")
   @@schema("foodprint")
 }

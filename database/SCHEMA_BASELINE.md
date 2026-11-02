@@ -41,6 +41,7 @@ Lịch sử triển khai schema được quản lý tại `prisma/migrations/`, 
 | `20261031000200_cooking_option_a_expand`        | Phase 1 Cooking Batch: guard lịch sử, backfill lượng còn thiếu, giữ cột legacy để tương thích    |
 | `20261031000300_menu_meal_ingredient_standards` | Định mức chính thức theo thực đơn và phân bổ gia vị dùng chung theo bữa                          |
 | `20261101000100_cooking_batch_inspection_data`  | Thêm inspection_data jsonb nullable, giữ dữ liệu kiểm thực đã có                                 |
+| `20261101000200_meal_portion_groups`            | Suất ăn riêng theo nhóm lớp, đối soát dị ứng và phân bổ món thay thế                             |
 
 Baseline lấy phần DDL từ file gốc `FoodPrint_PostgreSQL_Database_v5_4_FINAL_with_MOCK_DATA.sql`, version v5.4. File SQL ở root FoodPrint hiện đã được đồng bộ sang Phase 1; DDL baseline trong `prisma/migrations/0_init/migration.sql` giữ nguyên. Nguồn SHA-256 gốc tại thời điểm nhận baseline: `770751bf506fa523b50bd6c51d235a6305b584c5e1fb63c3bd4e0eac040f5884`.
 

@@ -34,6 +34,8 @@ import { createFoodAnalysisRouter } from "../modules/food-analysis/food-analysis
 import { createSchoolAlertRouter } from "../modules/school-alert/school-alert.routes";
 import { createTraceabilityRouter } from "../modules/traceability/traceability.routes";
 import { createMenuReviewRouter } from "../modules/menu-review/menu-review.routes";
+import { createSchoolOverviewRouter } from "../modules/school-overview/school-overview.routes";
+import { createSupplierOnboardingRouter } from "../modules/supplier-onboarding/supplier-onboarding.routes";
 
 export function createApiRouter(
   authHandler: RequestHandler = authenticate,
@@ -53,6 +55,8 @@ export function createApiRouter(
   });
 
   router.use(createPermissionRouter(authHandler));
+  router.use(createSupplierOnboardingRouter(authHandler));
+  router.use("/school-overview", createSchoolOverviewRouter(authHandler));
   router.use("/auth", createAuthRouter(undefined, authHandler, authServices));
   router.use("/users", createUserRouter(undefined, authHandler));
   router.use("/schools", createOrganizationRouter(undefined, authHandler));
@@ -135,6 +139,21 @@ export function createApiRouter(
     createTraceabilityRouter(undefined, authHandler),
   );
   router.use("/menu-reviews", createMenuReviewRouter(undefined, authHandler));
+
+  router.use("/v1/menus", createMenuRouter(undefined, authHandler, true));
+  router.use("/v1/kitchen", createKitchenRouter(undefined, authHandler, true));
+  router.use(
+    "/v1/meal-allocations",
+    createMealAllocationRouter(undefined, authHandler),
+  );
+  router.use(
+    "/v1/daily-meal-portions",
+    createMealAttendanceRouter(undefined, authHandler, true),
+  );
+  router.use(
+    "/v1/food-samples",
+    createRetainedSampleRouter(undefined, authHandler),
+  );
 
   return router;
 }

@@ -6,6 +6,9 @@ import {
   validateKitchenAction,
   validateKitchenListQuery,
   validateKitchenPlan,
+  validateKitchenComplete,
+  validateKitchenFilters,
+  validateKitchenUpdate,
 } from "./kitchen.validation";
 import { uuid } from "../../utils/auth-validation";
 
@@ -13,6 +16,54 @@ export function createKitchenController(
   service: KitchenService = kitchenService,
 ) {
   return {
+    update: asyncHandler(async (req, res) => {
+      sendSuccess(
+        res,
+        await service.update(
+          uuid(req.params.id),
+          validateKitchenUpdate(req.body),
+          requirePrincipal(req),
+        ),
+        "Đã sửa ghi chú mẻ chưa xác nhận",
+      );
+    }),
+    remove: asyncHandler(async (req, res) => {
+      sendSuccess(
+        res,
+        await service.remove(uuid(req.params.id), requirePrincipal(req)),
+        "Đã xóa mẻ chưa xác nhận và giải phóng giữ chỗ",
+      );
+    }),
+    list: asyncHandler(
+      async (req, res) =>
+        void sendSuccess(
+          res,
+          await service.list(
+            validateKitchenFilters(req.query),
+            requirePrincipal(req),
+          ),
+        ),
+    ),
+    stats: asyncHandler(
+      async (req, res) =>
+        void sendSuccess(
+          res,
+          await service.stats(
+            validateKitchenFilters(req.query),
+            requirePrincipal(req),
+          ),
+        ),
+    ),
+    inspectionSheet: asyncHandler(
+      async (req, res) =>
+        void sendSuccess(
+          res,
+          await service.inspectionSheet(
+            uuid(req.params.id),
+            requirePrincipal(req),
+          ),
+        ),
+    ),
     getOne: asyncHandler(async (req, res) => {
       sendSuccess(
         res,
@@ -24,7 +75,11 @@ export function createKitchenController(
       const result = await service.plan(input, requirePrincipal(req));
       sendSuccess(
         res,
-        result,
+        {
+          ...(result.batches.length === 1 ? result.batches[0] : {}),
+          ...result,
+          batchCount: result.batches.length,
+        },
         "Đã lập phương án chế biến",
         result.created ? 201 : 200,
       );
@@ -38,10 +93,13 @@ export function createKitchenController(
       );
     }),
     complete: asyncHandler(async (req, res) => {
-      validateKitchenAction(req.body as unknown);
       sendSuccess(
         res,
-        await service.complete(uuid(req.params.id), requirePrincipal(req)),
+        await service.complete(
+          uuid(req.params.id),
+          requirePrincipal(req),
+          validateKitchenComplete(req.body),
+        ),
         "Đã xác nhận hoàn thành theo kế hoạch",
       );
     }),

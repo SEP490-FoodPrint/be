@@ -376,6 +376,38 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
   );
 
   await context.test(
+    "portion group expansion starts empty and has validated ownership foreign keys",
+    async () => {
+      const tables = [
+        "menu_meal_portion_groups",
+        "menu_meal_portion_group_dishes",
+        "menu_meal_portion_group_avoidances",
+        "daily_meal_portion_groups",
+      ];
+      for (const table of tables) {
+        const result = await db.query<{ count: number }>(
+          `SELECT count(*)::int AS count FROM foodprint.${table}`,
+        );
+        assert.equal(
+          result.rows[0].count,
+          0,
+          "Migration must not infer or backfill historical groups",
+        );
+      }
+      const foreignKeys = await db.query<{ count: number; validated: boolean }>(
+        "SELECT count(*)::int AS count,bool_and(c.convalidated) AS validated FROM pg_constraint c JOIN pg_class t ON t.oid=c.conrelid JOIN pg_namespace n ON n.oid=t.relnamespace WHERE n.nspname='foodprint' AND t.relname=ANY($1::text[]) AND c.contype='f'",
+        [tables],
+      );
+      assert.equal(foreignKeys.rows[0].count, 8);
+      assert.equal(foreignKeys.rows[0].validated, true);
+      const index = await db.query<{ indexdef: string }>(
+        "SELECT indexdef FROM pg_indexes WHERE schemaname='foodprint' AND indexname='uq_menu_meal_default_group'",
+      );
+      assert.match(index.rows[0].indexdef, /UNIQUE.*WHERE is_default/);
+    },
+  );
+
+  await context.test(
     "migrate deploy builds an entirely empty database with the full migration history",
     async () => {
       const name = `foodprint_migration_test_fresh_${randomUUID().replaceAll("-", "")}`;
