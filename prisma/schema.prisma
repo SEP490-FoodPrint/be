@@ -758,9 +758,32 @@ model RegistrationRequest {
   updatedAt           DateTime                  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   applicantUser       User                      @relation("registration_requests_applicant_user_id__users", fields: [applicantUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   reviewedByUser      User?                     @relation("registration_requests_reviewed_by_user_id__users", fields: [reviewedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  emailOutbox          EmailOutbox[]
 
   @@unique([applicantUserId])
   @@map("registration_requests")
+  @@schema("foodprint")
+}
+
+model EmailOutbox {
+  id                String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  registrationId    String              @map("registration_id") @db.Uuid
+  recipientEmail    String              @map("recipient_email") @db.VarChar(254)
+  subject           String              @db.VarChar(255)
+  text              String              @db.Text
+  html              String              @db.Text
+  status            String              @default("PENDING") @db.VarChar(16)
+  attempts          Int                 @default(0)
+  nextAttemptAt     DateTime            @default(now()) @map("next_attempt_at") @db.Timestamptz(6)
+  lockedUntil       DateTime?           @map("locked_until") @db.Timestamptz(6)
+  firstAttemptAt    DateTime?           @map("first_attempt_at") @db.Timestamptz(6)
+  providerMessageId String?             @map("provider_message_id") @db.VarChar(255)
+  createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  registration      RegistrationRequest @relation(fields: [registrationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([status, nextAttemptAt], map: "idx_email_outbox_dispatch")
+  @@map("email_outbox")
   @@schema("foodprint")
 }
 

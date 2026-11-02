@@ -4,6 +4,7 @@ import { sendSuccess } from "../../utils/response";
 import { requirePrincipal } from "../../utils/authorization";
 import { objectBody, text, uuid } from "../../utils/auth-validation";
 import { readProfileBody } from "./onboarding.validation";
+import { expectedReviewVersion } from "./registration-review";
 import {
   onboardingService,
   type OnboardingService,
@@ -53,22 +54,30 @@ export function createOnboardingController(
       );
     }),
     approve: asyncHandler(async (req, res) => {
-      objectBody((req.body as unknown) ?? {}, []);
+      const body = objectBody(req.body as unknown, ["expectedReviewVersion"]);
       res.setHeader("Cache-Control", "no-store");
       sendSuccess(
         res,
-        await service.approve(requirePrincipal(req), uuid(req.params.id)),
+        await service.approve(
+          requirePrincipal(req),
+          uuid(req.params.id),
+          expectedReviewVersion(body.expectedReviewVersion),
+        ),
         "Đã duyệt hồ sơ và kích hoạt tài khoản",
       );
     }),
     reject: asyncHandler(async (req, res) => {
-      const body = objectBody(req.body as unknown, ["rejectionReason"]);
+      const body = objectBody(req.body as unknown, [
+        "expectedReviewVersion",
+        "rejectionReason",
+      ]);
       res.setHeader("Cache-Control", "no-store");
       sendSuccess(
         res,
         await service.reject(
           requirePrincipal(req),
           uuid(req.params.id),
+          expectedReviewVersion(body.expectedReviewVersion),
           text(body.rejectionReason, 4000),
         ),
         "Đã từ chối hồ sơ",

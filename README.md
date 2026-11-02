@@ -60,6 +60,14 @@ npm run dev
 
 `db:check` chỉ kết nối và chạy `SELECT 1`, sau đó đóng Prisma Client. `redis:check` gửi `PING` và đóng Redis client. API chỉ mở cổng sau khi PostgreSQL và Redis đã sẵn sàng; lỗi kết nối thì startup thất bại. SIGINT/SIGTERM đóng HTTP rồi đóng cả hai kết nối.
 
+Worker gửi email kết quả xét duyệt hồ sơ là process riêng; chạy ở terminal khác khi thử duyệt/từ chối và cần Redis cùng cấu hình Resend hợp lệ:
+
+```bash
+npm run worker:email
+```
+
+Worker dùng outbox trong PostgreSQL, không nhận nội dung hồ sơ qua Redis. Xem [hợp đồng hồ sơ và vận hành outbox](docs/ONBOARDING.md#thông-báo-kết-quả-xét-duyệt).
+
 Kiểm tra HTTP sau khi API chạy:
 
 ```bash
@@ -345,6 +353,8 @@ npm run auth:bootstrap
 Bootstrap không tạo tài khoản hoặc mock data. Khi chạy lại, nó giữ thay đổi quyền của các role ngoài SYSTEM_ADMIN và giữ các permission đang inactive. Quyền SYSTEM_ADMIN được khởi tạo qua bước operator này, không chỉnh qua API. Hướng dẫn bootstrap Azure có kiểm tra đích và quy trình triển khai nằm trong [tài liệu phân quyền](docs/AUTHORIZATION.md).
 
 `POST /api/auth/signup` tạo tài khoản UNVERIFIED cho SCHOOL/SUPPLIER, chưa tạo hồ sơ PENDING. Resend gửi mã xác minh email sau commit; người dùng xác minh email rồi đăng nhập để hoàn thiện hồ sơ. Xem [gửi/gửi lại mã và xác minh email](docs/EMAIL_VERIFICATION.md). `/api/auth/me` trả status, emailVerifiedAt, onboardingRequired và trạng thái hồ sơ, nhưng tài khoản UNVERIFIED chưa truy cập API nghiệp vụ. `POST /api/auth/onboarding` nộp hồ sơ theo hai form Figma, giữ UNVERIFIED; System Admin có registration.approve mới duyệt và tạo tổ chức/kích hoạt trong một transaction. Có API từ chối kèm lý do và nộp lại. Xem [hợp đồng hồ sơ, chứng nhận và tài liệu](docs/ONBOARDING.md); upload tệp cần cấu hình CLOUDINARY_CLOUD_NAME/API_KEY/API_SECRET trong `.env` riêng. Các permission mới cần operator bootstrap riêng, không tự áp dụng lên database thật.
+
+`GET /api/registration-requests/:id` trả `reviewVersion` SHA-256; approve/reject bắt buộc gửi lại `expectedReviewVersion`. Hồ sơ đổi nội dung trả 409 `REGISTRATION_STALE`, hồ sơ đã được xét duyệt trả 409 `REGISTRATION_ALREADY_REVIEWED`, mã trường/mã số thuế trùng trả 409 `ORGANIZATION_CONFLICT`. Mỗi quyết định ghi `EmailOutbox` trong cùng transaction; API trả `emailNotification: { id, status: "PENDING" }` nhưng không bảo đảm email đã tới. Worker riêng gửi tối đa 5 lần, retry tăng dần, dùng jobId/idempotency key là UUID outbox và không gửi lại bản ghi đã ACCEPTED. Kiểm tra/gửi lại một ID bằng `npm run email:outbox:status -- <UUID>` hoặc `npm run email:outbox:retry -- <UUID>`; nếu lần gửi đầu đã quá 24 giờ cần đối soát Resend và dùng `--confirm-possible-duplicate`. Lỗi Redis/Resend sau commit không đảo ngược quyết định và không tự gửi bù quyết định cũ.
 
 `POST /api/auth/login` đặt access token và refresh token vào cookie HttpOnly, không trả token trong JSON. Redis chỉ lưu hash refresh token, userId và hạn phiên. Xem `POST /api/auth/refresh`, `POST /api/auth/logout`, `GET /api/auth/me` và [hướng dẫn frontend/Postman](docs/AUTH_SESSIONS.md).
 

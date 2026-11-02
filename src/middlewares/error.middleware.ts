@@ -32,7 +32,12 @@ export const globalErrorHandler: ErrorRequestHandler = (
     code,
   });
   if (err instanceof HttpError)
-    return sendError(res, err.message, err.statusCode);
+    return sendError(
+      res,
+      err.message,
+      err.statusCode,
+      err.code ? { code: err.code } : null,
+    );
   if (
     err instanceof Prisma.PrismaClientValidationError ||
     (err instanceof Prisma.PrismaClientKnownRequestError &&

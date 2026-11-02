@@ -538,14 +538,15 @@ export const INITIAL_PERMISSIONS = [
     name: "Duyệt yêu cầu đăng ký",
     module: "registration",
     action: "approve",
-    description: "System Admin duyệt hồ sơ và kích hoạt tài khoản",
+    description: "Phê duyệt đơn đăng ký của nhà trường hoặc nhà cung cấp",
   },
   {
     code: "registration.reject",
-    name: "Từ chối yêu cầu đăng ký",
+    name: "Từ chối đơn đăng ký",
     module: "registration",
     action: "reject",
-    description: "System Admin từ chối hồ sơ kèm lý do",
+    description:
+      "Từ chối, yêu cầu chỉnh sửa đơn đăng ký của nhà trường hoặc nhà cung cấp",
   },
   {
     code: "supplier_relationship.view",
