@@ -7,6 +7,8 @@ export interface PublicSchoolListQuery {
   limit: number;
   search?: string;
   locationId?: string;
+  city?: string;
+  district?: string;
 }
 
 const UUID_REGEX =
@@ -31,7 +33,14 @@ function parsePositiveInteger(
 export function validatePublicSchoolQuery(
   query: Record<string, unknown>,
 ): PublicSchoolListQuery {
-  const allowedKeys = new Set(["page", "limit", "search", "locationId"]);
+  const allowedKeys = new Set([
+    "page",
+    "limit",
+    "search",
+    "locationId",
+    "city",
+    "district",
+  ]);
   for (const key of Object.keys(query)) {
     if (!allowedKeys.has(key)) {
       throw new HttpError(400, `Tham số không được hỗ trợ: ${key}`);
@@ -67,7 +76,31 @@ export function validatePublicSchoolQuery(
     locationId = query.locationId.trim();
   }
 
-  return { page, limit, search, locationId };
+  let city: string | undefined;
+  if (query.city !== undefined) {
+    if (typeof query.city !== "string") {
+      throw new HttpError(400, "Tên thành phố phải là chuỗi ký tự");
+    }
+    const trimmed = query.city.trim();
+    if (trimmed.length > 100) {
+      throw new HttpError(400, "Tên thành phố tối đa 100 ký tự");
+    }
+    city = trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  let district: string | undefined;
+  if (query.district !== undefined) {
+    if (typeof query.district !== "string") {
+      throw new HttpError(400, "Tên quận/huyện phải là chuỗi ký tự");
+    }
+    const trimmed = query.district.trim();
+    if (trimmed.length > 100) {
+      throw new HttpError(400, "Tên quận/huyện tối đa 100 ký tự");
+    }
+    district = trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  return { page, limit, search, locationId, city, district };
 }
 
 export function validateSchoolCode(code: unknown): string {

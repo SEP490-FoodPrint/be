@@ -20,4 +20,3 @@ CREATE TABLE "foodprint"."email_outbox" (
 );
 
 CREATE INDEX "idx_email_outbox_dispatch" ON "foodprint"."email_outbox" ("status", "next_attempt_at");
-

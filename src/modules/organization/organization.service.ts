@@ -239,6 +239,22 @@ export function createOrganizationService(
         where.locationId = query.locationId;
       }
 
+      if (query.city || query.district) {
+        const locationFilter: Prisma.LocationWhereInput = {};
+        if (query.district) {
+          locationFilter.name = {
+            contains: query.district,
+            mode: "insensitive",
+          };
+        }
+        if (query.city) {
+          locationFilter.parent = {
+            name: { contains: query.city, mode: "insensitive" },
+          };
+        }
+        where.location = locationFilter;
+      }
+
       const [schools, total] = await Promise.all([
         prisma.school.findMany({
           where,
@@ -322,6 +338,22 @@ export function createOrganizationService(
 
       if (!school) return null;
       return mapSchoolToDTO(school);
+    },
+
+    async getPublicLocations() {
+      const prisma = await getClient();
+      return prisma.location.findMany({
+        where: { isActive: true },
+        orderBy: [{ level: "asc" }, { name: "asc" }],
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          type: true,
+          level: true,
+          parentId: true,
+        },
+      });
     },
   };
 }

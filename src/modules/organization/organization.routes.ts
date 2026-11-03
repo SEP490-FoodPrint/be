@@ -17,6 +17,7 @@ export function createOrganizationRouter(
 
   // Public endpoints (Không yêu cầu đăng nhập)
   router.get("/public", controller.getPublicSchools);
+  router.get("/public/locations", controller.getPublicLocations);
   router.get("/public/code/:code", controller.getPublicSchoolByCode);
   router.get("/public/:id", controller.getPublicSchoolById);
 
