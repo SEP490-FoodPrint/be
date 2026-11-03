@@ -332,65 +332,24 @@ void test("menu reviews require a revision reason and reject mass assignment or 
   assert.throws(() => validateAllergyCheck({ ingredientIds: [] }), HttpError);
 });
 
-function validInspection() {
-  return {
-    inspectionData: {
-      step2_Cooking: {
-        startTime: "08:15",
-        endTime: "10:15",
-        method: "Nấu chín",
-        cookStaff: "Bếp trưởng",
-      },
-      step3_Serving: {
-        servingTime: "10:45",
-        servingTemperature: 65,
-        tempPass: true,
-        sensoryEvaluation: "Đạt",
-        sensoryPass: true,
-        hygieneStaff: true,
-        hygieneUtensils: true,
-        inspectedBy: "Bếp trưởng",
-        inspectedAt: "2026-11-01T10:30:00+07:00",
-        notes: "",
-      },
-    },
-  };
-}
-void test("inspection enforces the actual temperature and every pass flag; totals cannot be entered manually", () => {
-  assert.equal(
-    validateKitchenComplete(validInspection())?.step3_Serving
-      .servingTemperature,
-    65,
+void test("validateKitchenComplete validates optional note and ignores legacy inspectionData", () => {
+  assert.equal(validateKitchenComplete(undefined), undefined);
+  assert.deepEqual(validateKitchenComplete({}), { note: undefined });
+  assert.deepEqual(validateKitchenComplete({ note: "  Xong mẻ  " }), {
+    note: "Xong mẻ",
+  });
+  assert.deepEqual(
+    validateKitchenComplete({ inspectionData: { any: "data" } }),
+    { note: undefined },
   );
-  assert.equal(
-    validateKitchenComplete(validInspection())?.step3_Serving.inspectedAt,
-    "2026-11-01T03:30:00.000Z",
-  );
-  for (const failure of [
-    { servingTemperature: 64.999 },
-    { tempPass: false },
-    { sensoryPass: false },
-    { hygieneStaff: false },
-    { hygieneUtensils: false },
-  ]) {
-    const input = validInspection();
-    Object.assign(input.inspectionData.step3_Serving, failure);
-    assert.throws(
-      () => validateKitchenComplete(input),
-      (e: unknown) => e instanceof HttpError && e.statusCode === 422,
-    );
-  }
-  for (const extra of [{ preparedPortions: 120 }, { quantityUsed: 9.6 }])
-    assert.throws(
-      () => validateKitchenComplete({ ...validInspection(), ...extra }),
-      HttpError,
-    );
   assert.throws(
-    () => validateKitchenComplete({ inspectionData: {} }),
+    () => validateKitchenComplete({ note: "a".repeat(2001) }),
     HttpError,
   );
-  // The service alone decides whether an empty body is an idempotent completed retry.
-  assert.equal(validateKitchenComplete({}), undefined);
+  assert.throws(
+    () => validateKitchenComplete({ unknownField: 123 }),
+    HttpError,
+  );
 });
 
 void test("retained samples and kitchen filters reject malformed quantities, timestamps and tenant selectors", () => {
@@ -459,7 +418,6 @@ void test("v1 routes enforce permissions and emit versioned error codes before a
     ["GET", `/meal-allocations/${testStaff.id}`],
     ["POST", "/meal-allocations"],
     ["POST", `/meal-allocations/${testStaff.id}/distribute`],
-    ["GET", `/kitchen/${testStaff.id}/inspection-sheet`],
     ["POST", `/kitchen/${testStaff.id}/food-samples`],
     ["GET", `/kitchen/${testStaff.id}/food-samples`],
     ["POST", `/food-samples/${testStaff.id}/dispose`],
@@ -480,7 +438,7 @@ void test("v1 routes enforce permissions and emit versioned error codes before a
   );
 });
 
-void test("v1 complete rejects forged inspection before calling inventory services", async (context) => {
+void test("v1 complete rejects unauthorized caller before calling inventory services", async (context) => {
   let databaseCalls = 0;
   const service = createKitchenService(undefined, () => {
     databaseCalls++;
@@ -493,7 +451,7 @@ void test("v1 complete rejects forged inspection before calling inventory servic
     createKitchenRouter(
       service,
       (req, _res, next) => {
-        req.auth = { ...testStaff, permissions: ["cooking_batch.complete"] };
+        req.auth = { ...testStaff, permissions: [] };
         next();
       },
       true,
@@ -502,21 +460,15 @@ void test("v1 complete rejects forged inspection before calling inventory servic
   app.use(globalErrorHandler);
   const http = await startHttp(app);
   context.after(() => http.close());
-  const input = validInspection();
-  input.inspectionData.step3_Serving.servingTemperature = 64;
   const result = await http.request(
     `/api/v1/kitchen/${testStaff.id}/complete`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
+      body: JSON.stringify({}),
     },
   );
-  assert.equal(result.status, 422);
-  assert.equal(
-    (result.body as { code: string }).code,
-    "BUSINESS_RULE_VIOLATION",
-  );
+  assert.equal(result.status, 403);
   assert.equal(databaseCalls, 0);
 });
 
