@@ -6,4 +6,3 @@ SET LOCAL statement_timeout = '30s';
 ALTER TABLE foodprint.cooking_batches DROP COLUMN IF EXISTS inspection_data;
 
 COMMIT;
-
