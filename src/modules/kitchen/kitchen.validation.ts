@@ -1,10 +1,4 @@
-import {
-  objectBody,
-  uuid,
-  text,
-  isoTimestamp,
-  calendarDate,
-} from "../../utils/auth-validation";
+import { objectBody, uuid, calendarDate } from "../../utils/auth-validation";
 import { parseListQuery } from "../../utils/list-query";
 import { HttpError } from "../../utils/http-error";
 export { parseListQuery as validateKitchenListQuery } from "../../utils/list-query";
@@ -39,91 +33,23 @@ export function validateKitchenUpdate(value: unknown) {
 }
 
 export function validateKitchenComplete(value: unknown) {
-  const body = objectBody(value ?? {}, ["inspectionData"]);
-  if (body.inspectionData === undefined) return undefined; // Only an already-completed retry may omit it.
-  const data = objectBody(body.inspectionData, [
-    "step2_Cooking",
-    "step3_Serving",
-  ]);
-  const cooking = objectBody(data.step2_Cooking, [
-    "startTime",
-    "endTime",
-    "method",
-    "cookStaff",
-  ]);
-  const serving = objectBody(data.step3_Serving, [
-    "servingTime",
-    "servingTemperature",
-    "tempPass",
-    "sensoryEvaluation",
-    "sensoryPass",
-    "hygieneStaff",
-    "hygieneUtensils",
-    "inspectedBy",
-    "inspectedAt",
-    "notes",
-  ]);
-  const clock = (value: unknown) => {
-    if (typeof value !== "string" || !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value))
-      throw new HttpError(400, "Giờ kiểm thực phải có định dạng HH:mm");
-    return value;
-  };
+  if (value === undefined || value === null) return undefined;
+  const body = objectBody(value, ["note", "inspectionData"]);
   if (
-    typeof serving.servingTemperature !== "number" ||
-    !Number.isFinite(serving.servingTemperature) ||
-    serving.servingTemperature < -50 ||
-    serving.servingTemperature > 300
+    body.note !== undefined &&
+    body.note !== null &&
+    (typeof body.note !== "string" || body.note.length > 2000)
   )
-    throw new HttpError(400, "Nhiệt độ kiểm thực không hợp lệ");
-  for (const key of [
-    "tempPass",
-    "sensoryPass",
-    "hygieneStaff",
-    "hygieneUtensils",
-  ])
-    if (typeof serving[key] !== "boolean")
-      throw new HttpError(400, "Kết quả kiểm thực phải là boolean");
-  // Application threshold explicitly required by API FINAL; never trust a client-supplied pass flag.
-  if (
-    serving.servingTemperature < 65 ||
-    !serving.tempPass ||
-    !serving.sensoryPass ||
-    !serving.hygieneStaff ||
-    !serving.hygieneUtensils
-  )
-    throw new HttpError(
-      422,
-      "Kiểm thực chưa đạt điều kiện nghiệm thu; chưa được hoàn thành mẻ",
-    );
+    throw new HttpError(400, "Ghi chú tối đa 2000 ký tự");
   return {
-    step2_Cooking: {
-      startTime: clock(cooking.startTime),
-      endTime: clock(cooking.endTime),
-      method: text(cooking.method, 1000),
-      cookStaff: text(cooking.cookStaff, 255),
-    },
-    step3_Serving: {
-      servingTime: clock(serving.servingTime),
-      servingTemperature: serving.servingTemperature,
-      tempPass: true,
-      sensoryEvaluation: text(serving.sensoryEvaluation, 2000),
-      sensoryPass: true,
-      hygieneStaff: true,
-      hygieneUtensils: true,
-      inspectedBy: text(serving.inspectedBy, 255),
-      inspectedAt: isoTimestamp(serving.inspectedAt).toISOString(),
-      notes:
-        serving.notes === undefined
-          ? ""
-          : typeof serving.notes === "string" && serving.notes.length <= 2000
-            ? serving.notes.trim()
-            : text(serving.notes, 2000),
-    },
+    note:
+      body.note === null || body.note === undefined
+        ? undefined
+        : body.note.trim() || undefined,
   };
 }
-export type KitchenInspection = NonNullable<
-  ReturnType<typeof validateKitchenComplete>
->;
+export type KitchenCompleteInput = ReturnType<typeof validateKitchenComplete>;
+export type KitchenInspection = KitchenCompleteInput;
 
 export function validateKitchenFilters(query: Record<string, unknown>) {
   if (

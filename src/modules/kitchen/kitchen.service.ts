@@ -791,7 +791,6 @@ const detailSelect = {
   completedAt: true,
   createdAt: true,
   updatedAt: true,
-  inspectionData: true,
   Dish: { select: { name: true } },
   MenuDay: { select: { menuDate: true } },
   cookingBatchLots: {
@@ -1293,62 +1292,15 @@ export function createKitchenLifecycle(
       );
     },
 
-    complete(
-      id: string,
-      principal: AuthPrincipal,
-      inspection?: KitchenInspection,
-    ) {
+    complete(id: string, principal: AuthPrincipal, input?: KitchenInspection) {
       return write(
         principal,
         "cooking_batch.complete",
         async (tx, actor, schoolId) => {
           const batch = await lockedBatch(tx, id, schoolId);
           if (batch.status === "COMPLETED") {
-            if (
-              inspection &&
-              JSON.stringify(batch.inspectionData) !==
-                JSON.stringify(inspection)
-            ) {
-              // JSONB key order is not stable; compare normalized values instead.
-              const canonical = (value: unknown): string =>
-                JSON.stringify(value, (_key, item: unknown) =>
-                  item && typeof item === "object" && !Array.isArray(item)
-                    ? Object.fromEntries(
-                        Object.entries(item).sort(([a], [b]) =>
-                          a.localeCompare(b),
-                        ),
-                      )
-                    : item,
-                );
-              if (canonical(batch.inspectionData) !== canonical(inspection))
-                throw new HttpError(
-                  409,
-                  "Mẻ đã hoàn thành; không ghi đè biên bản kiểm thực",
-                );
-            }
             return completionResult(tx, batch);
           }
-          if (!inspection)
-            throw new HttpError(
-              422,
-              "Cần nhập đủ biên bản kiểm thực trước khi hoàn thành",
-            );
-          if (
-            new Date(inspection.step3_Serving.inspectedAt).getTime() >
-            Date.now() + 60000
-          )
-            throw new HttpError(
-              400,
-              "Thời điểm kiểm thực không được nằm trong tương lai",
-            );
-          if (
-            batch.confirmedAt &&
-            new Date(inspection.step3_Serving.inspectedAt) < batch.confirmedAt
-          )
-            throw new HttpError(
-              422,
-              "Thời điểm kiểm thực không được trước lúc xác nhận nấu",
-            );
           if (batch.status !== "CONFIRMED")
             throw new HttpError(
               409,
@@ -1414,7 +1366,7 @@ export function createKitchenLifecycle(
               status: "COMPLETED",
               completedAt: new Date(),
               completedByUserId: actor.id,
-              inspectionData: inspection,
+              ...(input?.note !== undefined ? { note: input.note } : {}),
             },
             select: detailSelect,
           });
@@ -1578,51 +1530,7 @@ export function createKitchenService(
         { isolationLevel: "RepeatableRead" },
       );
     },
-    async inspectionSheet(id: string, principal: AuthPrincipal) {
-      const db = await connect(),
-        where = listScopes.kitchen(principal);
-      const batch = await db.cookingBatch.findFirst({
-        where: { AND: [where, { id }] },
-        select: {
-          ...detailSelect,
-          completedByUser: { select: { id: true, fullName: true } },
-          MenuDay: {
-            select: {
-              menuDate: true,
-              WeeklyMenu: {
-                select: { School: { select: { id: true, name: true } } },
-              },
-            },
-          },
-          RetainedFoodSample: {
-            select: {
-              id: true,
-              sampledAt: true,
-              quantity: true,
-              unit: true,
-              storageLocation: true,
-              status: true,
-              disposedAt: true,
-            },
-          },
-        },
-      });
-      if (!batch) throw new HttpError(404, "Không tìm thấy mẻ chế biến");
-      return {
-        cookingBatchId: batch.id,
-        batchCode: batch.batchCode,
-        school: batch.MenuDay.WeeklyMenu.School,
-        menuDate: batch.MenuDay.menuDate,
-        mealType: batch.mealType,
-        dish: batch.Dish,
-        plannedPortions: batch.plannedPortions,
-        status: batch.status,
-        inspectionData: batch.inspectionData,
-        completedAt: batch.completedAt,
-        completedBy: batch.completedByUser,
-        foodSamples: batch.RetainedFoodSample,
-      };
-    },
+
     getAll(query: ListQuery, principal: AuthPrincipal) {
       const where = listScopes["kitchen"](principal);
       return readListPage(

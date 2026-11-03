@@ -47,12 +47,6 @@ export function createKitchenRouter(
     controller.stats,
   );
   router.get(
-    "/:id/inspection-sheet",
-    authHandler,
-    requireResource("kitchen"),
-    controller.inspectionSheet,
-  );
-  router.get(
     "/:id/food-samples",
     authHandler,
     requirePermission("retained_sample.view"),
