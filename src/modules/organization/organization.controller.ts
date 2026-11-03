@@ -8,7 +8,9 @@ import {
 } from "./organization.service";
 import {
   validateOrganizationListQuery,
+  validatePublicDailyMenuQuery,
   validatePublicSchoolQuery,
+  validatePublicWeeklyMenuQuery,
   validateSchoolCode,
   validateSchoolId,
 } from "./organization.validation";
@@ -50,6 +52,36 @@ export function createOrganizationController(
     getPublicLocations: asyncHandler(async (_req, res) => {
       const locations = await service.getPublicLocations();
       sendSuccess(res, locations, "Lấy danh mục địa điểm thành công");
+    }),
+
+    getPublicDailyMenu: asyncHandler(async (req, res) => {
+      const schoolCode = validateSchoolCode(req.params.schoolCode);
+      const query = validatePublicDailyMenuQuery(req.query);
+      const result = await service.getPublicDailyMenu(schoolCode, query);
+      if (!result) {
+        sendSuccess(
+          res,
+          null,
+          "Trường học chưa có thực đơn được công bố cho ngày này",
+        );
+        return;
+      }
+      sendSuccess(res, result, "Lấy thực đơn ngày thành công");
+    }),
+
+    getPublicWeeklyMenu: asyncHandler(async (req, res) => {
+      const schoolCode = validateSchoolCode(req.params.schoolCode);
+      const query = validatePublicWeeklyMenuQuery(req.query);
+      const result = await service.getPublicWeeklyMenu(schoolCode, query);
+      if (!result) {
+        sendSuccess(
+          res,
+          null,
+          "Trường học chưa có thực đơn được công bố cho tuần này",
+        );
+        return;
+      }
+      sendSuccess(res, result, "Lấy thực đơn tuần thành công");
     }),
   };
 }

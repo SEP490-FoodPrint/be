@@ -120,3 +120,72 @@ export function validateSchoolId(id: unknown): string {
   }
   return id.trim();
 }
+
+const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+
+export interface PublicDailyMenuQuery {
+  date?: string;
+}
+
+export interface PublicWeeklyMenuQuery {
+  week?: string;
+  grade?: string;
+  group?: string;
+}
+
+export function validatePublicDailyMenuQuery(
+  query: Record<string, unknown>,
+): PublicDailyMenuQuery {
+  let date: string | undefined;
+  if (query.date !== undefined && query.date !== "") {
+    if (typeof query.date !== "string" || !DATE_REGEX.test(query.date.trim())) {
+      throw new HttpError(
+        400,
+        "Ngày không đúng định dạng (yêu cầu YYYY-MM-DD)",
+      );
+    }
+    const parsed = new Date(`${query.date.trim()}T00:00:00.000Z`);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new HttpError(400, "Ngày không hợp lệ");
+    }
+    date = query.date.trim();
+  }
+  return { date };
+}
+
+export function validatePublicWeeklyMenuQuery(
+  query: Record<string, unknown>,
+): PublicWeeklyMenuQuery {
+  let week: string | undefined;
+  if (query.week !== undefined && query.week !== "") {
+    if (typeof query.week !== "string" || !DATE_REGEX.test(query.week.trim())) {
+      throw new HttpError(
+        400,
+        "Ngày tuần không đúng định dạng (yêu cầu YYYY-MM-DD)",
+      );
+    }
+    const parsed = new Date(`${query.week.trim()}T00:00:00.000Z`);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new HttpError(400, "Ngày tuần không hợp lệ");
+    }
+    week = query.week.trim();
+  }
+
+  let grade: string | undefined;
+  if (query.grade !== undefined && query.grade !== "") {
+    if (typeof query.grade !== "string") {
+      throw new HttpError(400, "Mã khối/nhóm không hợp lệ");
+    }
+    grade = query.grade.trim();
+  }
+
+  let group: string | undefined;
+  if (query.group !== undefined && query.group !== "") {
+    if (typeof query.group !== "string") {
+      throw new HttpError(400, "Mã nhóm bán trú không hợp lệ");
+    }
+    group = query.group.trim();
+  }
+
+  return { week, grade, group };
+}
