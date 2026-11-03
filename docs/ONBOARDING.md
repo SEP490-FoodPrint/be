@@ -80,11 +80,11 @@ Trình duyệt tự đặt Content-Type cùng boundary; không đặt applicatio
 | API                                                      | Điều kiện                                                                                                                       |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | GET /api/registration-requests/:id                       | SYSTEM_ADMIN có registration.view                                                                                               |
-| POST /api/registration-requests/:id/approve              | SYSTEM_ADMIN có registration.approve; body {}                                                                                   |
-| POST /api/registration-requests/:id/reject               | SYSTEM_ADMIN có registration.reject; body { rejectionReason } dài 1–4000 ký tự                                                  |
+| POST /api/registration-requests/:id/approve              | SYSTEM_ADMIN có registration.approve; body `{ expectedReviewVersion }`                                                          |
+| POST /api/registration-requests/:id/reject               | SYSTEM_ADMIN có registration.reject; body `{ expectedReviewVersion, rejectionReason }`, lý do dài 1–4000 ký tự                  |
 | GET /api/registration-requests/:id/documents/:documentId | SYSTEM_ADMIN có registration.view; hoặc tài khoản ACTIVE của đúng supplier có supplier_certification.view với hồ sơ đã APPROVED |
 
-Quyền được đọc lại từ DB, thao tác duyệt/từ chối kiểm tra lại actor/target trong transaction Serializable. Hai lượt duyệt đồng thời chỉ tạo một tổ chức; hồ sơ không còn PENDING trả 409. Mã trường/mã số thuế trùng trả 409 và rollback toàn bộ; không tự gắn tài khoản vào tổ chức cũ. Tài khoản ACTIVE không được nộp lại hồ sơ. Lỗi validation trả 400, thiếu quyền 403, tài liệu không thuộc phạm vi 404, tệp quá lớn 413, dịch vụ không sẵn sàng 503.
+Quyền được đọc lại từ DB, thao tác duyệt/từ chối kiểm tra lại actor/target trong transaction Serializable. `GET` chi tiết trả `reviewVersion` SHA-256 từ bản hồ sơ và người đăng ký đang hiển thị; POST yêu cầu đúng phiên bản này. Hai lượt duyệt đồng thời chỉ tạo một tổ chức. Lỗi 409 trả `error.code`: `REGISTRATION_STALE` (cần xem lại), `REGISTRATION_ALREADY_REVIEWED` hoặc `ORGANIZATION_CONFLICT`. Mã trường/mã số thuế trùng rollback toàn bộ; không tự gắn tài khoản vào tổ chức cũ. Tài khoản ACTIVE không được nộp lại hồ sơ. Lỗi validation trả 400, thiếu quyền 403, tài liệu không thuộc phạm vi 404, tệp quá lớn 413, dịch vụ không sẵn sàng 503.
 
 `GET /api/registration-requests?page=1&limit=5` trả thông tin người đăng ký tại `data.items[i].applicantUser` với cùng các trường như API chi tiết bên dưới. Hai API dùng chung projection an toàn; thông tin lấy từ tài khoản hiện tại. Danh sách giữ hợp đồng phân trang page/limit/hasNext và chỉ trả các trường tóm tắt hồ sơ cùng applicantUser, không nhúng hồ sơ/tệp đầy đủ.
 
@@ -95,7 +95,13 @@ Quyền được đọc lại từ DB, thao tác duyệt/từ chối kiểm tra 
 
 Tên/số điện thoại người đại diện được lưu trong users từ signup. `profileData.name/email/phone` là thông tin tổ chức, độc lập với `applicantUser.fullName/email/phone`. Tài liệu tiếp tục nằm trong `documents` với metadata an toàn. API chi tiết không trả password hash, role grants, token hoặc metadata Cloudinary nội bộ; quyền đọc vẫn yêu cầu SYSTEM_ADMIN có registration.view.
 
-Catalog thêm registration.approve/registration.reject và quyền mặc định SYSTEM_ADMIN tương ứng cùng registration.view. Database đang dùng cần operator cập nhật catalog bằng auth:bootstrap theo chính sách môi trường; ứng dụng/CD không tự bootstrap. Không thay đổi Prisma schema, SQL migration hoặc database thật trong task triển khai API.
+Response POST thành công trả đầy đủ DTO chi tiết và `emailNotification: { id, status: "PENDING" }`; email chưa được xác nhận đã đến hộp thư. Catalog thêm registration.approve/registration.reject và quyền mặc định SYSTEM_ADMIN tương ứng cùng registration.view. Database đang dùng cần operator cập nhật catalog bằng auth:bootstrap theo chính sách môi trường; ứng dụng/CD không tự bootstrap.
+
+### Thông báo kết quả xét duyệt
+
+Migration `20261102000100_registration_review_outbox` tạo bảng `foodprint.email_outbox`. Mỗi quyết định ghi một bản email cùng transaction; API chỉ trả `emailNotification.status = PENDING` sau khi commit, không cam kết thư đã đến. Cần áp dụng migration đã review trước khi dùng API xét duyệt mới. Worker riêng đọc outbox, đẩy job vào BullMQ/Redis local và gọi `sendMail` từ Resend. Chạy `npm run worker:email` song song với API.
+
+Lỗi Redis/Resend sau commit không thay đổi quyết định xét duyệt. Worker tự thử tối đa 5 lượt, chờ tăng dần từ 5 giây. Kiểm tra một sự kiện bằng `npm run email:outbox:status -- <UUID>`; gửi lại trạng thái FAILED bằng `npm run email:outbox:retry -- <UUID>`. Nếu lượt gửi đầu đã quá 24 giờ và kết quả chưa rõ, đối soát trên Resend trước rồi dùng `--confirm-possible-duplicate`. Các lệnh mặc định chỉ cho PostgreSQL local; thao tác Azure cần `--azure`, `AZURE_DATABASE_HOST` khớp target và quyền vận hành riêng. Không dùng script này để seed hoặc gửi bù hồ sơ cũ.
 
 ## Lưu tài liệu và kiểm thử
 

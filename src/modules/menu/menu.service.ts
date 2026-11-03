@@ -1552,7 +1552,7 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
               approvalStatus: true,
               note: true,
               menuDayDishes: {
-                select: { id: true, mealType: true },
+                select: { dishId: true, mealType: true },
               },
             },
             orderBy: { menuDate: "asc" },
