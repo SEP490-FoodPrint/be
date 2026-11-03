@@ -57,7 +57,6 @@ import {
 } from "../src/modules/menu/menu.validation";
 import { createKitchenService } from "../src/modules/kitchen/kitchen.service";
 import {
-  validateKitchenComplete,
   validateKitchenFilters,
   validateKitchenUpdate,
 } from "../src/modules/kitchen/kitchen.validation";
@@ -627,35 +626,9 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       );
       await batches.confirm(batch.id, chef);
       await batches.confirm(side.id, chef);
-      await assert.rejects(
-        () => batches.complete(batch.id, chef),
-        (e: unknown) => e instanceof HttpError && e.statusCode === 422,
-      );
-      const inspection = validateKitchenComplete({
-        inspectionData: {
-          step2_Cooking: {
-            startTime: "08:00",
-            endTime: "10:00",
-            method: "Boiled",
-            cookStaff: "Chef",
-          },
-          step3_Serving: {
-            servingTime: "10:30",
-            servingTemperature: 72,
-            tempPass: true,
-            sensoryEvaluation: "Passed",
-            sensoryPass: true,
-            hygieneStaff: true,
-            hygieneUtensils: true,
-            inspectedBy: "Chef",
-            inspectedAt: new Date().toISOString(),
-            notes: "",
-          },
-        },
-      })!;
       const completed = await Promise.all([
-        batches.complete(batch.id, chef, inspection),
-        batches.complete(batch.id, chef, inspection),
+        batches.complete(batch.id, chef),
+        batches.complete(batch.id, chef),
       ]);
       assert(
         completed.every(
@@ -677,15 +650,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         "0",
       );
       assert.equal(
-        (
-          await batches.complete(side.id, chef, {
-            ...inspection,
-            step3_Serving: {
-              ...inspection.step3_Serving,
-              inspectedAt: new Date().toISOString(),
-            },
-          })
-        ).mealSeasoningsConsumed,
+        (await batches.complete(side.id, chef)).mealSeasoningsConsumed,
         true,
       );
       const shared = await db.menuMealSeasoningLot.findMany({
@@ -719,10 +684,6 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       await assert.rejects(
         () => samples.dispose(saved.id, disposal, chef),
         (e: unknown) => e instanceof HttpError && e.statusCode === 422,
-      );
-      assert.deepEqual(
-        (await batches.inspectionSheet(batch.id, chef)).inspectionData,
-        inspection,
       );
       assert.equal(
         (
@@ -1009,13 +970,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         (e: unknown) => e instanceof HttpError && e.statusCode === 409,
       );
       for (const [index, grBatch] of grAll.entries()) {
-        const grComplete = await batches.complete(grBatch.id, chef, {
-          ...inspection,
-          step3_Serving: {
-            ...inspection.step3_Serving,
-            inspectedAt: new Date().toISOString(),
-          },
-        });
+        const grComplete = await batches.complete(grBatch.id, chef);
         assert.equal(
           grComplete.mealSeasoningsConsumed,
           index === grAll.length - 1,

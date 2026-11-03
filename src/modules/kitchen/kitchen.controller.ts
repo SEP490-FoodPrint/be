@@ -54,16 +54,6 @@ export function createKitchenController(
           ),
         ),
     ),
-    inspectionSheet: asyncHandler(
-      async (req, res) =>
-        void sendSuccess(
-          res,
-          await service.inspectionSheet(
-            uuid(req.params.id),
-            requirePrincipal(req),
-          ),
-        ),
-    ),
     getOne: asyncHandler(async (req, res) => {
       sendSuccess(
         res,
