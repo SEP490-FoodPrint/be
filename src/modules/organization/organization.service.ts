@@ -1,6 +1,15 @@
 import type { AuthPrincipal } from "../../types/auth";
 import { listScopes } from "../../utils/resource-access";
-import type { Prisma, PrismaClient } from "../../generated/prisma/client";
+import {
+  assertPermission,
+  withSchoolTransaction,
+} from "../../utils/authorization";
+import { HttpError } from "../../utils/http-error";
+import type {
+  CookingMode,
+  Prisma,
+  PrismaClient,
+} from "../../generated/prisma/client";
 import { getPrisma } from "../../utils/database";
 import {
   listWindow,
@@ -183,6 +192,8 @@ function mapSchoolToDTO(school: SchoolQueryResult): PublicSchoolDTO {
 
 export type PrismaProvider = () => Promise<PrismaClient>;
 
+const COOKING_MODE_PERMISSION = "school_cooking_mode.manage";
+
 export interface OrganizationServiceDeps {
   readList?: ListReader;
   prismaProvider?: PrismaProvider;
@@ -210,6 +221,35 @@ export function createOrganizationService(
             orderBy: [{ id: "asc" }],
           }),
         query,
+      );
+    },
+
+    async getCookingMode(principal: AuthPrincipal) {
+      assertPermission(principal, COOKING_MODE_PERMISSION);
+      if (principal.orgType !== "SCHOOL" || !principal.schoolId)
+        throw new HttpError(403, "Thao tác yêu cầu phạm vi trường đã xác thực");
+      const prisma = await getClient();
+      return prisma.school.findUniqueOrThrow({
+        where: { id: principal.schoolId },
+        select: { cookingMode: true },
+      });
+    },
+
+    // Mẻ đã lập giữ chế độ cũ; giá trị mới chỉ áp dụng cho kế hoạch nấu sau đó
+    async updateCookingMode(
+      cookingMode: CookingMode,
+      principal: AuthPrincipal,
+    ) {
+      return withSchoolTransaction(
+        await getClient(),
+        principal,
+        COOKING_MODE_PERMISSION,
+        (tx, _actor, schoolId) =>
+          tx.school.update({
+            where: { id: schoolId },
+            data: { cookingMode },
+            select: { cookingMode: true },
+          }),
       );
     },
 

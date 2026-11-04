@@ -1,3 +1,5 @@
+import { objectBody } from "../../utils/auth-validation";
+import type { CookingMode } from "../../generated/prisma/client";
 import { HttpError } from "../../utils/http-error";
 
 export { parseListQuery as validateOrganizationListQuery } from "../../utils/list-query";
@@ -28,6 +30,13 @@ function parsePositiveInteger(
     throw new HttpError(400, `${name} vượt giới hạn cho phép`);
   }
   return result;
+}
+
+export function validateCookingMode(value: unknown): CookingMode {
+  const { cookingMode } = objectBody(value, ["cookingMode"]);
+  if (cookingMode !== "SEPARATE_BY_LOT" && cookingMode !== "COMBINE_LOTS")
+    throw new HttpError(400, "Chế độ nấu không hợp lệ");
+  return cookingMode;
 }
 
 export function validatePublicSchoolQuery(
