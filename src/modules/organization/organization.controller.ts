@@ -7,6 +7,7 @@ import {
   type OrganizationService,
 } from "./organization.service";
 import {
+  validateCookingMode,
   validateOrganizationListQuery,
   validatePublicDailyMenuQuery,
   validatePublicSchoolQuery,
@@ -23,6 +24,20 @@ export function createOrganizationController(
       const query = validateOrganizationListQuery(req.query);
       const result = await service.getAll(query, requirePrincipal(req));
       sendSuccess(res, result, "Lấy danh sách trường học thành công");
+    }),
+
+    getCookingMode: asyncHandler(async (req, res) => {
+      const result = await service.getCookingMode(requirePrincipal(req));
+      sendSuccess(res, result, "Lấy chế độ nấu thành công");
+    }),
+
+    updateCookingMode: asyncHandler(async (req, res) => {
+      const cookingMode = validateCookingMode(req.body);
+      const result = await service.updateCookingMode(
+        cookingMode,
+        requirePrincipal(req),
+      );
+      sendSuccess(res, result, "Cập nhật chế độ nấu thành công");
     }),
 
     getPublicSchools: asyncHandler(async (req, res) => {

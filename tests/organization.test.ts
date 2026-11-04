@@ -166,6 +166,9 @@ void test("organization service maps school rows correctly and respects paginati
   };
 
   const mockRepo: OrganizationRepository = {
+    findCookingMode: () => Promise.resolve({ cookingMode: "SEPARATE_BY_LOT" }),
+    updateCookingMode: (_tx, _schoolId, cookingMode) =>
+      Promise.resolve({ cookingMode }),
     listSchools: () =>
       Promise.resolve([
         {
