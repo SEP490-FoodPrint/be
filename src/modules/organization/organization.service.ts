@@ -1,7 +1,17 @@
 import type { AuthPrincipal } from "../../types/auth";
 import { listScopes } from "../../utils/resource-access";
-import type { Prisma, PrismaClient } from "../../generated/prisma/client";
+import type {
+  CookingMode,
+  Prisma,
+  PrismaClient,
+} from "../../generated/prisma/client";
+import { ROLES } from "../../constants/roles";
+import {
+  assertPermission,
+  withSchoolTransaction,
+} from "../../utils/authorization";
 import { getPrisma } from "../../utils/database";
+import { HttpError } from "../../utils/http-error";
 import {
   listWindow,
   readListPage,
@@ -53,6 +63,18 @@ const readFromDatabase: ListReader = async (args) => {
   return prisma.school.findMany(args);
 };
 
+const COOKING_MODE_PERMISSION = "school_cooking_mode.manage";
+
+function assertCookingModeManager(principal: AuthPrincipal) {
+  assertPermission(principal, COOKING_MODE_PERMISSION);
+  if (
+    principal.role !== ROLES.SCHOOL_MANAGEMENT_BOARD ||
+    principal.orgType !== "SCHOOL" ||
+    !principal.schoolId
+  )
+    throw new HttpError(403, "Chỉ Ban Giám hiệu được cấu hình chế độ nấu");
+}
+
 export function createOrganizationService(
   read: ListReader = readFromDatabase,
   getClient: () => Promise<PrismaClient> = getPrisma,
@@ -69,6 +91,36 @@ export function createOrganizationService(
             orderBy: [{ id: "asc" }],
           }),
         query,
+      );
+    },
+
+    async getCookingMode(principal: AuthPrincipal) {
+      assertCookingModeManager(principal);
+      const prisma = await getClient();
+      return prisma.school.findUniqueOrThrow({
+        where: { id: principal.schoolId! },
+        select: { cookingMode: true },
+      });
+    },
+
+    // Mẻ đã lập giữ chế độ cũ; giá trị mới chỉ áp dụng cho kế hoạch nấu sau đó.
+    async updateCookingMode(
+      cookingMode: CookingMode,
+      principal: AuthPrincipal,
+    ) {
+      assertCookingModeManager(principal);
+      return withSchoolTransaction(
+        await getClient(),
+        principal,
+        COOKING_MODE_PERMISSION,
+        (tx, actor, schoolId) => {
+          assertCookingModeManager(actor);
+          return tx.school.update({
+            where: { id: schoolId },
+            data: { cookingMode },
+            select: { cookingMode: true },
+          });
+        },
       );
     },
 
