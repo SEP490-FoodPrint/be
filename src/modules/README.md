@@ -67,6 +67,15 @@ Quy tắc trong transaction: một lớp một GVCN; một GVCN chỉ chủ nhi�
 
 `auth` cung cấp signup, login, refresh, logout bằng cookie HttpOnly/phiên Redis, thông tin tài khoản/quyền hiện tại, cập nhật hồ sơ cá nhân bằng PATCH /auth/me (fullName/phone) và danh sách Role; xem [AUTH_SESSIONS.md](../../docs/AUTH_SESSIONS.md). Signup tạo tài khoản UNVERIFIED chưa có yêu cầu duyệt; người dùng xác minh email bằng mã Resend rồi đăng nhập để nộp/xem hồ sơ của mình, chưa được gọi API nghiệp vụ. `onboarding` trong auth xử lý nộp hồ sơ/tài liệu; registration gắn API chi tiết/duyệt/từ chối vào cùng service để giữ một luồng transaction; xem [ONBOARDING.md](../../docs/ONBOARDING.md). Hợp đồng API quản trị role/permission ở [docs/AUTHORIZATION.md](../../docs/AUTHORIZATION.md). `organization` hiện quản lý khung cho School; Supplier và CommuneFoodSafetyUnit có module riêng. API traceability chỉ đọc bản ghi, không gửi transaction blockchain.
 
+## Duyệt thực đơn tuần
+
+BGH phê duyệt hoặc yêu cầu chỉnh sửa nguyên cả `WeeklyMenu`; `MenuDay` chỉ để xem chi tiết.
+
+- `GET /api/v1/menus/:menuId/approval-detail`: hồ sơ duyệt của tuần trong trường của tài khoản (`menu.view`).
+- `POST /api/v1/menus/:menuId/reviews`: body `{ "decision": "APPROVED" | "REVISION_REQUESTED", "feedback": "..." }`; `APPROVED` cần `menu.approve`, yêu cầu chỉnh sửa cần `menu.review` và bắt buộc `feedback`.
+
+Chỉ tuần `PENDING_APPROVAL` được quyết định. Quyết định đổi mọi ngày trong cùng transaction và ghi một `MenuReviewRecord` không có `menuDayId`; body có `menuDayId` bị từ chối. Cột `menu_review_records.menu_day_id` chỉ còn giữ lịch sử của luồng cũ.
+
 ## Quyền truy cập và phân trang
 
 Các API yêu cầu JWT hợp lệ với UUID sub và sid của phiên Redis còn sống. Trình duyệt dùng cookie HttpOnly với credentials include; Bearer vẫn hỗ trợ token được cấp từ phiên hợp lệ. Middleware tải lại user ACTIVE và quyền hiện tại từ DB; service yêu cầu AuthPrincipal và thêm WHERE theo quan hệ sở hữu. Mỗi endpoint kiểm tra permission trong [ma trận phân quyền](../../docs/AUTHORIZATION.md). System Admin chỉ truy cập khi có quyền được gán, không có bypass. ID tổ chức từ query/body không được dùng để tự chọn phạm vi dữ liệu. Bộ lọc này theo tổ chức, không tự suy diễn giới hạn đến từng lớp khi chưa có quan hệ tài khoản-lớp.
