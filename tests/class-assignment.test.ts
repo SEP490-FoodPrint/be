@@ -13,6 +13,7 @@ import {
   validateHomeroomAssignment,
 } from "../src/modules/class/class.validation";
 import { createClassService } from "../src/modules/class/class.service";
+import { listScopes } from "../src/utils/resource-access";
 
 const isHttp = (status: number) => (error: unknown) =>
   error instanceof HttpError && error.statusCode === status;
@@ -32,6 +33,30 @@ const board: AuthPrincipal = {
   communeFoodSafetyUnitId: null,
   permissions: ["class.view", "class_assignment.manage"],
 };
+
+void test("homeroom teachers only list meals of their assigned classes", () => {
+  const teacher: AuthPrincipal = {
+    ...board,
+    id: "00000000-0000-4000-8000-0000000000c1",
+    role: "HOMEROOM_TEACHER",
+    permissions: ["daily_meal_portion.view"],
+  };
+  assert.deepEqual(listScopes["meal-attendance"](teacher), {
+    Class: {
+      schoolId: board.schoolId,
+      homeroomAssignments: {
+        some: { teacherUserId: teacher.id, endedAt: null },
+      },
+    },
+  });
+  assert.deepEqual(
+    listScopes["meal-attendance"]({
+      ...teacher,
+      role: "SCHOOL_KITCHEN_STAFF",
+    }),
+    { Class: { schoolId: board.schoolId } },
+  );
+});
 
 void test("academic year starts in September in Vietnam time", () => {
   assert.equal(currentAcademicYear(NOV_2026), "2026-2027");

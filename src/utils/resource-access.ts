@@ -145,7 +145,17 @@ export const listScopes = {
   "meal-attendance": (p: AuthPrincipal): Prisma.DailyMealPortionWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["meal-attendance"]);
     if (p.orgType === "SYSTEM") return {};
-    if (p.orgType === "SCHOOL") return { Class: { schoolId: school(p) } };
+    if (p.orgType === "SCHOOL")
+      return {
+        Class: {
+          schoolId: school(p),
+          ...(p.role === "HOMEROOM_TEACHER" && {
+            homeroomAssignments: {
+              some: { teacherUserId: p.id, endedAt: null },
+            },
+          }),
+        },
+      };
     throw new HttpError(
       403,
       "Loại tổ chức không có phạm vi truy cập tài nguyên này",

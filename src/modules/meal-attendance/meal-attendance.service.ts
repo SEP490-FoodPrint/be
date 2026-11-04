@@ -61,11 +61,18 @@ export function createMealAttendanceService(
       include: { portionGroups: true, dailyAllergyPortions: true },
     });
     if (!demand) throw new HttpError(404, "Không tìm thấy suất ăn của lớp");
-    if (
-      principal.role === "HOMEROOM_TEACHER" &&
-      demand.confirmedByUserId !== principal.id
-    )
-      throw new HttpError(403, "GVCN chỉ được thao tác suất ăn do mình chốt");
+    if (principal.role === "HOMEROOM_TEACHER") {
+      const assignment = await db.classHomeroomAssignment.findFirst({
+        where: {
+          classId: demand.classId,
+          teacherUserId: principal.id,
+          endedAt: null,
+        },
+        select: { id: true },
+      });
+      if (!assignment)
+        throw new HttpError(403, "GVCN chỉ thao tác lớp đang được phân công");
+    }
     return demand;
   }
   return {
