@@ -116,6 +116,16 @@ export function createMenuController(service: MenuService = menuService) {
           "Đã ghi nhận kết quả duyệt",
         ),
     ),
+    getApprovalDetail: asyncHandler(
+      async (req, res) =>
+        void sendSuccess(
+          res,
+          await service.getApprovalDetail(
+            uuid(req.params.menuId),
+            requirePrincipal(req),
+          ),
+        ),
+    ),
     getReviews: asyncHandler(
       async (req, res) =>
         void sendSuccess(
