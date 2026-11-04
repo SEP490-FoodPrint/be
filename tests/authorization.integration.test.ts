@@ -42,6 +42,7 @@ import type {
   OnboardingDocument,
 } from "../src/utils/onboarding-documents";
 import { HttpError } from "../src/utils/http-error";
+import { listScopes } from "../src/utils/resource-access";
 import { loadSessionUser } from "../src/utils/session-identity";
 import { createProfileService } from "../src/modules/auth/profile.service";
 import {
@@ -892,6 +893,20 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           portionCount: grCounts[g.name],
         })),
       });
+      const notAssigned = (error: unknown) =>
+        error instanceof HttpError && error.statusCode === 403;
+      // confirmedByUserId không thay cho phân công GVCN
+      await assert.rejects(
+        attendance.savePortionGroups(grDaily.id, grInput, teacherPrincipal),
+        notAssigned,
+      );
+      const grAssignment = await db.classHomeroomAssignment.create({
+        data: {
+          classId: grClass.id,
+          teacherUserId: teacher.id,
+          assignedByUserId: reviewerAccount.id,
+        },
+      });
       await attendance.savePortionGroups(grDaily.id, grInput, teacherPrincipal);
       assert.equal(
         (
@@ -902,6 +917,35 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           )
         ).unchanged,
         true,
+      );
+      assert.equal(
+        (await attendance.getPortionGroups(grDaily.id, teacherPrincipal))
+          .dailyMealPortionId,
+        grDaily.id,
+      );
+      assert.equal(
+        await db.dailyMealPortion.count({
+          where: listScopes["meal-attendance"](teacherPrincipal),
+        }),
+        1,
+      );
+      await db.classHomeroomAssignment.update({
+        where: { id: grAssignment.id },
+        data: { endedAt: new Date(), endedByUserId: reviewerAccount.id },
+      });
+      await assert.rejects(
+        attendance.getPortionGroups(grDaily.id, teacherPrincipal),
+        notAssigned,
+      );
+      await assert.rejects(
+        attendance.savePortionGroups(grDaily.id, grInput, teacherPrincipal),
+        notAssigned,
+      );
+      assert.equal(
+        await db.dailyMealPortion.count({
+          where: listScopes["meal-attendance"](teacherPrincipal),
+        }),
+        0,
       );
       const grRequired = new Map(
         (await menus.getRequirements(grKey, health)).items.map((i) => [
