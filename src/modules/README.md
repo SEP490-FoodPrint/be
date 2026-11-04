@@ -53,7 +53,28 @@ Tất cả đường dẫn bên dưới dùng phương thức **GET**.
 | `traceability`                | `/api/traceability-anchors`          | `TraceabilityAnchor`         | —                              |
 | `menu-review`                 | `/api/menu-reviews`                  | `MenuReviewRecord`           | —                              |
 
+## Phân công giáo viên chủ nhiệm
+
+Bảng `class_homeroom_assignments` lưu GVCN của từng lớp. Mỗi dòng `classes` đã thuộc một niên khóa, nên phân công đi theo năm học; đổi GVCN đóng dòng hiện tại (`ended_at`) và giữ làm lịch sử.
+
+- `GET /api/classes?academicYear=2026-2027`: danh sách lớp kèm `homeroomTeacher` hiện tại và `canAssign` (`class.view`).
+- `GET /api/classes/academic-years`: niên khóa có lớp trong trường và niên khóa hiện tại (`class.view`).
+- `GET /api/classes/eligible-teachers?academicYear=`: tài khoản `HOMEROOM_TEACHER` ACTIVE cùng trường, kèm lớp đang chủ nhiệm trong năm (`class_assignment.manage`).
+- `PUT /api/classes/:classId/homeroom-teacher` body `{ "teacherUserId": "..." }`: gán hoặc đổi GVCN (`class_assignment.manage`).
+- `DELETE /api/classes/:classId/homeroom-teacher`: bỏ GVCN hiện tại (`class_assignment.manage`).
+
+Quy tắc trong transaction: một lớp một GVCN; một GVCN chỉ chủ nhiệm một lớp mỗi niên khóa; chỉ lớp ACTIVE ở niên khóa hiện tại hoặc sắp tới (năm học từ tháng 9, giờ Việt Nam) được thay đổi; trường lấy từ principal. GVCN cũ mất phân công ngay khi bị thay.
+
 `auth` cung cấp signup, login, refresh, logout bằng cookie HttpOnly/phiên Redis, thông tin tài khoản/quyền hiện tại, cập nhật hồ sơ cá nhân bằng PATCH /auth/me (fullName/phone) và danh sách Role; xem [AUTH_SESSIONS.md](../../docs/AUTH_SESSIONS.md). Signup tạo tài khoản UNVERIFIED chưa có yêu cầu duyệt; người dùng xác minh email bằng mã Resend rồi đăng nhập để nộp/xem hồ sơ của mình, chưa được gọi API nghiệp vụ. `onboarding` trong auth xử lý nộp hồ sơ/tài liệu; registration gắn API chi tiết/duyệt/từ chối vào cùng service để giữ một luồng transaction; xem [ONBOARDING.md](../../docs/ONBOARDING.md). Hợp đồng API quản trị role/permission ở [docs/AUTHORIZATION.md](../../docs/AUTHORIZATION.md). `organization` hiện quản lý khung cho School; Supplier và CommuneFoodSafetyUnit có module riêng. API traceability chỉ đọc bản ghi, không gửi transaction blockchain.
+
+## Duyệt thực đơn tuần
+
+BGH phê duyệt hoặc yêu cầu chỉnh sửa nguyên cả `WeeklyMenu`; `MenuDay` chỉ để xem chi tiết.
+
+- `GET /api/v1/menus/:menuId/approval-detail`: hồ sơ duyệt của tuần trong trường của tài khoản (`menu.view`).
+- `POST /api/v1/menus/:menuId/reviews`: body `{ "decision": "APPROVED" | "REVISION_REQUESTED", "feedback": "..." }`; `APPROVED` cần `menu.approve`, yêu cầu chỉnh sửa cần `menu.review` và bắt buộc `feedback`.
+
+Chỉ tuần `PENDING_APPROVAL` được quyết định. Quyết định đổi mọi ngày trong cùng transaction và ghi một `MenuReviewRecord` không có `menuDayId`; body có `menuDayId` bị từ chối. Cột `menu_review_records.menu_day_id` chỉ còn giữ lịch sử của luồng cũ.
 
 ## Quyền truy cập và phân trang
 
