@@ -19,6 +19,8 @@ export function createOrganizationRouter(
   router.get("/public", controller.getPublicSchools);
   router.get("/public/locations", controller.getPublicLocations);
   router.get("/public/code/:code", controller.getPublicSchoolByCode);
+  router.get("/public/:schoolCode/daily-menu", controller.getPublicDailyMenu);
+  router.get("/public/:schoolCode/weekly-menu", controller.getPublicWeeklyMenu);
   router.get("/public/:id", controller.getPublicSchoolById);
 
   // Internal admin endpoint
