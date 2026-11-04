@@ -311,7 +311,10 @@ void test("menu writes enforce real dates, weekly boundaries and server-owned li
 });
 
 void test("menu reviews require a revision reason and reject mass assignment or duplicate allergy IDs", () => {
-  assert.equal(validateMenuReview({ decision: "APPROVED" }).menuDayId, null);
+  assert.deepEqual(validateMenuReview({ decision: "APPROVED" }), {
+    decision: "APPROVED",
+    feedback: null,
+  });
   assert.equal(
     validateMenuReview({
       decision: "REVISION_REQUESTED",
@@ -323,6 +326,7 @@ void test("menu reviews require a revision reason and reject mass assignment or 
     { decision: "REVISION_REQUESTED" },
     { decision: "REVISION_REQUIRED" },
     { decision: "APPROVED", reviewerUserId: testStaff.id },
+    { decision: "APPROVED", menuDayId: testStaff.id },
   ])
     assert.throws(() => validateMenuReview(input), HttpError);
   assert.throws(
@@ -406,6 +410,7 @@ void test("v1 routes enforce permissions and emit versioned error codes before a
     ["POST", `/menus/${testStaff.id}/submit`],
     ["POST", `/menus/${testStaff.id}/reviews`],
     ["GET", `/menus/${testStaff.id}/reviews`],
+    ["GET", `/menus/${testStaff.id}/approval-detail`],
     ["POST", "/menus/allergy-check"],
     ["GET", "/kitchen"],
     ["GET", "/kitchen/stats"],

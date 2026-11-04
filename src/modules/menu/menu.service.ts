@@ -1461,56 +1461,41 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
         permission,
         async (tx, actor, schoolId) => {
           const menu = await owned(tx, id, schoolId);
-          if (!["PENDING_APPROVAL", "REVISION_REQUIRED"].includes(menu.status))
+          if (menu.status !== "PENDING_APPROVAL")
             throw new HttpError(409, "Thực đơn chưa chờ duyệt");
-          const days = input.menuDayId
-            ? menu.menuDays.filter((d) => d.id === input.menuDayId)
-            : menu.menuDays.filter(
-                (d) => d.approvalStatus === "PENDING_APPROVAL",
-              );
-          if (!days.length)
-            throw new HttpError(
-              404,
-              "Không có ngày cần duyệt trong thực đơn này",
-            );
-          if (days.some((d) => d.approvalStatus !== "PENDING_APPROVAL"))
-            throw new HttpError(409, "Ngày không chờ duyệt");
-          if (input.decision === "APPROVED")
-            await ready(tx, { ...menu, menuDays: days }, schoolId);
           const status =
             input.decision === "APPROVED" ? "APPROVED" : "REVISION_REQUIRED";
+          // Ngày đã APPROVED theo luồng cũ cũng phải đạt điều kiện như các ngày khác.
+          if (input.decision === "APPROVED")
+            await ready(
+              tx,
+              {
+                ...menu,
+                menuDays: menu.menuDays.map((day) => ({
+                  ...day,
+                  approvalStatus: "PENDING_APPROVAL" as const,
+                })),
+              },
+              schoolId,
+            );
           const record = await tx.menuReviewRecord.create({
             data: { weeklyMenuId: id, ...input, reviewerUserId: actor.id },
             include: { User: { select: { id: true, fullName: true } } },
           });
           await tx.menuDay.updateMany({
-            where: { id: { in: days.map((d) => d.id) } },
+            where: { weeklyMenuId: id },
             data: { approvalStatus: status },
           });
-          const states = await tx.menuDay.findMany({
-            where: { weeklyMenuId: id },
-            select: { approvalStatus: true },
-          });
-          const weeklyStatus = states.every(
-            (d) => d.approvalStatus === "APPROVED",
-          )
-            ? "APPROVED"
-            : states.some((d) => d.approvalStatus === "REVISION_REQUIRED")
-              ? "REVISION_REQUIRED"
-              : "PENDING_APPROVAL";
           await tx.weeklyMenu.update({
             where: { id },
             data: {
-              status: weeklyStatus,
-              approvedAt:
-                weeklyStatus === "APPROVED" ? record.reviewedAt : null,
+              status,
+              approvedAt: status === "APPROVED" ? record.reviewedAt : null,
             },
           });
           return {
             weeklyMenuId: id,
-            menuDayId: input.menuDayId,
-            approvalStatus: status,
-            weeklyStatus,
+            weeklyStatus: status,
             reviewedAt: record.reviewedAt,
             reviewer: record.User,
           };
@@ -1659,6 +1644,166 @@ const readFromDatabase: ListReader = async (args) => {
   return prisma.weeklyMenu.findMany(args);
 };
 
+const approvalInclude = {
+  School: { select: { name: true } },
+  menuDays: {
+    orderBy: { menuDate: "asc" as const },
+    include: {
+      menuDayDishes: {
+        orderBy: { displayOrder: "asc" as const },
+        include: {
+          Dish: {
+            include: {
+              dishIngredientEntries: {
+                include: {
+                  IngredientEntry: {
+                    include: {
+                      Ingredient: {
+                        include: {
+                          Supplier: { select: { id: true, name: true } },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  menuReviewRecords: {
+    orderBy: { reviewedAt: "desc" as const },
+    include: {
+      User: { select: { fullName: true, Role: { select: { code: true } } } },
+    },
+  },
+} as const satisfies Prisma.WeeklyMenuInclude;
+
+const approvalDayLabels = [
+  "Chủ Nhật",
+  "Thứ Hai",
+  "Thứ Ba",
+  "Thứ Tư",
+  "Thứ Năm",
+  "Thứ Sáu",
+  "Thứ Bảy",
+];
+
+const formatDate = (value: Date): string =>
+  new Intl.DateTimeFormat("vi-VN", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    timeZone: "Asia/Ho_Chi_Minh",
+  }).format(value);
+
+const formatDateTime = (value: Date | null): string | null =>
+  value
+    ? new Intl.DateTimeFormat("vi-VN", {
+        dateStyle: "short",
+        timeStyle: "short",
+        timeZone: "Asia/Ho_Chi_Minh",
+      }).format(value)
+    : null;
+
+type ApprovalMenu = Prisma.WeeklyMenuGetPayload<{
+  include: typeof approvalInclude;
+}>;
+
+function approvalDetail(menu: ApprovalMenu) {
+  const healthReview = menu.menuReviewRecords.find(
+    (review) => review.User.Role.code === "SCHOOL_HEALTH_OFFICER",
+  );
+  // Tuần đang chờ duyệt lại không hiển thị quyết định của lần trước.
+  const boardReview =
+    menu.status === "PENDING_APPROVAL"
+      ? undefined
+      : menu.menuReviewRecords.find(
+          (review) => review.User.Role.code === "SCHOOL_MANAGEMENT_BOARD",
+        );
+  const days = menu.menuDays.map((day) => {
+    const placements = day.menuDayDishes.map((placement) => ({
+      mealType: placement.mealType,
+      portionSize: placement.portionSize ? Number(placement.portionSize) : 0,
+      item: {
+        name: placement.Dish.name,
+        description: placement.Dish.description,
+        supplier:
+          [
+            ...new Set(
+              placement.Dish.dishIngredientEntries.map(
+                (link) => link.IngredientEntry.Ingredient.Supplier.name,
+              ),
+            ),
+          ].join(", ") || null,
+      },
+    }));
+    return {
+      id: day.id,
+      shortLabel: approvalDayLabels[day.menuDate.getUTCDay()],
+      date: formatDate(day.menuDate),
+      portions: Math.max(0, ...placements.map((item) => item.portionSize)),
+      lunch: placements
+        .filter((item) => item.mealType === "LUNCH")
+        .map((item) => item.item),
+      snack: placements
+        .filter((item) => item.mealType === "AFTERNOON")
+        .map((item) => item.item),
+    };
+  });
+  const supplierIds = new Set(
+    menu.menuDays.flatMap((day) =>
+      day.menuDayDishes.flatMap((placement) =>
+        placement.Dish.dishIngredientEntries.map(
+          (link) => link.IngredientEntry.Ingredient.Supplier.id,
+        ),
+      ),
+    ),
+  );
+  const firstDate = menu.menuDays[0]?.menuDate ?? menu.weekStartDate;
+  const lastDate = menu.menuDays.at(-1)?.menuDate ?? menu.weekStartDate;
+
+  return {
+    id: menu.id,
+    title: menu.title,
+    status: menu.status,
+    canDecide: menu.status === "PENDING_APPROVAL",
+    submittedAt: formatDateTime(menu.submittedAt),
+    summary: {
+      audience: "Toàn trường",
+      audienceDetail: "Số suất ăn được xác định theo kế hoạch phục vụ",
+      servingPeriod: `${formatDate(firstDate)} - ${formatDate(lastDate)}`,
+      proposer: "Cán bộ Y tế",
+      proposerDetail: menu.School.name,
+      supplier: `${supplierIds.size} nhà cung cấp`,
+    },
+    compliance: [],
+    days,
+    medicalReview: {
+      status:
+        healthReview?.decision === "APPROVED"
+          ? "Đã thẩm định"
+          : healthReview
+            ? "Yêu cầu điều chỉnh"
+            : "Chưa thẩm định",
+      isApproved: healthReview?.decision === "APPROVED",
+      reviewer: healthReview?.User.fullName ?? "Chưa phân công",
+      role: "Cán bộ Y tế",
+      reviewedAt: formatDateTime(healthReview?.reviewedAt ?? null) ?? "—",
+      note: healthReview?.feedback ?? "Chưa có nhận xét thẩm định.",
+      documents: [],
+    },
+    approval: {
+      approver: boardReview?.User.fullName ?? null,
+      role: "Ban Giám hiệu",
+      note: boardReview?.feedback ?? "",
+      reviewedAt: formatDateTime(boardReview?.reviewedAt ?? null),
+    },
+  };
+}
+
 export function createMenuService(
   read: ListReader = readFromDatabase,
   connect: () => Promise<PrismaClient> = getPrisma,
@@ -1666,6 +1811,16 @@ export function createMenuService(
   return {
     ...createIngredientOperations(connect),
     ...createMenuOperations(connect),
+    async getApprovalDetail(id: string, principal: AuthPrincipal) {
+      const scope = listScopes.menu(principal);
+      const db = await connect();
+      const menu = await db.weeklyMenu.findFirst({
+        where: { AND: [scope, { id }] },
+        include: approvalInclude,
+      });
+      if (!menu) throw new HttpError(404, "Không tìm thấy thực đơn của trường");
+      return approvalDetail(menu);
+    },
     getAll(query: ListQuery, principal: AuthPrincipal) {
       const where = listScopes["menu"](principal);
       return readListPage(

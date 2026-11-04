@@ -233,7 +233,8 @@ export function validateMenuWrite(value: unknown) {
 export type MenuWrite = ReturnType<typeof validateMenuWrite>;
 
 export function validateMenuReview(value: unknown) {
-  const body = objectBody(value, ["menuDayId", "decision", "feedback"]);
+  // BGH quyết định cho cả tuần: không nhận menuDayId.
+  const body = objectBody(value, ["decision", "feedback"]);
   if (body.decision !== "APPROVED" && body.decision !== "REVISION_REQUESTED")
     throw new HttpError(400, "Quyết định duyệt không hợp lệ");
   const feedback =
@@ -242,11 +243,7 @@ export function validateMenuReview(value: unknown) {
       : text(body.feedback, 2000);
   if (body.decision === "REVISION_REQUESTED" && !feedback)
     throw new HttpError(400, "Cần nêu lý do yêu cầu chỉnh sửa");
-  return {
-    menuDayId: body.menuDayId == null ? null : uuid(body.menuDayId),
-    decision: body.decision,
-    feedback,
-  } as const;
+  return { decision: body.decision, feedback } as const;
 }
 export type MenuReviewInput = ReturnType<typeof validateMenuReview>;
 
