@@ -9,6 +9,8 @@ import {
   validateMealAttendanceListQuery,
   validateMealSummaryQuery,
   validateDailyPortionGroups,
+  validateDailyMealPortion,
+  validateMyClassMealQuery,
 } from "./meal-attendance.validation";
 import { uuid } from "../../utils/auth-validation";
 
@@ -16,6 +18,32 @@ export function createMealAttendanceController(
   service: MealAttendanceService = mealAttendanceService,
 ) {
   return {
+    getMyClass: asyncHandler(async (req, res) => {
+      sendSuccess(
+        res,
+        await service.getMyClass(
+          validateMyClassMealQuery(req.query),
+          requirePrincipal(req),
+        ),
+      );
+    }),
+    saveDraft: asyncHandler(async (req, res) => {
+      sendSuccess(
+        res,
+        await service.saveDraft(
+          validateDailyMealPortion(req.body),
+          requirePrincipal(req),
+        ),
+        "Đã lưu nháp số suất ăn của lớp",
+      );
+    }),
+    finalize: asyncHandler(async (req, res) => {
+      sendSuccess(
+        res,
+        await service.finalize(uuid(req.params.id), requirePrincipal(req)),
+        "Đã chốt số suất ăn của lớp",
+      );
+    }),
     getPortionGroups: asyncHandler(async (req, res) => {
       sendSuccess(
         res,
