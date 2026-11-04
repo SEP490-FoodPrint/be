@@ -13,6 +13,8 @@ import {
   validateHomeroomAssignment,
 } from "../src/modules/class/class.validation";
 import { createClassService } from "../src/modules/class/class.service";
+import { createMealAttendanceService } from "../src/modules/meal-attendance/meal-attendance.service";
+import { listScopes } from "../src/utils/resource-access";
 
 const isHttp = (status: number) => (error: unknown) =>
   error instanceof HttpError && error.statusCode === status;
@@ -51,6 +53,112 @@ const identity = {
   },
   permissionDenials: [],
 };
+
+const teacher: AuthPrincipal = {
+  ...board,
+  id: "00000000-0000-4000-8000-0000000000c1",
+  username: "homeroom_teacher",
+  role: "HOMEROOM_TEACHER",
+  permissions: ["daily_meal_portion.view", "daily_meal_portion.update"],
+};
+
+void test("homeroom teachers only list meals of their current assigned classes", () => {
+  assert.deepEqual(listScopes["meal-attendance"](teacher), {
+    Class: {
+      schoolId: board.schoolId,
+      homeroomAssignments: {
+        some: { teacherUserId: teacher.id, endedAt: null },
+      },
+    },
+  });
+  assert.deepEqual(
+    listScopes["meal-attendance"]({
+      ...teacher,
+      role: "SCHOOL_KITCHEN_STAFF",
+    }),
+    { Class: { schoolId: board.schoolId } },
+  );
+});
+
+void test("homeroom summary is class-scoped while school staff keep school scope", async () => {
+  const seen: unknown[] = [];
+  const tx = {
+    dailyMealPortion: {
+      aggregate: (args: unknown) => {
+        seen.push(args);
+        return Promise.resolve({ _sum: { totalPortions: 20 }, _count: 1 });
+      },
+      count: (args: unknown) => {
+        seen.push(args);
+        return Promise.resolve(0);
+      },
+    },
+  };
+  const db = {
+    $transaction: (operation: (client: typeof tx) => Promise<unknown>) =>
+      operation(tx),
+  } as unknown as PrismaClient;
+  const service = createMealAttendanceService(undefined, () =>
+    Promise.resolve(db),
+  );
+  const query = {
+    date: new Date("2026-11-04T00:00:00.000Z"),
+    mealType: "LUNCH",
+  } as const;
+
+  await service.summary(query, teacher);
+  assert.deepEqual((seen[0] as { where: { Class: unknown } }).where.Class, {
+    schoolId: board.schoolId,
+    homeroomAssignments: {
+      some: { teacherUserId: teacher.id, endedAt: null },
+    },
+  });
+
+  seen.length = 0;
+  await service.summary(query, {
+    ...teacher,
+    role: "SCHOOL_KITCHEN_STAFF",
+    permissions: ["cooking_batch.view"],
+  });
+  assert.deepEqual((seen[0] as { where: { Class: unknown } }).where.Class, {
+    schoolId: board.schoolId,
+  });
+});
+
+void test("meal detail ownership follows the current assignment, not the confirmer", async () => {
+  let assigned = false;
+  const demand = {
+    id: "00000000-0000-4000-8000-0000000000d1",
+    classId: "00000000-0000-4000-8000-0000000000d2",
+    confirmedByUserId: teacher.id,
+    mealDate: new Date("2026-11-04T00:00:00.000Z"),
+    mealType: "LUNCH",
+    totalPortions: 20,
+    status: "FINALIZED",
+    portionGroups: [],
+    dailyAllergyPortions: [],
+  };
+  const db = {
+    dailyMealPortion: { findFirst: () => Promise.resolve(demand) },
+    classHomeroomAssignment: {
+      findFirst: () => Promise.resolve(assigned ? { id: "assignment" } : null),
+    },
+    menuMealPortionGroup: { findMany: () => Promise.resolve([]) },
+  } as unknown as PrismaClient;
+  const service = createMealAttendanceService(undefined, () =>
+    Promise.resolve(db),
+  );
+
+  await assert.rejects(
+    service.getPortionGroups(demand.id, teacher),
+    isHttp(403),
+  );
+  assigned = true;
+  assert.equal(
+    (await service.getPortionGroups(demand.id, teacher)).dailyMealPortionId,
+    demand.id,
+  );
+});
 
 void test("academic year starts in September in Vietnam time", () => {
   assert.equal(currentAcademicYear(NOV_2026), "2026-2027");
