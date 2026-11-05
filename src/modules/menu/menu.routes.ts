@@ -100,6 +100,12 @@ export function createMenuRouter(
     requirePermission("menu.update"),
     controller.submit,
   );
+  router.get(
+    "/:menuId/approval-detail",
+    authHandler,
+    requirePermission("menu.view"),
+    controller.getApprovalDetail,
+  );
   router.post(
     "/:menuId/reviews",
     authHandler,
