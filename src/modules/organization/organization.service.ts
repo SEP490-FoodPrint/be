@@ -21,6 +21,7 @@ import type {
   PublicDailyMenuQuery,
   PublicSchoolListQuery,
   PublicWeeklyMenuQuery,
+  MealTimesInput,
 } from "./organization.validation";
 import {
   getPublicSchools,
@@ -64,6 +65,7 @@ const readFromDatabase: ListReader = async (args) => {
 };
 
 const COOKING_MODE_PERMISSION = "school_cooking_mode.manage";
+const MEAL_TIME_PERMISSION = "school_meal_time.manage";
 
 function assertCookingModeManager(principal: AuthPrincipal) {
   assertPermission(principal, COOKING_MODE_PERMISSION);
@@ -73,6 +75,24 @@ function assertCookingModeManager(principal: AuthPrincipal) {
     !principal.schoolId
   )
     throw new HttpError(403, "Chỉ Ban Giám hiệu được cấu hình chế độ nấu");
+}
+
+function assertMealTimeManager(principal: AuthPrincipal) {
+  assertPermission(principal, MEAL_TIME_PERMISSION);
+  if (
+    principal.role !== ROLES.SCHOOL_MANAGEMENT_BOARD ||
+    principal.orgType !== "SCHOOL" ||
+    !principal.schoolId
+  )
+    throw new HttpError(403, "Chỉ Ban Giám hiệu được cấu hình giờ phục vụ");
+}
+
+function formatTime(value: Date | null) {
+  return value ? value.toISOString().slice(11, 16) : null;
+}
+
+function timeValue(value: string | null) {
+  return value ? new Date(`1970-01-01T${value}:00.000Z`) : null;
 }
 
 export function createOrganizationService(
@@ -122,6 +142,43 @@ export function createOrganizationService(
           });
         },
       );
+    },
+
+    async getMealTimes(principal: AuthPrincipal) {
+      assertMealTimeManager(principal);
+      const prisma = await getClient();
+      const school = await prisma.school.findUniqueOrThrow({
+        where: { id: principal.schoolId! },
+        select: { lunchTime: true, afternoonMealTime: true },
+      });
+      return {
+        lunchTime: formatTime(school.lunchTime),
+        afternoonMealTime: formatTime(school.afternoonMealTime),
+      };
+    },
+
+    async updateMealTimes(input: MealTimesInput, principal: AuthPrincipal) {
+      assertMealTimeManager(principal);
+      const school = await withSchoolTransaction(
+        await getClient(),
+        principal,
+        MEAL_TIME_PERMISSION,
+        (tx, actor, schoolId) => {
+          assertMealTimeManager(actor);
+          return tx.school.update({
+            where: { id: schoolId },
+            data: {
+              lunchTime: timeValue(input.lunchTime),
+              afternoonMealTime: timeValue(input.afternoonMealTime),
+            },
+            select: { lunchTime: true, afternoonMealTime: true },
+          });
+        },
+      );
+      return {
+        lunchTime: formatTime(school.lunchTime),
+        afternoonMealTime: formatTime(school.afternoonMealTime),
+      };
     },
 
     getPublicSchools(query: PublicSchoolListQuery) {
