@@ -10,3 +10,14 @@ export const registrationApplicantSelect = {
   status: true,
   emailVerifiedAt: true,
 } as const satisfies Prisma.UserSelect;
+
+export const registrationListSelect = {
+  id: true,
+  applicantUserId: true,
+  applicantUser: { select: registrationApplicantSelect },
+  requestType: true,
+  status: true,
+  submittedAt: true,
+  reviewedAt: true,
+  updatedAt: true,
+} as const satisfies Prisma.RegistrationRequestSelect;
