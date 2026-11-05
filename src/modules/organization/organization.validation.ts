@@ -39,6 +39,27 @@ export function validateCookingMode(value: unknown): CookingMode {
   return cookingMode;
 }
 
+const TIME_REGEX = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+
+export function validateMealTimes(value: unknown) {
+  const body = objectBody(value, ["lunchTime", "afternoonMealTime"]);
+  const parseTime = (input: unknown, label: string) => {
+    if (input === null) return null;
+    if (typeof input !== "string" || !TIME_REGEX.test(input))
+      throw new HttpError(400, `${label} phải có định dạng HH:mm hoặc null`);
+    return input;
+  };
+  const lunchTime = parseTime(body.lunchTime, "Giờ phục vụ bữa trưa");
+  const afternoonMealTime = parseTime(
+    body.afternoonMealTime,
+    "Giờ phục vụ bữa phụ",
+  );
+  if (lunchTime && afternoonMealTime && lunchTime >= afternoonMealTime)
+    throw new HttpError(400, "Giờ bữa trưa phải trước giờ bữa phụ");
+  return { lunchTime, afternoonMealTime };
+}
+export type MealTimesInput = ReturnType<typeof validateMealTimes>;
+
 export function validatePublicSchoolQuery(
   query: Record<string, unknown>,
 ): PublicSchoolListQuery {
