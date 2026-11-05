@@ -220,7 +220,7 @@ printf '%s\n' 'docs(team): update contribution guide' | npm exec --no -- commitl
 
 ## 8. Quy trình Spec-Driven với spec-kit
 
-Mọi thay đổi trong `src/**` hoặc `prisma/**` (gồm `feat`, `fix`, `refactor`, `perf`) phải có spec viết bằng [spec-kit](https://github.com/github/spec-kit) và nằm **cùng một PR** với code. Nguyên tắc bất biến của dự án nằm trong [.specify/memory/constitution.md](.specify/memory/constitution.md); chi tiết vẫn theo [AGENTS.md](AGENTS.md).
+Mọi thay đổi trong `src/**` hoặc `prisma/**` (gồm `feat`, `fix`, `refactor`, `perf`) phải có spec viết bằng [spec-kit](https://github.com/github/spec-kit) và nằm **cùng một PR** với code. Nguyên tắc bất biến của dự án nằm trong [.specify/memory/constitution.md](.specify/memory/constitution.md); chi tiết vẫn theo [AGENTS.md](AGENTS.md). Giải thích chi tiết từng lệnh `$speckit-*`, khi nào dùng và ví dụ thực hành nằm tại [docs/SPEC_KIT_GUIDE.md](docs/SPEC_KIT_GUIDE.md).
 
 ### 8.1. Cài đặt một lần
 
