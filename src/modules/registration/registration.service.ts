@@ -1,53 +1,58 @@
 import type { AuthPrincipal } from "../../types/auth";
 import { listScopes } from "../../utils/resource-access";
-import type { Prisma } from "../../generated/prisma/client";
-import { getPrisma } from "../../utils/database";
-import { registrationApplicantSelect } from "./registration.select";
+import { readListPage, type ListPage } from "../../utils/list-query";
 import {
-  listWindow,
-  readListPage,
-  type ListQuery,
-} from "../../utils/list-query";
+  registrationRepository,
+  type RegistrationListRow,
+  type RegistrationRepository,
+} from "./registration.repository";
+import type { RegistrationListRequestDTO } from "./registration.request.dto";
+import type { RegistrationListResponseDTO } from "./registration.response.dto";
 
-const select = {
-  id: true,
-  applicantUserId: true,
-  applicantUser: { select: registrationApplicantSelect },
-  requestType: true,
-  status: true,
-  submittedAt: true,
-  reviewedAt: true,
-  updatedAt: true,
-} as const satisfies Prisma.RegistrationRequestSelect;
-
-type ListRow = Prisma.RegistrationRequestGetPayload<{ select: typeof select }>;
-type ListArguments = Pick<
-  Prisma.RegistrationRequestFindManyArgs,
-  "skip" | "take" | "orderBy" | "where"
-> & {
-  select: typeof select;
-};
-type ListReader = (args: ListArguments) => Promise<ListRow[]>;
-
-const readFromDatabase: ListReader = async (args) => {
-  const prisma = await getPrisma();
-  return prisma.registrationRequest.findMany(args);
-};
-
-export function createRegistrationService(read: ListReader = readFromDatabase) {
+function toRegistrationListResponseDTO(
+  page: ListPage<RegistrationListRow>,
+): RegistrationListResponseDTO {
   return {
-    getAll(query: ListQuery, principal: AuthPrincipal) {
-      const where = listScopes["registration"](principal);
+    items: page.items.map((row) => ({
+      id: row.id,
+      applicantUserId: row.applicantUserId,
+      applicantUser: {
+        id: row.applicantUser.id,
+        username: row.applicantUser.username,
+        fullName: row.applicantUser.fullName,
+        email: row.applicantUser.email,
+        phone: row.applicantUser.phone,
+        status: row.applicantUser.status,
+        emailVerifiedAt:
+          row.applicantUser.emailVerifiedAt?.toISOString() ?? null,
+      },
+      requestType: row.requestType,
+      status: row.status,
+      submittedAt: row.submittedAt.toISOString(),
+      reviewedAt: row.reviewedAt?.toISOString() ?? null,
+      updatedAt: row.updatedAt.toISOString(),
+    })),
+    pagination: {
+      page: page.pagination.page,
+      limit: page.pagination.limit,
+      hasNext: page.pagination.hasNext,
+    },
+  };
+}
+
+export function createRegistrationService(
+  repository: RegistrationRepository = registrationRepository,
+) {
+  return {
+    getAll(
+      query: RegistrationListRequestDTO,
+      principal: AuthPrincipal,
+    ): Promise<RegistrationListResponseDTO> {
+      listScopes.registration(principal);
       return readListPage(
-        () =>
-          read({
-            ...listWindow(query),
-            where,
-            select,
-            orderBy: [{ id: "asc" }],
-          }),
+        () => repository.listForReview(query, principal),
         query,
-      );
+      ).then(toRegistrationListResponseDTO);
     },
   };
 }

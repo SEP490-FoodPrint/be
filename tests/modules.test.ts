@@ -21,6 +21,12 @@ import {
 } from "../src/modules/user/user.service";
 import { createWarehouseService } from "../src/modules/warehouse/warehouse.service";
 import { createRegistrationService } from "../src/modules/registration/registration.service";
+import { createRegistrationRepository } from "../src/modules/registration/registration.repository";
+import { createRegistrationRouter } from "../src/modules/registration/registration.routes";
+import {
+  RegistrationValidationError,
+  validateRegistrationListQuery,
+} from "../src/modules/registration/registration.validation";
 import { HttpError } from "../src/utils/http-error";
 import { signToken } from "../src/utils/jwt";
 import { parseListQuery } from "../src/utils/list-query";
@@ -607,6 +613,59 @@ void test("a final or empty page has no next page", async () => {
   }
 });
 
+void test("registration query validation preserves optional pagination, strict inputs and offset bounds", () => {
+  assert.deepEqual(validateRegistrationListQuery({}), { page: 1, limit: 20 });
+  assert.deepEqual(validateRegistrationListQuery({ limit: "100" }), {
+    page: 1,
+    limit: 100,
+  });
+  assert.deepEqual(
+    validateRegistrationListQuery({ page: "2147483648", limit: "1" }),
+    { page: 2147483648, limit: 1 },
+  );
+  for (const query of [
+    null,
+    [],
+    { page: null },
+    { page: 1 },
+    { page: "" },
+    { page: "01" },
+    { page: " 1 " },
+    { page: "1.5" },
+    { page: "1e2" },
+    { page: "-1" },
+    { page: ["1", "2"] },
+    { limit: { value: "2" } },
+    { page: "9007199254740992" },
+    { page: "2147483649", limit: "1" },
+    { limit: "101" },
+    { schoolId: "other-school" },
+  ]) {
+    assert.throws(
+      () => validateRegistrationListQuery(query),
+      (error: unknown) =>
+        error instanceof RegistrationValidationError &&
+        error.statusCode === 400,
+    );
+  }
+});
+
+void test("registration validation reports multiple fields without reflecting input values", () => {
+  assert.throws(
+    () =>
+      validateRegistrationListQuery({ page: "private-input", limit: "101" }),
+    (error: unknown) => {
+      assert(error instanceof RegistrationValidationError);
+      assert.deepEqual(error.fields, [
+        { field: "page", message: "page phải là số nguyên dương" },
+        { field: "limit", message: "limit tối đa 100" },
+      ]);
+      assert(!JSON.stringify(error.fields).includes("private-input"));
+      return true;
+    },
+  );
+});
+
 void test("registration list returns safe applicant contacts with stable pagination and nullable metadata", async () => {
   let calls = 0;
   const applicantUser = {
@@ -633,7 +692,7 @@ void test("registration list returns safe applicant contacts with stable paginat
     id: "request-2",
     applicantUser: { ...applicantUser, phone: null, emailVerifiedAt: null },
   };
-  const service = createRegistrationService((args) => {
+  const repository = createRegistrationRepository((args) => {
     calls++;
     assert.equal(args.skip, 4);
     assert.equal(args.take, 3);
@@ -648,13 +707,27 @@ void test("registration list returns safe applicant contacts with stable paginat
       "status",
       "username",
     ]);
-    return Promise.resolve([row, nullable, { ...row, id: "request-3" }]);
+    return Promise.resolve([
+      {
+        ...row,
+        profileData: { private: "hidden" },
+        applicantUser: { ...applicantUser, passwordHash: "hidden" },
+      },
+      nullable,
+      { ...row, id: "request-3" },
+    ]);
   });
+  const service = createRegistrationService(repository);
   const result = await service.getAll(
     { page: 3, limit: 2 },
     { ...testAdmin, permissions: ["registration.view"] },
   );
   assert.equal(calls, 1);
+  assert.equal(result.items[0].submittedAt, now.toISOString());
+  assert.equal(
+    result.items[0].applicantUser.emailVerifiedAt,
+    now.toISOString(),
+  );
   assert.deepEqual(result.pagination, { page: 3, limit: 2, hasNext: true });
   assert.deepEqual(
     result.items.map((item) => item.id),
@@ -681,7 +754,13 @@ void test("registration list returns safe applicant contacts with stable paginat
 
 void test("registration contact reads still require an assigned permission and System organization scope", () => {
   let reads = 0;
-  const service = createRegistrationService(() => {
+  const service = createRegistrationService({
+    listForReview: () => {
+      reads++;
+      return Promise.resolve([]);
+    },
+  });
+  const repository = createRegistrationRepository(() => {
     reads++;
     return Promise.resolve([]);
   });
@@ -694,8 +773,83 @@ void test("registration contact reads still require an assigned permission and S
       (error: unknown) =>
         error instanceof HttpError && error.statusCode === 403,
     );
+    assert.throws(
+      () => repository.listForReview({ page: 1, limit: 5 }, principal),
+      (error: unknown) =>
+        error instanceof HttpError && error.statusCode === 403,
+    );
   }
   assert.equal(reads, 0);
+});
+
+void test("registration HTTP preserves envelopes and reports field errors before database access", async (context) => {
+  context.mock.method(console, "error", () => undefined);
+  let reads = 0;
+  let databaseFailure = false;
+  const service = createRegistrationService(
+    createRegistrationRepository(() => {
+      reads++;
+      if (databaseFailure)
+        throw new Error("postgresql://private:password@localhost/private");
+      return Promise.resolve([]);
+    }),
+  );
+  const app = express();
+  app.use(
+    "/api/registration-requests",
+    createRegistrationRouter(service, (req, _res, next) => {
+      req.auth = { ...testAdmin, permissions: ["registration.view"] };
+      next();
+    }),
+  );
+  app.use(globalErrorHandler);
+  const http = await startHttp(app);
+  context.after(() => http.close());
+
+  const invalid = await http.request(
+    "/api/registration-requests?page=private-input&limit=101",
+  );
+  assert.equal(invalid.status, 400);
+  assert.deepEqual(invalid.body, {
+    success: false,
+    statusCode: 400,
+    message: "Tham số danh sách đăng ký không hợp lệ",
+    error: {
+      fields: [
+        { field: "page", message: "page phải là số nguyên dương" },
+        { field: "limit", message: "limit tối đa 100" },
+      ],
+    },
+  });
+  for (const query of ["?page=1&page=2", "?schoolId=other-school"]) {
+    assert.equal(
+      (await http.request(`/api/registration-requests${query}`)).status,
+      400,
+    );
+  }
+  assert.equal(reads, 0);
+
+  const success = await http.request("/api/registration-requests");
+  assert.equal(success.status, 200);
+  assert.deepEqual(success.body, {
+    success: true,
+    statusCode: 200,
+    message: "Lấy danh sách yêu cầu đăng ký thành công",
+    data: {
+      items: [],
+      pagination: { page: 1, limit: 20, hasNext: false },
+    },
+  });
+  assert.equal(reads, 1);
+
+  databaseFailure = true;
+  const failure = await http.request("/api/registration-requests");
+  assert.equal(failure.status, 503);
+  assert.deepEqual(failure.body, {
+    success: false,
+    statusCode: 503,
+    message: "Không thể tải danh sách. Vui lòng thử lại sau.",
+  });
 });
 
 void test("composite-primary-key lists use both keys for deterministic ordering", async () => {
