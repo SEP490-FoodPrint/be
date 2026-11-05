@@ -143,6 +143,8 @@ Luồng hiện tại là `dev` → `<type>/<description>` → PR vào `dev` → 
 
 Đây là quy ước team cần review thủ công: hooks hiện tại chưa kiểm tra tên nhánh. Commitlint chỉ kiểm tra commit message. `git check-ref-format --branch <ten-nhanh>` chỉ kiểm tra cú pháp Git, không xác minh đầy đủ quy ước phía trên.
 
+Riêng nhánh có thay đổi `src/**` hoặc `prisma/**` phải dùng dạng `<feat|fix|refactor|perf>/NNN-slug` gắn với spec `specs/NNN-slug/`; dạng này được job **Spec gate** trong CI kiểm tra tự động. Xem [mục 8](#8-quy-trình-spec-driven-với-spec-kit).
+
 ## 5. Quy trình làm việc
 
 Mỗi commit tập trung vào một thay đổi có thể giải thích và review độc lập. Tạo nhánh công việc theo quy tắc phía trên trước khi bắt đầu thay đổi mới.
@@ -192,6 +194,7 @@ Ghi rõ kiểm tra bị BLOCKED và nguyên nhân nếu thiếu hạ tầng. Cá
 PR cần có:
 
 - Tên nhánh đúng quy tắc và nhánh đích `dev` cho công việc thường ngày; PR phát hành từ `dev` vào `main`.
+- Đường dẫn spec `specs/NNN-slug/` nếu PR thay đổi `src/**` hoặc `prisma/**` (xem [mục 8](#8-quy-trình-spec-driven-với-spec-kit)).
 - Vấn đề cần giải quyết và hành vi/cấu hình sau thay đổi.
 - Issue liên quan nếu có, cùng phạm vi các thành phần bị ảnh hưởng.
 - Lệnh kiểm tra thực tế và kết quả PASS/FAIL/BLOCKED; nêu lỗi còn tồn tại.
@@ -199,7 +202,7 @@ PR cần có:
 
 Hooks kiểm tra local; GitHub Actions tại [.github/workflows/ci.yml](.github/workflows/ci.yml) chạy lại kiểm tra khi push lên `main`/`dev` hoặc mở/cập nhật PR vào hai nhánh này. Job **Code quality** cài dependencies bằng `npm ci`, kiểm tra Conventional Commits, validate/generate Prisma, chạy `validate` và `test:unit`. PR kiểm tra toàn bộ commit trong khoảng base/head; push kiểm tra commit cuối cùng. Merge/revert messages vẫn theo ngoại lệ của Commitlint hiện tại.
 
-CI lấy Node từ `.nvmrc`, yêu cầu npm theo `package.json`. Job Code quality dùng URL placeholder local; job PostgreSQL migrations dùng service PostgreSQL 18 tạm để kiểm tra baseline, migration, CHECK và phân quyền/phạm vi dữ liệu bằng `test:authorization`. Job Backend quality tổng hợp hai kết quả và thất bại nếu một job lỗi hoặc bị bỏ qua, giữ nguyên tên check bắt buộc hiện tại. Các job quality không kết nối Azure, chạy Redis integration hoặc tải `.env`/secrets thật. Sau khi CI của push vào `dev` PASS, job CD được gọi để triển khai các migration còn thiếu lên Azure; PR và `main` không deploy database này. Chất lượng mô tả, phạm vi commit/PR và quy trình nhánh vẫn cần team review.
+CI lấy Node từ `.nvmrc`, yêu cầu npm theo `package.json`. Job Code quality dùng URL placeholder local; job PostgreSQL migrations dùng service PostgreSQL 18 tạm để kiểm tra baseline, migration, CHECK và phân quyền/phạm vi dữ liệu bằng `test:authorization`. Job **Spec gate** chỉ chạy với PR và kiểm tra spec theo [mục 8.5](#85-spec-gate-trong-ci). Job Backend quality tổng hợp các kết quả và thất bại nếu Code quality hoặc PostgreSQL migrations lỗi hoặc bị bỏ qua, hay Spec gate lỗi (Spec gate được phép bỏ qua với sự kiện push), giữ nguyên tên check bắt buộc hiện tại. Các job quality không kết nối Azure, chạy Redis integration hoặc tải `.env`/secrets thật. Sau khi CI của push vào `dev` PASS, job CD được gọi để triển khai các migration còn thiếu lên Azure; PR và `main` không deploy database này. Chất lượng mô tả, phạm vi commit/PR và quy trình nhánh vẫn cần team review.
 
 PR thay đổi database phải chứa cả SQL migration mới và schema đích phù hợp. Review SQL trước khi merge vào `dev`, vì bản merge sẽ được CD triển khai khi CI PASS. Giữ SQL đã applied bất biến; CD kiểm tra checksum và từ chối lịch sử lỗi/thiếu baseline. Cấu hình environment, secrets, kết nối runner và cách chạy lại được ghi ở [README mục CD](README.md#10-cd-migration-azure-từ-dev).
 
@@ -214,3 +217,96 @@ Thử message mà không tạo commit:
 ```bash
 printf '%s\n' 'docs(team): update contribution guide' | npm exec --no -- commitlint
 ```
+
+## 8. Quy trình Spec-Driven với spec-kit
+
+Mọi thay đổi trong `src/**` hoặc `prisma/**` (gồm `feat`, `fix`, `refactor`, `perf`) phải có spec viết bằng [spec-kit](https://github.com/github/spec-kit) và nằm **cùng một PR** với code. Nguyên tắc bất biến của dự án nằm trong [.specify/memory/constitution.md](.specify/memory/constitution.md); chi tiết vẫn theo [AGENTS.md](AGENTS.md).
+
+### 8.1. Cài đặt một lần
+
+Repo đã commit sẵn `.specify/` (templates, scripts, constitution) và các skill Codex trong `.agents/skills/speckit-*`. Mỗi thành viên chỉ cần CLI để nâng cấp hoặc kiểm tra, không chạy lại `specify init`:
+
+```bash
+uv tool install specify-cli --from git+https://github.com/github/spec-kit.git
+specify version   # repo đang dùng 0.16.2
+```
+
+Mở Codex tại root repo; các lệnh được gọi bằng `$speckit-<tên>`. Không cài extension `git` của spec-kit: nhánh được tạo thủ công theo quy tắc bên dưới.
+
+### 8.2. Đặt tên nhánh và thư mục spec
+
+- Nhánh: `<feat|fix|refactor|perf>/NNN-slug`, ví dụ `feat/007-menu-weekly-export`. `NNN` là số 3 chữ số của spec, `slug` theo quy tắc ở mục 4.
+- Thư mục spec: `specs/NNN-slug/` gồm tối thiểu `spec.md`, `plan.md`, `tasks.md`. Số `NNN` trên nhánh và thư mục phải trùng nhau; phần slug có thể khác.
+- Lấy số tiếp theo sau số lớn nhất trong `specs/` trên `dev` mới nhất. Nếu hai người lấy trùng số, CI chặn PR merge sau; đổi sang số chưa dùng.
+- Sửa spec đã merge: dùng lại số cũ với slug mô tả thay đổi, ví dụ `fix/007-menu-export-timezone`.
+- Nhánh `docs/NNN-slug` được dùng khi muốn mở PR chỉ chứa spec (tùy chọn).
+
+### 8.3. Các bước cho tính năng mới
+
+```bash
+git switch dev
+git pull --ff-only origin dev
+ls specs/                      # tìm số NNN tiếp theo
+git switch -c feat/007-menu-weekly-export
+codex
+```
+
+Trong Codex:
+
+1. `$speckit-specify <mô tả yêu cầu đã được xác nhận>`: tạo `specs/007-.../spec.md` và ghi `.specify/feature.json` (file local, không commit).
+2. `$speckit-clarify`: trả lời các câu hỏi cho tới khi `spec.md` không còn `[NEEDS CLARIFICATION: ...]`.
+3. `$speckit-plan`: tạo `plan.md` (và `research.md`, `data-model.md`, `contracts/` nếu cần). Mục **Constitution Check** phải PASS hoặc ghi rõ lý do ngoại lệ.
+4. `$speckit-tasks`: tạo `tasks.md`. Có thể chạy `$speckit-analyze` để kiểm tra spec/plan/tasks nhất quán.
+5. Format và commit spec trước:
+
+   ```bash
+   npm exec --no -- prettier --write specs/007-menu-weekly-export
+   git add specs/007-menu-weekly-export
+   git commit -m "docs(spec): specify weekly menu export"
+   ```
+
+6. `$speckit-implement` (hoặc code tay) theo `tasks.md`, tick `[x]` các task đã xong, commit code theo Conventional Commits.
+7. Chạy kiểm tra ở mục 6 rồi mở PR vào `dev`, điền đường dẫn spec trong PR template.
+
+Không bắt buộc tick hết `tasks.md` trong một PR; một spec có thể được triển khai qua nhiều PR cùng số.
+
+### 8.4. Sửa spec
+
+- **PR đang mở:** sửa trực tiếp file trong `specs/NNN-slug/`, commit `docs(spec): ...` trong cùng PR.
+- **Spec đã merge:** tạo nhánh mới cùng số (mục 8.2), trỏ spec-kit vào thư mục cũ rồi cập nhật:
+
+  ```bash
+  SPECIFY_FEATURE_DIRECTORY=specs/007-menu-weekly-export codex
+  # trong Codex: $speckit-clarify → $speckit-plan → $speckit-tasks
+  ```
+
+  Không chạy `$speckit-specify` khi sửa, vì lệnh này luôn tạo thư mục spec mới.
+
+- **Thay đổi lớn hoặc là tính năng khác:** tạo spec mới với số mới và ghi tham chiếu tới spec cũ trong `spec.md`.
+
+Spec và code phải luôn khớp nhau: khi yêu cầu đổi trong lúc code, cập nhật spec/plan/tasks trong cùng PR.
+
+### 8.5. Spec gate trong CI
+
+Job **Spec gate** ([.github/scripts/spec-gate.mjs](.github/scripts/spec-gate.mjs)) chạy với mọi PR và là một phần của check bắt buộc **Backend quality**. Nếu PR thay đổi `src/**` hoặc `prisma/**`, job yêu cầu:
+
+- Tên nhánh khớp `^(feat|fix|refactor|perf)/[0-9]{3}-[a-z0-9]+(-[a-z0-9]+)*$`.
+- Sau khi áp PR, có đúng một thư mục `specs/NNN-*` cùng số với nhánh, đủ `spec.md`, `plan.md`, `tasks.md`. Thư mục có thể tạo trong PR hoặc đã có trên `dev`.
+- `spec.md` và `plan.md` không còn cụm `NEEDS CLARIFICATION`.
+- PR không sửa thư mục spec mang số khác.
+
+PR chỉ sửa `specs/**` được kiểm tra cùng các điều kiện trên (cho phép thêm nhánh `docs/NNN-slug`). Được miễn: PR không đụng `src/**`, `prisma/**`, `specs/**` (tài liệu, CI, test, tooling); nhánh `revert/*`; PR `dev` → `main`; sự kiện push. Không có label hay cơ chế bỏ qua khác.
+
+Chạy thử gate trên máy trước khi push:
+
+```bash
+SPEC_GATE_BASE_SHA=$(git merge-base origin/dev HEAD) SPEC_GATE_HEAD_SHA=HEAD \
+SPEC_GATE_BASE_REF=dev SPEC_GATE_HEAD_REF=$(git branch --show-current) \
+npm run spec:check
+```
+
+Gate chỉ kiểm tra cấu trúc. Reviewer phải đọc spec trước khi duyệt code và xác nhận code chỉ triển khai yêu cầu đã ghi trong spec.
+
+### 8.6. Nâng cấp spec-kit
+
+Các file trong `.specify/` (trừ `memory/`) và `.agents/skills/speckit-*` do Specify CLI sinh ra, được Prettier bỏ qua; không sửa tay. Nâng cấp qua một PR riêng (ví dụ nhánh `chore/upgrade-spec-kit`): cập nhật CLI, chạy lại `specify init --here --force --integration codex --integration-options="--skills" --script sh`, kiểm tra `git diff` và giữ nguyên `constitution.md`.
