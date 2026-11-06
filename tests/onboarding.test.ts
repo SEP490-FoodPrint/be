@@ -1,3 +1,5 @@
+import { createOnboardingController } from "../src/modules/auth/onboarding.controller";
+import { RequestValidationError } from "../src/utils/request-validation";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Readable } from "node:stream";
@@ -401,6 +403,7 @@ function editFixture(status: "PENDING" | "REJECTED" | "APPROVED" = "PENDING") {
   };
   const row = {
     id: requestId,
+    registrationNumber: 1n,
     applicantUserId: userId,
     requestType: "SUPPLIER",
     status,
@@ -466,6 +469,8 @@ function editFixture(status: "PENDING" | "REJECTED" | "APPROVED" = "PENDING") {
     registrationRequest: {
       findUnique: () => Promise.resolve(structuredClone(row)),
       update({ data }: { data: Record<string, unknown> }) {
+        assert(!("registrationNumber" in data));
+        assert(!("registrationID" in data));
         writes++;
         return Promise.resolve({ ...row, ...data, updatedAt: new Date() });
       },
@@ -483,7 +488,26 @@ function editFixture(status: "PENDING" | "REJECTED" | "APPROVED" = "PENDING") {
     uploaded,
     storage,
     writes: () => writes,
-    service: createOnboardingService(() => Promise.resolve(db), storage),
+    service: {
+      ...createOnboardingService(() => Promise.resolve(db), storage),
+      submit(
+        actor: SessionUser,
+        body: unknown,
+        files: Express.Multer.File[] = [],
+      ) {
+        return createOnboardingService(
+          () => Promise.resolve(db),
+          storage,
+        ).submit(
+          actor,
+          readSubmission(
+            body,
+            actor.orgType === "SCHOOL" ? "SCHOOL" : "SUPPLIER",
+          ),
+          files,
+        );
+      },
+    },
   };
 }
 const retainedBody = (fixture: ReturnType<typeof editFixture>) => ({
@@ -500,6 +524,7 @@ void test("pending edits keep the same application and remap retained certificat
     retainedBody(fixture),
   );
   assert.equal(result.id, fixture.row.id);
+  assert.equal(result.registrationID, "FP-REG-00001");
   assert.equal(result.status, "PENDING");
   assert.equal(result.profileData.name, "Updated supplier");
   assert.deepEqual(
@@ -667,4 +692,154 @@ void test("edit metadata cannot inject storage URLs, duplicate IDs/fields, wrong
     () => readSubmission({ name: "School", status: "APPROVED" }, "SCHOOL"),
     invalid,
   );
+});
+
+void test("registration codes cannot be assigned at any strict input depth and errors never reflect values", () => {
+  for (const key of ["registrationID", "registrationNumber"]) {
+    for (const [body, expectedPath] of [
+      [{ name: "Supplier", [key]: "private-marker" }, key],
+      [
+        {
+          name: "Supplier",
+          certifications: [
+            {
+              certificationType: "ISO",
+              certificateNo: "ISO",
+              [key]: "private-marker",
+            },
+          ],
+        },
+        "certifications.0." + key,
+      ],
+      [
+        {
+          name: "Supplier",
+          certifications: [{ certificationType: "ISO", certificateNo: "ISO" }],
+          retainedDocuments: [
+            {
+              id: randomUUID(),
+              field: "certificate_0",
+              [key]: "private-marker",
+            },
+          ],
+        },
+        "retainedDocuments.0." + key,
+      ],
+    ] as const) {
+      assert.throws(
+        () => readSubmission(body, "SUPPLIER"),
+        (error: unknown) => {
+          assert(error instanceof RequestValidationError);
+          assert(error.fields.some((issue) => issue.field === expectedPath));
+          assert(!JSON.stringify(error.fields).includes("private-marker"));
+          return true;
+        },
+      );
+    }
+    assert.throws(
+      () =>
+        readProfileBody(
+          {
+            profile: JSON.stringify({ name: "Supplier" }),
+            [key]: "private-marker",
+          },
+          true,
+        ),
+      invalid,
+    );
+    assert.throws(
+      () =>
+        readSubmission(
+          readProfileBody(
+            {
+              profile: JSON.stringify({
+                name: "Supplier",
+                [key]: "private-marker",
+              }),
+            },
+            true,
+          ),
+          "SUPPLIER",
+        ),
+      invalid,
+    );
+  }
+  assert.throws(
+    () =>
+      readSubmission(
+        {
+          name: "",
+          certifications: [
+            {
+              certificationType: "",
+              certificateNo: "",
+              registrationID: "private-marker",
+            },
+          ],
+        },
+        "SUPPLIER",
+      ),
+    (error: unknown) => {
+      assert(error instanceof RequestValidationError);
+      assert(error.fields.length >= 4);
+      assert(!JSON.stringify(error.fields).includes("private-marker"));
+      return true;
+    },
+  );
+  assert.doesNotThrow(() =>
+    readSubmission({ name: "registrationID is ordinary text" }, "SUPPLIER"),
+  );
+});
+
+void test("HTTP rejects code assignment in JSON and multipart before any database access or cloud upload", async (context) => {
+  context.mock.method(console, "error", () => undefined);
+  const fixture = editFixture();
+  let reads = 0;
+  const service = createOnboardingService(() => {
+    reads++;
+    return Promise.reject(new Error("must not access database"));
+  }, fixture.storage);
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    req.sessionUser = fixture.user;
+    next();
+  });
+  app.post("/", onboardingUpload, createOnboardingController(service).submit);
+  app.use(globalErrorHandler);
+  const http = await startHttp(app);
+  context.after(() => http.close());
+  const json = await http.request("/", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: "Supplier",
+      registrationID: "private-marker",
+    }),
+  });
+  assert.equal(json.status, 400);
+  assert(!JSON.stringify(json.body).includes("private-marker"));
+  for (const outer of [true, false]) {
+    const form = new FormData();
+    form.append(
+      "profile",
+      JSON.stringify({
+        name: "Supplier",
+        certifications: [{ certificationType: "ISO", certificateNo: "ISO" }],
+        ...(outer ? {} : { registrationID: "private-marker" }),
+      }),
+    );
+    if (outer) form.append("registrationID", "private-marker");
+    form.append(
+      "certificate_0",
+      new Blob(["%PDF-1.7 local"], { type: "application/pdf" }),
+      "test.pdf",
+    );
+    const response = await http.request("/", { method: "POST", body: form });
+    assert.equal(response.status, 400);
+    assert(!JSON.stringify(response.body).includes("private-marker"));
+  }
+  assert.equal(reads, 0);
+  assert.deepEqual(fixture.uploaded, []);
+  assert.equal(fixture.writes(), 0);
 });

@@ -1,3 +1,4 @@
+import { toSessionUserResponseDTO } from "../src/modules/auth/session.service";
 import { testAdmin } from "./helpers/authorization";
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
@@ -36,10 +37,7 @@ import {
 import { principalFromIdentity } from "../src/utils/authorization";
 import { requirePermission } from "../src/middlewares/permission.middleware";
 import { globalErrorHandler } from "../src/middlewares/error.middleware";
-import {
-  validateProfileUpdate,
-  type PersonalProfileUpdate,
-} from "../src/modules/auth/profile.validation";
+import { validateProfileUpdate } from "../src/modules/auth/profile.validation";
 import type { SessionUser } from "../src/types/session-user";
 
 process.env.NODE_ENV = "test";
@@ -64,7 +62,7 @@ function cookieHeader(headers: Headers): string {
     .join("; ");
 }
 
-async function authApi(context: TestContext) {
+async function authApi(context: TestContext, withRegistration = false) {
   const { store, records } = memorySessions();
   const sessions = createAuthSessions(store);
   let user: SessionUser = {
@@ -73,26 +71,44 @@ async function authApi(context: TestContext) {
     phone: null,
     status: "ACTIVE",
     onboardingRequired: false,
-    registrationRequest: null,
+    registrationRequest: withRegistration
+      ? {
+          id: "00000000-0000-4000-8000-000000000101",
+          registrationNumber: 1n,
+          status: "PENDING",
+          submittedAt: new Date("2026-11-01T00:00:00.000Z"),
+          rejectionReason: null,
+        }
+      : null,
     emailVerifiedAt: null,
   };
-  const profileUpdates: { id: string; data: PersonalProfileUpdate }[] = [];
+  const profileUpdates: {
+    id: string;
+    data: ReturnType<typeof validateProfileUpdate>;
+  }[] = [];
   const services: AuthServices = {
     profile: {
       update(principal, data) {
         profileUpdates.push({ id: principal.id, data });
         user = { ...user, ...data };
-        return Promise.resolve(user);
+        return Promise.resolve(toSessionUserResponseDTO(user));
       },
     },
     session: {
-      async login(identifier, password, previousRefreshToken) {
+      async login({ identifier, password }, previousRefreshToken) {
         if (identifier !== "admin" || password !== "correct-password")
           throw new HttpError(401, "Sai thông tin đăng nhập");
         if (previousRefreshToken) await sessions.logout(previousRefreshToken);
-        return { ...(await sessions.issue(testAdmin.id)), user };
+        return {
+          ...(await sessions.issue(testAdmin.id)),
+          user: toSessionUserResponseDTO(user),
+        };
       },
-      refresh: (token) => sessions.refresh(token, () => Promise.resolve(user)),
+      refresh: (token) =>
+        sessions.refresh(token, () =>
+          Promise.resolve(toSessionUserResponseDTO(user)),
+        ),
+      getProfile: toSessionUserResponseDTO,
       logout: (refresh, access) => sessions.logout(refresh, access),
       currentUser: () => Promise.resolve(user),
     },
@@ -676,4 +692,52 @@ void test("onboarding cookie reaches self endpoints but business access starts o
   assert.equal((await http.request("/business", { headers })).status, 204);
   const self = await http.request("/self", { headers });
   assert.equal(self.status, 200);
+});
+
+void test("session responses expose the same registration code without bigint across login, refresh and profile edits", async (context) => {
+  const { http } = await authApi(context, true);
+  const login = await http.request("/api/auth/login", {
+    method: "POST",
+    headers: csrfHeaders,
+    body: JSON.stringify({ identifier: "admin", password: "correct-password" }),
+  });
+  assert.equal(login.status, 200);
+  let cookies = cookieHeader(login.headers);
+  const summary = (body: unknown, nestedUser: boolean) => {
+    assert(body && typeof body === "object" && "data" in body);
+    let data = body.data as Record<string, unknown>;
+    if (nestedUser) data = data.user as Record<string, unknown>;
+    assert.deepEqual(data.registrationRequest, {
+      id: "00000000-0000-4000-8000-000000000101",
+      registrationID: "FP-REG-00001",
+      status: "PENDING",
+      submittedAt: "2026-11-01T00:00:00.000Z",
+      rejectionReason: null,
+    });
+    assert(!JSON.stringify(body).includes("registrationNumber"));
+  };
+  summary(login.body, true);
+  const me = await http.request("/api/auth/me", {
+    headers: { Cookie: cookies },
+  });
+  assert.equal(me.status, 200);
+  summary(me.body, false);
+  const updated = await http.request("/api/auth/me", {
+    method: "PATCH",
+    headers: { ...csrfHeaders, Cookie: cookies },
+    body: JSON.stringify({ phone: "0901234567" }),
+  });
+  assert.equal(updated.status, 200);
+  summary(updated.body, false);
+  const refresh = await http.request("/api/auth/refresh", {
+    method: "POST",
+    headers: { ...csrfHeaders, Cookie: cookies },
+  });
+  assert.equal(refresh.status, 200);
+  cookies = cookieHeader(refresh.headers);
+  summary(refresh.body, true);
+  const after = await http.request("/api/auth/me", {
+    headers: { Cookie: cookies },
+  });
+  summary(after.body, false);
 });

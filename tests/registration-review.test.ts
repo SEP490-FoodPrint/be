@@ -9,6 +9,7 @@ import {
 import { reviewEmail } from "../src/modules/auth/registration-review-email";
 
 const row = {
+  registrationNumber: 1n,
   id: randomUUID(),
   applicantUserId: randomUUID(),
   requestType: "SCHOOL",
@@ -78,4 +79,13 @@ void test("review email uses the applicant address, escapes HTML and includes re
   const approved = reviewEmail(row);
   assert.match(approved.text, /kích hoạt/);
   assert(!approved.text.includes("Thiếu <giấy phép>"));
+});
+
+void test("registration numbering leaves the prior review hash unchanged and never serializes bigint", () => {
+  const before = reviewVersion(row);
+  assert.equal(reviewVersion({ ...row, registrationNumber: 1n }), before);
+  assert.equal(
+    reviewVersion({ ...row, registrationNumber: 9007199254740993n }),
+    before,
+  );
 });

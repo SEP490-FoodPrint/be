@@ -1260,13 +1260,19 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       headers: headers(id),
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
+  const applicationCodes = new Map<string, string>();
   const reviewVersion = async (id: string) => {
     const response = await request(
       `/api/registration-requests/${id}`,
       system.id,
     );
     assert.equal(response.status, 200);
-    return String(record(record(response.body).data).reviewVersion);
+    const detail = record(record(response.body).data);
+    assert.match(String(detail.registrationID), /^FP-REG-[0-9]{5,}$/);
+    if (applicationCodes.has(id))
+      assert.equal(detail.registrationID, applicationCodes.get(id));
+    assert(!JSON.stringify(response.body).includes("registrationNumber"));
+    return String(detail.reviewVersion);
   };
   async function grantIds(roleId: string) {
     return (await db.rolePermission.findMany({ where: { roleId } })).map(
@@ -2090,6 +2096,8 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         assert.equal(data.accountStatus, "UNVERIFIED");
         const id = String(data.id);
         applicationIds.set(type, id);
+        assert.match(String(data.registrationID), /^FP-REG-[0-9]{5,}$/);
+        applicationCodes.set(id, String(data.registrationID));
         const userAfter = await db.user.findUniqueOrThrow({
           where: { id: account.id },
         });
@@ -2143,6 +2151,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         assert.equal(detail.status, 200);
         assert(!JSON.stringify(detail.body).includes("publicId"));
         const detailData = record(record(detail.body).data);
+        assert.equal(detailData.registrationID, applicationCodes.get(id));
         const applicantData = record(detailData.applicantUser);
         const applicantAccount = await db.user.findUniqueOrThrow({
           where: { id: String(detailData.applicantUserId) },
@@ -2355,6 +2364,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       );
       assert.equal(rejected.status, 200);
       const rejectedData = record(record(rejected.body).data);
+      assert.equal(rejectedData.registrationID, applicationCodes.get(id));
       assert.equal(rejectedData.status, "REJECTED");
       assert.equal(rejectedData.accountStatus, "UNVERIFIED");
       assert.equal(rejectedData.rejectionReason, "Bổ sung mã trường");
@@ -2608,6 +2618,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         );
         assert(approvedResponse);
         const approvedData = record(record(approvedResponse.body).data);
+        assert.equal(approvedData.registrationID, applicationCodes.get(id));
         assert.equal(approvedData.status, "APPROVED");
         assert.equal(approvedData.accountStatus, "ACTIVE");
         assert.equal(record(approvedData.applicantUser).status, "ACTIVE");

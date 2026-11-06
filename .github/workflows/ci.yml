@@ -128,6 +128,9 @@ jobs:
       - name: Verify baseline adoption, migrations and SQL constraints
         run: npm run test:migrations
 
+      - name: Verify registration numbering and concurrent submissions
+        run: npm run test:registration-id
+
       - name: Verify dynamic authorization and tenant isolation on PostgreSQL
         run: npm run test:authorization
 

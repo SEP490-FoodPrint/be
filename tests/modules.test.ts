@@ -679,6 +679,7 @@ void test("registration list returns safe applicant contacts with stable paginat
   };
   const row = {
     id: "request-1",
+    registrationNumber: 1n,
     applicantUserId: applicantUser.id,
     applicantUser,
     requestType: "SCHOOL" as const,
@@ -690,6 +691,7 @@ void test("registration list returns safe applicant contacts with stable paginat
   const nullable = {
     ...row,
     id: "request-2",
+    registrationNumber: 2n,
     applicantUser: { ...applicantUser, phone: null, emailVerifiedAt: null },
   };
   const repository = createRegistrationRepository((args) => {
@@ -733,17 +735,25 @@ void test("registration list returns safe applicant contacts with stable paginat
     result.items.map((item) => item.id),
     ["request-1", "request-2"],
   );
+  assert.equal(result.items[0].registrationID, "FP-REG-00001");
+  assert(!JSON.stringify(result).includes("registrationNumber"));
+  const { registrationNumber: _number, ...publicRow } = row;
+  const { registrationNumber: _nullableNumber, ...publicNullable } = nullable;
+  void _number;
+  void _nullableNumber;
   const json: unknown = JSON.parse(JSON.stringify(result));
   assert.deepEqual(json, {
     items: [
       {
-        ...row,
+        ...publicRow,
+        registrationID: "FP-REG-00001",
         submittedAt: now.toISOString(),
         updatedAt: now.toISOString(),
         applicantUser: { ...applicantUser, emailVerifiedAt: now.toISOString() },
       },
       {
-        ...nullable,
+        ...publicNullable,
+        registrationID: "FP-REG-00002",
         submittedAt: now.toISOString(),
         updatedAt: now.toISOString(),
       },
