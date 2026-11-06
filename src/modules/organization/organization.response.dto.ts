@@ -1,3 +1,9 @@
+import type { CookingMode } from "../../generated/prisma/client";
+
+export interface CookingModeResponseDTO {
+  cookingMode: CookingMode | null;
+}
+
 export interface OrganizationListItemResponseDTO {
   id: string;
   name: string;

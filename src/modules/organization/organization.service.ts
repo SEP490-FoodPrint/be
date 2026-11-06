@@ -1,4 +1,11 @@
 import type { AuthPrincipal } from "../../types/auth";
+import { ROLES } from "../../constants/roles";
+import type { CookingMode, PrismaClient } from "../../generated/prisma/client";
+import {
+  assertPermission,
+  withSchoolTransaction,
+} from "../../utils/authorization";
+import { getPrisma } from "../../utils/database";
 import { HttpError } from "../../utils/http-error";
 import { readListPage } from "../../utils/list-query";
 import {
@@ -21,13 +28,14 @@ import type {
   PublicDailyMenuDTO,
   PublicWeeklyMenuDTO,
   AvailableWeekSummaryDTO,
+  CookingModeResponseDTO,
   DishItemDTO,
   SnackItemDTO,
   PortionGroupDTO,
   WeeklyMenuDayDTO,
 } from "./organization.response.dto";
 import {
-  organizationRepository,
+  createOrganizationRepository,
   type OrganizationRepository,
   type PublicSchoolDbRow,
 } from "./organization.repository";
@@ -78,16 +86,32 @@ function mapSchoolToDTO(school: PublicSchoolDbRow): PublicSchoolDTO {
   };
 }
 
+const COOKING_MODE_PERMISSION = "school_cooking_mode.manage";
+
+function assertCookingModeManager(
+  principal: AuthPrincipal,
+): asserts principal is AuthPrincipal & { schoolId: string } {
+  assertPermission(principal, COOKING_MODE_PERMISSION);
+  if (
+    principal.role !== ROLES.SCHOOL_MANAGEMENT_BOARD ||
+    principal.orgType !== "SCHOOL" ||
+    !principal.schoolId
+  )
+    throw new HttpError(403, "Chỉ Ban Giám hiệu được cấu hình chế độ nấu");
+}
+
 export function createOrganizationService(
-  repository: OrganizationRepository = organizationRepository,
+  repository?: OrganizationRepository,
+  getClient: () => Promise<PrismaClient> = getPrisma,
 ) {
+  const data = repository ?? createOrganizationRepository(getClient);
   return {
     async getAll(
       query: OrganizationListRequestDTO,
       principal: AuthPrincipal,
     ): Promise<OrganizationListResponseDTO> {
       const page = await readListPage(
-        () => repository.listSchools(query, principal),
+        () => data.listSchools(query, principal),
         query,
       );
 
@@ -108,6 +132,30 @@ export function createOrganizationService(
       };
     },
 
+    async getCookingMode(
+      principal: AuthPrincipal,
+    ): Promise<CookingModeResponseDTO> {
+      assertCookingModeManager(principal);
+      return data.findCookingMode(principal.schoolId);
+    },
+
+    // Mẻ đã lập giữ chế độ cũ; giá trị mới chỉ áp dụng cho kế hoạch nấu sau đó.
+    async updateCookingMode(
+      cookingMode: CookingMode,
+      principal: AuthPrincipal,
+    ): Promise<CookingModeResponseDTO> {
+      assertCookingModeManager(principal);
+      return withSchoolTransaction(
+        await getClient(),
+        principal,
+        COOKING_MODE_PERMISSION,
+        (tx, actor, schoolId) => {
+          assertCookingModeManager(actor);
+          return data.updateCookingMode(tx, schoolId, cookingMode);
+        },
+      );
+    },
+
     async getPublicSchools(
       query: PublicSchoolListRequestDTO,
     ): Promise<PublicSchoolListResult> {
@@ -115,7 +163,7 @@ export function createOrganizationService(
       const limit = query.limit;
       const skip = (page - 1) * limit;
 
-      const { items: schools, total } = await repository.findPublicSchools({
+      const { items: schools, total } = await data.findPublicSchools({
         skip,
         take: limit,
         search: query.search,
@@ -141,26 +189,26 @@ export function createOrganizationService(
     },
 
     async getPublicSchoolByCode(code: string): Promise<PublicSchoolDTO | null> {
-      const school = await repository.findPublicSchoolByCode(code);
+      const school = await data.findPublicSchoolByCode(code);
       if (!school) return null;
       return mapSchoolToDTO(school);
     },
 
     async getPublicSchoolById(id: string): Promise<PublicSchoolDTO | null> {
-      const school = await repository.findPublicSchoolById(id);
+      const school = await data.findPublicSchoolById(id);
       if (!school) return null;
       return mapSchoolToDTO(school);
     },
 
     async getPublicLocations(): Promise<PublicLocationDTO[]> {
-      return repository.findPublicLocations();
+      return data.findPublicLocations();
     },
 
     async getPublicDailyMenu(
       schoolCode: string,
       query: PublicDailyMenuRequestDTO,
     ): Promise<PublicDailyMenuDTO | null> {
-      const school = await repository.findSchoolForMenu(schoolCode);
+      const school = await data.findSchoolForMenu(schoolCode);
       if (!school) {
         throw new HttpError(
           404,
@@ -181,13 +229,10 @@ export function createOrganizationService(
         targetDate = new Date(`${yyyy}-${mm}-${dd}T00:00:00.000Z`);
       }
 
-      let menuDay = await repository.findMenuDayForDailyMenu(
-        school.id,
-        targetDate,
-      );
+      let menuDay = await data.findMenuDayForDailyMenu(school.id, targetDate);
 
       if (!menuDay && !query.date) {
-        menuDay = await repository.findLatestApprovedMenuDay(school.id);
+        menuDay = await data.findLatestApprovedMenuDay(school.id);
       }
 
       if (!menuDay || menuDay.menuDayDishes.length === 0) {
@@ -278,7 +323,7 @@ export function createOrganizationService(
       schoolCode: string,
       query: PublicWeeklyMenuRequestDTO,
     ): Promise<PublicWeeklyMenuDTO | null> {
-      const school = await repository.findSchoolForMenu(schoolCode);
+      const school = await data.findSchoolForMenu(schoolCode);
       if (!school) {
         throw new HttpError(
           404,
@@ -296,13 +341,10 @@ export function createOrganizationService(
         targetWeekMonday = monday;
       }
 
-      let weeklyMenu = await repository.findWeeklyMenu(
-        school.id,
-        targetWeekMonday,
-      );
+      let weeklyMenu = await data.findWeeklyMenu(school.id, targetWeekMonday);
 
       if (!weeklyMenu && !query.week) {
-        weeklyMenu = await repository.findLatestApprovedWeeklyMenu(school.id);
+        weeklyMenu = await data.findLatestApprovedWeeklyMenu(school.id);
       }
 
       if (!weeklyMenu || weeklyMenu.menuDays.length === 0) {
@@ -310,7 +352,7 @@ export function createOrganizationService(
       }
 
       const dayIds = weeklyMenu.menuDays.map((d) => d.id);
-      const rawGroups = await repository.findPortionGroupsRaw(dayIds);
+      const rawGroups = await data.findPortionGroupsRaw(dayIds);
       let dynamicGroups: PortionGroupDTO[] = rawGroups.map((g) => ({
         id: g.id,
         name: g.name,
@@ -405,7 +447,7 @@ export function createOrganizationService(
         };
       });
 
-      const rawAvailableWeeks = await repository.findAvailableWeeklyMenuWeeks(
+      const rawAvailableWeeks = await data.findAvailableWeeklyMenuWeeks(
         school.id,
       );
       const availableWeeks: AvailableWeekSummaryDTO[] = rawAvailableWeeks.map(

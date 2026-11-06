@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { CookingMode } from "../../generated/prisma/client";
 import { HttpError } from "../../utils/http-error";
 
 export interface OrganizationValidationIssue {
@@ -38,6 +39,12 @@ function mapZodIssues(issues: z.ZodIssue[]): OrganizationValidationIssue[] {
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+
+export const cookingModeBodySchema = z.strictObject({
+  cookingMode: z.enum(["SEPARATE_BY_LOT", "COMBINE_LOTS"], {
+    error: "Chế độ nấu không hợp lệ",
+  }),
+});
 
 function positiveIntegerQuery(name: string, fallback: number) {
   const message = `${name} phải là số nguyên dương`;
@@ -221,6 +228,14 @@ export function validateOrganizationListQuery(value: unknown) {
     throw new OrganizationValidationError(mapZodIssues(result.error.issues));
   }
   return result.data;
+}
+
+export function validateCookingMode(value: unknown): CookingMode {
+  const result = cookingModeBodySchema.safeParse(value);
+  if (!result.success) {
+    throw new OrganizationValidationError(mapZodIssues(result.error.issues));
+  }
+  return result.data.cookingMode;
 }
 
 export function validatePublicSchoolQuery(value: unknown) {
