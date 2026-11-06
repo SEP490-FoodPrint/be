@@ -22,3 +22,9 @@
 - **Decision**: Tái sử dụng tests/migrations.test.ts để test SQL thật, lịch sử, fresh deploy và Prisma drift.
 - **Rationale**: Đây là thay đổi ràng buộc database nên kiểm thử PostgreSQL có giá trị hơn unit test so chuỗi SQL. Không dùng Azure hoặc database thành viên.
 - **Evidence**: Đã đối chiếu prisma/schema.prisma, tests/migrations.test.ts và database/SCHEMA_BASELINE.md; nghiên cứu độc lập bởi agent calendar_schema_research trong workflow speckit-plan. Không cần công nghệ hoặc dependency mới.
+
+## Khôi phục lịch sử đã applied khi CD bị chặn
+
+- **Decision**: Phục hồi SQL GVCN từ nhánh gốc dưới đúng tên Azure đã ghi nhận, cùng model/relation/partial indexes; không merge cả nhánh hoặc làm yếu guard.
+- **Rationale**: SQL nguồn có checksum `b1fe455a26a60267d045f2602e61dbdeb9a37ec6367909963f423604cb146f5e`, trùng lịch sử Azure. Bản sửa cần đầy đủ cả lịch sử và model để preflight và drift cùng đúng.
+- **Alternatives considered**: Xóa/sửa `_prisma_migrations`, tự resolve migration hoặc bỏ qua lịch sử dư sẽ che lỗi; chỉ thêm file SQL mà thiếu model làm drift coi bảng GVCN là dư. Các cách đó không được dùng.

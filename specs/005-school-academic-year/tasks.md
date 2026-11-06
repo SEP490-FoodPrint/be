@@ -57,3 +57,13 @@ Sau khi migration đã chốt, cập nhật `database/SCHEMA_BASELINE.md` độc
 ## Implementation Strategy
 
 Hoàn thành foundation và model/migration (US1), kiểm chứng JSON (US2), chạy test upgrade đầy đủ (US3), rồi quality checks. MVP là toàn bộ thay đổi storage trong spec; không mở rộng sang API, FE, calendar business validation hoặc deployment.
+
+## Phase 7: Release repair — lịch sử Azure đã đi trước Git
+
+- [x] T011 [US3] Đối chiếu lịch sử Azure trong transaction chỉ đọc và xác minh checksum SQL gốc từ nhánh GVCN; ghi bằng chứng/phạm vi FR-008 vào `specs/005-school-academic-year/spec.md` và `plan.md`.
+- [x] T012 [US3] Thêm regression case vào `tests/migration-deployment.test.ts` cho thiếu migration GVCN, phục hồi prefix và từ chối checksum sai.
+- [x] T013 [US3] Khôi phục nguyên SQL đã applied tại `prisma/migrations/20261107000100_class_homeroom_assignments/migration.sql` và model/relation/partial indexes tương ứng trong `prisma/schema.prisma` từ nguồn đã kiểm chứng.
+- [x] T014 [US3] Kiểm tra prefix Azure chỉ đọc, migration/history/drift trên PostgreSQL disposable; cập nhật `database/SCHEMA_BASELINE.md` và `specs/005-school-academic-year/quickstart.md`.
+- [x] T015 Chạy Prisma validate/generate, lint/format file liên quan, typecheck/build và unit tests; review diff/checksum/Spec gate, ghi kết quả vào `specs/005-school-academic-year/quickstart.md`.
+
+T011 → T012 → T013 → T014/T015. Không thay đổi guard để bỏ qua lịch sử dư hoặc chỉnh database từ CI bị lỗi.
