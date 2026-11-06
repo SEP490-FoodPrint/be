@@ -222,7 +222,7 @@ Dùng database riêng; không sửa chung migration trong lúc chạy cùng mộ
 | SC-003                 | T016, T022, T039                      |
 | SC-004                 | T023–T027, T030–T035                  |
 | SC-005                 | T013, T024, T029, T039                |
-| FR-013–FR-015, SC-006  | T041–T045                             |
+| FR-013–FR-015, SC-006  | T041–T050                             |
 
 ## Implementation Strategy
 
@@ -239,7 +239,7 @@ Hoàn tất Setup + Foundational + US1 để có bản demo backend tạo mã v�
 
 ## Notes
 
-- Tính năng gốc có 40 task: Setup 2, Foundational 10, US1 10, US2 7, US3 6, Polish 5. Yêu cầu tìm kiếm bổ sung có 5 task T041–T045 ở Phase 7.
+- Tính năng gốc có 40 task: Setup 2, Foundational 10, US1 10, US2 7, US3 6, Polish 5. Tìm mã có 5 task T041–T045 ở Phase 7; tìm thêm tên có 5 task T046–T050 ở Phase 8.
 - Các task được cập nhật theo kết quả triển khai; chỉ đánh dấu hoàn tất khi có bằng chứng tương ứng.
 - Việc có migration/test task không tự cấp phép chạy ghi vào DB hiện hữu. Thiếu môi trường không ngăn viết code/test độc lập, nhưng phải ghi blocker và không đánh dấu kiểm chứng DB đã hoàn tất.
 - Không tự thêm requirements, seed/mock data ngoài database test, endpoint, schema reset, custom function/trigger hoặc cơ chế cache mới.
@@ -261,3 +261,15 @@ Hoàn tất Setup + Foundational + US1 để có bản demo backend tạo mã v�
 - [x] T045 [US4] Cập nhật ví dụ tìm kiếm trong `docs/ONBOARDING.md` và `specs/001-add-registration-id/quickstart.md`; chạy `npm run validate`, `npm run test:unit`, spec gate preflight và `git diff --check`, ghi kết quả thực tế.
 
 **Bằng chứng US4**: 7/7 kiểm thử registration PASS; `npm run validate` PASS; `npm run test:unit` 177/177 PASS; spec gate working-tree preflight PASS trên nhánh `fix/001-registration-code-search`; diff whitespace PASS. Test unit/HTTP dùng reader giả lập, không chạy PostgreSQL/Redis hoặc migration trong lần bổ sung này.
+
+## Phase 8: User Story 4 — Bổ sung tìm theo tên người nộp
+
+**Yêu cầu xác nhận ngày 2026-11-07**: Dùng chung query `search` để tìm mã hồ sơ hoặc chuỗi con trong `applicantUser.fullName`, không phân biệt hoa/thường; chi tiết vẫn UUID. Phase 7 là bằng chứng lịch sử của bản chỉ tìm mã, quy tắc hiện hành nằm trong spec/plan/contract đã cập nhật.
+
+- [x] T046 [US4] Cập nhật `specs/001-add-registration-id/spec.md`, `plan.md`, `contracts/registration-id.md` trước code và tạo nhánh `feat/001-registration-name-search` từ dev; ghi tên người nộp là trường đã được chọn.
+- [x] T047 [US4] Cập nhật `tests/modules.test.ts` và `tests/registration-id.test.ts` cho search tên/mã, giới hạn chuỗi, parser bigint an toàn, mode insensitive, literal wildcard, phân trang và phân quyền.
+- [x] T048 [US4] Đổi validation search trong `src/modules/registration/registration.validation.ts` thành chuỗi trim tối đa 255 ký tự, giữ Request DTO suy ra từ Zod; thêm parser mã chuẩn tại `src/utils/registration-id.ts`.
+- [x] T049 [US4] Mở rộng `src/modules/registration/registration.repository.ts` để tìm OR mã chính xác/tên người nộp contains insensitive trong scope tin cậy trước phân trang; giữ projection/envelope và các đường chi tiết/review/document UUID.
+- [x] T050 [US4] Cập nhật `docs/ONBOARDING.md` và `specs/001-add-registration-id/quickstart.md`; chạy targeted tests, `npm run validate`, `npm run test:unit`, spec gate preflight, diff check và ghi kết quả thực tế.
+
+**Bằng chứng tìm tên**: 12/12 targeted registration tests PASS; `npm run validate` PASS; `npm run test:unit` 188/188 PASS; spec gate working-tree preflight PASS trên nhánh `feat/001-registration-name-search`; diff whitespace PASS. Test unit/HTTP dùng reader giả lập để kiểm tra query/mapping/validation; không chạy lại integration PostgreSQL/Redis hoặc migration trong lần bổ sung này.

@@ -12,7 +12,7 @@
 - Không xuất `registrationNumber`, bigint, sequence name hoặc giá trị bộ đếm thô.
 - Mọi ngày hiện có được service chuyển sang ISO string hoặc null theo tính nullable hiện tại.
 - Envelope thành công vẫn là `{ success, statusCode, message, data }`; lỗi vẫn đi qua sendError.
-- Danh sách nhận thêm query `search` để tra cứu mã; không đổi endpoint, quyền hoặc thứ tự danh sách. API chi tiết vẫn nhận UUID.
+- Danh sách dùng query `search` để tra cứu mã hoặc tên người nộp; không đổi endpoint, quyền hoặc thứ tự danh sách. API chi tiết vẫn nhận UUID.
 
 ## Response surfaces
 
@@ -58,13 +58,14 @@ List pagination tiếp tục là `{ page, limit, hasNext }`, mặc định page 
 
 ### Tìm kiếm trong danh sách
 
-`GET /api/registration-requests?search=FP-REG-00001&page=1&limit=20` tìm chính xác mã `registrationID` đầy đủ. Query vẫn dùng tên `search`; response public vẫn dùng tên `registrationID`.
+`GET /api/registration-requests?search=FP-REG-00001&page=1&limit=20` hoặc `GET /api/registration-requests?search=Nguy%E1%BB%85n` dùng chung query `search`. Kết quả khớp chính xác mã `registrationID` đầy đủ HOẶC chứa từ khóa trong tên người nộp `applicantUser.fullName`. Response public vẫn dùng tên `registrationID`.
 
-- `search` tùy chọn, chỉ nhận một chuỗi, trim và uppercase trước đối chiếu. Bỏ tham số, `search=` hoặc chuỗi trắng tương đương danh sách chưa lọc.
-- Mã hợp lệ là dạng chuẩn do formatter sinh, phần số từ 1 đến 9223372036854775807: `FP-REG-00001`, `FP-REG-100000`, `FP-REG-9007199254740993`. Không chấp nhận số 0, dấu âm/dấu cộng, UUID, mã thiếu chữ số hoặc số 0 dư như `FP-REG-000001`.
-- Mã hợp lệ nhưng không có hồ sơ trả 200 với `data.items: []` và pagination tương ứng. Lọc trước phân trang; trang sau một kết quả duy nhất là rỗng.
-- Query sai kiểu, mã sai định dạng hoặc vượt bigint trả 400 với field `search`; thông báo không phản chiếu input. Tham số lạ, page/limit sai tiếp tục bị từ chối.
-- Chỉ người có quyền/phạm vi danh sách hiện hành được tìm; không dò UUID, tên, email hay phone. Không lộ số bigint nội bộ hoặc đưa search vào pagination response.
+- `search` tùy chọn, chỉ nhận một chuỗi tối đa 255 ký tự sau trim. Bỏ tham số, `search=` hoặc chuỗi trắng tương đương danh sách chưa lọc.
+- Tên được tìm theo chuỗi con, không phân biệt hoa/thường nhưng vẫn phân biệt dấu; `%`, `_` và `\` là ký tự văn bản. Không tìm tên trường/nhà cung cấp, UUID, email hoặc phone.
+- Parser mã chỉ nhận dạng chuẩn có phần số 1–9223372036854775807, không phân biệt hoa/thường: `FP-REG-00001`, `FP-REG-100000`, `FP-REG-9007199254740993`. Phần số không làm tròn qua Number. Chuỗi không phải mã chuẩn, kể cả mã sai hoặc vượt bigint, chỉ được tìm trong tên.
+- Không có mã hoặc tên khớp trả 200 với `data.items: []` và pagination tương ứng. Lọc trước phân trang và không nhân đôi hồ sơ khớp cả mã lẫn tên.
+- Search sai kiểu hoặc quá dài trả 400 với field `search`; thông báo không phản chiếu input. Tham số lạ, page/limit sai tiếp tục bị từ chối.
+- Chỉ người có quyền/phạm vi danh sách hiện hành được tìm. Không lộ số bigint nội bộ hoặc đưa search vào pagination response.
 - `GET /api/registration-requests/:id` và các thao tác/tài liệu tiếp tục nhận UUID. Gửi `FP-REG-00001` vào `:id` vẫn trả 400.
 
 ## Request và validation

@@ -1,6 +1,6 @@
 # Feature Specification: Mã hồ sơ đăng ký dễ đọc
 
-**Feature Branch**: `fix/001-registration-code-search` (bổ sung sau `feat/001-add-registration-id`)
+**Feature Branch**: `feat/001-registration-name-search` (bổ sung sau tìm kiếm mã hồ sơ)
 
 **Created**: 2026-11-06
 
@@ -8,7 +8,7 @@
 
 **Input**: User description: "Thêm trường registrationID để đánh số registration, giúp danh sách gọn hơn và minh bạch các đơn đăng ký. Định dạng là FP-REG-00001, các hồ sơ sau tăng số lên."
 
-**Bổ sung đã xác nhận**: Tìm kiếm trong danh sách theo mã `registrationID`; API chi tiết tiếp tục tra theo UUID. Không đổi API chi tiết sang mã hồ sơ.
+**Bổ sung đã xác nhận**: Query `search` tìm theo mã `registrationID` hoặc tên người nộp `applicantUser.fullName`. Người dùng chọn rõ tên người nộp, không phải tên trường/nhà cung cấp. API chi tiết tiếp tục tra theo UUID.
 
 ## User Scenarios & Testing _(mandatory)_
 
@@ -62,20 +62,21 @@ Là quản trị viên hệ thống, tôi muốn các hồ sơ đã có trước
 
 ---
 
-### User Story 4 - Tìm hồ sơ trong danh sách bằng mã đăng ký (Priority: P1)
+### User Story 4 - Tìm hồ sơ trong danh sách bằng mã hoặc tên người nộp (Priority: P1)
 
-Là quản trị viên có quyền xem hồ sơ, tôi muốn nhập mã `FP-REG-00001` để tìm đúng hồ sơ trong danh sách, rồi tiếp tục mở chi tiết và xét duyệt bằng UUID hiện có.
+Là quản trị viên có quyền xem hồ sơ, tôi muốn nhập mã `FP-REG-00001` hoặc một phần tên người nộp để tìm hồ sơ trong danh sách, rồi tiếp tục mở chi tiết và xét duyệt bằng UUID hiện có.
 
-**Independent Test**: Gọi danh sách với `search` là mã của một hồ sơ có sẵn; kiểm tra chỉ hồ sơ đó được trả về, mã không tồn tại cho danh sách rỗng, và chi tiết vẫn nhận UUID.
+**Independent Test**: Gọi danh sách với mã hồ sơ hoặc một phần tên người nộp, đối chiếu tập kết quả và phân trang; kiểm tra từ khóa không khớp cho danh sách rỗng và chi tiết vẫn nhận UUID.
 
 **Acceptance Scenarios**:
 
-1. **Given** hồ sơ có mã `FP-REG-00001`, **When** gọi `GET /api/registration-requests?search=FP-REG-00001`, **Then** danh sách chỉ chứa hồ sơ có đúng mã đó; không tìm theo UUID hoặc liên hệ người nộp.
-2. **Given** từ khóa có khoảng trắng hai đầu hoặc chữ thường, **When** tìm `fp-reg-00001`, **Then** hệ thống chuẩn hóa và trả cùng kết quả như mã viết hoa.
-3. **Given** không có mã tương ứng, **When** tìm một mã hợp lệ, **Then** trả HTTP 200 với `items: []`, giữ phân trang; bỏ `search` hoặc gửi chuỗi trắng tiếp tục trả danh sách như trước.
-4. **Given** từ khóa sai định dạng, số không dương, vượt bigint PostgreSQL, dạng mảng/object hoặc tham số lạ, **When** gọi danh sách, **Then** trả 400 kèm đường dẫn trường, không lộ giá trị đầu vào và không truy vấn hồ sơ.
+1. **Given** hồ sơ có mã `FP-REG-00001`, **When** gọi `GET /api/registration-requests?search=FP-REG-00001`, **Then** trả các hồ sơ có đúng mã hoặc tên người nộp chứa từ khóa đó; không tìm theo UUID, email hoặc phone.
+2. **Given** từ khóa có khoảng trắng hai đầu hoặc chữ thường, **When** tìm `fp-reg-00001` hoặc `nguyễn`, **Then** trim từ khóa và đối chiếu mã/tên không phân biệt hoa thường; tìm tên theo chuỗi con, vẫn phân biệt dấu tiếng Việt.
+3. **Given** không có mã hoặc tên nào khớp, **When** tìm từ khóa, **Then** trả HTTP 200 với `items: []`, giữ phân trang; bỏ `search` hoặc gửi chuỗi trắng tiếp tục trả danh sách như trước.
+4. **Given** search sai kiểu, dài hơn 255 ký tự sau trim hoặc tham số lạ, **When** gọi danh sách, **Then** trả 400 kèm đường dẫn trường, không lộ giá trị đầu vào và không truy vấn hồ sơ. Chuỗi không phải mã chuẩn được tìm theo tên, không chuyển phần số không hợp lệ sang bigint.
 5. **Given** người dùng thiếu quyền hoặc sai phạm vi tổ chức, **When** tìm bằng mã có thật, **Then** vẫn bị từ chối; mã không tạo thêm quyền truy cập.
 6. **Given** có kết quả tìm kiếm, **When** mở chi tiết bằng UUID `id` của kết quả, **Then** API chi tiết hoạt động theo hợp đồng cũ; gửi mã `FP-REG-…` vào đường dẫn chi tiết tiếp tục bị 400.
+7. **Given** nhiều người nộp có tên chứa `Nguyễn`, **When** tìm `nguyễn` và chuyển trang, **Then** chỉ phân trang trên tập hồ sơ khớp, giữ thứ tự UUID và hasNext; không nhân đôi hồ sơ khớp cả mã và tên.
 
 ### Edge Cases
 
@@ -87,6 +88,8 @@ Là quản trị viên có quyền xem hồ sơ, tôi muốn nhập mã `FP-REG-
 - Đổi ngày, năm hoặc tạo xen kẽ hồ sơ trường học và nhà cung cấp: tiếp tục cùng dãy số, không khởi động lại việc đánh số.
 - Tìm mã sau 99999 và mã có phần số vượt `Number.MAX_SAFE_INTEGER`: đối chiếu chính xác trong dải bigint dương, không làm tròn qua Number. Chỉ nhận dạng chuẩn với tối thiểu 5 chữ số, không thêm số 0 dư khi phần số dài hơn 5 chữ số.
 - Tìm đúng mã nhưng yêu cầu trang sau: áp dụng phân trang trên tập kết quả đã lọc, không trả lại hồ sơ ở mọi trang.
+- Từ khóa trông giống mã nhưng thiếu/sai phần số hoặc vượt bigint: chỉ dùng như từ khóa tên, không gây lỗi chuyển BigInt. UUID nhập trong search cũng chỉ được tìm trong tên, không dùng làm định danh.
+- Các ký tự `%`, `_` và `\` trong từ khóa tên được tìm như ký tự thông thường, không được dùng như wildcard để khớp toàn bộ danh sách.
 
 ## Requirements _(mandatory)_
 
@@ -104,8 +107,8 @@ Là quản trị viên có quyền xem hồ sơ, tôi muốn nhập mã `FP-REG-
 - **FR-010**: UUID hiện có PHẢI được giữ nguyên để các liên kết và thao tác đang sử dụng tiếp tục hoạt động. Việc bổ sung mã không thay đổi cấu trúc kết quả thành công/lỗi hiện có, phân trang hoặc thứ tự danh sách hiện hành.
 - **FR-011**: Quyền xem, chỉnh sửa và xét duyệt hồ sơ PHẢI giữ nguyên. Biết hoặc đoán được `registrationID` không cấp quyền truy cập; chỉ những hồ sơ người dùng vốn được phép xem mới được cung cấp mã.
 - **FR-012**: Nếu không thể tạo hồ sơ kèm mã hợp lệ, hệ thống PHẢI thông báo thất bại theo cách xử lý lỗi hiện có; không được báo nộp thành công với hồ sơ thiếu mã hoặc trùng mã.
-- **FR-013**: Danh sách PHẢI nhận thêm query `search` tùy chọn để tìm chính xác mã `registrationID` đầy đủ. Trim khoảng trắng hai đầu và chuẩn hóa chữ hoa; chuỗi rỗng sau trim tương đương không lọc. Không tìm bằng UUID, tên hoặc thông tin liên hệ.
-- **FR-014**: `search` PHẢI là một chuỗi mã chuẩn có phần số từ 1 đến 9223372036854775807; mã sau 99999 tiếp tục hợp lệ. Từ khóa không hợp lệ PHẢI trả 400 theo envelope validation với field `search` và không lộ đầu vào. Bộ lọc PHẢI được áp dụng trước phân trang và kết hợp với phạm vi truy cập hiện hành; mã không tồn tại trả danh sách rỗng HTTP 200.
+- **FR-013**: Danh sách PHẢI nhận query `search` tùy chọn để tìm chính xác mã `registrationID` đầy đủ HOẶC tìm chuỗi con trong tên người nộp `applicantUser.fullName`, không phân biệt hoa/thường. Trim khoảng trắng hai đầu; chuỗi rỗng sau trim tương đương không lọc. Chỉ tìm theo hai trường này, giữ dấu tiếng Việt; ký tự wildcard được coi là văn bản.
+- **FR-014**: `search` PHẢI là một chuỗi tối đa 255 ký tự sau trim. Search sai kiểu hoặc quá dài PHẢI trả 400 theo envelope validation với field `search` và không lộ đầu vào. Mã chuẩn có phần số 1–9223372036854775807 được đối chiếu bằng bigint chính xác, không làm tròn qua Number; chuỗi không phải mã chuẩn vẫn được tìm trong tên. Bộ lọc PHẢI áp dụng trước phân trang, kết hợp với phạm vi truy cập hiện hành và không nhân đôi hồ sơ; từ khóa không khớp mã/tên trả danh sách rỗng HTTP 200.
 - **FR-015**: API chi tiết, duyệt, từ chối và tài liệu PHẢI tiếp tục dùng UUID trong đường dẫn. Việc tìm kiếm không thay đổi UUID, cấu trúc response, thứ tự danh sách, quyền hoặc schema database.
 
 ### Key Entities
@@ -123,7 +126,7 @@ Là quản trị viên có quyền xem hồ sơ, tôi muốn nhập mã `FP-REG-
 - **SC-003**: Khi 100 người nộp khác nhau gửi hồ sơ mới đồng thời trong điều kiện hợp lệ, tất cả hồ sơ được lưu thành công có mã riêng; không có hồ sơ thành công thiếu mã.
 - **SC-004**: 100% kịch bản chỉnh sửa, từ chối, gửi lại và phê duyệt giữ nguyên mã của cùng hồ sơ; toàn bộ hồ sơ cũ giữ nguyên nội dung, liên kết và các mốc thời gian sau khi bổ sung mã.
 - **SC-005**: 100% kịch bản nghiệm thu thiếu quyền hoặc xem hồ sơ ngoài phạm vi tiếp tục bị từ chối theo quy tắc hiện hành, kể cả khi người dùng biết mã mới.
-- **SC-006**: Các kịch bản tìm mã có thật/không tồn tại, chuẩn hóa, bigint lớn, trang sau, validation và thiếu quyền đều đạt; API chi tiết tiếp tục tra theo UUID.
+- **SC-006**: Các kịch bản tìm mã và tên đầy đủ/một phần, không phân biệt hoa thường, wildcard literal, bigint lớn, trang sau, validation và thiếu quyền đều đạt; API chi tiết tiếp tục tra theo UUID.
 
 ## Assumptions
 
@@ -133,5 +136,5 @@ Là quản trị viên có quyền xem hồ sơ, tôi muốn nhập mã `FP-REG-
 - Luồng hiện tại chỉnh sửa hoặc gửi lại cùng hồ sơ thay vì tạo một hồ sơ độc lập cho mỗi lần nộp, nên mã được giữ nguyên qua các lần này.
 - Dữ liệu hiện có chỉ bảo đảm thời điểm nộp đang lưu; đánh số hồ sơ cũ theo mốc đó không nhằm khôi phục lịch sử nộp lần đầu.
 - Phạm vi trong kho mã hiện tại là bổ sung mã và cung cấp mã trong dữ liệu hồ sơ. Trang danh sách cần được tích hợp để hiển thị `registrationID` thay UUID trong ứng dụng quản trị tương ứng; thay đổi bố cục giao diện không thuộc phạm vi này.
-- Bổ sung tìm chính xác mã qua `search` trong danh sách theo yêu cầu mới; chưa bổ sung tìm một phần mã, bộ lọc khác, cách sắp xếp mới, lịch sử xét duyệt, báo cáo công khai hoặc thay đổi nội dung email.
+- Query `search` dùng chung cho mã đầy đủ và tên người nộp. Chưa bổ sung tìm một phần mã, tên tổ chức, email/phone, tìm không dấu, bộ lọc khác, cách sắp xếp mới, lịch sử xét duyệt, báo cáo công khai hoặc thay đổi nội dung email.
 - Việc triển khai và bổ sung mã cho dữ liệu hiện có phải được lập kế hoạch, kiểm tra và thực hiện theo quy trình thay đổi dữ liệu của dự án. Giai đoạn đặc tả không thay đổi cơ sở dữ liệu.

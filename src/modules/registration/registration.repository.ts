@@ -3,6 +3,7 @@ import type { AuthPrincipal } from "../../types/auth";
 import { getPrisma } from "../../utils/database";
 import { listWindow, type ListQuery } from "../../utils/list-query";
 import { listScopes } from "../../utils/resource-access";
+import { parseRegistrationID } from "../../utils/registration-id";
 import { registrationListSelect } from "./registration.select";
 
 export type RegistrationListRow = Prisma.RegistrationRequestGetPayload<{
@@ -38,12 +39,23 @@ export function createRegistrationRepository(
 ): RegistrationRepository {
   return {
     listForReview(query, principal) {
-      const where = {
-        ...listScopes.registration(principal),
-        ...(query.search
-          ? { registrationNumber: BigInt(query.search.slice(7)) }
-          : {}),
-      };
+      let where = listScopes.registration(principal);
+      if (query.search) {
+        const nameFilter: Prisma.RegistrationRequestWhereInput = {
+          applicantUser: {
+            fullName: {
+              contains: query.search.replace(/[\\%_]/g, "\\$&"),
+              mode: "insensitive",
+            },
+          },
+        };
+        const number = parseRegistrationID(query.search);
+        const searchFilter =
+          number === undefined
+            ? nameFilter
+            : { OR: [{ registrationNumber: number }, nameFilter] };
+        where = { AND: [where, searchFilter] };
+      }
       return read({
         ...listWindow(query),
         where,

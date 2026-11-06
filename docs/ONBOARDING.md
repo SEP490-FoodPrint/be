@@ -88,7 +88,9 @@ Quyền được đọc lại từ DB, thao tác duyệt/từ chối kiểm tra 
 
 `GET /api/registration-requests?page=1&limit=5` trả thông tin người đăng ký tại `data.items[i].applicantUser` với cùng các trường như API chi tiết bên dưới. Hai API dùng chung projection an toàn; thông tin lấy từ tài khoản hiện tại. Danh sách giữ hợp đồng phân trang page/limit/hasNext và chỉ trả các trường tóm tắt hồ sơ cùng applicantUser, không nhúng hồ sơ/tệp đầy đủ.
 
-Tìm đúng mã hồ sơ bằng `GET /api/registration-requests?search=FP-REG-00001&page=1&limit=5`. `search` chỉ tìm chính xác trường public `registrationID`, được trim và chuyển chữ hoa; bỏ tham số hoặc gửi chuỗi trắng thì không lọc. Mã không tồn tại trả 200 với `items: []`; từ khóa sai định dạng, UUID, mảng/object hoặc phần số ngoài dải 1–9223372036854775807 trả 400 kèm field `search`. Mã sau 99999 như `FP-REG-100000` được hỗ trợ. Quyền và phân trang giữ nguyên; query vẫn tên `search`, field response vẫn tên `registrationID`.
+Dùng chung query `search` để tìm mã `registrationID` đầy đủ hoặc tên người nộp `applicantUser.fullName`, ví dụ `GET /api/registration-requests?search=FP-REG-00001&page=1&limit=5` hoặc `GET /api/registration-requests?search=Nguy%E1%BB%85n`. Tên được tìm theo chuỗi con, không phân biệt hoa/thường, vẫn phân biệt dấu; không tìm tên trường/nhà cung cấp, UUID, email hay phone. Các ký tự `%`, `_` và `\` được xem là văn bản thông thường.
+
+`search` nhận một chuỗi tối đa 255 ký tự sau trim; bỏ tham số hoặc gửi chuỗi trắng thì không lọc. Mã chuẩn trong dải 1–9223372036854775807 được đối chiếu chính xác, kể cả `fp-reg-00001` hoặc mã sau 99999 như `FP-REG-100000`. Từ khóa không phải mã chuẩn được tìm trong tên; không có mã/tên khớp trả 200 với `items: []`. Search sai kiểu hoặc quá dài trả 400 kèm field `search`. Quyền và phân trang giữ nguyên; query vẫn tên `search`, field response vẫn tên `registrationID`.
 
 API chi tiết, duyệt, từ chối và mở tài liệu tiếp tục nhận UUID `id` trong đường dẫn; dùng `id` của kết quả tìm kiếm để gọi các API này.
 
