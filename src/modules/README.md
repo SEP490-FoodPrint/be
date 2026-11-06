@@ -15,6 +15,15 @@ Các router được đăng ký tại [routes/index.ts](../routes/index.ts). Cli
 
 Module auth còn hỗ trợ đổi mật khẩu bằng mật khẩu cũ và khôi phục qua mã email 6 chữ số; xem [PASSWORD_RECOVERY.md](../../docs/PASSWORD_RECOVERY.md) cho API và luồng frontend.
 
+## Duyệt thực đơn tuần
+
+Ban Giám hiệu quyết định nguyên `WeeklyMenu`; `MenuDay` chỉ là dữ liệu chi tiết và được đồng bộ trạng thái trong cùng transaction.
+
+- `GET /api/v1/menus/:menuId/approval-detail`: hồ sơ duyệt thuộc trường hiện tại, yêu cầu vai trò Ban Giám hiệu và quyền `menu.view`.
+- `POST /api/v1/menus/:menuId/reviews`: body `{ "decision": "APPROVED" | "REVISION_REQUESTED", "feedback": "..." }`. Phê duyệt cần `menu.approve`; yêu cầu chỉnh sửa cần `menu.review` và bắt buộc có `feedback`.
+
+Chỉ tuần `PENDING_APPROVAL` được quyết định. Quyết định cập nhật mọi ngày, cập nhật tuần và ghi một `MenuReviewRecord` có `menuDayId = null` trong cùng transaction. API từ chối `menuDayId` trong body; bản ghi cấp ngày cũ vẫn được giữ làm lịch sử. Số suất hiển thị lấy từ nhu cầu lớp đã `FINALIZED`, không lấy từ kích thước khẩu phần của món.
+
 ## Danh sách API
 
 Tất cả đường dẫn bên dưới dùng phương thức **GET**.
