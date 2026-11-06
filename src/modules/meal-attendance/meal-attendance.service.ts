@@ -9,6 +9,7 @@ import { HttpError } from "../../utils/http-error";
 import type {
   MealSummaryQuery,
   DailyPortionGroupsInput,
+  DailyMealPortionInput,
 } from "./meal-attendance.validation";
 import { assertPortionGroupSafety } from "../kitchen/kitchen.service";
 import { getPrisma } from "../../utils/database";
@@ -17,6 +18,7 @@ import {
   readListPage,
   type ListQuery,
 } from "../../utils/list-query";
+import { currentAcademicYear } from "../class/academic-year";
 
 const select = {
   id: true,
@@ -29,6 +31,10 @@ const select = {
   finalizedAt: true,
   createdAt: true,
   updatedAt: true,
+  Class: { select: { name: true, academicYear: true } },
+  dailyAllergyPortions: {
+    select: { ingredientEntryId: true, portionCount: true },
+  },
 } as const satisfies Prisma.DailyMealPortionSelect;
 
 type ListRow = Prisma.DailyMealPortionGetPayload<{ select: typeof select }>;
@@ -49,6 +55,56 @@ export function createMealAttendanceService(
   read: ListReader = readFromDatabase,
   connect: () => Promise<PrismaClient> = getPrisma,
 ) {
+  async function assignedClass(
+    db: Prisma.TransactionClient,
+    principal: AuthPrincipal,
+    date: Date,
+  ) {
+    if (
+      principal.role !== "HOMEROOM_TEACHER" ||
+      principal.orgType !== "SCHOOL" ||
+      !principal.schoolId
+    )
+      throw new HttpError(403, "Chỉ GVCN được khai báo suất ăn của lớp");
+    const assignment = await db.classHomeroomAssignment.findFirst({
+      where: {
+        teacherUserId: principal.id,
+        endedAt: null,
+        Class: {
+          schoolId: principal.schoolId,
+          academicYear: currentAcademicYear(date),
+          status: "ACTIVE",
+        },
+      },
+      select: {
+        Class: {
+          select: {
+            id: true,
+            name: true,
+            academicYear: true,
+            registeredMealPortions: true,
+            classAllergies: {
+              select: {
+                ingredientEntryId: true,
+                affectedCount: true,
+                IngredientEntry: {
+                  select: { Ingredient: { select: { name: true } } },
+                },
+              },
+              orderBy: { ingredientEntryId: "asc" },
+            },
+          },
+        },
+      },
+    });
+    if (!assignment)
+      throw new HttpError(
+        404,
+        "GVCN chưa được phân công lớp trong niên khóa của ngày đã chọn",
+      );
+    return assignment.Class;
+  }
+
   async function owned(
     db: Prisma.TransactionClient,
     id: string,
@@ -76,6 +132,131 @@ export function createMealAttendanceService(
     return demand;
   }
   return {
+    async getMyClass(query: MealSummaryQuery, principal: AuthPrincipal) {
+      assertPermission(principal, "daily_meal_portion.view");
+      const db = await connect();
+      const assigned = await assignedClass(db, principal, query.date);
+      const submission = await db.dailyMealPortion.findUnique({
+        where: {
+          classId_mealDate_mealType: {
+            classId: assigned.id,
+            mealDate: query.date,
+            mealType: query.mealType,
+          },
+        },
+        include: {
+          dailyAllergyPortions: {
+            select: { ingredientEntryId: true, portionCount: true },
+            orderBy: { ingredientEntryId: "asc" },
+          },
+        },
+      });
+      return { class: assigned, submission };
+    },
+    async saveDraft(input: DailyMealPortionInput, principal: AuthPrincipal) {
+      return withSchoolTransaction(
+        await connect(),
+        principal,
+        "daily_meal_portion.update",
+        async (tx, actor) => {
+          const assigned = await assignedClass(tx, actor, input.date);
+          if (input.totalPortions > assigned.registeredMealPortions)
+            throw new HttpError(
+              422,
+              "Tổng số suất vượt số suất đã đăng ký của lớp",
+            );
+          for (const allergy of input.allergies) {
+            const master = assigned.classAllergies.find(
+              (item) => item.ingredientEntryId === allergy.ingredientEntryId,
+            );
+            if (!master || allergy.portionCount > master.affectedCount)
+              throw new HttpError(
+                422,
+                "Số suất dị ứng vượt thông tin dị ứng tổng hợp của lớp",
+              );
+          }
+          const key = {
+            classId: assigned.id,
+            mealDate: input.date,
+            mealType: input.mealType,
+          } as const;
+          const existing = await tx.dailyMealPortion.findUnique({
+            where: { classId_mealDate_mealType: key },
+            select: { id: true, status: true },
+          });
+          if (existing?.status === "FINALIZED")
+            throw new HttpError(
+              409,
+              "Suất ăn đã chốt, không thể sửa trực tiếp",
+            );
+          const data = {
+            confirmedByUserId: actor.id,
+            totalPortions: input.totalPortions,
+            allergyNotes: input.allergyNotes,
+          };
+          const demand = existing
+            ? await tx.dailyMealPortion.update({
+                where: { id: existing.id },
+                data,
+                select: { id: true },
+              })
+            : await tx.dailyMealPortion.create({
+                data: { ...key, ...data, status: "DRAFT" },
+                select: { id: true },
+              });
+          await tx.dailyAllergyPortion.deleteMany({
+            where: { dailyMealPortionId: demand.id },
+          });
+          const allergyRows = input.allergies.filter(
+            (item) => item.portionCount > 0,
+          );
+          if (allergyRows.length)
+            await tx.dailyAllergyPortion.createMany({
+              data: allergyRows.map((item) => ({
+                dailyMealPortionId: demand.id,
+                classId: assigned.id,
+                ...item,
+              })),
+            });
+          return tx.dailyMealPortion.findUniqueOrThrow({
+            where: { id: demand.id },
+            include: {
+              dailyAllergyPortions: {
+                select: { ingredientEntryId: true, portionCount: true },
+                orderBy: { ingredientEntryId: "asc" },
+              },
+            },
+          });
+        },
+      );
+    },
+    async finalize(id: string, principal: AuthPrincipal) {
+      return withSchoolTransaction(
+        await connect(),
+        principal,
+        "daily_meal_portion.update",
+        async (tx, actor) => {
+          if (actor.role !== "HOMEROOM_TEACHER")
+            throw new HttpError(403, "Chỉ GVCN được chốt suất ăn của lớp");
+          const demand = await owned(tx, id, actor);
+          if (demand.status === "FINALIZED") return demand;
+          return tx.dailyMealPortion.update({
+            where: { id },
+            data: {
+              status: "FINALIZED",
+              finalizedAt: new Date(),
+              confirmedByUserId: actor.id,
+            },
+            include: {
+              dailyAllergyPortions: {
+                select: { ingredientEntryId: true, portionCount: true },
+                orderBy: { ingredientEntryId: "asc" },
+              },
+            },
+          });
+        },
+      );
+    },
     async getPortionGroups(id: string, principal: AuthPrincipal) {
       assertPermission(principal, "daily_meal_portion.view");
       const db = await connect(),
