@@ -1,4 +1,8 @@
-import type { Prisma, PrismaClient } from "../../generated/prisma/client";
+import type {
+  CookingMode,
+  Prisma,
+  PrismaClient,
+} from "../../generated/prisma/client";
 import type { AuthPrincipal } from "../../types/auth";
 import { getPrisma } from "../../utils/database";
 import { listWindow, type ListQuery } from "../../utils/list-query";
@@ -143,6 +147,14 @@ export interface RawPortionGroup {
 }
 
 export interface OrganizationRepository {
+  findCookingMode(
+    schoolId: string,
+  ): Promise<{ cookingMode: CookingMode | null }>;
+  updateCookingMode(
+    tx: Prisma.TransactionClient,
+    schoolId: string,
+    cookingMode: CookingMode,
+  ): Promise<{ cookingMode: CookingMode | null }>;
   listSchools(
     query: ListQuery,
     principal: AuthPrincipal,
@@ -176,6 +188,22 @@ export function createOrganizationRepository(
   getClient: () => Promise<PrismaClient> = getPrisma,
 ): OrganizationRepository {
   return {
+    async findCookingMode(schoolId) {
+      const prisma = await getClient();
+      return prisma.school.findUniqueOrThrow({
+        where: { id: schoolId },
+        select: { cookingMode: true },
+      });
+    },
+
+    updateCookingMode(tx, schoolId, cookingMode) {
+      return tx.school.update({
+        where: { id: schoolId },
+        data: { cookingMode },
+        select: { cookingMode: true },
+      });
+    },
+
     async listSchools(query, principal) {
       const prisma = await getClient();
       const where = listScopes.organization(principal);

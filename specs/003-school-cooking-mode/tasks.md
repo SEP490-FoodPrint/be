@@ -8,13 +8,13 @@
 
 ## Phase 1: Specification and contracts
 
-- [ ] T001 Hoàn thiện yêu cầu, edge cases và success criteria trong `specs/003-school-cooking-mode/spec.md`.
-- [ ] T002 Hoàn thiện thiết kế phân lớp, transaction và Constitution Check trong `specs/003-school-cooking-mode/plan.md`.
+- [x] T001 Hoàn thiện yêu cầu, edge cases và success criteria trong `specs/003-school-cooking-mode/spec.md`.
+- [x] T002 Hoàn thiện thiết kế phân lớp, transaction và Constitution Check trong `specs/003-school-cooking-mode/plan.md`.
 
 ## Phase 2: Foundational authorization
 
-- [ ] T003 [P] Thêm permission `school_cooking_mode.manage` và grant mặc định cho Ban Giám hiệu trong `src/constants/permission-catalog.ts`.
-- [ ] T004 [P] Ghi hợp đồng endpoint/quyền và lưu ý không sửa hồi tố kế hoạch trong `src/modules/README.md`.
+- [x] T003 [P] Thêm permission `school_cooking_mode.manage` và grant mặc định cho Ban Giám hiệu trong `src/constants/permission-catalog.ts`.
+- [x] T004 [P] Ghi hợp đồng endpoint/quyền và lưu ý không sửa hồi tố kế hoạch trong `src/modules/README.md`.
 
 ## Phase 3: User Story 1 - Xem chế độ nấu (Priority: P1)
 
@@ -22,10 +22,10 @@
 
 **Independent Test**: Gọi GET với BGH hợp lệ, thiếu quyền và sai role; xác nhận data/scope/status.
 
-- [ ] T005 [US1] Thêm repository read projection cho `cookingMode` trong `src/modules/organization/organization.repository.ts`.
-- [ ] T006 [US1] Thêm Response DTO và service authorization/mapping trong `src/modules/organization/organization.response.dto.ts` và `src/modules/organization/organization.service.ts`.
-- [ ] T007 [US1] Thêm controller/route GET với permission middleware trong `src/modules/organization/organization.controller.ts` và `src/modules/organization/organization.routes.ts`.
-- [ ] T008 [P] [US1] Thêm unit/HTTP tests cho read scope và role trong `tests/cooking-mode.test.ts`.
+- [x] T005 [US1] Thêm repository read projection cho `cookingMode` trong `src/modules/organization/organization.repository.ts`.
+- [x] T006 [US1] Thêm Response DTO và service authorization/mapping trong `src/modules/organization/organization.response.dto.ts` và `src/modules/organization/organization.service.ts`.
+- [x] T007 [US1] Thêm controller/route GET với permission middleware trong `src/modules/organization/organization.controller.ts` và `src/modules/organization/organization.routes.ts`.
+- [x] T008 [P] [US1] Thêm unit/HTTP tests cho read scope và role trong `tests/cooking-mode.test.ts`.
 
 ## Phase 4: User Story 2 - Cập nhật chế độ nấu (Priority: P1)
 
@@ -33,16 +33,16 @@
 
 **Independent Test**: PATCH hai enum hợp lệ, payload sai/dư trường, thiếu quyền, sai role và kiểm tra kết quả persistence.
 
-- [ ] T009 [P] [US2] Thêm strict Zod schema và Request DTO trong `src/modules/organization/organization.validation.ts` và `src/modules/organization/organization.request.dto.ts`.
-- [ ] T010 [US2] Thêm repository update nhận transaction client trong `src/modules/organization/organization.repository.ts`.
-- [ ] T011 [US2] Thêm service transaction/recheck role-scope và explicit response mapping trong `src/modules/organization/organization.service.ts`.
-- [ ] T012 [US2] Thêm controller/route PATCH trong `src/modules/organization/organization.controller.ts` và `src/modules/organization/organization.routes.ts`.
-- [ ] T013 [P] [US2] Thêm validation, route và service tests trong `tests/cooking-mode.test.ts` và `tests/organization.test.ts`.
-- [ ] T014 [US2] Mở rộng authorization integration test cho từ chối nhân viên bếp và cập nhật thành công của BGH trong `tests/authorization.integration.test.ts`.
+- [x] T009 [P] [US2] Thêm strict Zod schema và Request DTO trong `src/modules/organization/organization.validation.ts` và `src/modules/organization/organization.request.dto.ts`.
+- [x] T010 [US2] Thêm repository update nhận transaction client trong `src/modules/organization/organization.repository.ts`.
+- [x] T011 [US2] Thêm service transaction/recheck role-scope và explicit response mapping trong `src/modules/organization/organization.service.ts`.
+- [x] T012 [US2] Thêm controller/route PATCH trong `src/modules/organization/organization.controller.ts` và `src/modules/organization/organization.routes.ts`.
+- [x] T013 [P] [US2] Thêm validation, route và service tests trong `tests/cooking-mode.test.ts` và `tests/organization.test.ts`.
+- [x] T014 [US2] Mở rộng authorization integration test cho từ chối nhân viên bếp và cập nhật thành công của BGH trong `tests/authorization.integration.test.ts`.
 
 ## Phase 5: Quality gates and handoff
 
-- [ ] T015 Đăng ký `tests/cooking-mode.test.ts` trong `npm run test:unit` tại `package.json`.
+- [x] T015 Đăng ký `tests/cooking-mode.test.ts` trong `npm run test:unit` tại `package.json`.
 - [ ] T016 Chạy format, lint, typecheck, build, unit tests và targeted tests; sửa mọi lỗi trong phạm vi PR.
 - [ ] T017 Chạy Spec gate với branch/base/head ref thực tế và xác nhận PASS.
 - [ ] T018 Kiểm tra GitHub CI gồm Code quality, PostgreSQL migrations, Spec gate và Backend quality; ghi kết quả thật trong PR.
