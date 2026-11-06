@@ -13,20 +13,10 @@ function positiveIntegerQuery(name: string, fallback: number) {
     .default(fallback);
 }
 
-const searchMessage = "Mã tìm kiếm phải có dạng FP-REG-00001";
 const registrationSearchSchema = z
-  .string({ error: searchMessage })
+  .string({ error: "Từ khóa tìm kiếm phải là chuỗi ký tự" })
   .trim()
-  .toUpperCase()
-  .refine(
-    (value) => {
-      if (value === "") return true;
-      if (!/^FP-REG-(?:[0-9]{5}|[1-9][0-9]{5,18})$/.test(value)) return false;
-      const number = BigInt(value.slice(7));
-      return number > 0n && number <= 9_223_372_036_854_775_807n;
-    },
-    { error: searchMessage },
-  )
+  .max(255, { error: "Từ khóa tìm kiếm tối đa 255 ký tự" })
   .transform((value) => value || undefined)
   .optional();
 

@@ -1,6 +1,6 @@
 # Implementation Plan: Mã hồ sơ đăng ký dễ đọc
 
-**Branch**: `fix/001-registration-code-search` | **Date**: 2026-11-06 | **Spec**: [spec.md](spec.md)
+**Branch**: `feat/001-registration-name-search` | **Date**: 2026-11-07 | **Spec**: [spec.md](spec.md)
 
 **Input**: `specs/001-add-registration-id/spec.md`
 
@@ -10,7 +10,7 @@ Bổ sung mã public `registrationID` dạng `FP-REG-00001`, dùng chung một d
 
 Lưu số nội bộ `registrationNumber` dưới dạng bigint có default PostgreSQL sequence; service định dạng thành mã khi ánh xạ response. Migration mới bổ sung số cho hồ sơ cũ theo `submitted_at, id`, giữ nguyên dữ liệu cũ và khởi tạo sequence nối tiếp. Cập nhật tất cả response có chứa hồ sơ, kể cả summary trong phiên đăng nhập. Không thay giao diện frontend, quyền, thứ tự danh sách hoặc nội dung email.
 
-Bổ sung lần này: danh sách nhận `search` để tìm chính xác mã public; API chi tiết giữ UUID theo xác nhận của người dùng. Dùng cột/index đã có, không tạo hoặc chạy migration mới.
+Bổ sung lần này: query `search` tìm mã public đầy đủ hoặc chuỗi con của tên người nộp `applicantUser.fullName` không phân biệt hoa/thường. API chi tiết giữ UUID. Dùng cột hiện có, không tạo hoặc chạy migration mới.
 
 ## Technical Context
 
@@ -30,7 +30,7 @@ Bổ sung lần này: danh sách nhận `search` để tìm chính xác mã publ
 
 **Constraints**: UUID, FK, safe projection, envelope, phân trang, thứ tự UUID hiện tại và phân quyền không đổi. Mã bất biến qua chỉnh sửa/gửi lại/xét duyệt; không yêu cầu dãy số không có khoảng trống. Không chuyển bigint qua Number hoặc trả bigint trong JSON.
 
-**Scale/Scope**: Cả hai loại hồ sơ và ba trạng thái hiện có, tất cả hồ sơ cũ và mới; số có tối thiểu 5 chữ số và mở rộng sau 99999. Dùng dải bigint dương. Bổ sung tìm chính xác mã trong danh sách; không đổi sort, thêm bộ lọc khác, lịch sử hay báo cáo công khai.
+**Scale/Scope**: Cả hai loại hồ sơ và ba trạng thái hiện có, tất cả hồ sơ cũ và mới; số có tối thiểu 5 chữ số và mở rộng sau 99999. Dùng dải bigint dương. Tìm mã hoặc tên người nộp trong danh sách; không đổi sort, thêm bộ lọc khác, lịch sử hay báo cáo công khai.
 
 ## Constitution Check
 
@@ -47,7 +47,7 @@ Gate được đánh giá trước nghiên cứu và đối chiếu lại sau th
 
 Không cần ngoại lệ hiến chương. Những service hiện còn query/spread sẽ được điều chỉnh trong phạm vi bắt buộc để đưa mã vào các response; không mở rộng sang toàn bộ module auth.
 
-Đối chiếu bổ sung US4: PASS I–VI. Zod strict chuẩn hóa query; DTO tiếp tục suy ra từ schema; repository dựng bộ lọc số kết hợp scope; service giữ quyền và mapping. Không thay transaction/cache, schema hay dữ liệu; cập nhật spec/plan/tasks cùng nhánh 001 trước code.
+Đối chiếu bổ sung US4: PASS I–VI. Zod strict chuẩn hóa query; DTO tiếp tục suy ra từ schema; repository kết hợp scope với OR của mã/tên; service giữ quyền và mapping. Không thay transaction/cache, schema hay dữ liệu; cập nhật spec/plan/tasks cùng nhánh 001 trước code.
 
 ## Project Structure
 
@@ -174,12 +174,12 @@ Helper request-validation tổng hợp lỗi tiếng Việt với field path, kh
 
 ## Verification Strategy
 
-### Bổ sung US4 — Tìm chính xác mã trong danh sách
+### Bổ sung US4 — Tìm mã hoặc tên người nộp trong danh sách
 
-1. `registration.validation.ts` thêm `search` tùy chọn, trim, uppercase, chuỗi trắng thành undefined; kiểm tra mã chuẩn và giới hạn bigint dương trước truy vấn. Lỗi nhiều trường tiếp tục dùng RegistrationValidationError tiếng Việt.
-2. `registration.request.dto.ts` tiếp tục dùng z.infer. Repository nhận kiểu filter nội bộ riêng mở rộng ListQuery, không import DTO. Đổi phần số đã validate trực tiếp sang BigInt và lọc `registrationNumber` bằng điều kiện bằng trên index hiện có; kết hợp listScopes.registration rồi áp skip/take/orderBy cũ. Service không dựng Prisma query.
+1. `registration.validation.ts` nhận `search` là chuỗi tùy chọn dài tối đa 255 ký tự sau trim, giữ chữ hoa/thường của từ khóa, chuỗi trắng thành undefined. Không còn bắt mọi từ khóa phải có dạng mã. Lỗi nhiều trường tiếp tục dùng RegistrationValidationError tiếng Việt; Request DTO vẫn dùng z.infer.
+2. `src/utils/registration-id.ts` thêm parser nhận mã chuẩn không phân biệt hoa/thường, trả bigint dương trong dải PostgreSQL hoặc undefined; regex giới hạn số chữ số trước chuyển BigInt. Repository giữ filter nội bộ, dựng điều kiện `applicantUser.fullName contains` với mode insensitive và escape `%`, `_`, `\` như ký tự literal. Với mã hợp lệ, thêm `registrationNumber` bằng số đã parse qua OR; mọi nhánh nằm dưới scope từ listScopes.registration rồi mới skip/take/orderBy. Không truy vấn UUID/email/phone/tên tổ chức và không lọc trong bộ nhớ. Service không dựng Prisma query.
 3. Giữ tất cả router/detail/review/document UUID và response mapping hiện tại; `search` không xuất hiện trong pagination response.
-4. Kiểm thử unit/HTTP trong `tests/modules.test.ts`: mặc định/chuỗi trắng, chuẩn hóa, mốc 100000 và bigint lớn, mã không tồn tại, trang sau, malformed/repeated/object/unknown input, quyền, lỗi DB và UUID detail. Chạy `npm run validate`, `npm run test:unit`, spec gate preflight và diff check. Không cần hạ tầng DB vì không thay schema, kết nối hay cơ chế cấp mã.
+4. Kiểm thử parser tại `tests/registration-id.test.ts`; cập nhật unit/HTTP trong `tests/modules.test.ts` cho tên đầy đủ/một phần, mode insensitive, escape literal, OR mã/tên, mốc 100000/bigint lớn, mã không chuẩn chỉ tìm tên, no match, nhiều trang, quá 255 ký tự/repeated/object/unknown input, quyền và lỗi DB. Chạy `npm run validate`, `npm run test:unit`, spec gate preflight và diff check. Không cần hạ tầng DB vì không thay schema, kết nối hay cơ chế cấp mã; ghi rõ bằng chứng unit dùng reader giả lập.
 5. Cập nhật `docs/ONBOARDING.md`, contract và quickstart với ví dụ query; ghi kết quả thực tế trong tasks/quickstart.
 
 | Yêu cầu               | Bằng chứng nghiệm thu dự kiến                                                                                              |
@@ -192,7 +192,9 @@ Helper request-validation tổng hợp lỗi tiếng Việt với field path, kh
 | FR-008–FR-009         | Upgrade DB cũ, trùng submitted_at, đủ loại/trạng thái; so sánh mọi cột cũ và số kế tiếp; database rỗng                     |
 | FR-010                | UUID/FK/document paths/orderBy id/pagination/envelope giữ nguyên; hash reviewVersion không đổi khi chỉ thêm số             |
 | FR-011                | Quyền view/approve/reject độc lập, reload actor/target trong tx, own/foreign scope và thiếu quyền giữ nguyên               |
-| FR-013–FR-015, SC-006 | Unit/HTTP: tìm đúng registrationNumber, validate mã, giữ scope/pagination và detail UUID; không cần migration mới          |
+| FR-013–FR-015, SC-006 | Parser/unit/HTTP: tìm mã hoặc tên người nộp, giới hạn query, giữ scope/pagination và detail UUID; không cần migration mới  |
+
+Tìm tên sử dụng phép đối chiếu chuỗi con không phân biệt hoa/thường; `%`, `_` và ký tự escape cần xử lý như ký tự thông thường theo [quy tắc pattern matching của PostgreSQL](https://www.postgresql.org/docs/18/functions-matching.html).
 
 Dùng tests/migrations.test.ts cho backfill/constraints/drift; bổ sung fixture ở trạng thái ngay trước migration mới trong database riêng, không cố mô phỏng upgrade trên schema đã có cột. tests/registration-id.integration.test.ts dùng harness tạo database con ngẫu nhiên trong instance local được chọn rõ ràng, storage test và người nộp độc lập để kiểm chứng cấp số thật. Không dùng database thành viên, Azure hoặc cloud storage thật.
 
