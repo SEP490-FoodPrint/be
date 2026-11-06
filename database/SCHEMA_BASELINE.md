@@ -1,5 +1,15 @@
 # Baseline database và lịch sử migration
 
+## Mã hồ sơ đăng ký
+
+Migration mới `20261106000100_registration_number` bổ sung cột bigint bắt buộc `foodprint.registration_requests.registration_number`, unique index và CHECK dương. UUID primary key và `email_outbox.registration_id` giữ nguyên. API ánh xạ số thành `registrationID` dạng `FP-REG-00001`; không lưu thêm chuỗi mã trùng lặp.
+
+SQL chạy trong transaction tường minh, giữ khóa ACCESS EXCLUSIVE trên registration_requests, thêm cột chưa có default rồi đánh số theo submitted_at ASC, id ASC. Backfill chỉ cập nhật cột mới, không thay timestamps, JSON, trạng thái hoặc quan hệ. Sequence cùng schema, có ownership vào cột, tăng 1, CACHE 1 và NO CYCLE; bảng rỗng bắt đầu 1, bảng có dữ liệu tiếp tục sau max. Không thêm function, trigger, seed hay script cấp mã ở startup.
+
+**Trạng thái:** đã kiểm chứng trên PostgreSQL 18 disposable local, gồm database rỗng, nâng cấp đủ hai loại/ba trạng thái, timestamp trùng, snapshot toàn bộ cột cũ, constraints/catalog và Prisma drift. Chưa triển khai lên database thành viên hoặc Azure.
+
+**Rollout:** review migration và merge qua quy trình dev đã duyệt; dự kiến khoảng khóa theo lượng dữ liệu thực, kiểm tra quyền USAGE sequence của runtime nếu khác migration owner. Áp migration/backfill trước backend mới, sau đó frontend dùng registrationID để hiển thị và vẫn dùng UUID cho thao tác. Backend cũ bỏ qua cột mới vẫn được default cấp số. Rollback ứng dụng giữ nguyên cột, sequence và mã; không reset/đánh số lại hoặc sửa migration đã triển khai.
+
 ## Dữ liệu kiểm thực của CookingBatch
 
 `20261101000100_cooking_batch_inspection_data` nối tiếp migration định mức thực đơn, thêm cột nullable `foodprint.cooking_batches.inspection_data jsonb`, khớp Prisma `inspectionData Json? @db.JsonB`. Không thêm bảng, enum, quyền hay giá trị mặc định. Các batch cũ giữ NULL; không backfill JSON giả hoặc thay đổi dữ liệu nghiệp vụ.

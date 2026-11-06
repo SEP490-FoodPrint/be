@@ -1,6 +1,7 @@
 import type { AuthPrincipal } from "./auth";
 
 interface RegistrationState {
+  registrationNumber: bigint;
   id: string;
   status: "PENDING" | "APPROVED" | "REJECTED";
   submittedAt: Date;

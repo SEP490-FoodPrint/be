@@ -16,3 +16,12 @@ src/generated/prisma/
 *.tsbuildinfo
 .eslintcache
 .husky/_/
+
+# Local configuration and transient outputs
+.env*
+!.env.example
+!.env.sample
+build/
+Thumbs.db
+*.tmp
+*.swp

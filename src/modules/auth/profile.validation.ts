@@ -1,25 +1,22 @@
-import { objectBody, text } from "../../utils/auth-validation";
-import { HttpError } from "../../utils/http-error";
-
-export interface PersonalProfileUpdate {
-  fullName?: string;
-  phone?: string | null;
-}
-
-export function validateProfileUpdate(value: unknown): PersonalProfileUpdate {
-  const body = objectBody(value, ["fullName", "phone"]);
-  if (Object.keys(body).length === 0)
-    throw new HttpError(400, "Cần cung cấp fullName hoặc phone để cập nhật");
-  const update: PersonalProfileUpdate = {};
-  if (Object.hasOwn(body, "fullName"))
-    update.fullName = text(body.fullName, 255);
-  if (Object.hasOwn(body, "phone")) {
-    if (
-      body.phone === null ||
-      (typeof body.phone === "string" && !body.phone.trim())
-    )
-      update.phone = null;
-    else update.phone = text(body.phone, 30);
-  }
-  return update;
+import { z } from "zod";
+import { parseRequest, requiredText } from "../../utils/request-validation";
+export const profileUpdateSchema = z
+  .strictObject({
+    fullName: requiredText(255).optional(),
+    phone: z
+      .union([
+        z
+          .string()
+          .trim()
+          .max(30, { error: "Điện thoại chỉ nhận tối đa 30 ký tự" }),
+        z.null(),
+      ])
+      .transform((value) => (value === "" ? null : value))
+      .optional(),
+  })
+  .refine((value) => Object.keys(value).length > 0, {
+    error: "Cần cung cấp fullName hoặc phone để cập nhật",
+  });
+export function validateProfileUpdate(value: unknown) {
+  return parseRequest(profileUpdateSchema, value);
 }

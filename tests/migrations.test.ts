@@ -424,7 +424,173 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
         "prisma/schema.prisma",
         "--exit-code",
       ]);
+      const empty = new Client({ connectionString: fresh.toString() });
+      await empty.connect();
+      try {
+        const initial = (
+          await empty.query<{ last_value: string; is_called: boolean }>(
+            "SELECT last_value,is_called FROM foodprint.registration_requests_registration_number_seq",
+          )
+        ).rows[0];
+        assert.deepEqual(initial, { last_value: "1", is_called: false });
+        assert.equal(
+          (
+            await empty.query<{ value: string }>(
+              "SELECT nextval('foodprint.registration_requests_registration_number_seq') AS value",
+            )
+          ).rows[0].value,
+          "1",
+        );
+      } finally {
+        await empty.end();
+      }
       // This database belongs to the disposable test instance; no database/volume is dropped by tests.
+    },
+  );
+  await context.test(
+    "registration numbering preserves legacy rows, orders ties deterministically and continues the sequence",
+    async () => {
+      const name =
+        "foodprint_migration_test_codes_" + randomUUID().replaceAll("-", "");
+      await db.query(`CREATE DATABASE "${name}"`);
+      const fresh = new URL(url);
+      fresh.pathname = "/" + name;
+      const legacy = new Client({ connectionString: fresh.toString() });
+      await legacy.connect();
+      try {
+        const numbering = "20261106000100_registration_number";
+        for (const migration of migrationNames.filter(
+          (value) => value < numbering,
+        )) {
+          await legacy.query(
+            await readFile(
+              path.join(root, "prisma/migrations", migration, "migration.sql"),
+              "utf8",
+            ),
+          );
+        }
+        const roleId = randomUUID();
+        await legacy.query(
+          "INSERT INTO foodprint.roles(id,code,name,type) VALUES ($1,'SCHOOL_ADMINISTRATION','School admin','SCHOOL')",
+          [roleId],
+        );
+        const supplierRole = randomUUID();
+        await legacy.query(
+          "INSERT INTO foodprint.roles(id,code,name,type) VALUES ($1,'INGREDIENT_SUPPLIER_ADMIN','Supplier admin','SUPPLIER')",
+          [supplierRole],
+        );
+        const ids = [
+          "00000000-0000-4000-8000-000000000003",
+          "00000000-0000-4000-8000-000000000002",
+          "00000000-0000-4000-8000-000000000001",
+        ];
+        for (let index = 0; index < 3; index++) {
+          const userId = randomUUID();
+          const supplier = index % 2 === 1;
+          await legacy.query(
+            "INSERT INTO foodprint.users(id,role_id,role_code,username,email,password_hash,full_name) VALUES($1,$2,$3,$4,$5,'fixture-only','Legacy applicant')",
+            [
+              userId,
+              supplier ? supplierRole : roleId,
+              supplier ? "INGREDIENT_SUPPLIER_ADMIN" : "SCHOOL_ADMINISTRATION",
+              `legacy_${index}`,
+              `legacy_${index}@example.test`,
+            ],
+          );
+          const status = ["PENDING", "APPROVED", "REJECTED"][index];
+          await legacy.query(
+            "INSERT INTO foodprint.registration_requests(id,applicant_user_id,request_type,status,profile_data,supporting_documents,submitted_at,updated_at,reviewed_at,rejection_reason) VALUES($1,$2,$3,$4::foodprint.registration_request_status,'{\"name\":\"Legacy\",\"keep\":true}','[]',$5::timestamptz,'2026-11-01T12:34:56.123456Z',CASE WHEN $4::foodprint.registration_request_status='PENDING' THEN NULL ELSE '2026-11-02T00:00:00Z'::timestamptz END,CASE WHEN $4::foodprint.registration_request_status='REJECTED' THEN 'Keep reason' ELSE NULL END)",
+            [
+              ids[index],
+              userId,
+              supplier ? "SUPPLIER" : "SCHOOL",
+              status,
+              index === 0
+                ? "2026-11-01T00:00:00.123456Z"
+                : "2026-11-01T00:00:00.123457Z",
+            ],
+          );
+        }
+        const before = (
+          await legacy.query<{ row: unknown }>(
+            "SELECT to_jsonb(r) AS row FROM foodprint.registration_requests r ORDER BY id",
+          )
+        ).rows;
+        const migrationSql = await readFile(
+          path.join(root, "prisma/migrations", numbering, "migration.sql"),
+          "utf8",
+        );
+        await legacy.query(migrationSql);
+        assert.deepEqual(
+          (
+            await legacy.query<{ row: unknown }>(
+              "SELECT to_jsonb(r)-'registration_number' AS row FROM foodprint.registration_requests r ORDER BY id",
+            )
+          ).rows,
+          before,
+        );
+        const numbered = (
+          await legacy.query<{ id: string; registration_number: string }>(
+            "SELECT id,registration_number FROM foodprint.registration_requests ORDER BY registration_number",
+          )
+        ).rows;
+        assert.deepEqual(
+          numbered.map((row) => row.id),
+          [ids[0], ids[2], ids[1]],
+        );
+        assert.deepEqual(
+          numbered.map((row) => row.registration_number),
+          ["1", "2", "3"],
+        );
+        const sequence = (
+          await legacy.query<{
+            seqincrement: string;
+            seqmin: string;
+            seqcache: string;
+            seqcycle: boolean;
+          }>(
+            "SELECT seqincrement,seqmin,seqcache,seqcycle FROM pg_sequence WHERE seqrelid='foodprint.registration_requests_registration_number_seq'::regclass",
+          )
+        ).rows[0];
+        assert.deepEqual(sequence, {
+          seqincrement: "1",
+          seqmin: "1",
+          seqcache: "1",
+          seqcycle: false,
+        });
+        assert.equal(
+          (
+            await legacy.query<{ owner: string }>(
+              "SELECT pg_get_serial_sequence('foodprint.registration_requests','registration_number') AS owner",
+            )
+          ).rows[0].owner,
+          "foodprint.registration_requests_registration_number_seq",
+        );
+        assert.equal(
+          (
+            await legacy.query<{ value: string }>(
+              "SELECT nextval('foodprint.registration_requests_registration_number_seq') AS value",
+            )
+          ).rows[0].value,
+          "4",
+        );
+        for (const [value, code] of [
+          [null, "23502"],
+          ["0", "23514"],
+          ["-1", "23514"],
+          ["1", "23505"],
+        ] as const) {
+          await assert.rejects(
+            legacy.query(
+              "UPDATE foodprint.registration_requests SET registration_number=$1 WHERE id=$2",
+              [value, ids[1]],
+            ),
+            (error: unknown) => sqlState(error, code),
+          );
+        }
+      } finally {
+        await legacy.end();
+      }
     },
   );
 });

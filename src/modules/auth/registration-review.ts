@@ -1,27 +1,7 @@
 import { createHash } from "node:crypto";
-import type { Prisma } from "../../generated/prisma/client";
 import { HttpError } from "../../utils/http-error";
-import { registrationApplicantSelect } from "../registration/registration.select";
-
-export const reviewSelect = {
-  id: true,
-  applicantUserId: true,
-  requestType: true,
-  status: true,
-  profileData: true,
-  supportingDocuments: true,
-  submittedAt: true,
-  reviewedAt: true,
-  rejectionReason: true,
-  updatedAt: true,
-  reviewedByUserId: true,
-  applicantUser: { select: registrationApplicantSelect },
-  reviewedByUser: { select: { id: true, fullName: true } },
-} as const satisfies Prisma.RegistrationRequestSelect;
-
-export type ReviewRow = Prisma.RegistrationRequestGetPayload<{
-  select: typeof reviewSelect;
-}>;
+import type { ReviewRow } from "./onboarding.repository";
+export type { ReviewRow } from "./onboarding.repository";
 
 function canonical(value: unknown): unknown {
   if (value instanceof Date) return value.toISOString();
@@ -39,7 +19,25 @@ function canonical(value: unknown): unknown {
 
 export function reviewVersion(row: ReviewRow): string {
   return createHash("sha256")
-    .update(JSON.stringify(canonical(row)))
+    .update(
+      JSON.stringify(
+        canonical({
+          id: row.id,
+          applicantUserId: row.applicantUserId,
+          requestType: row.requestType,
+          status: row.status,
+          profileData: row.profileData,
+          supportingDocuments: row.supportingDocuments,
+          submittedAt: row.submittedAt,
+          reviewedAt: row.reviewedAt,
+          rejectionReason: row.rejectionReason,
+          updatedAt: row.updatedAt,
+          reviewedByUserId: row.reviewedByUserId,
+          applicantUser: row.applicantUser,
+          reviewedByUser: row.reviewedByUser,
+        }),
+      ),
+    )
     .digest("hex");
 }
 

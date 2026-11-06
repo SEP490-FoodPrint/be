@@ -1,5 +1,6 @@
 import bcrypt from "bcryptjs";
 import type { PrismaClient } from "../../generated/prisma/client";
+import type { SessionUser } from "../../types/session-user";
 import { getPrisma } from "../../utils/database";
 import {
   authorizationTransaction,
@@ -8,6 +9,52 @@ import {
 import { loadSessionUser } from "../../utils/session-identity";
 import { HttpError } from "../../utils/http-error";
 import { authSessions, type AuthSessions } from "../../utils/auth-sessions";
+import { formatRegistrationID } from "../../utils/registration-id";
+import { sessionRepository } from "./session.repository";
+import type { LoginRequestDTO } from "./auth.request.dto";
+import type { SessionUserResponseDTO } from "./auth.response.dto";
+
+export function toSessionUserResponseDTO(
+  user: SessionUser,
+): SessionUserResponseDTO {
+  const row = user.registrationRequest;
+  const common = {
+    id: user.id,
+    username: user.username,
+    fullName: user.fullName,
+    email: user.email,
+    phone: user.phone,
+    roleId: user.roleId,
+    role: user.role,
+    orgType: user.orgType,
+    schoolId: user.schoolId,
+    supplierId: user.supplierId,
+    communeFoodSafetyUnitId: user.communeFoodSafetyUnitId,
+    registrationRequest: row
+      ? {
+          id: row.id,
+          registrationID: formatRegistrationID(row.registrationNumber),
+          status: row.status,
+          submittedAt: row.submittedAt.toISOString(),
+          rejectionReason: row.rejectionReason,
+        }
+      : null,
+    emailVerifiedAt: user.emailVerifiedAt?.toISOString() ?? null,
+  };
+  return user.status === "ACTIVE"
+    ? {
+        ...common,
+        status: "ACTIVE",
+        onboardingRequired: false,
+        permissions: [...user.permissions],
+      }
+    : {
+        ...common,
+        status: "UNVERIFIED",
+        onboardingRequired: true,
+        communeFoodSafetyUnitId: null,
+      };
+}
 const dummyHash =
   "$2b$12$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy";
 export function createSessionService(
@@ -15,21 +62,16 @@ export function createSessionService(
   sessions: AuthSessions = authSessions,
 ) {
   return {
-    async login(
-      identifier: string,
-      password: string,
-      previousRefreshToken?: string,
-    ) {
+    async login(input: LoginRequestDTO, previousRefreshToken?: string) {
       return databaseOperation(async () => {
         const db = await connect();
-        const rows = await db.user.findMany({
-          where: { OR: [{ username: identifier }, { email: identifier }] },
-          take: 2,
-          select: { id: true, passwordHash: true },
-        });
+        const rows = await sessionRepository.findCandidates(
+          db,
+          input.identifier,
+        );
         const candidate = rows.length === 1 ? rows[0] : undefined;
         const valid = await bcrypt.compare(
-          password,
+          input.password,
           candidate?.passwordHash ?? dummyHash,
         );
         if (!candidate || !valid)
@@ -37,28 +79,30 @@ export function createSessionService(
             401,
             "Tên đăng nhập/email hoặc mật khẩu không đúng",
           );
-        // Serialize session issuance with password replacement. A login that checked
-        // an old password must never acquire the new Redis session generation.
         return authorizationTransaction(db, async (tx) => {
-          await tx.$queryRaw`SELECT id FROM foodprint.users WHERE id = ${candidate.id}::uuid FOR UPDATE`;
-          const current = await tx.user.findUnique({
-            where: { id: candidate.id },
-            select: { passwordHash: true },
-          });
+          const current = await sessionRepository.lockPassword(
+            tx,
+            candidate.id,
+          );
           if (current?.passwordHash !== candidate.passwordHash)
             throw new HttpError(
               401,
               "Tên đăng nhập/email hoặc mật khẩu không đúng",
             );
-          const principal = await loadSessionUser(candidate.id, tx);
+          const user = await loadSessionUser(candidate.id, tx);
           if (previousRefreshToken) await sessions.logout(previousRefreshToken);
-          return { ...(await sessions.issue(principal.id)), user: principal };
+          return {
+            ...(await sessions.issue(user.id)),
+            user: toSessionUserResponseDTO(user),
+          };
         });
       });
     },
     refresh(refreshToken: string | undefined) {
       return sessions.refresh(refreshToken, async (userId) =>
-        loadSessionUser(userId, await connect()),
+        toSessionUserResponseDTO(
+          await loadSessionUser(userId, await connect()),
+        ),
       );
     },
     logout(refreshToken?: string, accessToken?: string) {
@@ -66,6 +110,9 @@ export function createSessionService(
     },
     async currentUser(userId: string) {
       return loadSessionUser(userId, await connect());
+    },
+    getProfile(user: SessionUser) {
+      return toSessionUserResponseDTO(user);
     },
   };
 }

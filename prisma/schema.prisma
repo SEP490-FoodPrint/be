@@ -721,6 +721,7 @@ model MenuReviewRecord {
 
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
 model RegistrationRequest {
+  registrationNumber BigInt @unique(map: "registration_requests_registration_number_key") @default(autoincrement()) @map("registration_number") @db.BigInt
   id                  String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   applicantUserId     String                    @map("applicant_user_id") @db.Uuid
   requestType         RegistrationRequestType   @map("request_type")
