@@ -13,6 +13,23 @@ function positiveIntegerQuery(name: string, fallback: number) {
     .default(fallback);
 }
 
+const searchMessage = "Mã tìm kiếm phải có dạng FP-REG-00001";
+const registrationSearchSchema = z
+  .string({ error: searchMessage })
+  .trim()
+  .toUpperCase()
+  .refine(
+    (value) => {
+      if (value === "") return true;
+      if (!/^FP-REG-(?:[0-9]{5}|[1-9][0-9]{5,18})$/.test(value)) return false;
+      const number = BigInt(value.slice(7));
+      return number > 0n && number <= 9_223_372_036_854_775_807n;
+    },
+    { error: searchMessage },
+  )
+  .transform((value) => value || undefined)
+  .optional();
+
 export const registrationListQuerySchema = z
   .strictObject(
     {
@@ -20,11 +37,12 @@ export const registrationListQuerySchema = z
       limit: positiveIntegerQuery("limit", 20).refine((value) => value <= 100, {
         error: "limit tối đa 100",
       }),
+      search: registrationSearchSchema,
     },
     {
       error: (issue) =>
         issue.code === "unrecognized_keys"
-          ? "Chỉ hỗ trợ tham số page và limit"
+          ? "Chỉ hỗ trợ tham số page, limit và search"
           : "Tham số danh sách đăng ký không hợp lệ",
     },
   )

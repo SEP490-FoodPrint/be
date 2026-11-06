@@ -1,12 +1,14 @@
 # Feature Specification: Mã hồ sơ đăng ký dễ đọc
 
-**Feature Branch**: `feat/001-add-registration-id`
+**Feature Branch**: `fix/001-registration-code-search` (bổ sung sau `feat/001-add-registration-id`)
 
 **Created**: 2026-11-06
 
 **Status**: Draft
 
 **Input**: User description: "Thêm trường registrationID để đánh số registration, giúp danh sách gọn hơn và minh bạch các đơn đăng ký. Định dạng là FP-REG-00001, các hồ sơ sau tăng số lên."
+
+**Bổ sung đã xác nhận**: Tìm kiếm trong danh sách theo mã `registrationID`; API chi tiết tiếp tục tra theo UUID. Không đổi API chi tiết sang mã hồ sơ.
 
 ## User Scenarios & Testing _(mandatory)_
 
@@ -58,6 +60,23 @@ Là quản trị viên hệ thống, tôi muốn các hồ sơ đã có trước
 2. **Given** các hồ sơ cũ có thời điểm nộp khác nhau, **When** cấp mã ban đầu, **Then** đánh số từ 1 theo thời điểm nộp đang được lưu, sớm trước muộn sau; nếu trùng thời điểm thì dùng thứ tự UUID tăng dần để phân định.
 3. **Given** hồ sơ cũ đã được cấp mã, **When** tiếp tục tạo hồ sơ mới, **Then** phần số của mã mới lớn hơn phần số lớn nhất đã cấp, không trùng và không đánh số lại hồ sơ cũ.
 
+---
+
+### User Story 4 - Tìm hồ sơ trong danh sách bằng mã đăng ký (Priority: P1)
+
+Là quản trị viên có quyền xem hồ sơ, tôi muốn nhập mã `FP-REG-00001` để tìm đúng hồ sơ trong danh sách, rồi tiếp tục mở chi tiết và xét duyệt bằng UUID hiện có.
+
+**Independent Test**: Gọi danh sách với `search` là mã của một hồ sơ có sẵn; kiểm tra chỉ hồ sơ đó được trả về, mã không tồn tại cho danh sách rỗng, và chi tiết vẫn nhận UUID.
+
+**Acceptance Scenarios**:
+
+1. **Given** hồ sơ có mã `FP-REG-00001`, **When** gọi `GET /api/registration-requests?search=FP-REG-00001`, **Then** danh sách chỉ chứa hồ sơ có đúng mã đó; không tìm theo UUID hoặc liên hệ người nộp.
+2. **Given** từ khóa có khoảng trắng hai đầu hoặc chữ thường, **When** tìm `fp-reg-00001`, **Then** hệ thống chuẩn hóa và trả cùng kết quả như mã viết hoa.
+3. **Given** không có mã tương ứng, **When** tìm một mã hợp lệ, **Then** trả HTTP 200 với `items: []`, giữ phân trang; bỏ `search` hoặc gửi chuỗi trắng tiếp tục trả danh sách như trước.
+4. **Given** từ khóa sai định dạng, số không dương, vượt bigint PostgreSQL, dạng mảng/object hoặc tham số lạ, **When** gọi danh sách, **Then** trả 400 kèm đường dẫn trường, không lộ giá trị đầu vào và không truy vấn hồ sơ.
+5. **Given** người dùng thiếu quyền hoặc sai phạm vi tổ chức, **When** tìm bằng mã có thật, **Then** vẫn bị từ chối; mã không tạo thêm quyền truy cập.
+6. **Given** có kết quả tìm kiếm, **When** mở chi tiết bằng UUID `id` của kết quả, **Then** API chi tiết hoạt động theo hợp đồng cũ; gửi mã `FP-REG-…` vào đường dẫn chi tiết tiếp tục bị 400.
+
 ### Edge Cases
 
 - Nhiều hồ sơ mới được nộp đồng thời: mỗi hồ sơ được lưu thành công phải có mã riêng; thứ tự hoàn tất các yêu cầu đồng thời không bắt buộc trùng thứ tự cấp số.
@@ -66,6 +85,8 @@ Là quản trị viên hệ thống, tôi muốn các hồ sơ đã có trước
 - Danh sách rỗng, chuyển trang hoặc thay đổi thứ tự hiển thị: không sinh mã mới, không đánh số lại; mã hồ sơ không phải số thứ tự của dòng.
 - Có hồ sơ cũ trùng thời điểm nộp hoặc đã từng gửi lại: dùng thời điểm nộp đang được lưu để cấp mã ban đầu; mã không khẳng định thứ tự nộp lần đầu trong quá khứ.
 - Đổi ngày, năm hoặc tạo xen kẽ hồ sơ trường học và nhà cung cấp: tiếp tục cùng dãy số, không khởi động lại việc đánh số.
+- Tìm mã sau 99999 và mã có phần số vượt `Number.MAX_SAFE_INTEGER`: đối chiếu chính xác trong dải bigint dương, không làm tròn qua Number. Chỉ nhận dạng chuẩn với tối thiểu 5 chữ số, không thêm số 0 dư khi phần số dài hơn 5 chữ số.
+- Tìm đúng mã nhưng yêu cầu trang sau: áp dụng phân trang trên tập kết quả đã lọc, không trả lại hồ sơ ở mọi trang.
 
 ## Requirements _(mandatory)_
 
@@ -83,6 +104,9 @@ Là quản trị viên hệ thống, tôi muốn các hồ sơ đã có trước
 - **FR-010**: UUID hiện có PHẢI được giữ nguyên để các liên kết và thao tác đang sử dụng tiếp tục hoạt động. Việc bổ sung mã không thay đổi cấu trúc kết quả thành công/lỗi hiện có, phân trang hoặc thứ tự danh sách hiện hành.
 - **FR-011**: Quyền xem, chỉnh sửa và xét duyệt hồ sơ PHẢI giữ nguyên. Biết hoặc đoán được `registrationID` không cấp quyền truy cập; chỉ những hồ sơ người dùng vốn được phép xem mới được cung cấp mã.
 - **FR-012**: Nếu không thể tạo hồ sơ kèm mã hợp lệ, hệ thống PHẢI thông báo thất bại theo cách xử lý lỗi hiện có; không được báo nộp thành công với hồ sơ thiếu mã hoặc trùng mã.
+- **FR-013**: Danh sách PHẢI nhận thêm query `search` tùy chọn để tìm chính xác mã `registrationID` đầy đủ. Trim khoảng trắng hai đầu và chuẩn hóa chữ hoa; chuỗi rỗng sau trim tương đương không lọc. Không tìm bằng UUID, tên hoặc thông tin liên hệ.
+- **FR-014**: `search` PHẢI là một chuỗi mã chuẩn có phần số từ 1 đến 9223372036854775807; mã sau 99999 tiếp tục hợp lệ. Từ khóa không hợp lệ PHẢI trả 400 theo envelope validation với field `search` và không lộ đầu vào. Bộ lọc PHẢI được áp dụng trước phân trang và kết hợp với phạm vi truy cập hiện hành; mã không tồn tại trả danh sách rỗng HTTP 200.
+- **FR-015**: API chi tiết, duyệt, từ chối và tài liệu PHẢI tiếp tục dùng UUID trong đường dẫn. Việc tìm kiếm không thay đổi UUID, cấu trúc response, thứ tự danh sách, quyền hoặc schema database.
 
 ### Key Entities
 
@@ -99,6 +123,7 @@ Là quản trị viên hệ thống, tôi muốn các hồ sơ đã có trước
 - **SC-003**: Khi 100 người nộp khác nhau gửi hồ sơ mới đồng thời trong điều kiện hợp lệ, tất cả hồ sơ được lưu thành công có mã riêng; không có hồ sơ thành công thiếu mã.
 - **SC-004**: 100% kịch bản chỉnh sửa, từ chối, gửi lại và phê duyệt giữ nguyên mã của cùng hồ sơ; toàn bộ hồ sơ cũ giữ nguyên nội dung, liên kết và các mốc thời gian sau khi bổ sung mã.
 - **SC-005**: 100% kịch bản nghiệm thu thiếu quyền hoặc xem hồ sơ ngoài phạm vi tiếp tục bị từ chối theo quy tắc hiện hành, kể cả khi người dùng biết mã mới.
+- **SC-006**: Các kịch bản tìm mã có thật/không tồn tại, chuẩn hóa, bigint lớn, trang sau, validation và thiếu quyền đều đạt; API chi tiết tiếp tục tra theo UUID.
 
 ## Assumptions
 
@@ -108,5 +133,5 @@ Là quản trị viên hệ thống, tôi muốn các hồ sơ đã có trước
 - Luồng hiện tại chỉnh sửa hoặc gửi lại cùng hồ sơ thay vì tạo một hồ sơ độc lập cho mỗi lần nộp, nên mã được giữ nguyên qua các lần này.
 - Dữ liệu hiện có chỉ bảo đảm thời điểm nộp đang lưu; đánh số hồ sơ cũ theo mốc đó không nhằm khôi phục lịch sử nộp lần đầu.
 - Phạm vi trong kho mã hiện tại là bổ sung mã và cung cấp mã trong dữ liệu hồ sơ. Trang danh sách cần được tích hợp để hiển thị `registrationID` thay UUID trong ứng dụng quản trị tương ứng; thay đổi bố cục giao diện không thuộc phạm vi này.
-- Không bổ sung tìm kiếm theo mã, bộ lọc hay cách sắp xếp mới, lịch sử xét duyệt, báo cáo công khai hoặc thay đổi nội dung email trong tính năng này.
+- Bổ sung tìm chính xác mã qua `search` trong danh sách theo yêu cầu mới; chưa bổ sung tìm một phần mã, bộ lọc khác, cách sắp xếp mới, lịch sử xét duyệt, báo cáo công khai hoặc thay đổi nội dung email.
 - Việc triển khai và bổ sung mã cho dữ liệu hiện có phải được lập kế hoạch, kiểm tra và thực hiện theo quy trình thay đổi dữ liệu của dự án. Giai đoạn đặc tả không thay đổi cơ sở dữ liệu.

@@ -17,9 +17,13 @@ type ListArguments = Pick<
 };
 type ListReader = (args: ListArguments) => Promise<RegistrationListRow[]>;
 
+interface RegistrationListFilters extends ListQuery {
+  search?: string;
+}
+
 export interface RegistrationRepository {
   listForReview(
-    query: ListQuery,
+    query: RegistrationListFilters,
     principal: AuthPrincipal,
   ): Promise<RegistrationListRow[]>;
 }
@@ -34,7 +38,12 @@ export function createRegistrationRepository(
 ): RegistrationRepository {
   return {
     listForReview(query, principal) {
-      const where = listScopes.registration(principal);
+      const where = {
+        ...listScopes.registration(principal),
+        ...(query.search
+          ? { registrationNumber: BigInt(query.search.slice(7)) }
+          : {}),
+      };
       return read({
         ...listWindow(query),
         where,
