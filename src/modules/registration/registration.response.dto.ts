@@ -9,6 +9,7 @@ export interface RegistrationApplicantResponseDTO {
 }
 
 export interface RegistrationListItemResponseDTO {
+  registrationID: string;
   id: string;
   applicantUserId: string;
   applicantUser: RegistrationApplicantResponseDTO;

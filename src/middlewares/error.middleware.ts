@@ -1,3 +1,4 @@
+import { RequestValidationError } from "../utils/request-validation";
 import type { ErrorRequestHandler, RequestHandler } from "express";
 import { Prisma } from "../generated/prisma/client";
 import { HttpError } from "../utils/http-error";
@@ -31,6 +32,8 @@ export const globalErrorHandler: ErrorRequestHandler = (
     name: err instanceof Error ? err.name : "Error",
     code,
   });
+  if (err instanceof RequestValidationError)
+    return sendError(res, err.message, err.statusCode, { fields: err.fields });
   if (err instanceof HttpError)
     return sendError(
       res,

@@ -20,8 +20,7 @@ export function createSessionController(
     login: asyncHandler(async (req, res) => {
       const body = validateLogin(req.body as unknown);
       const result = await service.login(
-        body.identifier,
-        body.password,
+        body,
         readAuthCookie(req, REFRESH_COOKIE),
       );
       setAuthCookies(res, result);
@@ -81,7 +80,7 @@ export function createSessionController(
     }),
     me: asyncHandler((req, res) => {
       res.setHeader("Cache-Control", "no-store");
-      sendSuccess(res, requireSessionUser(req));
+      sendSuccess(res, service.getProfile(requireSessionUser(req)));
       return Promise.resolve();
     }),
     permissions: asyncHandler((req, res) => {

@@ -19,6 +19,7 @@ export const sessionIdentitySelect = {
   RegistrationRequestAsApplicantUser: {
     select: {
       id: true,
+      registrationNumber: true,
       status: true,
       submittedAt: true,
       rejectionReason: true,
