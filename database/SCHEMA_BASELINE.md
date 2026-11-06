@@ -1,5 +1,19 @@
 # Baseline database và lịch sử migration
 
+## Lịch năm học toàn trường
+
+Migration `20261107000100_school_academic_year` chỉ thêm bảng `foodprint.school_academic_years`, được Prisma ánh xạ thành `SchoolAcademicYear`, với quan hệ `School.academicYears`. Mỗi trường có tối đa một bản ghi cho cùng nhãn `academic_year`; các năm và trường khác nhau được lưu độc lập.
+
+- UUID primary key, FK `school_id` tới `schools(id)` với `ON DELETE RESTRICT ON UPDATE NO ACTION`, unique index `(school_id, academic_year)`.
+- `start_date`/`end_date` là DATE bắt buộc; CHECK ngày bắt đầu không sau ngày kết thúc và nhãn năm học không rỗng sau `btrim`.
+- `holidays` là JSONB NOT NULL DEFAULT `[]`, CHECK phải là array. Hình dạng dự kiến: `[{"date":"2026-10-22","reason":"Nghỉ theo kế hoạch nhà trường"}]`.
+- CHECK JSON chỉ bảo đảm array, chưa kiểm tra từng mục, ngày lịch hợp lệ, lý do bắt buộc/không trắng, ngày trùng hay ngày nằm trong khoảng năm học. Các kiểm tra này phải được thực hiện trong validation/service khi triển khai API lịch.
+- `created_at`/`updated_at` có default thời điểm hiện tại; Prisma dùng `@updatedAt`, các thao tác raw SQL phải đặt `updated_at` tường minh khi cập nhật.
+
+Migration tạo bảng rỗng, không thêm function/trigger/seed, không backfill từ `Class.academicYear`, không thay đổi dữ liệu hay FK của lớp, thực đơn, suất ăn hoặc lịch sử hiện có. Không thêm học kỳ hoặc cách đánh số tuần. API/giao diện BGH và việc áp ngày nghỉ vào thực đơn/suất ăn chưa nằm trong thay đổi storage này.
+
+**Triển khai:** tác vụ chỉ chuẩn bị migration và kiểm chứng trên PostgreSQL local disposable; không áp dụng lên database thành viên hoặc Azure. Review/merge vào `dev` để CI/CD đã duyệt xử lý pending migration. Ứng dụng cũ vẫn tương thích; rollback ứng dụng giữ bảng và dữ liệu lịch đã được nhập. Kết quả kiểm chứng thực tế nằm trong [quickstart của spec 005](../specs/005-school-academic-year/quickstart.md).
+
 ## Mã hồ sơ đăng ký
 
 Migration mới `20261106000100_registration_number` bổ sung cột bigint bắt buộc `foodprint.registration_requests.registration_number`, unique index và CHECK dương. UUID primary key và `email_outbox.registration_id` giữ nguyên. API ánh xạ số thành `registrationID` dạng `FP-REG-00001`; không lưu thêm chuỗi mã trùng lặp.
@@ -46,19 +60,22 @@ SQL bootstrap root được đồng bộ các migration MenuDay/Supplier/School 
 
 Lịch sử triển khai schema được quản lý tại `prisma/migrations/`, với provider PostgreSQL và Prisma CLI/Client theo lockfile hiện tại (**7.10.1**). `prisma/schema.prisma` mô tả trạng thái đích; các CHECK và SQL riêng của PostgreSQL nằm trong migration.
 
-| Migration                                       | Nội dung                                                                                         |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `0_init`                                        | Baseline cấu trúc v5.4 đang có trên Azure, trước UserPermissionDenial                            |
-| `20261029000100_user_permission_denials`        | Thêm bảng quyền bị tắt theo user/tổ chức, FK, partial unique index và CHECK đúng một tổ chức     |
-| `20261029000200_single_organization_admin`      | Thêm role_code được FK ghép kiểm tra, CHECK loại tổ chức và unique một admin mỗi school/supplier |
-| `20261030000100_menu_day_approval`              | Đồng bộ phê duyệt MenuDay và tham chiếu người phê duyệt                                          |
-| `20261030000200_supplier_contract_linking`      | Đồng bộ liên kết hợp đồng nhà cung ứng và các ràng buộc liên quan                                |
-| `20261031000100_school_profile_baseline`        | Đồng bộ các cột hồ sơ School đã provision và giữ dữ liệu hiện có                                 |
-| `20261031000200_cooking_option_a_expand`        | Phase 1 Cooking Batch: guard lịch sử, backfill lượng còn thiếu, giữ cột legacy để tương thích    |
-| `20261031000300_menu_meal_ingredient_standards` | Định mức chính thức theo thực đơn và phân bổ gia vị dùng chung theo bữa                          |
-| `20261101000100_cooking_batch_inspection_data`  | Thêm inspection_data jsonb nullable, giữ dữ liệu kiểm thực đã có                                 |
-| `20261101000200_meal_portion_groups`            | Suất ăn riêng theo nhóm lớp, đối soát dị ứng và phân bổ món thay thế                             |
-| `20261102000100_registration_review_outbox`     | Thêm email_outbox bền vững cho thông báo kết quả duyệt/từ chối, không backfill dữ liệu cũ        |
+| Migration                                           | Nội dung                                                                                         |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `0_init`                                            | Baseline cấu trúc v5.4 đang có trên Azure, trước UserPermissionDenial                            |
+| `20261029000100_user_permission_denials`            | Thêm bảng quyền bị tắt theo user/tổ chức, FK, partial unique index và CHECK đúng một tổ chức     |
+| `20261029000200_single_organization_admin`          | Thêm role_code được FK ghép kiểm tra, CHECK loại tổ chức và unique một admin mỗi school/supplier |
+| `20261030000100_menu_day_approval`                  | Đồng bộ phê duyệt MenuDay và tham chiếu người phê duyệt                                          |
+| `20261030000200_supplier_contract_linking`          | Đồng bộ liên kết hợp đồng nhà cung ứng và các ràng buộc liên quan                                |
+| `20261031000100_school_profile_baseline`            | Đồng bộ các cột hồ sơ School đã provision và giữ dữ liệu hiện có                                 |
+| `20261031000200_cooking_option_a_expand`            | Phase 1 Cooking Batch: guard lịch sử, backfill lượng còn thiếu, giữ cột legacy để tương thích    |
+| `20261031000300_menu_meal_ingredient_standards`     | Định mức chính thức theo thực đơn và phân bổ gia vị dùng chung theo bữa                          |
+| `20261101000100_cooking_batch_inspection_data`      | Thêm inspection_data jsonb nullable, giữ dữ liệu kiểm thực đã có                                 |
+| `20261101000200_meal_portion_groups`                | Suất ăn riêng theo nhóm lớp, đối soát dị ứng và phân bổ món thay thế                             |
+| `20261102000100_registration_review_outbox`         | Thêm email_outbox bền vững cho thông báo kết quả duyệt/từ chối, không backfill dữ liệu cũ        |
+| `20261103000100_drop_cooking_batch_inspection_data` | Bỏ inspection_data theo migration đã có trong lịch sử                                            |
+| `20261106000100_registration_number`                | Mã hồ sơ đăng ký từ bigint/sequence, giữ UUID và dữ liệu cũ                                      |
+| `20261107000100_school_academic_year`               | Thêm một bảng năm học toàn trường, khoảng ngày và danh sách ngày nghỉ JSONB; không seed          |
 
 Baseline lấy phần DDL từ file gốc `FoodPrint_PostgreSQL_Database_v5_4_FINAL_with_MOCK_DATA.sql`, version v5.4. File SQL ở root FoodPrint hiện đã được đồng bộ sang Phase 1; DDL baseline trong `prisma/migrations/0_init/migration.sql` giữ nguyên. Nguồn SHA-256 gốc tại thời điểm nhận baseline: `770751bf506fa523b50bd6c51d235a6305b584c5e1fb63c3bd4e0eac040f5884`.
 
