@@ -55,7 +55,7 @@ specs/002-class-homeroom-assignment/
 ```text
 prisma/
 ├── schema.prisma
-└── migrations/20261104000100_class_homeroom_assignments/migration.sql
+└── migrations/20261107000100_class_homeroom_assignments/migration.sql
 src/
 ├── constants/permission-catalog.ts
 └── modules/class/
