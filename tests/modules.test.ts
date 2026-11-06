@@ -666,6 +666,156 @@ void test("registration validation reports multiple fields without reflecting in
   );
 });
 
+void test("registration search normalizes full codes and rejects malformed or out-of-range inputs", () => {
+  for (const [input, expected] of [
+    ["  fp-reg-00001  ", "FP-REG-00001"],
+    ["FP-REG-99999", "FP-REG-99999"],
+    ["FP-REG-100000", "FP-REG-100000"],
+    ["FP-REG-9007199254740993", "FP-REG-9007199254740993"],
+    ["FP-REG-9223372036854775807", "FP-REG-9223372036854775807"],
+    ["", undefined],
+    ["   ", undefined],
+  ]) {
+    const query = validateRegistrationListQuery({ search: input });
+    assert.equal(query.search, expected);
+    assert.equal(query.page, 1);
+    assert.equal(query.limit, 20);
+  }
+  for (const search of [
+    null,
+    1,
+    ["FP-REG-00001"],
+    { equals: "FP-REG-00001" },
+    testAdmin.id,
+    "FP-REG-1",
+    "FP-REG-00000",
+    "FP-REG-000001",
+    "FP-REG-0100000",
+    "FP-REG--00001",
+    "FP-REG-+00001",
+    "FP-REG-00001.0",
+    "FP-REG-1e5",
+    "FP-REG-9223372036854775808",
+    "FP-REG-" + "9".repeat(100),
+    "private-input",
+  ]) {
+    assert.throws(
+      () => validateRegistrationListQuery({ search }),
+      (error: unknown) => {
+        assert(error instanceof RegistrationValidationError);
+        assert.equal(error.statusCode, 400);
+        assert(error.fields.every((issue) => issue.field === "search"));
+        assert(!JSON.stringify(error.fields).includes("private-input"));
+        return true;
+      },
+    );
+  }
+  assert.throws(
+    () =>
+      validateRegistrationListQuery({
+        page: "private-input",
+        limit: "101",
+        search: "private-input",
+      }),
+    (error: unknown) => {
+      assert(error instanceof RegistrationValidationError);
+      assert.deepEqual(
+        error.fields.map((issue) => issue.field),
+        ["page", "limit", "search"],
+      );
+      assert(!JSON.stringify(error.fields).includes("private-input"));
+      return true;
+    },
+  );
+});
+
+void test("registration search filters the stored number exactly before pagination without losing bigint precision", async () => {
+  const numbers = [1n, 100000n, 9007199254740992n, 9007199254740993n];
+  const rows = numbers.map((registrationNumber, index) => ({
+    id: `00000000-0000-4000-8000-00000000000${index + 1}`,
+    registrationNumber,
+    applicantUserId: testAdmin.id,
+    applicantUser: {
+      id: testAdmin.id,
+      username: "applicant",
+      fullName: "Người nộp",
+      email: "applicant@example.test",
+      phone: null,
+      status: "UNVERIFIED" as const,
+      emailVerifiedAt: now,
+    },
+    requestType: "SCHOOL" as const,
+    status: "PENDING" as const,
+    submittedAt: now,
+    reviewedAt: null,
+    updatedAt: now,
+  }));
+  let expectedNumber: bigint | undefined;
+  let calls = 0;
+  const service = createRegistrationService(
+    createRegistrationRepository((args) => {
+      calls++;
+      assert.deepEqual(
+        args.where,
+        expectedNumber === undefined
+          ? {}
+          : { registrationNumber: expectedNumber },
+      );
+      assert.deepEqual(args.orderBy, [{ id: "asc" }]);
+      const filtered = rows.filter(
+        (row) =>
+          expectedNumber === undefined ||
+          row.registrationNumber === expectedNumber,
+      );
+      const skip = args.skip ?? 0;
+      return Promise.resolve(filtered.slice(skip, skip + (args.take ?? 0)));
+    }),
+  );
+  const principal = { ...testAdmin, permissions: ["registration.view"] };
+  for (const number of [1n, 100000n, 9007199254740993n, 2n]) {
+    expectedNumber = number;
+    const search = `FP-REG-${number.toString().padStart(5, "0")}`;
+    const result = await service.getAll(
+      validateRegistrationListQuery({ search, limit: "1" }),
+      principal,
+    );
+    assert.deepEqual(
+      result.items.map((row) => row.registrationID),
+      number === 2n ? [] : [search],
+    );
+    assert.deepEqual(result.pagination, {
+      page: 1,
+      limit: 1,
+      hasNext: false,
+    });
+    assert(!JSON.stringify(result).includes("registrationNumber"));
+  }
+  expectedNumber = 1n;
+  const laterPage = await service.getAll(
+    validateRegistrationListQuery({
+      search: "FP-REG-00001",
+      page: "2",
+      limit: "1",
+    }),
+    principal,
+  );
+  assert.deepEqual(laterPage, {
+    items: [],
+    pagination: { page: 2, limit: 1, hasNext: false },
+  });
+  expectedNumber = undefined;
+  const unfiltered = await service.getAll(
+    validateRegistrationListQuery({ search: "  ", limit: "1" }),
+    principal,
+  );
+  assert.deepEqual(unfiltered.pagination, {
+    page: 1,
+    limit: 1,
+    hasNext: true,
+  });
+  assert.equal(calls, 6);
+});
+
 void test("registration list returns safe applicant contacts with stable pagination and nullable metadata", async () => {
   let calls = 0;
   const applicantUser = {
@@ -778,16 +928,19 @@ void test("registration contact reads still require an assigned permission and S
     testAdmin,
     { ...testStaff, permissions: ["registration.view"] },
   ]) {
-    assert.throws(
-      () => service.getAll({ page: 1, limit: 5 }, principal),
-      (error: unknown) =>
-        error instanceof HttpError && error.statusCode === 403,
-    );
-    assert.throws(
-      () => repository.listForReview({ page: 1, limit: 5 }, principal),
-      (error: unknown) =>
-        error instanceof HttpError && error.statusCode === 403,
-    );
+    for (const search of [undefined, "FP-REG-00001"]) {
+      const query = { page: 1, limit: 5, search };
+      assert.throws(
+        () => service.getAll(query, principal),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 403,
+      );
+      assert.throws(
+        () => repository.listForReview(query, principal),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 403,
+      );
+    }
   }
   assert.equal(reads, 0);
 });
@@ -796,9 +949,11 @@ void test("registration HTTP preserves envelopes and reports field errors before
   context.mock.method(console, "error", () => undefined);
   let reads = 0;
   let databaseFailure = false;
+  let expectedWhere = {};
   const service = createRegistrationService(
-    createRegistrationRepository(() => {
+    createRegistrationRepository((args) => {
       reads++;
+      assert.deepEqual(args.where, expectedWhere);
       if (databaseFailure)
         throw new Error("postgresql://private:password@localhost/private");
       return Promise.resolve([]);
@@ -831,12 +986,37 @@ void test("registration HTTP preserves envelopes and reports field errors before
       ],
     },
   });
-  for (const query of ["?page=1&page=2", "?schoolId=other-school"]) {
+  for (const query of [
+    "?page=1&page=2",
+    "?schoolId=other-school",
+    "?search=FP-REG-00001&search=FP-REG-00002",
+    "?search[value]=FP-REG-00001",
+    `?search=${testAdmin.id}`,
+    "?registrationId=FP-REG-00001",
+  ]) {
     assert.equal(
       (await http.request(`/api/registration-requests${query}`)).status,
       400,
     );
   }
+  const invalidSearch = await http.request(
+    "/api/registration-requests?search=private-input",
+  );
+  assert.equal(invalidSearch.status, 400);
+  assert.deepEqual(invalidSearch.body, {
+    success: false,
+    statusCode: 400,
+    message: "Tham số danh sách đăng ký không hợp lệ",
+    error: {
+      fields: [
+        { field: "search", message: "Mã tìm kiếm phải có dạng FP-REG-00001" },
+      ],
+    },
+  });
+  const detailByCode = await http.request(
+    "/api/registration-requests/FP-REG-00001",
+  );
+  assert.equal(detailByCode.status, 400);
   assert.equal(reads, 0);
 
   const success = await http.request("/api/registration-requests");
@@ -852,8 +1032,27 @@ void test("registration HTTP preserves envelopes and reports field errors before
   });
   assert.equal(reads, 1);
 
+  expectedWhere = { registrationNumber: 1n };
+  const searched = await http.request(
+    "/api/registration-requests?search=%20fp-reg-00001%20",
+  );
+  assert.equal(searched.status, 200);
+  assert.deepEqual(searched.body, success.body);
+  assert.equal(reads, 2);
+
+  expectedWhere = {};
+  const blankSearch = await http.request(
+    "/api/registration-requests?search=%20%20",
+  );
+  assert.equal(blankSearch.status, 200);
+  assert.deepEqual(blankSearch.body, success.body);
+  assert.equal(reads, 3);
+
   databaseFailure = true;
-  const failure = await http.request("/api/registration-requests");
+  expectedWhere = { registrationNumber: 1n };
+  const failure = await http.request(
+    "/api/registration-requests?search=FP-REG-00001",
+  );
   assert.equal(failure.status, 503);
   assert.deepEqual(failure.body, {
     success: false,
