@@ -11,7 +11,10 @@ import {
   createOrganizationService,
   type OrganizationService,
 } from "../src/modules/organization/organization.service";
-import { validateCookingMode } from "../src/modules/organization/organization.validation";
+import {
+  validateCookingMode,
+  validateMealTimes,
+} from "../src/modules/organization/organization.validation";
 import { HttpError } from "../src/utils/http-error";
 
 const isHttp = (status: number) => (error: unknown) =>
@@ -27,7 +30,7 @@ const board: AuthPrincipal = {
   schoolId: "10000000-0000-4000-8000-000000000001",
   supplierId: null,
   communeFoodSafetyUnitId: null,
-  permissions: ["school_cooking_mode.manage"],
+  permissions: ["school_cooking_mode.manage", "school_meal_time.manage"],
 };
 
 void test("cooking mode payload only accepts the enum value", () => {
@@ -127,4 +130,103 @@ void test("cooking mode routes require the permission and validate the body", as
   assert.equal((await fetch(url)).status, 403);
   assert.equal((await patch("COMBINE_LOTS")).status, 403);
   assert.equal(calls.length, 1);
+});
+
+void test("meal serving times accept HH:mm, null and require lunch first", () => {
+  assert.deepEqual(
+    validateMealTimes({ lunchTime: "11:30", afternoonMealTime: "15:00" }),
+    { lunchTime: "11:30", afternoonMealTime: "15:00" },
+  );
+  assert.deepEqual(
+    validateMealTimes({ lunchTime: "11:30", afternoonMealTime: null }),
+    { lunchTime: "11:30", afternoonMealTime: null },
+  );
+  for (const body of [
+    {},
+    null,
+    { lunchTime: "11:30" },
+    { lunchTime: "25:00", afternoonMealTime: null },
+    { lunchTime: "15:00", afternoonMealTime: "11:30" },
+    {
+      lunchTime: "11:30",
+      afternoonMealTime: "15:00",
+      schoolId: board.schoolId,
+    },
+  ])
+    assert.throws(() => validateMealTimes(body), isHttp(400));
+});
+
+void test("meal serving times are read from the session school and BGH only", async () => {
+  let where: unknown;
+  const mockRepo = {
+    findMealTimes: (schoolId: string) => {
+      where = { id: schoolId };
+      return Promise.resolve({
+        lunchTime: new Date("1970-01-01T11:30:00.000Z"),
+        afternoonMealTime: new Date("1970-01-01T15:00:00.000Z"),
+      });
+    },
+  };
+  const service = createOrganizationService(mockRepo as never);
+  assert.deepEqual(await service.getMealTimes(board), {
+    lunchTime: "11:30",
+    afternoonMealTime: "15:00",
+  });
+  assert.deepEqual(where, { id: board.schoolId });
+  await assert.rejects(
+    service.getMealTimes({ ...board, role: "SCHOOL_ADMINISTRATION" }),
+    isHttp(403),
+  );
+});
+
+void test("meal serving time routes use a dedicated BGH permission", async (context) => {
+  const calls: unknown[] = [];
+  const service = {
+    getMealTimes: () =>
+      Promise.resolve({ lunchTime: "11:30", afternoonMealTime: "15:00" }),
+    updateMealTimes: (input: unknown) => {
+      calls.push(input);
+      return Promise.resolve(input);
+    },
+  } as unknown as OrganizationService;
+  let current = board;
+  const auth: RequestHandler = (req, _res, next) => {
+    req.auth = current;
+    next();
+  };
+  const app = express();
+  app.use(express.json());
+  app.use("/schools", createOrganizationRouter(service, auth));
+  app.use(globalErrorHandler);
+  const server = app.listen(0);
+  context.after(() => server.close());
+  await once(server, "listening");
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/schools/me/meal-times`;
+  const patch = (body: unknown) =>
+    fetch(url, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  assert.equal((await fetch(url)).status, 200);
+  assert.equal(
+    (
+      (await (
+        await patch({ lunchTime: "11:45", afternoonMealTime: "15:15" })
+      ).json()) as { data: { lunchTime: string } }
+    ).data.lunchTime,
+    "11:45",
+  );
+  assert.equal(calls.length, 1);
+  assert.equal(
+    (await patch({ lunchTime: "15:00", afternoonMealTime: "11:00" })).status,
+    400,
+  );
+  current = { ...board, permissions: ["school_cooking_mode.manage"] };
+  assert.equal((await fetch(url)).status, 403);
+  assert.equal(
+    (await patch({ lunchTime: "11:45", afternoonMealTime: "15:15" })).status,
+    403,
+  );
 });
