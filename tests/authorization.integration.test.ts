@@ -50,6 +50,7 @@ import {
 } from "../src/modules/auth/password.service";
 import { createRedisPasswordResetStore } from "../src/utils/password-reset-store";
 import { createMenuService } from "../src/modules/menu/menu.service";
+import { createOrganizationService } from "../src/modules/organization/organization.service";
 import {
   validateMenuWrite,
   validateMenuReview,
@@ -913,9 +914,26 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       assert.equal(grRequired.get(grMilk.ingredient.id), "1.07");
       assert.equal(grRequired.get(grPeanut.ingredient.id), "0.535");
       assert.equal(grRequired.get(grBeef.ingredient.id), "0.26");
-      await db.school.update({
-        where: { id: school.id },
-        data: { cookingMode: "SEPARATE_BY_LOT" },
+      const organizations = createOrganizationService(undefined, () =>
+        Promise.resolve(db),
+      );
+      await assert.rejects(
+        organizations.updateCookingMode(
+          { cookingMode: "SEPARATE_BY_LOT" },
+          chef,
+        ),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 403,
+      );
+      assert.deepEqual(
+        await organizations.updateCookingMode(
+          { cookingMode: "SEPARATE_BY_LOT" },
+          reviewer,
+        ),
+        { cookingMode: "SEPARATE_BY_LOT" },
+      );
+      assert.deepEqual(await organizations.getCookingMode(reviewer), {
+        cookingMode: "SEPARATE_BY_LOT",
       });
       let grPlan = await batches.plan({ ...grKey, dishId: grCommon }, chef);
       assert.deepEqual(
