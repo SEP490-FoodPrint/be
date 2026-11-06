@@ -12,7 +12,7 @@
 - Không xuất `registrationNumber`, bigint, sequence name hoặc giá trị bộ đếm thô.
 - Mọi ngày hiện có được service chuyển sang ISO string hoặc null theo tính nullable hiện tại.
 - Envelope thành công vẫn là `{ success, statusCode, message, data }`; lỗi vẫn đi qua sendError.
-- Không thêm endpoint hoặc tham số tra cứu theo mã; không đổi quyền hoặc thứ tự danh sách.
+- Danh sách nhận thêm query `search` để tra cứu mã; không đổi endpoint, quyền hoặc thứ tự danh sách. API chi tiết vẫn nhận UUID.
 
 ## Response surfaces
 
@@ -55,6 +55,17 @@ Ví dụ phần định danh trong một hồ sơ, được rút gọn để min
 ```
 
 List pagination tiếp tục là `{ page, limit, hasNext }`, mặc định page 1, limit 20 và limit tối đa 100. Repository vẫn sắp theo UUID id tăng dần; mã trên các dòng không bắt buộc tăng theo vị trí hiển thị.
+
+### Tìm kiếm trong danh sách
+
+`GET /api/registration-requests?search=FP-REG-00001&page=1&limit=20` tìm chính xác mã `registrationID` đầy đủ. Query vẫn dùng tên `search`; response public vẫn dùng tên `registrationID`.
+
+- `search` tùy chọn, chỉ nhận một chuỗi, trim và uppercase trước đối chiếu. Bỏ tham số, `search=` hoặc chuỗi trắng tương đương danh sách chưa lọc.
+- Mã hợp lệ là dạng chuẩn do formatter sinh, phần số từ 1 đến 9223372036854775807: `FP-REG-00001`, `FP-REG-100000`, `FP-REG-9007199254740993`. Không chấp nhận số 0, dấu âm/dấu cộng, UUID, mã thiếu chữ số hoặc số 0 dư như `FP-REG-000001`.
+- Mã hợp lệ nhưng không có hồ sơ trả 200 với `data.items: []` và pagination tương ứng. Lọc trước phân trang; trang sau một kết quả duy nhất là rỗng.
+- Query sai kiểu, mã sai định dạng hoặc vượt bigint trả 400 với field `search`; thông báo không phản chiếu input. Tham số lạ, page/limit sai tiếp tục bị từ chối.
+- Chỉ người có quyền/phạm vi danh sách hiện hành được tìm; không dò UUID, tên, email hay phone. Không lộ số bigint nội bộ hoặc đưa search vào pagination response.
+- `GET /api/registration-requests/:id` và các thao tác/tài liệu tiếp tục nhận UUID. Gửi `FP-REG-00001` vào `:id` vẫn trả 400.
 
 ## Request và validation
 

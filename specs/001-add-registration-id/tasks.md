@@ -16,7 +16,7 @@ description: "Đầu việc triển khai mã registrationID cho hồ sơ đăng 
 
 - Mọi dòng công việc có checkbox, ID tuần tự và đường dẫn file cụ thể.
 - `[P]`: có thể làm song song với task khác trong cùng đợt khi tiền điều kiện đã hoàn tất, trên các file khác nhau.
-- `[US1]`, `[US2]`, `[US3]`: liên kết với ba user story trong spec.
+- `[US1]`, `[US2]`, `[US3]`, `[US4]`: liên kết với các user story trong spec; US4 là yêu cầu tìm kiếm bổ sung.
 - Checkbox chỉ được đánh dấu khi công việc và kiểm chứng tương ứng thực sự hoàn thành.
 
 ## Path Conventions
@@ -222,6 +222,7 @@ Dùng database riêng; không sửa chung migration trong lúc chạy cùng mộ
 | SC-003                 | T016, T022, T039                      |
 | SC-004                 | T023–T027, T030–T035                  |
 | SC-005                 | T013, T024, T029, T039                |
+| FR-013–FR-015, SC-006  | T041–T045                             |
 
 ## Implementation Strategy
 
@@ -238,13 +239,25 @@ Hoàn tất Setup + Foundational + US1 để có bản demo backend tạo mã v�
 
 ## Notes
 
-- Tổng cộng 40 task: Setup 2, Foundational 10, US1 10, US2 7, US3 6, Polish 5.
+- Tính năng gốc có 40 task: Setup 2, Foundational 10, US1 10, US2 7, US3 6, Polish 5. Yêu cầu tìm kiếm bổ sung có 5 task T041–T045 ở Phase 7.
 - Các task được cập nhật theo kết quả triển khai; chỉ đánh dấu hoàn tất khi có bằng chứng tương ứng.
 - Việc có migration/test task không tự cấp phép chạy ghi vào DB hiện hữu. Thiếu môi trường không ngăn viết code/test độc lập, nhưng phải ghi blocker và không đánh dấu kiểm chứng DB đã hoàn tất.
 - Không tự thêm requirements, seed/mock data ngoài database test, endpoint, schema reset, custom function/trigger hoặc cơ chế cache mới.
 
-## Completion Evidence
+## Completion Evidence — Tính năng gốc
 
 - Hoàn tất 40/40 task; kết quả cụ thể tại [quickstart.md](quickstart.md#8-kết-quả-thực-thi-tính-năng).
 - Validate PASS; 172 unit/HTTP tests và 54 integration/migration tests PASS; spec gate working-tree preflight và diff whitespace PASS.
 - PostgreSQL/Redis kiểm thử tạm tách khỏi cấu hình hiện tại; migration cho database đang dùng cần review/CD theo quy trình.
+
+## Phase 7: User Story 4 — Tìm mã trong danh sách, giữ chi tiết UUID
+
+**Yêu cầu xác nhận**: Danh sách tìm theo mã `registrationID`; API chi tiết vẫn dùng UUID. Áp dụng FR-013–FR-015 và SC-006. Phần dưới bổ sung sau 40 task gốc; không thay đổi bằng chứng hoàn tất trước đây.
+
+- [x] T041 [US4] Cập nhật `specs/001-add-registration-id/spec.md`, `plan.md` và `contracts/registration-id.md` trước code, ghi rõ query search chính xác, normalization, lỗi và phạm vi; tạo nhánh `fix/001-registration-code-search` từ dev.
+- [x] T042 [US4] Bổ sung kiểm thử validation, repository/service và HTTP trong `tests/modules.test.ts` cho tìm mã, bigint lớn, pagination, no match, quyền và detail UUID.
+- [x] T043 [US4] Thêm search vào Zod strict trong `src/modules/registration/registration.validation.ts`; Request DTO tại `registration.request.dto.ts` tiếp tục suy ra từ schema, giữ phân trang và lỗi tiếng Việt.
+- [x] T044 [US4] Thêm filter nội bộ và truy vấn registrationNumber bằng BigInt trong `src/modules/registration/registration.repository.ts`, kết hợp scope tin cậy và pagination, giữ mapping tại `registration.service.ts` và router/detail UUID.
+- [x] T045 [US4] Cập nhật ví dụ tìm kiếm trong `docs/ONBOARDING.md` và `specs/001-add-registration-id/quickstart.md`; chạy `npm run validate`, `npm run test:unit`, spec gate preflight và `git diff --check`, ghi kết quả thực tế.
+
+**Bằng chứng US4**: 7/7 kiểm thử registration PASS; `npm run validate` PASS; `npm run test:unit` 177/177 PASS; spec gate working-tree preflight PASS trên nhánh `fix/001-registration-code-search`; diff whitespace PASS. Test unit/HTTP dùng reader giả lập, không chạy PostgreSQL/Redis hoặc migration trong lần bổ sung này.

@@ -44,6 +44,7 @@ Kết quả mong đợi:
 - Edit/resubmit không cấp mã mới; validation từ chối tự gán mã ở các object JSON/multipart strict.
 - reviewVersion của nội dung không đổi giữ nguyên khi chỉ bổ sung số; thay liên hệ, nội dung hoặc tài liệu vẫn thay hash.
 - Session fixtures có summary khác null để kiểm chứng login/refresh/me/PATCH me; null vẫn là null.
+- Danh sách tìm chính xác mã qua `search=FP-REG-00001`; trim/uppercase, chuỗi trắng bỏ lọc, bigint lớn không mất độ chính xác, no match/trang sau trả rỗng, input sai và người thiếu quyền bị chặn. Chi tiết vẫn nhận UUID.
 
 ## 3. Migration trên disposable PostgreSQL
 
@@ -93,6 +94,7 @@ Dùng các request/fixture đang có trong integration thay vì tạo dữ liệ
 1. Đăng nhập người nộp hợp lệ và nộp hồ sơ; POST onboarding vẫn trả 201, data có UUID id và registrationID.
 2. GET onboarding trả cùng mã; GET me và refresh/login có cùng mã trong registrationRequest.
 3. Đăng nhập quản trị viên có quyền view; GET registration-requests và GET chi tiết theo UUID cho cùng mã. Chuyển trang không đổi mã hoặc thứ tự hiện hành.
+   Thử `GET /api/registration-requests?search=FP-REG-00001&page=1&limit=5` và `search=%20fp-reg-00001%20`; chỉ hồ sơ có mã tương ứng xuất hiện. Không dùng mã thay UUID khi gọi chi tiết. Mã hợp lệ không có hồ sơ cho 200/rỗng; từ khóa UUID hoặc mã sai cho 400 ở field search.
 4. Gửi registrationID tự chọn ở root JSON, outer multipart, JSON profile, certification và retained document; mỗi trường hợp nhận 400 trước upload cloud/ghi.
 5. Thực hiện edit → reject → resubmit → approve hợp lệ; đối chiếu mã, trạng thái, reviewVersion và phản hồi theo [contract](contracts/registration-id.md).
 6. Gửi mã FP-REG vào UUID param hoặc dùng tài khoản thiếu quyền; nhận lỗi hiện hành và không mở rộng phạm vi truy cập.
@@ -126,3 +128,11 @@ Review migration → áp migration/backfill qua quy trình được phép → ba
 - Spec gate working-tree preflight: PASS trên branch feat/001-add-registration-id; không thay thế kết quả CI cho commit/PR sau này. git diff --check: PASS.
 - Lượt kiểm chứng cuối: npm run validate PASS; registration integration 5/5 PASS sau khi siết allowlist outbox và projection user. Không còn task implementation/kiểm chứng bắt buộc chưa hoàn tất.
 - Cấu hình .env của dự án và dữ liệu remote không được thay đổi. Migration production cần review/CD theo quy trình hiện hành.
+
+## 9. Kết quả bổ sung tìm kiếm trong danh sách
+
+- Nhánh `fix/001-registration-code-search`: `GET /api/registration-requests?search=FP-REG-00001`; chi tiết và các thao tác/tài liệu tiếp tục dùng UUID.
+- 7/7 kiểm thử registration PASS: normalization, validation nhiều trường, mã sau 99999/bigint lớn, no match/trang sau, scope, envelope và từ chối mã public ở đường dẫn chi tiết.
+- `npm run validate`: PASS (lint, format, typecheck, build). `npm run test:unit`: 177/177 PASS.
+- Spec gate working-tree preflight: PASS; `git diff --check`: PASS. Preflight không thay thế check CI cho commit/PR.
+- Lượt này chỉ thêm bộ lọc trên cột/index hiện có; dùng kiểm thử unit/HTTP với reader giả lập, không chạy lại integration PostgreSQL/Redis, không tạo hoặc áp dụng migration và không thay cấu hình/dữ liệu hiện hữu.

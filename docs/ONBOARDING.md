@@ -88,6 +88,10 @@ Quyền được đọc lại từ DB, thao tác duyệt/từ chối kiểm tra 
 
 `GET /api/registration-requests?page=1&limit=5` trả thông tin người đăng ký tại `data.items[i].applicantUser` với cùng các trường như API chi tiết bên dưới. Hai API dùng chung projection an toàn; thông tin lấy từ tài khoản hiện tại. Danh sách giữ hợp đồng phân trang page/limit/hasNext và chỉ trả các trường tóm tắt hồ sơ cùng applicantUser, không nhúng hồ sơ/tệp đầy đủ.
 
+Tìm đúng mã hồ sơ bằng `GET /api/registration-requests?search=FP-REG-00001&page=1&limit=5`. `search` chỉ tìm chính xác trường public `registrationID`, được trim và chuyển chữ hoa; bỏ tham số hoặc gửi chuỗi trắng thì không lọc. Mã không tồn tại trả 200 với `items: []`; từ khóa sai định dạng, UUID, mảng/object hoặc phần số ngoài dải 1–9223372036854775807 trả 400 kèm field `search`. Mã sau 99999 như `FP-REG-100000` được hỗ trợ. Quyền và phân trang giữ nguyên; query vẫn tên `search`, field response vẫn tên `registrationID`.
+
+API chi tiết, duyệt, từ chối và mở tài liệu tiếp tục nhận UUID `id` trong đường dẫn; dùng `id` của kết quả tìm kiếm để gọi các API này.
+
 `GET /api/registration-requests/:id` trả trong `data` thông tin hồ sơ và hai object liên quan:
 
 - `applicantUser`: `id`, `username`, `fullName`, `email`, `phone`, `status`, `emailVerifiedAt`, đọc từ tài khoản được liên kết bằng `applicantUserId`. Đây là thông tin tài khoản hiện tại, bao gồm các lần cập nhật profile cá nhân; không phải bản chụp lúc signup. `phone` và `emailVerifiedAt` có thể null; thời điểm được trả theo ISO 8601.
