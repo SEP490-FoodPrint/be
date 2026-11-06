@@ -233,6 +233,142 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
   );
 
   await context.test(
+    "school academic years preserve school data and enforce dates, ownership, uniqueness and holiday arrays",
+    async () => {
+      assert.equal(
+        (
+          await db.query<{ count: number }>(
+            "SELECT count(*)::int AS count FROM foodprint.school_academic_years",
+          )
+        ).rows[0].count,
+        0,
+        "Migration must not create sample academic years or holidays",
+      );
+      const schoolBefore = (
+        await db.query<{ row: unknown }>(
+          "SELECT to_jsonb(s) AS row FROM foodprint.schools s WHERE id=$1",
+          [schoolId],
+        )
+      ).rows[0];
+      const initial = (
+        await db.query<{
+          id: string;
+          holidays: unknown;
+          start_date: string;
+          end_date: string;
+          created_at: Date;
+          updated_at: Date;
+        }>(
+          "INSERT INTO foodprint.school_academic_years(school_id,academic_year,start_date,end_date) VALUES($1,'2026–2027','2026-09-07','2027-05-28') RETURNING id,holidays,start_date::text,end_date::text,created_at,updated_at",
+          [schoolId],
+        )
+      ).rows[0];
+      assert.match(initial.id, /^[a-f0-9-]{36}$/i);
+      assert.deepEqual(initial.holidays, []);
+      assert.equal(initial.start_date, "2026-09-07");
+      assert.equal(initial.end_date, "2027-05-28");
+      assert(initial.created_at instanceof Date);
+      assert.equal(+initial.created_at, +initial.updated_at);
+
+      const holidays = [
+        { date: "2026-10-22", reason: "Nghỉ theo kế hoạch nhà trường" },
+        { date: "2027-02-15", reason: "Ngày nghỉ được BGH cấu hình" },
+      ];
+      const changed = (
+        await db.query<{ holidays: unknown; updated_at: Date }>(
+          "UPDATE foodprint.school_academic_years SET holidays=$1::jsonb,updated_at=updated_at+interval '1 second' WHERE id=$2 RETURNING holidays,updated_at",
+          [JSON.stringify(holidays), initial.id],
+        )
+      ).rows[0];
+      assert.deepEqual(changed.holidays, holidays);
+      assert(+changed.updated_at > +initial.updated_at);
+      await db.query(
+        "INSERT INTO foodprint.school_academic_years(school_id,academic_year,start_date,end_date) VALUES($1,'2027–2028','2027-09-06','2028-05-26')",
+        [schoolId],
+      );
+      const otherSchoolId = (
+        await db.query<{ id: string }>(
+          "INSERT INTO foodprint.schools(name,address_line) VALUES('Academic calendar fixture','Disposable local fixture') RETURNING id",
+        )
+      ).rows[0].id;
+      await db.query(
+        "INSERT INTO foodprint.school_academic_years(school_id,academic_year,start_date,end_date) VALUES($1,'2026–2027','2026-09-07','2027-05-28')",
+        [otherSchoolId],
+      );
+      await db.query(
+        "INSERT INTO foodprint.school_academic_years(school_id,academic_year,start_date,end_date) VALUES($1,'Single day','2029-01-01','2029-01-01')",
+        [schoolId],
+      );
+
+      await assert.rejects(
+        db.query(
+          "INSERT INTO foodprint.school_academic_years(school_id,academic_year,start_date,end_date) VALUES($1,'2026–2027','2026-09-07','2027-05-28')",
+          [schoolId],
+        ),
+        (error: unknown) =>
+          sqlState(error, "23505", "uq_school_academic_year_school_year"),
+      );
+      await assert.rejects(
+        db.query(
+          "INSERT INTO foodprint.school_academic_years(school_id,academic_year,start_date,end_date) VALUES($1,'Missing school','2026-09-07','2027-05-28')",
+          [randomUUID()],
+        ),
+        (error: unknown) =>
+          sqlState(error, "23503", "school_academic_years_school_id_fkey"),
+      );
+      await assert.rejects(
+        db.query("DELETE FROM foodprint.schools WHERE id=$1", [otherSchoolId]),
+        (error: unknown) =>
+          sqlState(error, "23001", "school_academic_years_school_id_fkey"),
+      );
+      for (const academicYear of ["", "   "]) {
+        await assert.rejects(
+          db.query(
+            "INSERT INTO foodprint.school_academic_years(school_id,academic_year,start_date,end_date) VALUES($1,$2,'2026-09-07','2027-05-28')",
+            [schoolId, academicYear],
+          ),
+          (error: unknown) =>
+            sqlState(error, "23514", "chk_school_academic_year_label"),
+        );
+      }
+      await assert.rejects(
+        db.query(
+          "INSERT INTO foodprint.school_academic_years(school_id,academic_year,start_date,end_date) VALUES($1,'Reversed dates','2027-05-28','2026-09-07')",
+          [schoolId],
+        ),
+        (error: unknown) =>
+          sqlState(error, "23514", "chk_school_academic_year_dates"),
+      );
+      for (const holidaysJson of ["{}", "null", '"closed"', "1", "true"]) {
+        await assert.rejects(
+          db.query(
+            "UPDATE foodprint.school_academic_years SET holidays=$1::jsonb,updated_at=CURRENT_TIMESTAMP WHERE id=$2",
+            [holidaysJson, initial.id],
+          ),
+          (error: unknown) =>
+            sqlState(error, "23514", "chk_school_academic_year_holidays_array"),
+        );
+      }
+      await assert.rejects(
+        db.query(
+          "UPDATE foodprint.school_academic_years SET holidays=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=$1",
+          [initial.id],
+        ),
+        (error: unknown) => sqlState(error, "23502"),
+      );
+      assert.deepEqual(
+        (
+          await db.query<{ row: unknown }>(
+            "SELECT to_jsonb(s) AS row FROM foodprint.schools s WHERE id=$1",
+            [schoolId],
+          )
+        ).rows[0],
+        schoolBefore,
+      );
+    },
+  );
+
+  await context.test(
     "School profile adoption preserves provisioned data and refuses ambiguous address columns",
     async () => {
       const name = `foodprint_migration_test_school_${randomUUID().replaceAll("-", "")}`;
