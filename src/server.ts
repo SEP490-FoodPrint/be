@@ -37,8 +37,14 @@ const startServer = async () => {
     );
   });
 
-  server.on("error", () => {
-    console.error("Không thể mở HTTP server. Kiểm tra PORT.");
+  server.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE") {
+      console.error(
+        `❌ Cổng ${PORT} đang bị chiếm bởi một tiến trình khác (EADDRINUSE). Hãy tắt tiến trình đang chiếm cổng hoặc đổi PORT trong file .env.`,
+      );
+    } else {
+      console.error("Không thể mở HTTP server. Kiểm tra PORT:", err);
+    }
     void closeConnections().finally(() => {
       process.exitCode = 1;
     });
