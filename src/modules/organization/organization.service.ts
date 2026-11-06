@@ -25,6 +25,9 @@ import type {
   SnackItemDTO,
   PortionGroupDTO,
   WeeklyMenuDayDTO,
+  IngredientDetailDTO,
+  PortionGroupDetailDTO,
+  DayNavDTO,
 } from "./organization.response.dto";
 import {
   organizationRepository,
@@ -217,6 +220,41 @@ export function createOrganizationService(
               ? `${mdd.portionSize.toString()} suất`
               : "1 suất";
 
+        const ingredients: IngredientDetailDTO[] = [];
+        if (mdd.ingredients && mdd.ingredients.length > 0) {
+          for (const ing of mdd.ingredients) {
+            if (ing.ingredient) {
+              ingredients.push({
+                id: ing.ingredient.id,
+                name: ing.ingredient.name,
+                category: ing.ingredient.category || "Nguyên liệu chế biến",
+                portion: `${Number(ing.quantityPerPortion)} ${ing.unit}`,
+                quantity: Number(ing.quantityPerPortion),
+                unit: ing.unit,
+                traceable: true,
+              });
+            }
+          }
+        } else if (
+          mdd.Dish?.dishIngredientEntries &&
+          mdd.Dish.dishIngredientEntries.length > 0
+        ) {
+          for (const entry of mdd.Dish.dishIngredientEntries) {
+            const ing = entry.IngredientEntry?.Ingredient;
+            if (ing) {
+              ingredients.push({
+                id: ing.id,
+                name: ing.name,
+                category: ing.category || "Nguyên liệu chế biến",
+                portion: `${Number(entry.requiredQuantity)} ${entry.unit}`,
+                quantity: Number(entry.requiredQuantity),
+                unit: entry.unit,
+                traceable: true,
+              });
+            }
+          }
+        }
+
         const item: DishItemDTO = {
           id: mdd.dishId,
           name: mdd.Dish?.name || "Món ăn",
@@ -226,6 +264,7 @@ export function createOrganizationService(
           order: mdd.displayOrder,
           mealType: mdd.mealType,
           description: mdd.Dish?.description || null,
+          ingredients,
         };
 
         if (mdd.mealType === "LUNCH") {
@@ -245,6 +284,132 @@ export function createOrganizationService(
         }
       }
 
+      // Build 7-day week navigation strip
+      const weekStartDate = menuDay.WeeklyMenu?.weekStartDate
+        ? new Date(menuDay.WeeklyMenu.weekStartDate)
+        : new Date(menuDay.menuDate);
+
+      const startMonday = new Date(weekStartDate);
+      const dayOfWeekIndex = startMonday.getUTCDay();
+      const diffToMonday = (dayOfWeekIndex === 0 ? -6 : 1) - dayOfWeekIndex;
+      startMonday.setUTCDate(startMonday.getUTCDate() + diffToMonday);
+
+      const availableDatesMap = new Set<string>();
+      if (menuDay.WeeklyMenu?.menuDays) {
+        for (const md of menuDay.WeeklyMenu.menuDays) {
+          availableDatesMap.add(md.menuDate.toISOString().slice(0, 10));
+        }
+      }
+
+      const dayNames = [
+        "Thứ Hai",
+        "Thứ Ba",
+        "Thứ Tư",
+        "Thứ Năm",
+        "Thứ Sáu",
+        "Thứ Bảy",
+        "Chủ Nhật",
+      ];
+
+      const weekNav: DayNavDTO[] = [];
+      for (let i = 0; i < 7; i++) {
+        const currentDay = new Date(startMonday);
+        currentDay.setUTCDate(startMonday.getUTCDate() + i);
+        const currentIso = currentDay.toISOString().slice(0, 10);
+        const dd = String(currentDay.getUTCDate()).padStart(2, "0");
+        const mm = String(currentDay.getUTCMonth() + 1).padStart(2, "0");
+        const dayOfMonth = `${dd}/${mm}`;
+        const isWeekend = i >= 5;
+        const hasMenu = availableDatesMap.has(currentIso);
+
+        let status: "SELECTED" | "AVAILABLE" | "OFF_DUTY";
+        let statusLabel: "Đang xem" | "Có thực đơn" | "Nghỉ bán trú";
+
+        if (isWeekend) {
+          status = "OFF_DUTY";
+          statusLabel = "Nghỉ bán trú";
+        } else if (currentIso === dateStr) {
+          status = "SELECTED";
+          statusLabel = "Đang xem";
+        } else if (hasMenu) {
+          status = "AVAILABLE";
+          statusLabel = "Có thực đơn";
+        } else {
+          status = "OFF_DUTY";
+          statusLabel = "Nghỉ bán trú";
+        }
+
+        weekNav.push({
+          date: currentIso,
+          dayOfWeek: dayNames[i],
+          dayOfMonth,
+          status,
+          statusLabel,
+          isWeekend,
+          hasMenu,
+        });
+      }
+
+      // Fetch special portion groups (allergy groups)
+      const portionGroupRows = await repository.findPortionGroupsForMenuDay(
+        menuDay.id,
+      );
+      const specialPortionGroups: PortionGroupDetailDTO[] = [];
+
+      for (const pg of portionGroupRows) {
+        if (pg.isDefault) continue;
+
+        const dishes = pg.dishes.map((d) => {
+          const dish = d.menuDayDish?.Dish;
+          const portionStr =
+            d.menuDayDish?.portionSize && d.menuDayDish?.portionUnit
+              ? `${d.menuDayDish.portionSize.toString()} ${d.menuDayDish.portionUnit}`
+              : "1 suất";
+          return {
+            id: d.dishId,
+            name: dish?.name || "Món ăn thay thế",
+            portion: portionStr,
+            tag: "Thay món",
+          };
+        });
+
+        const avoidances = pg.avoidances.map((a) => ({
+          id: a.ingredientEntry?.Ingredient?.id || a.ingredientEntryId,
+          name: a.ingredientEntry?.Ingredient?.name || "Dị nguyên",
+        }));
+
+        const keyIngredients: IngredientDetailDTO[] = [];
+        for (const d of pg.dishes) {
+          const dish = d.menuDayDish?.Dish;
+          if (dish?.dishIngredientEntries) {
+            for (const entry of dish.dishIngredientEntries) {
+              const ing = entry.IngredientEntry?.Ingredient;
+              if (ing && !keyIngredients.some((k) => k.id === ing.id)) {
+                keyIngredients.push({
+                  id: ing.id,
+                  name: ing.name,
+                  category: ing.category || "Nguyên liệu chính",
+                  portion: `${Number(entry.requiredQuantity)} ${entry.unit}`,
+                  quantity: Number(entry.requiredQuantity),
+                  unit: entry.unit,
+                  traceable: true,
+                });
+              }
+            }
+          }
+        }
+
+        specialPortionGroups.push({
+          id: pg.id,
+          name: pg.name,
+          mealType: pg.mealType,
+          isDefault: pg.isDefault,
+          dishes,
+          avoidances,
+          keyIngredients,
+        });
+      }
+
       const defaultLunchImage =
         school.coverImageUrl ||
         "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=800&auto=format&fit=crop&q=80";
@@ -255,6 +420,11 @@ export function createOrganizationService(
         date: dateStr,
         dateLabel: `${dayName}, ${dmy}`,
         updatedAt: "07:15 sáng nay",
+        weekStartDate: menuDay.WeeklyMenu?.weekStartDate
+          ? menuDay.WeeklyMenu.weekStartDate.toISOString().slice(0, 10)
+          : dateStr,
+        weekNav,
+        specialPortionGroups,
         lunch: {
           title: "Bữa trưa chính",
           servingWindow: `${lunchServingTime} – 11:30`,

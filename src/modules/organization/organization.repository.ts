@@ -61,7 +61,20 @@ export type SchoolForMenuDbRow = Prisma.SchoolGetPayload<{
 
 export const publicMenuDayInclude = {
   WeeklyMenu: {
-    select: { id: true, title: true, weekStartDate: true },
+    select: {
+      id: true,
+      title: true,
+      weekStartDate: true,
+      menuDays: {
+        where: { approvalStatus: "APPROVED" as const },
+        select: {
+          id: true,
+          menuDate: true,
+          approvalStatus: true,
+        },
+        orderBy: { menuDate: "asc" as const },
+      },
+    },
   },
   menuDayDishes: {
     include: {
@@ -71,6 +84,34 @@ export const publicMenuDayInclude = {
           name: true,
           description: true,
           status: true,
+          dishIngredientEntries: {
+            include: {
+              IngredientEntry: {
+                include: {
+                  Ingredient: {
+                    select: {
+                      id: true,
+                      name: true,
+                      category: true,
+                      defaultUnit: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      ingredients: {
+        include: {
+          ingredient: {
+            select: {
+              id: true,
+              name: true,
+              category: true,
+              defaultUnit: true,
+            },
+          },
         },
       },
     },
@@ -81,6 +122,60 @@ export const publicMenuDayInclude = {
     ],
   },
 } as const satisfies Prisma.MenuDayInclude;
+
+export const menuMealPortionGroupInclude = {
+  dishes: {
+    include: {
+      menuDayDish: {
+        include: {
+          Dish: {
+            select: {
+              id: true,
+              name: true,
+              description: true,
+              dishIngredientEntries: {
+                include: {
+                  IngredientEntry: {
+                    include: {
+                      Ingredient: {
+                        select: {
+                          id: true,
+                          name: true,
+                          category: true,
+                          defaultUnit: true,
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  avoidances: {
+    include: {
+      ingredientEntry: {
+        include: {
+          Ingredient: {
+            select: {
+              id: true,
+              name: true,
+              category: true,
+              defaultUnit: true,
+            },
+          },
+        },
+      },
+    },
+  },
+} as const satisfies Prisma.MenuMealPortionGroupInclude;
+
+export type MenuMealPortionGroupDbRow = Prisma.MenuMealPortionGroupGetPayload<{
+  include: typeof menuMealPortionGroupInclude;
+}>;
 
 export type PublicMenuDayDbRow = Prisma.MenuDayGetPayload<{
   include: typeof publicMenuDayInclude;
@@ -170,6 +265,9 @@ export interface OrganizationRepository {
   ): Promise<PublicWeeklyMenuDbRow | null>;
   findAvailableWeeklyMenuWeeks(schoolId: string): Promise<AvailableWeekDbRow[]>;
   findPortionGroupsRaw(dayIds: string[]): Promise<RawPortionGroup[]>;
+  findPortionGroupsForMenuDay(
+    menuDayId: string,
+  ): Promise<MenuMealPortionGroupDbRow[]>;
 }
 
 export function createOrganizationRepository(
@@ -366,6 +464,15 @@ export function createOrganizationRepository(
       } catch {
         return [];
       }
+    },
+
+    async findPortionGroupsForMenuDay(menuDayId: string) {
+      const prisma = await getClient();
+      return prisma.menuMealPortionGroup.findMany({
+        where: { menuDayId },
+        include: menuMealPortionGroupInclude,
+        orderBy: [{ isDefault: "desc" }, { name: "asc" }],
+      });
     },
   };
 }

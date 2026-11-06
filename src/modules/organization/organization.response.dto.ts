@@ -59,6 +59,16 @@ export interface PublicLocationDTO {
   parentId: string | null;
 }
 
+export interface IngredientDetailDTO {
+  id: string;
+  name: string;
+  category: string;
+  portion: string;
+  quantity: number;
+  unit: string;
+  traceable: boolean;
+}
+
 export interface DishItemDTO {
   id: string;
   name: string;
@@ -68,6 +78,7 @@ export interface DishItemDTO {
   order: number | null;
   mealType: "LUNCH" | "AFTERNOON";
   description: string | null;
+  ingredients?: IngredientDetailDTO[];
 }
 
 export interface SnackItemDTO {
@@ -81,6 +92,38 @@ export interface PortionGroupDTO {
   id: string;
   name: string;
   isDefault: boolean;
+}
+
+export interface PortionGroupDishItemDTO {
+  id: string;
+  name: string;
+  portion: string;
+  tag?: string;
+}
+
+export interface PortionGroupAvoidanceDTO {
+  id: string;
+  name: string;
+}
+
+export interface PortionGroupDetailDTO {
+  id: string;
+  name: string;
+  mealType: string;
+  isDefault: boolean;
+  dishes: PortionGroupDishItemDTO[];
+  avoidances: PortionGroupAvoidanceDTO[];
+  keyIngredients: IngredientDetailDTO[];
+}
+
+export interface DayNavDTO {
+  date: string;
+  dayOfWeek: string;
+  dayOfMonth: string;
+  status: "SELECTED" | "AVAILABLE" | "OFF_DUTY";
+  statusLabel: "Đang xem" | "Có thực đơn" | "Nghỉ bán trú";
+  isWeekend: boolean;
+  hasMenu: boolean;
 }
 
 export interface WeeklyMenuDayDTO {
@@ -100,6 +143,9 @@ export interface PublicDailyMenuDTO {
   date: string;
   dateLabel: string;
   updatedAt: string;
+  weekStartDate?: string;
+  weekNav?: DayNavDTO[];
+  specialPortionGroups?: PortionGroupDetailDTO[];
   lunch: {
     title: string;
     servingWindow: string;
