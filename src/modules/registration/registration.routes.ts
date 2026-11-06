@@ -1,5 +1,5 @@
 import { Router } from "express";
-import type { RequestHandler } from "express";
+import type { ErrorRequestHandler, RequestHandler } from "express";
 import { authenticate } from "../../middlewares/auth.middleware";
 import { requireResource } from "../../middlewares/permission.middleware";
 import { createRegistrationController } from "./registration.controller";
@@ -9,6 +9,20 @@ import {
 } from "./registration.service";
 import { createOnboardingController } from "../auth/onboarding.controller";
 import type { OnboardingService } from "../auth/onboarding.service";
+import { sendError } from "../../utils/response";
+import { RegistrationValidationError } from "./registration.validation";
+
+const registrationValidationErrorHandler: ErrorRequestHandler = (
+  error: unknown,
+  _req,
+  res,
+  next,
+) => {
+  if (!(error instanceof RegistrationValidationError)) return next(error);
+  return sendError(res, error.message, error.statusCode, {
+    fields: error.fields,
+  });
+};
 
 export function createRegistrationRouter(
   service: RegistrationService = registrationService,
@@ -32,6 +46,7 @@ export function createRegistrationRouter(
   );
   router.post("/:id/approve", authHandler, onboarding.approve);
   router.post("/:id/reject", authHandler, onboarding.reject);
+  router.use(registrationValidationErrorHandler);
   return router;
 }
 
