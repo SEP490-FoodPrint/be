@@ -6,14 +6,21 @@ import {
 } from "../../middlewares/permission.middleware";
 import { createMenuController } from "./menu.controller";
 import { menuService, type MenuService } from "./menu.service";
+import { createMenuApprovalController } from "../menu-approval/menu-approval.controller";
+import {
+  menuApprovalService,
+  type MenuApprovalService,
+} from "../menu-approval/menu-approval.service";
 
 export function createMenuRouter(
   service: MenuService = menuService,
   authHandler: RequestHandler = authenticate,
   versioned = false,
+  approvalService: MenuApprovalService = menuApprovalService,
 ) {
   const router = Router();
   const controller = createMenuController(service);
+  const approvalController = createMenuApprovalController(approvalService);
   router.get(
     "/",
     authHandler,
@@ -100,11 +107,17 @@ export function createMenuRouter(
     requirePermission("menu.update"),
     controller.submit,
   );
+  router.get(
+    "/:menuId/approval-detail",
+    authHandler,
+    requirePermission("menu.view"),
+    approvalController.getDetail,
+  );
   router.post(
     "/:menuId/reviews",
     authHandler,
     requirePermission("menu.review", "menu.approve"),
-    controller.review,
+    approvalController.decide,
   );
   router.get(
     "/:menuId/reviews",
