@@ -68,3 +68,11 @@ Review/merge PR vào dev; CI migration harness kiểm tra baseline/history/drift
 ## Complexity Tracking
 
 Không phát sinh ngoại lệ hoặc dependency mới.
+
+## Release repair: Khôi phục migration đã applied
+
+- Phạm vi FR-008 trên nhánh `fix/005-restore-applied-migration`: khôi phục nguyên byte SQL GVCN đã xác minh bằng checksum Azure, đặt đúng tên `20261107000100_class_homeroom_assignments`.
+- Nguồn: `origin/feat/bgh-menu-approval-class-assignment`, file migration tên cũ `20261102000200_class_homeroom_assignments`. Không merge cả nhánh; không đổi bất kỳ migration đang có hoặc dòng lịch sử Azure.
+- Đồng bộ model `ClassHomeroomAssignment` và relation Class/User từ cùng nguồn; giữ hai partial indexes và CHECK lifecycle trong SQL để Prisma drift không coi bảng đang có là dư.
+- Thêm regression test: thiếu migration GVCN thì guard chặn; có file khôi phục đúng checksum thì chỉ năm học còn pending; đổi checksum vẫn bị chặn. Test migration local tiếp tục bao phủ deploy/history/drift.
+- Xác minh lịch sử Azure bằng transaction chỉ đọc và checksum Git chuẩn LF; không chạy DDL, deploy/resolve hoặc sửa `_prisma_migrations` trên Azure. Constitution Check I–VI tiếp tục PASS: không đổi business API/quyền, SQL applied được khôi phục nguyên bản, các thay đổi cùng spec 005.

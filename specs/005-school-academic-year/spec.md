@@ -69,6 +69,7 @@ Nhà trường cần bổ sung nơi lưu lịch mà không thay đổi lớp, th
 - **FR-005**: Bản ghi MUST tham chiếu một trường tồn tại và được bảo toàn khi thao tác xóa trường vi phạm quan hệ tham chiếu.
 - **FR-006**: Việc mở rộng MUST không sửa/xóa dữ liệu cũ, tự tạo năm học/ngày nghỉ hoặc gán cấu hình vào lớp/thực đơn hiện có.
 - **FR-007**: Phạm vi lần này MUST chỉ bổ sung nền tảng lưu trữ và kiểm thử. Không thêm màn hình, endpoint, quyền, thay đổi cách tính tuần/học kỳ hoặc tự áp ngày nghỉ vào thực đơn/suất ăn.
+- **FR-008**: Khi khắc phục lỗi CD sau phát hành, hệ thống MUST khôi phục nguyên bản migration phân công GVCN đã được Azure ghi nhận và model tương ứng, để lịch sử đã áp dụng tiếp tục là prefix hợp lệ trước migration năm học. Không sửa SQL/checksum lịch sử, không bỏ qua guard hoặc thêm API phân công GVCN trong bản sửa.
 
 ### Key Entities
 
@@ -90,3 +91,9 @@ Nhà trường cần bổ sung nơi lưu lịch mà không thay đổi lớp, th
 - BGH là người sử dụng chức năng cấu hình trong tương lai; bước này chưa cung cấp thao tác nhập lịch cho người dùng.
 - Không yêu cầu bổ sung số tuần 18/17 hoặc học kỳ trong thay đổi một bảng này.
 - Kiểm thử thay đổi cấu trúc chỉ trên PostgreSQL local disposable; triển khai Azure theo quy trình review/merge/CD đã duyệt, không chạy thủ công trong tác vụ này.
+
+## Release repair — 07/11/2026
+
+CD của commit `194ac5c` dừng vì Azure đã hoàn tất `20261107000100_class_homeroom_assignments` trong khi Git thiếu thư mục đó. Kiểm tra chỉ đọc xác nhận SQL gốc ở nhánh `origin/feat/bgh-menu-approval-class-assignment`, dưới tên cũ `20261102000200_class_homeroom_assignments`, có SHA-256 trùng hoàn toàn với lịch sử Azure: `b1fe455a26a60267d045f2602e61dbdeb9a37ec6367909963f423604cb146f5e`.
+
+Bản sửa trên `fix/005-restore-applied-migration` phục hồi đúng file dưới tên đã applied và model `ClassHomeroomAssignment` từ cùng nguồn. Đây là khôi phục cấu trúc đã có trên đích triển khai, không mở rộng nghiệp vụ lịch năm học hoặc đưa toàn bộ nhánh GVCN cũ vào dev. Migration năm học giữ nguyên.
