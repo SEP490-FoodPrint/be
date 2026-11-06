@@ -26,6 +26,6 @@
 - [x] T013 Thêm test bảo đảm chi tiết dùng nhu cầu lớp đã FINALIZED.
 - [x] T014 Đăng ký test mới trong `npm run test:unit`.
 - [x] T015 Chạy Prettier cho các file thay đổi.
-- [ ] T016 Chạy Prisma validate/generate, lint, typecheck, build và unit tests.
-- [ ] T017 Chạy Spec gate và commitlint so với `origin/dev`.
+- [x] T016 Chạy Prisma validate/generate, lint, typecheck, build và unit tests.
+- [x] T017 Chạy Spec gate và commitlint so với `origin/dev`.
 - [ ] T018 Push branch và xác nhận CI/PR.
