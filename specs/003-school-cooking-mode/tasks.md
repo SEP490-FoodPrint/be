@@ -43,8 +43,8 @@
 ## Phase 5: Quality gates and handoff
 
 - [x] T015 Đăng ký `tests/cooking-mode.test.ts` trong `npm run test:unit` tại `package.json`.
-- [ ] T016 Chạy format, lint, typecheck, build, unit tests và targeted tests; sửa mọi lỗi trong phạm vi PR.
-- [ ] T017 Chạy Spec gate với branch/base/head ref thực tế và xác nhận PASS.
+- [x] T016 Chạy format, lint, typecheck, build, unit tests và targeted tests; sửa mọi lỗi trong phạm vi PR.
+- [x] T017 Chạy Spec gate với branch/base/head ref thực tế và xác nhận PASS.
 - [ ] T018 Kiểm tra GitHub CI gồm Code quality, PostgreSQL migrations, Spec gate và Backend quality; ghi kết quả thật trong PR.
 - [ ] T019 Ghi rõ bước bootstrap permission sau merge trong mô tả PR, không tự seed hoặc ghi Azure từ nhánh feature.
 
@@ -75,4 +75,7 @@ T001-T002
 
 ## Completion Evidence
 
-- Điền sau khi chạy local checks và GitHub CI.
+- Local PASS: `npm run prisma:validate`, `npm run lint`, `npm run typecheck`, `npm run test:unit`, `npm run build`.
+- Local PASS: targeted `tests/cooking-mode.test.ts` + `tests/organization.test.ts` (8/8), changed-file Prettier check và Commitlint (2/2 commit).
+- Local PASS: Spec gate với base `dev`, head `feat/003-school-cooking-mode` và SHA thực tế.
+- GitHub CI: chờ run của PR thay thế trước khi hoàn tất T018.
