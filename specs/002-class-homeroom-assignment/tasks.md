@@ -28,4 +28,4 @@
 - [x] T013 Viết test eligibility, school isolation, assignment history và validation tại `tests/class-assignment.test.ts`
 - [x] T014 Thêm test phân công vào `npm run test:unit`
 - [x] T015 Chạy Prisma validate/generate, typecheck, build, lint và test phân công
-- [ ] T016 Chạy spec gate cho branch `feat/002-class-homeroom-assignment`
+- [x] T016 Chạy spec gate cho branch `feat/002-class-homeroom-assignment`
