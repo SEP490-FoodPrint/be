@@ -5,7 +5,7 @@ Hợp đồng theo hai form Figma đã được xác nhận: [nhà trường](ht
 ## Trạng thái
 
 1. Signup tạo tài khoản UNVERIFIED, chưa tạo RegistrationRequest; xác minh mã email rồi login với quyền truy cập giới hạn, không phải chờ System Admin duyệt ở bước này.
-2. Frontend giữ dữ liệu đang soạn. Gửi hồ sơ hợp lệ tạo RegistrationRequest PENDING, tài khoản vẫn UNVERIFIED. Chưa tạo School/Supplier/SupplierCertification.
+2. Frontend giữ dữ liệu đang soạn. Gửi hồ sơ hợp lệ tạo RegistrationRequest PENDING, tài khoản vẫn UNVERIFIED. Cùng transaction tạo email xác nhận tiếp nhận gửi tới email tài khoản hiện hành. Nộp lại sau REJECTED tạo xác nhận mới; sửa hồ sơ đang PENDING không tạo thêm email. Chưa tạo School/Supplier/SupplierCertification.
 3. System Admin duyệt: một transaction tạo tổ chức, chuyển các chứng nhận sang SupplierCertification, gắn tài khoản vào tổ chức và đổi tài khoản thành ACTIVE, hồ sơ thành APPROVED.
 4. System Admin từ chối: hồ sơ REJECTED với lý do, tài khoản vẫn UNVERIFIED. Người dùng sửa và gửi lại cùng hồ sơ; backend xóa kết quả duyệt trước và chuyển lại PENDING.
 
@@ -105,7 +105,7 @@ Response POST thành công trả đầy đủ DTO chi tiết và `emailNotificat
 
 ### Thông báo kết quả xét duyệt
 
-Migration `20261102000100_registration_review_outbox` tạo bảng `foodprint.email_outbox`. Mỗi quyết định ghi một bản email cùng transaction; API chỉ trả `emailNotification.status = PENDING` sau khi commit, không cam kết thư đã đến. Cần áp dụng migration đã review trước khi dùng API xét duyệt mới. Worker riêng đọc outbox, đẩy job vào BullMQ/Redis local và gọi `sendMail` từ Resend. Chạy `npm run worker:email` song song với API.
+Migration `20261102000100_registration_review_outbox` tạo bảng `foodprint.email_outbox`. Nộp lần đầu, nộp lại sau từ chối và mỗi quyết định xét duyệt ghi một bản email cùng transaction; lỗi ghi outbox rollback thao tác đó. API xét duyệt trả `emailNotification.status = PENDING` sau khi commit, không cam kết thư đã đến; response nộp hồ sơ giữ nguyên hợp đồng hiện có. Không cần migration mới cho email xác nhận tiếp nhận. Cần áp dụng migration đã review trước khi dùng luồng outbox. Backend tự khởi động runtime đọc outbox, đẩy job vào BullMQ/Redis local và gọi `sendMail` từ Resend khi chạy `npm run dev` hoặc `npm start` sau build; không cần terminal worker riêng. Cả ba loại thông báo đều được xử lý bất đồng bộ, với dispatcher mỗi 5 giây. Khi dừng backend, runtime dừng timer, chờ lượt dispatch và worker đang chạy rồi đóng queue trước DB. Lệnh `npm run worker:email` vẫn dùng được khi cần chạy độc lập, nhưng không cần chạy thêm cùng backend mặc định. Resend cần được cấu hình trong môi trường backend; khởi động backend sẽ xử lý cả các thư đang chờ.
 
 Lỗi Redis/Resend sau commit không thay đổi quyết định xét duyệt. Worker tự thử tối đa 5 lượt, chờ tăng dần từ 5 giây. Kiểm tra một sự kiện bằng `npm run email:outbox:status -- <UUID>`; gửi lại trạng thái FAILED bằng `npm run email:outbox:retry -- <UUID>`. Nếu lượt gửi đầu đã quá 24 giờ và kết quả chưa rõ, đối soát trên Resend trước rồi dùng `--confirm-possible-duplicate`. Các lệnh mặc định chỉ cho PostgreSQL local; thao tác Azure cần `--azure`, `AZURE_DATABASE_HOST` khớp target và quyền vận hành riêng. Không dùng script này để seed hoặc gửi bù hồ sơ cũ.
 

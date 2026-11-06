@@ -1,5 +1,13 @@
 # Baseline database và lịch sử migration
 
+## Khôi phục lịch sử phân công GVCN đã có trên Azure
+
+CD tại commit `194ac5c` bị chặn ở `db:deploy:check`: Azure đã hoàn tất `20261107000100_class_homeroom_assignments` lúc `2026-11-06T17:49:59Z`, nhưng nhánh dev thiếu file này. Đây là lỗi thiếu lịch sử trong Git, không phải lỗi SQL tạo bảng năm học.
+
+Đã khôi phục nguyên byte SQL từ `origin/feat/bgh-menu-approval-class-assignment`, file gốc mang tên `20261102000200_class_homeroom_assignments`, vào đúng thư mục đã applied `20261107000100_class_homeroom_assignments`. SHA-256 được đối chiếu chỉ đọc với Azure: `b1fe455a26a60267d045f2602e61dbdeb9a37ec6367909963f423604cb146f5e`. Không đổi migration cũ, lịch sử/checksum Azure hoặc guard triển khai.
+
+Model `ClassHomeroomAssignment`, quan hệ Class/User và hai partial indexes được phục hồi từ cùng nguồn để schema đích phản ánh bảng đã tồn tại. Bản sửa không đưa API, permission hoặc logic phân công GVCN từ nhánh cũ vào dev. Trên database mới, Prisma replay file này; trên Azure đã applied, Prisma chỉ xác minh lịch sử và bỏ qua file đã hoàn tất. Migration năm học tiếp tục là pending migration sau đó.
+
 ## Lịch năm học toàn trường
 
 Migration `20261107000100_school_academic_year` chỉ thêm bảng `foodprint.school_academic_years`, được Prisma ánh xạ thành `SchoolAcademicYear`, với quan hệ `School.academicYears`. Mỗi trường có tối đa một bản ghi cho cùng nhãn `academic_year`; các năm và trường khác nhau được lưu độc lập.

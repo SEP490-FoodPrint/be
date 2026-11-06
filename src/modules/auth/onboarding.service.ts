@@ -22,7 +22,7 @@ import {
 import { validateOnboarding } from "./onboarding.validation";
 import { retainDocuments } from "./onboarding-submission";
 import { reviewVersion } from "./registration-review";
-import { reviewEmail } from "./registration-review-email";
+import { reviewEmail, submissionEmail } from "./registration-review-email";
 import {
   onboardingRepository,
   type Application,
@@ -130,7 +130,7 @@ async function editable(tx: AuthorizationClient, userId: string) {
       !["PENDING", "REJECTED"].includes(current.status))
   )
     throw new HttpError(409, "Hồ sơ đã được duyệt và không còn được chỉnh sửa");
-  return { requestType, current };
+  return { requestType, current, user };
 }
 
 export function createOnboardingService(
@@ -220,7 +220,11 @@ export function createOnboardingService(
         for (const file of files)
           uploaded.push(await storage.upload(user.id, file));
         const result = await authorizationTransaction(db, async (tx) => {
-          const { current, requestType } = await editable(tx, user.id);
+          const {
+            current,
+            requestType,
+            user: currentUser,
+          } = await editable(tx, user.id);
           if (requestType !== profile.requestType)
             throw new HttpError(
               409,
@@ -255,6 +259,13 @@ export function createOnboardingService(
                 user.id,
                 submission,
               );
+          if (!current || current.status === "REJECTED") {
+            await onboardingRepository.queueRegistrationEmail(
+              tx,
+              row.id,
+              submissionEmail(row, currentUser),
+            );
+          }
           return { ...view(row), accountStatus: "UNVERIFIED" as const };
         });
         // The replacement has committed; cleanup failure must not undo or hide submission success.
@@ -368,7 +379,7 @@ export function createOnboardingService(
             rejectionReason: null,
           },
         );
-        const notification = await onboardingRepository.queueReviewEmail(
+        const notification = await onboardingRepository.queueRegistrationEmail(
           tx,
           id,
           reviewEmail(row),
@@ -412,7 +423,7 @@ export function createOnboardingService(
             rejectionReason,
           },
         );
-        const notification = await onboardingRepository.queueReviewEmail(
+        const notification = await onboardingRepository.queueRegistrationEmail(
           tx,
           id,
           reviewEmail(original, rejectionReason),

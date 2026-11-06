@@ -26,3 +26,9 @@ Ngày không chứa giờ/timezone; reason là lý do người cấu hình nhậ
 ## Lifecycle / migration
 
 Không thêm trạng thái, học kỳ, bộ đếm tuần, creator FK hay rule chồng khoảng chưa được xác nhận. Migration chỉ tạo bảng rỗng, index và constraints. Không tự sinh năm học/ngày nghỉ hoặc backfill từ Class.academicYear. Lớp/thực đơn/suất ăn cũ giữ nguyên.
+
+## Release repair: ClassHomeroomAssignment đã tồn tại trên Azure
+
+Phục hồi nguyên model từ nhánh GVCN cùng migration đã xác minh checksum: UUID id, classId, teacherUserId, assignedByUserId, assignedAt, endedAt, endedByUserId; quan hệ Class và ba quan hệ User đều RESTRICT/NO ACTION. Giữ partial unique `uq_class_homeroom_current` theo classId và partial index `idx_class_homeroom_teacher_current` theo teacherUserId khi ended_at IS NULL. CHECK lifecycle giữ nguyên trong SQL.
+
+Đây là phản ánh cấu trúc đã có trên Azure để sửa lịch sử/drift, không thêm chức năng phân công hoặc thay đổi lịch năm học.

@@ -50,3 +50,15 @@ Lượt migration đầu ở working tree bị chặn bởi baseline 0_init có 
 Test restrict-delete dùng SQLSTATE 23001 (`restrict_violation`) theo kết quả PostgreSQL 18.4; FK tới trường không tồn tại dùng 23503. Lượt cuối không có test fail/skip. Kiểm tra định dạng toàn bản sao cũng còn lỗi các file cũ, nên không báo quality gate tổng hợp PASS.
 
 Migration và model mới chưa được commit/push hoặc áp dụng lên Azure/database thành viên. Cluster tạm được dừng sau kiểm thử; không drop/reset database hay xóa volume.
+
+## Actual verification — release repair FR-008
+
+Bản sửa `fix/005-restore-applied-migration`, base `origin/dev` commit `194ac5c`. Đã xác minh lịch sử Azure bằng transaction chỉ đọc; không chạy deploy/resolve hoặc sửa dữ liệu Azure.
+
+- SQL GVCN khôi phục khớp SHA-256 của migration đã applied: `b1fe455a26a60267d045f2602e61dbdeb9a37ec6367909963f423604cb146f5e`.
+- Evaluator trên lịch sử Azure và SQL chuẩn Git LF cộng file khôi phục: PASS, chỉ `20261107000100_school_academic_year` còn pending. Đây là kết quả kiểm tra nội dung dự kiến của bản sửa, chưa phải lần chạy CD trên committed HEAD mới.
+- Prisma validate/generate, lint toàn repo, typecheck/build và format các file liên quan: PASS. Runtime local vẫn là Node.js 22.15.0; CI dùng runtime theo .nvmrc. Không báo `validate` tổng hợp PASS vì vấn đề format toàn working tree đã nêu ở trên.
+- `npm run test:unit`: PASS 189/189, có regression cho missing history/restored prefix/checksum sai.
+- Harness migration trên PostgreSQL 18.4 disposable: PASS 10/10, bao gồm history, fresh deploy, bảo toàn dữ liệu, constraints và Prisma drift với model GVCN đã khôi phục. Dùng bản sao tạm với SQL chuẩn LF như hướng dẫn ở trên, không sửa migration đã applied trong workspace.
+- `git diff --check` và Spec gate evaluator trên working tree: PASS. Các thay đổi chưa commit/push; cần merge bản sửa vào dev để CI/CD chạy trên commit chứa migration đã khôi phục, không rerun commit cũ đang thiếu file.
+- Cluster PostgreSQL tạm đã tự dừng sau kiểm thử; không xóa database hay volume.

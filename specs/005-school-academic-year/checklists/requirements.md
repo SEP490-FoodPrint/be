@@ -30,3 +30,9 @@
 ## Notes
 
 Checklist xác nhận độ rõ của spec; không thay thế kết quả chạy migration hoặc triển khai database.
+
+## Release repair
+
+- [x] Migration GVCN đã có trên Azure được xác minh checksum với nguồn Git trước khi phục hồi.
+- [x] FR-008 giới hạn khôi phục lịch sử/model, không mở API/quyền hoặc sửa database Azure.
+- [x] Bản sửa có regression test, kiểm tra prefix chỉ đọc và kiểm thử migration/drift trên database disposable.

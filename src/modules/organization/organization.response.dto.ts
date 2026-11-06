@@ -8,6 +8,9 @@ export interface OrganizationListItemResponseDTO {
   id: string;
   name: string;
   code: string | null;
+  email: string | null;
+  phone: string | null;
+  address: string | null;
   status: string;
   createdAt: string;
   updatedAt: string;
@@ -18,6 +21,7 @@ export interface OrganizationListResponseDTO {
   pagination: {
     page: number;
     limit: number;
+    total: number;
     hasNext: boolean;
   };
 }
@@ -144,4 +148,9 @@ export interface PublicWeeklyMenuDTO {
   gradeGroups: Array<{ key: string; label: string }>;
   days: WeeklyMenuDayDTO[];
   availableWeeks: AvailableWeekSummaryDTO[];
+}
+
+export interface OrganizationSummaryResponseDTO {
+  total: number;
+  activeCount: number;
 }

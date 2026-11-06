@@ -78,6 +78,41 @@ void test("deployment refuses a missing baseline and unfinished migrations", () 
   assert.throws(() => pendingDeploymentMigrations([], [applied(0)]));
 });
 
+void test("restoring the applied homeroom migration leaves only the academic year pending without weakening checksum checks", () => {
+  const homeroom = {
+    name: "20261107000100_class_homeroom_assignments",
+    checksum:
+      "b1fe455a26a60267d045f2602e61dbdeb9a37ec6367909963f423604cb146f5e",
+  };
+  const academicYear = {
+    name: "20261107000100_school_academic_year",
+    checksum: "d".repeat(64),
+  };
+  const history = [
+    applied(0),
+    applied(1),
+    {
+      migration_name: homeroom.name,
+      checksum: homeroom.checksum,
+      finished_at: new Date("2026-11-06T17:49:59Z"),
+      rolled_back_at: null,
+    },
+  ];
+  assert.throws(() =>
+    pendingDeploymentMigrations([...files, academicYear], history),
+  );
+  assert.deepEqual(
+    pendingDeploymentMigrations([...files, homeroom, academicYear], history),
+    [academicYear.name],
+  );
+  assert.throws(() =>
+    pendingDeploymentMigrations(
+      [...files, { ...homeroom, checksum: "changed" }, academicYear],
+      history,
+    ),
+  );
+});
+
 void test("deployment rejects modified, missing, duplicate or out-of-order applied SQL", () => {
   assert.throws(() =>
     pendingDeploymentMigrations(files, [

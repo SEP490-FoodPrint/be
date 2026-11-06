@@ -225,3 +225,23 @@ MIGRATION_TEST_DATABASE_URL='<disposable-local-test-url>' npm run test:authoriza
 ```
 
 Integration test tạo database mới trong PostgreSQL local test đã chọn; không drop/reset database hiện có hoặc chạy trên Azure. CI chạy cả migration và authorization integration trước khi Backend quality PASS và gọi CD. Test bao gồm JWT role giả, System không có quyền, role SYSTEM_ADMIN bị bảo vệ, role thay đổi trên hai trường, denial riêng, supplier isolation, ATTP, user/permission inactive và ghi admin đồng thời.
+
+## Danh bạ quản trị trường và nhà cung cấp
+
+Danh sách `GET /api/schools` và `/api/suppliers` hỗ trợ `search`, `status`, `page`, `limit`; kết quả bổ sung email/phone/address và pagination.total sau lọc. Giữ scope hiện hành, thứ tự id tăng dần và hasNext.
+
+| GET dưới /api                                      | Quyền                                                                | Phạm vi                                                    |
+| -------------------------------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------- |
+| /schools/summary                                   | school.manage                                                        | SYSTEM_ADMIN thuộc SYSTEM                                  |
+| /suppliers/summary                                 | supplier.view hoặc supplier.manage                                   | SYSTEM_ADMIN thuộc SYSTEM                                  |
+| /schools/:id                                       | school.manage                                                        | SYSTEM hoặc trường hiện tại                                |
+| /suppliers/:id                                     | supplier.view hoặc supplier.manage                                   | Như danh sách supplier, gồm INACTIVE                       |
+| /schools/:schoolId/classes                         | class.view                                                           | SYSTEM hoặc trường hiện tại                                |
+| /schools/:schoolId/suppliers                       | supplier_relationship.view hoặc supplier_relationship.manage         | SYSTEM, trường hiện tại hoặc quan hệ của supplier hiện tại |
+| /schools/:schoolId/accounts                        | user.manage cho SYSTEM; school_user.manage cho SCHOOL_ADMINISTRATION | SYSTEM hoặc admin trường hiện tại                          |
+| /suppliers/:supplierId/certifications              | supplier_certification.view                                          | SYSTEM hoặc supplier hiện tại                              |
+| /supplier-certifications/:id/documents/:documentId | supplier_certification.view                                          | SYSTEM hoặc supplier sở hữu chứng nhận                     |
+
+Nhóm con dùng quyền riêng, không yêu cầu thêm quyền hồ sơ parent. Parent ngoài phạm vi/không tồn tại trả 404; parent hợp lệ nhưng không có dữ liệu trả danh sách rỗng và total=0. Summary không nhận bộ lọc và đếm total/activeCount toàn phạm vi. Không có System Admin bypass permission.
+
+Tệp chứng nhận được xác minh qua anchor hồ sơ APPROVED/SUPPLIER và nhóm certificate_N; quyền sở hữu theo chứng nhận hiện tại, không theo tổ chức hiện tại của applicant. Response danh sách chỉ chứa metadata an toàn, mở tệp trả URL 60 giây và Cache-Control no-store. API review hồ sơ giữ quyền registration.view riêng. Hợp đồng đầy đủ: [admin-directory.md](../specs/006-school-supplier-admin/contracts/admin-directory.md).

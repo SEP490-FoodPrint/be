@@ -1,3 +1,7 @@
+import { createClassSchoolRouter } from "../modules/class/class.routes";
+import { createSchoolSupplierSchoolRouter } from "../modules/school-supplier/school-supplier.routes";
+import { createUserSchoolRouter } from "../modules/user/user.routes";
+import { createSupplierCertificationsChildRouter } from "../modules/supplier-certification/supplier-certification.routes";
 import { createPermissionRouter } from "../modules/permission/permission.routes";
 import type { RequestHandler } from "express";
 import { authenticate } from "../middlewares/auth.middleware";
@@ -59,6 +63,22 @@ export function createApiRouter(
   router.use("/school-overview", createSchoolOverviewRouter(authHandler));
   router.use("/auth", createAuthRouter(undefined, authHandler, authServices));
   router.use("/users", createUserRouter(undefined, authHandler));
+  router.use(
+    "/schools/:schoolId/classes",
+    createClassSchoolRouter(authHandler),
+  );
+  router.use(
+    "/schools/:schoolId/suppliers",
+    createSchoolSupplierSchoolRouter(authHandler),
+  );
+  router.use(
+    "/schools/:schoolId/accounts",
+    createUserSchoolRouter(authHandler),
+  );
+  router.use(
+    "/suppliers/:supplierId/certifications",
+    createSupplierCertificationsChildRouter(undefined, authHandler),
+  );
   router.use("/schools", createOrganizationRouter(undefined, authHandler));
   router.use("/ingredients", createIngredientRouter(undefined, authHandler));
   router.use("/menus", createMenuRouter(undefined, authHandler));
