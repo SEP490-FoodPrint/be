@@ -17,6 +17,27 @@ datasource db {
 
 /// Physical table for conceptual M:N relationship Class HAS ALLERGY IngredientEntry. No Student entity; affected_count is a class-level aggregate.
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+/// BGH phân công một GVCN (User HOMEROOM_TEACHER, ACTIVE, cùng trường) cho mỗi lớp của một niên khóa.
+/// Đổi GVCN đóng dòng hiện tại (endedAt) và giữ lại làm lịch sử.
+model ClassHomeroomAssignment {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  classId          String    @map("class_id") @db.Uuid
+  teacherUserId    String    @map("teacher_user_id") @db.Uuid
+  assignedByUserId String    @map("assigned_by_user_id") @db.Uuid
+  assignedAt       DateTime  @default(now()) @map("assigned_at") @db.Timestamptz(6)
+  endedAt          DateTime? @map("ended_at") @db.Timestamptz(6)
+  endedByUserId    String?   @map("ended_by_user_id") @db.Uuid
+  Class            Class     @relation(fields: [classId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  Teacher          User      @relation("class_homeroom_assignments_teacher", fields: [teacherUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  AssignedBy       User      @relation("class_homeroom_assignments_assigned_by", fields: [assignedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  EndedBy          User?     @relation("class_homeroom_assignments_ended_by", fields: [endedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([classId], map: "uq_class_homeroom_current", where: raw("(ended_at IS NULL)"))
+  @@index([teacherUserId], map: "idx_class_homeroom_teacher_current", where: raw("(ended_at IS NULL)"))
+  @@map("class_homeroom_assignments")
+  @@schema("foodprint")
+}
+
 model ClassAllergy {
   classId              String                @map("class_id") @db.Uuid
   ingredientEntryId    String                @map("ingredient_entry_id") @db.Uuid
@@ -35,17 +56,18 @@ model ClassAllergy {
 
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
 model Class {
-  id                     String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  schoolId               String             @map("school_id") @db.Uuid
-  name                   String             @db.VarChar(120)
-  academicYear           String?            @map("academic_year") @db.VarChar(30)
-  registeredMealPortions Int                @default(0) @map("registered_meal_portions") @db.Integer
-  status                 EntityStatus       @default(ACTIVE)
-  createdAt              DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt              DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  School                 School             @relation("classes_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  dailyMealPortions      DailyMealPortion[] @relation("daily_meal_portions_class_id__classes")
-  classAllergies         ClassAllergy[]     @relation("class_allergies_class_id__classes")
+  id                     String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  schoolId               String                    @map("school_id") @db.Uuid
+  name                   String                    @db.VarChar(120)
+  academicYear           String?                   @map("academic_year") @db.VarChar(30)
+  registeredMealPortions Int                       @default(0) @map("registered_meal_portions") @db.Integer
+  status                 EntityStatus              @default(ACTIVE)
+  createdAt              DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime                  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  School                 School                    @relation("classes_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  dailyMealPortions      DailyMealPortion[]        @relation("daily_meal_portions_class_id__classes")
+  classAllergies         ClassAllergy[]            @relation("class_allergies_class_id__classes")
+  homeroomAssignments    ClassHomeroomAssignment[]
 
   @@unique([schoolId, name, academicYear])
   @@index([schoolId], map: "idx_classes_school_id")
@@ -1138,6 +1160,9 @@ model User {
   permissionDenials                            UserPermissionDenial[]       @relation("user_permission_denials_user_id__users")
   permissionDenialsAsDisabledBy                UserPermissionDenial[]       @relation("user_permission_denials_disabled_by_user_id__users")
   confirmedMealPortionGroups                   DailyMealPortionGroup[]
+  homeroomAssignments                          ClassHomeroomAssignment[]    @relation("class_homeroom_assignments_teacher")
+  homeroomAssignmentsAssigned                  ClassHomeroomAssignment[]    @relation("class_homeroom_assignments_assigned_by")
+  homeroomAssignmentsEnded                     ClassHomeroomAssignment[]    @relation("class_homeroom_assignments_ended_by")
 
   @@unique([username])
   @@unique([email])

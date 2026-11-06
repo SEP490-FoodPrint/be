@@ -61,6 +61,9 @@ src/
 └── modules/class/
     ├── academic-year.ts
     ├── class.controller.ts
+    ├── class.repository.ts
+    ├── class.request.dto.ts
+    ├── class.response.dto.ts
     ├── class.routes.ts
     ├── class.service.ts
     └── class.validation.ts
