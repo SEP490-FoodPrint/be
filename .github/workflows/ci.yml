@@ -185,7 +185,11 @@ jobs:
   deploy_database:
     name: Deploy Azure database
     needs: quality
-    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    if: >-
+      always() &&
+      needs.quality.result == 'success' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/dev'
     uses: ./.github/workflows/cd.yml
     secrets:
       AZURE_DATABASE_URL: ${{ secrets.AZURE_DATABASE_URL }}
