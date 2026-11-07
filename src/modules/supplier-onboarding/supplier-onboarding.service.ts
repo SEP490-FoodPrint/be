@@ -213,19 +213,25 @@ export async function directory(principal: AuthPrincipal, query: Filters) {
     "supplier_relationship.manage",
   );
   const db = await getPrisma();
-  const where: Prisma.SupplierWhereInput = {};
+  const where: Prisma.SupplierWhereInput = {
+    status: (query.status as "ACTIVE" | "INACTIVE") || "ACTIVE",
+  };
   if (query.status && !["ACTIVE", "INACTIVE"].includes(query.status))
     throw new HttpError(400, "Trạng thái nhà cung cấp không hợp lệ.");
-  if (query.status) where.status = query.status as "ACTIVE" | "INACTIVE";
   if (query.q)
     where.OR = [
       { name: { contains: query.q, mode: "insensitive" } },
       { taxCode: { contains: query.q, mode: "insensitive" } },
     ];
-  if (query.category)
+  if (query.category) {
+    const categoryMatches =
+      query.category === "Thịt tươi" || query.category === "Thịt"
+        ? ["Thịt", "Thịt tươi"]
+        : [query.category];
     where.ingredients = {
-      some: { category: query.category, status: "ACTIVE" },
+      some: { category: { in: categoryMatches }, status: "ACTIVE" },
     };
+  }
   let provinceId = query.provinceId;
   if (
     provinceId &&
@@ -339,7 +345,12 @@ export async function categories(principal: AuthPrincipal) {
     orderBy: { category: "asc" },
     take: 200,
   });
-  return rows.map((row) => row.category).filter(Boolean);
+  const normalized = rows
+    .map((row) => (row.category === "Thịt" ? "Thịt tươi" : row.category))
+    .filter(Boolean) as string[];
+  return Array.from(new Set(normalized)).sort((a, b) =>
+    a.localeCompare(b, "vi"),
+  );
 }
 
 export async function supplierDetail(
