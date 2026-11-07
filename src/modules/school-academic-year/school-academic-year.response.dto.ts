@@ -1,5 +1,6 @@
 export interface HolidayResponseDTO {
-  date: string;
+  startDate: string;
+  endDate: string;
   reason: string;
 }
 

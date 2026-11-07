@@ -20,19 +20,20 @@ export const dateOnlySchema = z
   .refine(isCalendarDate, "Ngày không hợp lệ, cần dùng định dạng YYYY-MM-DD");
 
 export const holidaySchema = z.strictObject({
-  date: dateOnlySchema,
+  startDate: dateOnlySchema,
+  endDate: dateOnlySchema,
   reason: requiredText(255),
 });
 
 const holidaysSchema = z
   .array(holidaySchema, { error: "Danh sách ngày nghỉ phải là một mảng" })
-  .max(366, "Danh sách ngày nghỉ không được vượt quá 366 ngày");
+  .max(100, "Danh sách kỳ nghỉ không được vượt quá 100 khoảng");
 
 function validateRangeAndHolidays(
   value: {
     startDate: string;
     endDate: string;
-    holidays: Array<{ date: string }>;
+    holidays: Array<{ startDate: string; endDate: string }>;
   },
   context: z.RefinementCtx,
 ) {
@@ -43,23 +44,36 @@ function validateRangeAndHolidays(
       message: "Ngày kết thúc phải bằng hoặc sau ngày bắt đầu",
     });
   }
-  const seen = new Set<string>();
   value.holidays.forEach((holiday, index) => {
-    if (seen.has(holiday.date)) {
+    if (holiday.startDate > holiday.endDate) {
       context.addIssue({
         code: "custom",
-        path: ["holidays", index, "date"],
-        message: "Ngày nghỉ bị trùng",
+        path: ["holidays", index, "endDate"],
+        message: "Ngày kết thúc kỳ nghỉ phải bằng hoặc sau ngày bắt đầu",
       });
     }
-    seen.add(holiday.date);
-    if (holiday.date < value.startDate || holiday.date > value.endDate) {
+    if (
+      holiday.startDate < value.startDate ||
+      holiday.endDate > value.endDate
+    ) {
       context.addIssue({
         code: "custom",
-        path: ["holidays", index, "date"],
-        message: "Ngày nghỉ phải nằm trong khoảng niên khóa",
+        path: ["holidays", index, "startDate"],
+        message: "Kỳ nghỉ phải nằm trong khoảng niên khóa",
       });
     }
+    value.holidays.slice(0, index).forEach((existing) => {
+      if (
+        holiday.startDate <= existing.endDate &&
+        holiday.endDate >= existing.startDate
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["holidays", index, "startDate"],
+          message: "Kỳ nghỉ bị trùng với một khoảng đã khai báo",
+        });
+      }
+    });
   });
 }
 

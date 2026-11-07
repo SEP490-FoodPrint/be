@@ -37,13 +37,25 @@ void test("academic-year validation accepts a valid calendar", () => {
       academicYear: " 2026-2027 ",
       startDate: "2026-09-05",
       endDate: "2027-05-31",
-      holidays: [{ date: "2027-01-01", reason: " Nghỉ Tết dương lịch " }],
+      holidays: [
+        {
+          startDate: "2027-01-01",
+          endDate: "2027-01-03",
+          reason: " Nghỉ Tết dương lịch ",
+        },
+      ],
     }),
     {
       academicYear: "2026-2027",
       startDate: "2026-09-05",
       endDate: "2027-05-31",
-      holidays: [{ date: "2027-01-01", reason: "Nghỉ Tết dương lịch" }],
+      holidays: [
+        {
+          startDate: "2027-01-01",
+          endDate: "2027-01-03",
+          reason: "Nghỉ Tết dương lịch",
+        },
+      ],
     },
   );
 });
@@ -56,16 +68,61 @@ void test("academic-year validation rejects invalid ranges and holidays", () => 
   };
   for (const input of [
     { ...base, startDate: "2027-06-01", holidays: [] },
-    { ...base, holidays: [{ date: "2027-06-01", reason: "Ngoài khoảng" }] },
     {
       ...base,
       holidays: [
-        { date: "2027-01-01", reason: "Lần một" },
-        { date: "2027-01-01", reason: "Lần hai" },
+        {
+          startDate: "2027-05-30",
+          endDate: "2027-06-01",
+          reason: "Ngoài khoảng",
+        },
       ],
     },
-    { ...base, holidays: [{ date: "2027-02-30", reason: "Ngày sai" }] },
-    { ...base, holidays: [{ date: "2027-01-01", reason: "  " }] },
+    {
+      ...base,
+      holidays: [
+        {
+          startDate: "2027-01-01",
+          endDate: "2027-01-03",
+          reason: "Lần một",
+        },
+        {
+          startDate: "2027-01-03",
+          endDate: "2027-01-05",
+          reason: "Lần hai",
+        },
+      ],
+    },
+    {
+      ...base,
+      holidays: [
+        {
+          startDate: "2027-02-30",
+          endDate: "2027-03-01",
+          reason: "Ngày sai",
+        },
+      ],
+    },
+    {
+      ...base,
+      holidays: [
+        {
+          startDate: "2027-01-02",
+          endDate: "2027-01-01",
+          reason: "Sai thứ tự",
+        },
+      ],
+    },
+    {
+      ...base,
+      holidays: [
+        {
+          startDate: "2027-01-01",
+          endDate: "2027-01-01",
+          reason: "  ",
+        },
+      ],
+    },
     { ...base, holidays: [], schoolId: board.schoolId },
   ])
     assert.throws(() => validateCreateAcademicYear(input), isBadRequest);

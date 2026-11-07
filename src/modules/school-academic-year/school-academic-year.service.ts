@@ -46,8 +46,18 @@ function dateOnly(value: Date) {
 function mapHoliday(value: Prisma.JsonValue): HolidayResponseDTO[] {
   if (!Array.isArray(value)) return [];
   return value.map((item) => {
-    const holiday = item as { date: string; reason: string };
-    return { date: holiday.date, reason: holiday.reason };
+    const holiday = item as {
+      date?: string;
+      startDate?: string;
+      endDate?: string;
+      reason: string;
+    };
+    const startDate = holiday.startDate ?? holiday.date ?? "";
+    return {
+      startDate,
+      endDate: holiday.endDate ?? startDate,
+      reason: holiday.reason,
+    };
   });
 }
 

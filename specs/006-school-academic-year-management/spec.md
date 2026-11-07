@@ -27,7 +27,7 @@ Ban Giám hiệu cập nhật ngày bắt đầu, ngày kết thúc và danh sá
 - **FR-003**: Cung cấp `POST /api/schools/me/academic-years` với `academicYear`, `startDate`, `endDate`, `holidays`.
 - **FR-004**: Cung cấp `PATCH /api/schools/me/academic-years/:id` chỉ nhận `startDate`, `endDate`, `holidays`; không cho đổi nhãn.
 - **FR-005**: Ngày dùng `YYYY-MM-DD`, ngày bắt đầu không sau ngày kết thúc.
-- **FR-006**: Holiday là mảng `{ date, reason }`; reason được trim, không rỗng, ngày hợp lệ, không trùng và nằm trong khoảng niên khóa.
+- **FR-006**: Holiday là mảng `{ startDate, endDate, reason }`; một ngày có hai mốc bằng nhau, nhiều ngày dùng khoảng bao đóng. Reason được trim, không rỗng; khoảng hợp lệ, không chồng lấn và nằm trong niên khóa.
 - **FR-007**: Chỉ `SCHOOL_MANAGEMENT_BOARD` thuộc School có quyền hiệu lực tương ứng được truy cập. `schoolId` luôn lấy từ principal.
 - **FR-008**: Quyền `school_academic_year.view` dùng cho đọc; `school_academic_year.manage` dùng cho tạo/cập nhật. Không grant mặc định cho School Administration.
 - **FR-009**: Unique conflict trả `409`; request sai trả `400`; record không thuộc trường trả `404`.
