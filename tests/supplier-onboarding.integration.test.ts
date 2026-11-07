@@ -108,7 +108,7 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
     [managerB, "managerB", schoolB, "SCHOOL_MANAGEMENT_BOARD"],
     [warehouseA, "warehouseA", schoolA, "INGREDIENT_MANAGEMENT_DEPARTMENT"],
     [randomUUID(), "warehouseB", schoolB, "INGREDIENT_MANAGEMENT_DEPARTMENT"],
-    [healthA, "healthA", schoolA, "SCHOOL_HEALTH_OFFICER"],
+    [healthA, "healthA", schoolA, "SCHOOL_NUTRITION_OFFICER"],
   ]) {
     const role = await db.role.findUniqueOrThrow({ where: { code: roleCode } });
     await db.user.create({

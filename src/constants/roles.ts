@@ -19,7 +19,7 @@ export const ROLES = {
   SCHOOL_ADMINISTRATION: "SCHOOL_ADMINISTRATION",
   SCHOOL_MANAGEMENT_BOARD: "SCHOOL_MANAGEMENT_BOARD", // Ban giám hiệu
   SCHOOL_NUTRITION_OFFICER: "SCHOOL_NUTRITION_OFFICER", // Nhân viên dinh dưỡng
-  SCHOOL_HEALTH_OFFICER: "SCHOOL_HEALTH_OFFICER", // Cán bộ Y tế Trường (tương thích ngược)
+
   SCHOOL_KITCHEN_STAFF: "SCHOOL_KITCHEN_STAFF", // Nhân viên bếp
   HOMEROOM_TEACHER: "HOMEROOM_TEACHER", // Giáo viên chủ nhiệm
   PARENTS_COMMITTEE: "PARENTS_COMMITTEE", // Ban phụ huynh
@@ -40,7 +40,7 @@ export const ROLE_LABELS = {
     "Quản trị viên Nhà trường (School Administrator)",
   [ROLES.SCHOOL_MANAGEMENT_BOARD]: "Ban Giám Hiệu",
   [ROLES.SCHOOL_NUTRITION_OFFICER]: "Nhân viên Dinh dưỡng",
-  [ROLES.SCHOOL_HEALTH_OFFICER]: "Cán bộ Y tế Trường",
+
   [ROLES.SCHOOL_KITCHEN_STAFF]: "Nhân viên Bếp / Bếp trưởng",
   [ROLES.HOMEROOM_TEACHER]: "Giáo viên Chủ nhiệm",
   [ROLES.PARENTS_COMMITTEE]: "Ban Đại diện Phụ huynh",
