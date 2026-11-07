@@ -1,3 +1,9 @@
+import {
+  paginationSchema,
+  emptyQuerySchema,
+  idParamsSchema,
+  parse,
+} from "../../utils/directory-validation";
 import { z } from "zod";
 import { HttpError } from "../../utils/http-error";
 
@@ -57,34 +63,23 @@ function positiveIntegerQuery(name: string, fallback: number) {
     .default(fallback);
 }
 
-export const organizationListQuerySchema = z
-  .strictObject(
-    {
-      page: positiveIntegerQuery("page", 1),
-      limit: positiveIntegerQuery("limit", 20).refine((value) => value <= 100, {
-        error: "limit tối đa 100",
-      }),
-    },
-    {
-      error: (issue) =>
-        issue.code === "unrecognized_keys"
-          ? "Chỉ hỗ trợ tham số page và limit"
-          : "Tham số danh sách trường học không hợp lệ",
-    },
-  )
-  .refine(
-    ({ page, limit }) =>
-      !Number.isSafeInteger(page) ||
-      !Number.isSafeInteger(limit) ||
-      page < 1 ||
-      limit < 1 ||
-      limit > 100 ||
-      (page - 1) * limit <= 2_147_483_647,
-    {
-      path: ["page"],
-      error: "page vượt giới hạn phân trang",
-    },
-  );
+export const organizationListQuerySchema = paginationSchema.safeExtend({
+  search: z
+    .string({ error: "Từ khóa phải là chuỗi" })
+    .trim()
+    .max(255, { error: "Từ khóa tối đa 255 ký tự" })
+    .transform((v) => v || undefined)
+    .optional(),
+  status: z
+    .enum(["ACTIVE", "INACTIVE"], { error: "Trạng thái không hợp lệ" })
+    .optional(),
+});
+export const organizationSummaryQuerySchema = emptyQuerySchema;
+export const organizationDetailParamsSchema = idParamsSchema;
+export const validateOrganizationSummaryQuery = (value: unknown) =>
+  parse(organizationSummaryQuerySchema, value);
+export const validateOrganizationDetailParams = (value: unknown) =>
+  parse(organizationDetailParamsSchema, value);
 
 export const publicSchoolListQuerySchema = z
   .strictObject(
@@ -222,11 +217,7 @@ export const publicWeeklyMenuQuerySchema = z.strictObject(
 );
 
 export function validateOrganizationListQuery(value: unknown) {
-  const result = organizationListQuerySchema.safeParse(value);
-  if (!result.success) {
-    throw new OrganizationValidationError(mapZodIssues(result.error.issues));
-  }
-  return result.data;
+  return parse(organizationListQuerySchema, value);
 }
 
 export function validateCookingMode(value: unknown) {
