@@ -61,6 +61,18 @@ export function createOrganizationRouter(
     requirePermission("school_cooking_mode.manage"),
     controller.updateCookingMode,
   );
+  router.get(
+    "/summary",
+    authHandler,
+    requireResource("organization"),
+    controller.getSummary,
+  );
+  router.get(
+    "/:id",
+    authHandler,
+    requireResource("organization"),
+    controller.getById,
+  );
   router.use(organizationValidationErrorHandler);
   return router;
 }

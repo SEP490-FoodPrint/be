@@ -268,7 +268,7 @@ void test("registration numbers are unique across concurrent real submissions an
       assert.equal(approved.id, submitted.id);
       assert.equal(
         await db.emailOutbox.count({ where: { registrationId: submitted.id } }),
-        2,
+        4,
       );
       const { store } = memorySessions();
       const sessions = createSessionService(

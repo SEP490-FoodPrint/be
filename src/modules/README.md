@@ -110,3 +110,9 @@ npm run validate
 ```
 
 Test module dùng HTTP local và reader được inject để kiểm tra quyền, pagination, projection an toàn, JSON Date/Decimal/BigInt và lỗi; không thay thế kiểm thử tích hợp với PostgreSQL thật. `validate` hiện gồm lint, format:check, typecheck và build, không tự chạy các test trên.
+
+### Danh bạ quản trị đơn vị (006)
+
+`organization` sở hữu school list/summary/detail; `supplier` sở hữu supplier list/summary/detail. Các router con dưới `/schools/:schoolId` thuộc `class` (classes), `school-supplier` (suppliers), `user` (accounts), được nối tại routes/index.ts và giữ quyền riêng. `supplier-certification` sở hữu `/suppliers/:supplierId/certifications` và endpoint `/supplier-certifications/:id/documents/:documentId`.
+
+Hai list đơn vị nhận search/status và trả contact/total; nhóm con phân trang riêng. Services dùng scope từ resource-access và helper read-transaction để count/items cùng snapshot; repositories nhận cùng transaction và áp scope vào WHERE. Metadata minh chứng được batch theo hồ sơ, không thêm schema. Xem [hợp đồng API](../../specs/006-school-supplier-admin/contracts/admin-directory.md).

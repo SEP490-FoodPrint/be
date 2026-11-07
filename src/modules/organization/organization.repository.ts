@@ -21,6 +21,21 @@ export type SchoolListDbRow = Prisma.SchoolGetPayload<{
   select: typeof schoolListSelect;
 }>;
 
+const directorySelect = {
+  ...schoolListSelect,
+  email: true,
+  phone: true,
+  address: true,
+} as const satisfies Prisma.SchoolSelect;
+export type SchoolDirectoryRow = Prisma.SchoolGetPayload<{
+  select: typeof directorySelect;
+}>;
+interface DirectoryFilter {
+  page: number;
+  limit: number;
+  search?: string;
+  status?: "ACTIVE" | "INACTIVE";
+}
 export const publicSchoolInclude = {
   location: {
     include: {
@@ -147,6 +162,20 @@ export interface RawPortionGroup {
 }
 
 export interface OrganizationRepository {
+  listDirectory?(
+    tx: Prisma.TransactionClient,
+    scope: Prisma.SchoolWhereInput,
+    q: DirectoryFilter,
+  ): Promise<{ items: SchoolDirectoryRow[]; total: number }>;
+  summary?(
+    tx: Prisma.TransactionClient,
+    scope: Prisma.SchoolWhereInput,
+  ): Promise<{ total: number; activeCount: number }>;
+  detail?(
+    tx: Prisma.TransactionClient,
+    scope: Prisma.SchoolWhereInput,
+    id: string,
+  ): Promise<SchoolDirectoryRow | null>;
   findCookingMode(
     schoolId: string,
   ): Promise<{ cookingMode: CookingMode | null }>;
@@ -188,6 +217,46 @@ export function createOrganizationRepository(
   getClient: () => Promise<PrismaClient> = getPrisma,
 ): OrganizationRepository {
   return {
+    async listDirectory(tx, scope, q) {
+      const search = q.search?.replace(/[\\%_]/g, "\\$&");
+      const where: Prisma.SchoolWhereInput = {
+        AND: [
+          scope,
+          q.status ? { status: q.status } : {},
+          search
+            ? {
+                OR: [
+                  { name: { contains: search, mode: "insensitive" } },
+                  { code: { contains: search, mode: "insensitive" } },
+                ],
+              }
+            : {},
+        ],
+      };
+      const total = await tx.school.count({ where });
+      const items = await tx.school.findMany({
+        where,
+        select: directorySelect,
+        skip: (q.page - 1) * q.limit,
+        take: q.limit,
+        orderBy: { id: "asc" },
+      });
+      return { items, total };
+    },
+    async summary(tx, scope) {
+      return {
+        total: await tx.school.count({ where: scope }),
+        activeCount: await tx.school.count({
+          where: { AND: [scope, { status: "ACTIVE" }] },
+        }),
+      };
+    },
+    detail(tx, scope, id) {
+      return tx.school.findFirst({
+        where: { AND: [scope, { id }] },
+        select: directorySelect,
+      });
+    },
     async findCookingMode(schoolId) {
       const prisma = await getClient();
       return prisma.school.findUniqueOrThrow({

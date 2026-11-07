@@ -6,7 +6,10 @@ import {
   reviewVersion,
   type ReviewRow,
 } from "../src/modules/auth/registration-review";
-import { reviewEmail } from "../src/modules/auth/registration-review-email";
+import {
+  reviewEmail,
+  submissionEmail,
+} from "../src/modules/auth/registration-review-email";
 
 const row = {
   registrationNumber: 1n,
@@ -79,6 +82,23 @@ void test("review email uses the applicant address, escapes HTML and includes re
   const approved = reviewEmail(row);
   assert.match(approved.text, /kích hoạt/);
   assert(!approved.text.includes("Thiếu <giấy phép>"));
+  for (const mail of [approved, rejected]) {
+    assert.match(mail.text, /Hồ sơ FP-REG-00001/);
+    assert.match(mail.html, /Hồ sơ FP-REG-00001/);
+    assert.ok(!mail.text.includes(row.id));
+    assert.ok(!mail.html.includes(row.id));
+  }
+});
+
+void test("submission email confirms pending status with the public registration code and escaped applicant name", () => {
+  const mail = submissionEmail(row, row.applicantUser);
+  assert.equal(mail.recipientEmail, row.applicantUser.email);
+  assert.match(mail.text, /FP-REG-00001/);
+  assert.match(mail.text, /đang chờ xét duyệt/);
+  assert.ok(!mail.text.includes(row.id));
+  assert.ok(!mail.text.includes("đã được kích hoạt"));
+  assert.match(mail.html, /Người &lt;đăng ký&gt;/);
+  assert.ok(!mail.html.includes("<đăng ký>"));
 });
 
 void test("registration numbering leaves the prior review hash unchanged and never serializes bigint", () => {

@@ -16,3 +16,17 @@ export function createUserRouter(
 }
 
 export default createUserRouter();
+
+export function createUserSchoolRouter(
+  authHandler: RequestHandler = authenticate,
+  service: UserService = userService,
+) {
+  const router = Router({ mergeParams: true });
+  router.get(
+    "/",
+    authHandler,
+    requireResource("user"),
+    createUserController(service).getBySchool,
+  );
+  return router;
+}
