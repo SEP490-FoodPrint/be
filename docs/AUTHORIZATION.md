@@ -107,7 +107,7 @@ Mọi dòng đều yêu cầu một trong các permission liệt kê. SYSTEM có
 | `inspection`                  | `food_safety_incident.view`                                                        | SCHOOL, AUTHORITY            |
 | `supplier`                    | `supplier.view`, `supplier.manage`                                                 | SUPPLIER, SCHOOL             |
 | `authority`                   | `authority.view`, `food_safety_report.view`                                        | AUTHORITY                    |
-| `class`                       | `class.view`                                                                       | SCHOOL                       |
+| `class`                       | `class.view`; ghi phân công GVCN cần `class_assignment.manage`                     | SCHOOL                       |
 | `source-facility`             | `source_facility.manage`                                                           | SUPPLIER                     |
 | `supplier-certification`      | `supplier_certification.view`                                                      | SUPPLIER                     |
 | `registration`                | `registration.view`                                                                | Không                        |
