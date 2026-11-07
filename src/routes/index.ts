@@ -36,6 +36,7 @@ import { createTraceabilityRouter } from "../modules/traceability/traceability.r
 import { createMenuReviewRouter } from "../modules/menu-review/menu-review.routes";
 import { createSchoolOverviewRouter } from "../modules/school-overview/school-overview.routes";
 import { createSupplierOnboardingRouter } from "../modules/supplier-onboarding/supplier-onboarding.routes";
+import { createSchoolAcademicYearRouter } from "../modules/school-academic-year/school-academic-year.routes";
 
 export function createApiRouter(
   authHandler: RequestHandler = authenticate,
@@ -60,6 +61,10 @@ export function createApiRouter(
   router.use("/auth", createAuthRouter(undefined, authHandler, authServices));
   router.use("/users", createUserRouter(undefined, authHandler));
   router.use("/schools", createOrganizationRouter(undefined, authHandler));
+  router.use(
+    "/schools/me/academic-years",
+    createSchoolAcademicYearRouter(undefined, authHandler),
+  );
   router.use("/ingredients", createIngredientRouter(undefined, authHandler));
   router.use("/menus", createMenuRouter(undefined, authHandler));
   router.use(
