@@ -166,6 +166,10 @@ void test("organization service maps school rows correctly and respects paginati
   };
 
   const mockRepo: OrganizationRepository = {
+    findMealTimes: () =>
+      Promise.resolve({ lunchTime: null, afternoonMealTime: null }),
+    updateMealTimes: (_tx, _schoolId, lunchTime, afternoonMealTime) =>
+      Promise.resolve({ lunchTime, afternoonMealTime }),
     findCookingMode: () => Promise.resolve({ cookingMode: "SEPARATE_BY_LOT" }),
     updateCookingMode: (_tx, _schoolId, cookingMode) =>
       Promise.resolve({ cookingMode }),

@@ -147,6 +147,16 @@ export interface RawPortionGroup {
 }
 
 export interface OrganizationRepository {
+  findMealTimes(schoolId: string): Promise<{
+    lunchTime: Date | null;
+    afternoonMealTime: Date | null;
+  }>;
+  updateMealTimes(
+    tx: Prisma.TransactionClient,
+    schoolId: string,
+    lunchTime: Date | null,
+    afternoonMealTime: Date | null,
+  ): Promise<{ lunchTime: Date | null; afternoonMealTime: Date | null }>;
   findCookingMode(
     schoolId: string,
   ): Promise<{ cookingMode: CookingMode | null }>;
@@ -188,6 +198,22 @@ export function createOrganizationRepository(
   getClient: () => Promise<PrismaClient> = getPrisma,
 ): OrganizationRepository {
   return {
+    async findMealTimes(schoolId) {
+      const prisma = await getClient();
+      return prisma.school.findUniqueOrThrow({
+        where: { id: schoolId },
+        select: { lunchTime: true, afternoonMealTime: true },
+      });
+    },
+
+    updateMealTimes(tx, schoolId, lunchTime, afternoonMealTime) {
+      return tx.school.update({
+        where: { id: schoolId },
+        data: { lunchTime, afternoonMealTime },
+        select: { lunchTime: true, afternoonMealTime: true },
+      });
+    },
+
     async findCookingMode(schoolId) {
       const prisma = await getClient();
       return prisma.school.findUniqueOrThrow({

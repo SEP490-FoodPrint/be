@@ -16,6 +16,7 @@ import {
 } from "../../utils/date-time";
 import type {
   CookingModeRequestDTO,
+  MealTimesRequestDTO,
   OrganizationListRequestDTO,
   PublicSchoolListRequestDTO,
   PublicDailyMenuRequestDTO,
@@ -30,6 +31,7 @@ import type {
   PublicWeeklyMenuDTO,
   AvailableWeekSummaryDTO,
   CookingModeResponseDTO,
+  MealTimesResponseDTO,
   DishItemDTO,
   SnackItemDTO,
   PortionGroupDTO,
@@ -88,6 +90,39 @@ function mapSchoolToDTO(school: PublicSchoolDbRow): PublicSchoolDTO {
 }
 
 const COOKING_MODE_PERMISSION = "school_cooking_mode.manage";
+const MEAL_TIMES_PERMISSION = "school_meal_times.manage";
+
+function assertMealTimesManager(
+  principal: AuthPrincipal,
+): asserts principal is AuthPrincipal & { schoolId: string } {
+  assertPermission(principal, MEAL_TIMES_PERMISSION);
+  if (
+    principal.role !== ROLES.SCHOOL_MANAGEMENT_BOARD ||
+    principal.orgType !== "SCHOOL" ||
+    !principal.schoolId
+  )
+    throw new HttpError(403, "Chỉ Ban Giám hiệu được cấu hình giờ phục vụ");
+}
+
+function parseMealTime(value: string | null): Date | null {
+  if (!value) return null;
+  const [hours, minutes] = value.split(":").map(Number);
+  return new Date(Date.UTC(1970, 0, 1, hours, minutes));
+}
+
+function mapMealTimes(value: {
+  lunchTime: Date | null;
+  afternoonMealTime: Date | null;
+}): MealTimesResponseDTO {
+  const format = (time: Date | null) =>
+    time
+      ? `${String(time.getUTCHours()).padStart(2, "0")}:${String(time.getUTCMinutes()).padStart(2, "0")}`
+      : null;
+  return {
+    lunchTime: format(value.lunchTime),
+    afternoonMealTime: format(value.afternoonMealTime),
+  };
+}
 
 function assertCookingModeManager(
   principal: AuthPrincipal,
@@ -138,6 +173,35 @@ export function createOrganizationService(
     ): Promise<CookingModeResponseDTO> {
       assertCookingModeManager(principal);
       return data.findCookingMode(principal.schoolId);
+    },
+
+    async getMealTimes(
+      principal: AuthPrincipal,
+    ): Promise<MealTimesResponseDTO> {
+      assertMealTimesManager(principal);
+      return mapMealTimes(await data.findMealTimes(principal.schoolId));
+    },
+
+    async updateMealTimes(
+      input: MealTimesRequestDTO,
+      principal: AuthPrincipal,
+    ): Promise<MealTimesResponseDTO> {
+      assertMealTimesManager(principal);
+      const result = await withSchoolTransaction(
+        await getClient(),
+        principal,
+        MEAL_TIMES_PERMISSION,
+        (tx, actor, schoolId) => {
+          assertMealTimesManager(actor);
+          return data.updateMealTimes(
+            tx,
+            schoolId,
+            parseMealTime(input.lunchTime),
+            parseMealTime(input.afternoonMealTime),
+          );
+        },
+      );
+      return mapMealTimes(result);
     },
 
     // Mẻ đã lập giữ chế độ cũ; giá trị mới chỉ áp dụng cho kế hoạch nấu sau đó.
