@@ -74,7 +74,9 @@ function mapDetail(
   finalizedPortions: FinalizedPortionRow[],
 ): MenuApprovalDetailResponseDTO {
   const healthReview = menu.menuReviewRecords.find(
-    (review) => review.User.Role.code === ROLES.SCHOOL_HEALTH_OFFICER,
+    (review) =>
+      review.User.Role.code === ROLES.SCHOOL_NUTRITION_OFFICER ||
+      review.User.Role.code === ROLES.SCHOOL_HEALTH_OFFICER,
   );
   const boardReview =
     menu.status === "PENDING_APPROVAL"

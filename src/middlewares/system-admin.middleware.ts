@@ -28,7 +28,7 @@ export const schoolKitchenStaffOnly: RequestHandler[] = [
 export const schoolHealthStaffOnly: RequestHandler[] = [
   authenticate,
   requireOrg([ORG_TYPES.SCHOOL]),
-  requireRoles([ROLES.SCHOOL_HEALTH_OFFICER]),
+  requireRoles([ROLES.SCHOOL_NUTRITION_OFFICER, ROLES.SCHOOL_HEALTH_OFFICER]),
 ];
 
 /** Initial read-only samples; tenant-specific permissions need an approved policy. */
