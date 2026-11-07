@@ -112,6 +112,13 @@ export const INITIAL_PERMISSIONS = [
     description: "Tạo và cập nhật lịch niên khóa của trường trong phiên.",
   },
   {
+    code: "school_meal_time.manage",
+    name: "Cấu hình giờ phục vụ bữa ăn",
+    module: "school",
+    action: "manage_meal_time",
+    description: "Xem và cấu hình giờ phục vụ bữa trưa, bữa phụ của trường.",
+  },
+  {
     code: "school_user.manage",
     name: "Quản lý tài khoản nhân sự trường",
     module: "user",
@@ -622,6 +629,7 @@ export const INITIAL_ROLE_PERMISSIONS = [
   ["SCHOOL_MANAGEMENT_BOARD", "school_cooking_mode.manage"],
   ["SCHOOL_MANAGEMENT_BOARD", "school_academic_year.view"],
   ["SCHOOL_MANAGEMENT_BOARD", "school_academic_year.manage"],
+  ["SCHOOL_MANAGEMENT_BOARD", "school_meal_time.manage"],
   ["SCHOOL_KITCHEN_STAFF", "dashboard.view"],
   ["SCHOOL_KITCHEN_STAFF", "menu.view"],
   ["SCHOOL_KITCHEN_STAFF", "cooking_batch.view"],

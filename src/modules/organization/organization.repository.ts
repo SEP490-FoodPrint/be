@@ -155,6 +155,13 @@ export interface OrganizationRepository {
     schoolId: string,
     cookingMode: CookingMode,
   ): Promise<{ cookingMode: CookingMode | null }>;
+  findMealTimes(
+    schoolId: string,
+  ): Promise<{ lunchTime: Date | null; afternoonMealTime: Date | null }>;
+  updateMealTimes(
+    schoolId: string,
+    data: { lunchTime: Date | null; afternoonMealTime: Date | null },
+  ): Promise<{ lunchTime: Date | null; afternoonMealTime: Date | null }>;
   listSchools(
     query: ListQuery,
     principal: AuthPrincipal,
@@ -201,6 +208,23 @@ export function createOrganizationRepository(
         where: { id: schoolId },
         data: { cookingMode },
         select: { cookingMode: true },
+      });
+    },
+
+    async findMealTimes(schoolId) {
+      const prisma = await getClient();
+      return prisma.school.findUniqueOrThrow({
+        where: { id: schoolId },
+        select: { lunchTime: true, afternoonMealTime: true },
+      });
+    },
+
+    async updateMealTimes(schoolId, data) {
+      const prisma = await getClient();
+      return prisma.school.update({
+        where: { id: schoolId },
+        data,
+        select: { lunchTime: true, afternoonMealTime: true },
       });
     },
 
