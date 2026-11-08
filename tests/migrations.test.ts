@@ -171,7 +171,145 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
         ).rows[0].name,
         null,
       );
+      const legacySupplier = (
+        await db.query<{ id: string }>(
+          "INSERT INTO foodprint.suppliers(name) VALUES ('Category migration fixture') RETURNING id",
+        )
+      ).rows[0].id;
+      const oldCategories = [
+        null,
+        "",
+        "   ",
+        "Grains",
+        "Grains",
+        "grains",
+        " Grains ",
+      ];
+      const legacyIngredientIds: string[] = [];
+      for (const [index, category] of oldCategories.entries()) {
+        legacyIngredientIds.push(
+          (
+            await db.query<{ id: string }>(
+              "INSERT INTO foodprint.ingredients(supplier_id,name,default_unit,category) VALUES ($1,$2,'kg',$3) RETURNING id",
+              [legacySupplier, "Category fixture " + index, category],
+            )
+          ).rows[0].id,
+        );
+      }
+      const linkedEntry = (
+        await db.query<{ id: string }>(
+          "INSERT INTO foodprint.ingredient_entries(school_id,ingredient_id,handling_type) VALUES ($1,$2,'DRY_STOCK') RETURNING id",
+          [schoolId, legacyIngredientIds[3]],
+        )
+      ).rows[0].id;
+      const otherSupplier = (
+        await db.query<{ id: string }>(
+          "INSERT INTO foodprint.suppliers(name) VALUES ('Other category supplier') RETURNING id",
+        )
+      ).rows[0].id;
+      const otherIngredient = (
+        await db.query<{ id: string }>(
+          "INSERT INTO foodprint.ingredients(supplier_id,name,default_unit,category) VALUES ($1,'Other grains','kg','Grains') RETURNING id",
+          [otherSupplier],
+        )
+      ).rows[0].id;
       await runPrisma(url, ["migrate", "deploy"]);
+      const converted = await db.query<{
+        id: string;
+        supplier_id: string;
+        category_name: string | null;
+        cover_image: string | null;
+        image_description: string[];
+        category_id: string | null;
+      }>(
+        "SELECT i.id,i.supplier_id,i.category_id,c.category_name,i.cover_image,i.image_description FROM foodprint.ingredients i LEFT JOIN foodprint.ingredient_categories c ON c.id=i.category_id WHERE i.supplier_id=$1 ORDER BY i.name",
+        [legacySupplier],
+      );
+      assert.deepEqual(
+        converted.rows.map((r) => r.id),
+        legacyIngredientIds,
+      );
+      assert.deepEqual(
+        converted.rows.map((r) => r.category_name),
+        [null, null, null, "Grains", "Grains", "grains", " Grains "],
+      );
+      assert.equal(
+        converted.rows[3].category_id,
+        converted.rows[4].category_id,
+      );
+      assert.equal(
+        (
+          await db.query<{ category_id: string }>(
+            "SELECT category_id FROM foodprint.ingredients WHERE id=$1",
+            [otherIngredient],
+          )
+        ).rows[0].category_id,
+        converted.rows[3].category_id,
+      );
+
+      assert(
+        converted.rows.every(
+          (r) =>
+            r.supplier_id === legacySupplier &&
+            r.cover_image === null &&
+            r.image_description.length === 0,
+        ),
+      );
+      assert.equal(
+        (
+          await db.query<{ ingredient_id: string }>(
+            "SELECT ingredient_id FROM foodprint.ingredient_entries WHERE id=$1",
+            [linkedEntry],
+          )
+        ).rows[0].ingredient_id,
+        legacyIngredientIds[3],
+      );
+      assert.deepEqual(
+        (
+          await db.query<{ column_name: string }>(
+            "SELECT column_name FROM information_schema.columns WHERE table_schema='foodprint' AND table_name='ingredient_categories' ORDER BY ordinal_position",
+          )
+        ).rows.map((r) => r.column_name),
+        ["id", "category_name", "category_description"],
+      );
+      await assert.rejects(
+        () =>
+          db.query("DELETE FROM foodprint.ingredient_categories WHERE id=$1", [
+            converted.rows[3].category_id,
+          ]),
+        (error) => sqlState(error, "23503") || sqlState(error, "23001"),
+      );
+      await assert.rejects(
+        () =>
+          db.query(
+            "INSERT INTO foodprint.ingredient_categories(category_name) VALUES ('  ')",
+          ),
+        (error) => sqlState(error, "23514"),
+      );
+      await assert.rejects(
+        () =>
+          db.query(
+            "UPDATE foodprint.ingredients SET image_description=ARRAY[NULL]::text[] WHERE id=$1",
+            [legacyIngredientIds[0]],
+          ),
+        (error) => sqlState(error, "23514"),
+      );
+      await db.query("DELETE FROM foodprint.ingredients WHERE supplier_id=$1", [
+        otherSupplier,
+      ]);
+      await db.query("DELETE FROM foodprint.suppliers WHERE id=$1", [
+        otherSupplier,
+      ]);
+      // Keep the existing authorization-cardinality assertions isolated from this fixture.
+      await db.query("DELETE FROM foodprint.ingredient_entries WHERE id=$1", [
+        linkedEntry,
+      ]);
+      await db.query("DELETE FROM foodprint.ingredients WHERE supplier_id=$1", [
+        legacySupplier,
+      ]);
+      await db.query("DELETE FROM foodprint.suppliers WHERE id=$1", [
+        legacySupplier,
+      ]);
       const preserved = await db.query<{
         role_id: string;
         role_code: string;

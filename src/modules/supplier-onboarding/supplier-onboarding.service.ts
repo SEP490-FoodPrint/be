@@ -41,7 +41,7 @@ const contractInclude = {
         select: {
           id: true,
           name: true,
-          category: true,
+          ingredientCategory: { select: { categoryName: true } },
           defaultUnit: true,
           status: true,
         },
@@ -85,6 +85,16 @@ function contractDto(contract: ContractRow) {
   const issues = currentContractIssues(contract, schoolToday());
   return {
     ...contract,
+    items: contract.items.map((item) => {
+      const { ingredientCategory, ...ingredient } = item.ingredient;
+      return {
+        ...item,
+        ingredient: {
+          ...ingredient,
+          category: ingredientCategory?.categoryName ?? null,
+        },
+      };
+    }),
     issues,
     eligible: contract.status === "ACTIVE" && issues.length === 0,
   };
@@ -224,7 +234,10 @@ export async function directory(principal: AuthPrincipal, query: Filters) {
     ];
   if (query.category)
     where.ingredients = {
-      some: { category: query.category, status: "ACTIVE" },
+      some: {
+        ingredientCategory: { categoryName: query.category },
+        status: "ACTIVE",
+      },
     };
   let provinceId = query.provinceId;
   if (
@@ -283,8 +296,8 @@ export async function directory(principal: AuthPrincipal, query: Filters) {
         serviceAreas: { include: { location: true } },
         ingredients: {
           where: { status: "ACTIVE" },
-          select: { category: true },
-          distinct: ["category"],
+          select: { ingredientCategory: { select: { categoryName: true } } },
+          distinct: ["categoryId"],
         },
         schoolSupplierRelationships: {
           where: { schoolId, status: { in: ["ACTIVE", "SUSPENDED"] } },
@@ -297,6 +310,9 @@ export async function directory(principal: AuthPrincipal, query: Filters) {
   return {
     items: rows.map(({ schoolSupplierRelationships, ...row }) => ({
       ...row,
+      ingredients: row.ingredients.map(({ ingredientCategory }) => ({
+        category: ingredientCategory?.categoryName ?? null,
+      })),
       relationship: schoolSupplierRelationships[0] || null,
     })),
     pagination: {
@@ -333,13 +349,15 @@ export async function categories(principal: AuthPrincipal) {
   const rows = await (
     await getPrisma()
   ).ingredient.findMany({
-    where: { status: "ACTIVE", category: { not: null } },
-    select: { category: true },
-    distinct: ["category"],
-    orderBy: { category: "asc" },
+    where: { status: "ACTIVE", categoryId: { not: null } },
+    select: { ingredientCategory: { select: { categoryName: true } } },
+    distinct: ["categoryId"],
+    orderBy: { ingredientCategory: { categoryName: "asc" } },
     take: 200,
   });
-  return rows.map((row) => row.category).filter(Boolean);
+  return rows
+    .map((row) => row.ingredientCategory?.categoryName)
+    .filter(Boolean);
 }
 
 export async function supplierDetail(
@@ -358,7 +376,21 @@ export async function supplierDetail(
     include: {
       location: { include: { parent: true } },
       serviceAreas: { include: { location: true } },
-      ingredients: { where: { status: "ACTIVE" }, orderBy: { name: "asc" } },
+      ingredients: {
+        where: { status: "ACTIVE" },
+        orderBy: { name: "asc" },
+        select: {
+          id: true,
+          supplierId: true,
+          name: true,
+          defaultUnit: true,
+          description: true,
+          status: true,
+          createdAt: true,
+          updatedAt: true,
+          ingredientCategory: { select: { categoryName: true } },
+        },
+      },
       supplierCertifications: { orderBy: { createdAt: "desc" } },
       sourceFacilities: {
         where: { status: "ACTIVE" },
@@ -391,7 +423,15 @@ export async function supplierDetail(
       })
     : [];
   return {
-    supplier,
+    supplier: {
+      ...supplier,
+      ingredients: supplier.ingredients.map(
+        ({ ingredientCategory, ...ingredient }) => ({
+          ...ingredient,
+          category: ingredientCategory?.categoryName ?? null,
+        }),
+      ),
+    },
     relationships: canRead
       ? relationships
       : relationships.map(({ id, status }) => ({ id, status })),

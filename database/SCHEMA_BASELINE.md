@@ -241,3 +241,13 @@ MIGRATION_TEST_DATABASE_URL='<local-test-url>' npm run test:authorization
 URL test phải trỏ loopback và database có tên `foodprint_migration_test` hoặc `foodprint_migration_test_<suffix>`, chưa có schema `foodprint`. Test không drop/reset database hoặc xóa volume. Nó kiểm tra replay baseline, phát hiện CHECK bị thiếu, nhận baseline trên database có dữ liệu mẫu để chứng minh dữ liệu được giữ, deploy/redeploy, drift bằng 0, fresh deploy và các tổ hợp tổ chức hợp lệ/không hợp lệ.
 
 CI dựng PostgreSQL 18 tạm cho job migration và integration phân quyền, tách khỏi database thực; job này tự generate Prisma Client trước khi test. Check bắt buộc `Backend quality` tổng hợp kết quả code quality và job PostgreSQL; một nhánh lỗi hoặc bị bỏ qua sẽ làm check tổng hợp thất bại. Sau khi CI của push vào `dev` PASS, workflow CD có thể triển khai pending migrations bằng environment `azure-dev` đã cấu hình. `npm run db:deploy:check` chỉ đọc, xác nhận đúng host/database/schema/SSL và đối chiếu checksum mọi migration đã applied. CD dừng nếu chưa nhận baseline, có migration lỗi, file bị sửa/xóa hoặc database đi trước commit. CD không tự nhận baseline hay xử lý lỗi bằng reset/resolve. Xem [cấu hình và vận hành CD](../README.md#10-cd-migration-azure-từ-dev).
+
+## Migration quản lý nguyên liệu nhà cung cấp — spec 008
+
+Migration mới `20261108000100_supplier_ingredient_management` giữ nguyên baseline/lịch sử đã có. Nó tạo `foodprint.ingredient_categories` với đúng ba cột id/category_name/category_description, thay ingredients.category bằng category_id nullable (FK Restrict, index), thêm cover_image nullable TEXT và image_description NOT NULL TEXT[] mặc định rỗng.
+
+Backfill một danh mục cho mỗi chuỗi category cũ DISTINCT có ý nghĩa, giữ nguyên chữ và khoảng trắng bao quanh; null/chỉ khoảng trắng thành chưa phân loại. Migration kiểm tra mapping trước khi bỏ cột, thực hiện atomic và không tạo seed, stored function hoặc trigger. CHECK chặn tên danh mục rỗng và phần tử null trong mảng ảnh. Ingredient id, supplier ownership và liên kết nghiệp vụ được giữ nguyên.
+
+Đã kiểm chứng trên PostgreSQL 18 disposable riêng: nâng cấp có dữ liệu legacy, backfill, CHECK/FK, fresh deploy và không có Prisma schema drift qua integration supplier-onboarding. Chưa deploy migration này lên database thành viên hoặc Azure. Sinh Prisma Client không thay đổi trạng thái triển khai.
+
+Ứng dụng cũ vẫn truy vấn cột category nên không tương thích sau migration. Khi triển khai được phép, phối hợp cửa sổ bảo trì và phiên bản ứng dụng mới; không rolling hai phiên bản schema này. Không sửa migration đã applied hoặc reset dữ liệu để rollback.
