@@ -388,7 +388,9 @@ import type {
   DocumentStorage,
 } from "../src/utils/onboarding-documents";
 
-function editFixture(status: "PENDING" | "REJECTED" | "APPROVED" = "PENDING") {
+function editFixture(
+  status: "PENDING" | "REJECTED" | "APPROVED" | null = "PENDING",
+) {
   const userId = randomUUID(),
     requestId = randomUUID(),
     documentId = randomUUID();
@@ -406,7 +408,7 @@ function editFixture(status: "PENDING" | "REJECTED" | "APPROVED" = "PENDING") {
     registrationNumber: 1n,
     applicantUserId: userId,
     requestType: "SUPPLIER",
-    status,
+    status: status ?? "PENDING",
     profileData: {
       name: "Supplier",
       certifications: [{ certificationType: "ISO", certificateNo: "ISO-2" }],
@@ -437,6 +439,12 @@ function editFixture(status: "PENDING" | "REJECTED" | "APPROVED" = "PENDING") {
   const removed: string[] = [],
     uploaded: string[] = [];
   let writes = 0;
+  let emailFailure = false;
+  const notifications: {
+    registrationId: string;
+    recipientEmail: string;
+    text: string;
+  }[] = [];
   const storage: DocumentStorage = {
     upload(_id, file) {
       const id = randomUUID();
@@ -467,12 +475,28 @@ function editFixture(status: "PENDING" | "REJECTED" | "APPROVED" = "PENDING") {
         }),
     },
     registrationRequest: {
-      findUnique: () => Promise.resolve(structuredClone(row)),
+      findUnique: () => Promise.resolve(status ? structuredClone(row) : null),
+      create({ data }: { data: Record<string, unknown> }) {
+        writes++;
+        return Promise.resolve({ ...row, ...data, updatedAt: new Date() });
+      },
       update({ data }: { data: Record<string, unknown> }) {
         assert(!("registrationNumber" in data));
         assert(!("registrationID" in data));
         writes++;
         return Promise.resolve({ ...row, ...data, updatedAt: new Date() });
+      },
+    },
+    emailOutbox: {
+      create({
+        data,
+      }: {
+        data: { registrationId: string; recipientEmail: string; text: string };
+      }) {
+        if (emailFailure)
+          return Promise.reject(new Error("Outbox unavailable"));
+        notifications.push(data);
+        return Promise.resolve({ id: randomUUID(), status: "PENDING" });
       },
     },
   };
@@ -486,6 +510,10 @@ function editFixture(status: "PENDING" | "REJECTED" | "APPROVED" = "PENDING") {
     document,
     removed,
     uploaded,
+    notifications,
+    failEmail: () => {
+      emailFailure = true;
+    },
     storage,
     writes: () => writes,
     service: {
@@ -534,6 +562,7 @@ void test("pending edits keep the same application and remap retained certificat
   assert.equal(fixture.writes(), 1);
   assert.deepEqual(fixture.removed, []);
   assert.deepEqual(fixture.uploaded, []);
+  assert.equal(fixture.notifications.length, 0);
 });
 
 void test("rejected edits still clear review outcomes and preserve selected stored files", async () => {
@@ -546,6 +575,50 @@ void test("rejected edits still clear review outcomes and preserve selected stor
   assert.equal(result.rejectionReason, null);
   assert.equal(result.reviewedAt, null);
   assert.deepEqual(fixture.removed, []);
+  assert.equal(fixture.notifications.length, 1);
+  assert.equal(fixture.notifications[0]?.registrationId, fixture.row.id);
+});
+
+void test("first submission queues one email to the freshly loaded account rather than the form or stale session", async () => {
+  const fixture = editFixture(null);
+  const result = await fixture.service.submit(
+    { ...fixture.user, email: "old-session@example.test" },
+    {
+      name: "Supplier",
+      email: "organization@example.test",
+      certifications: [],
+    },
+  );
+  assert.equal(result.status, "PENDING");
+  assert.equal(fixture.notifications.length, 1);
+  assert.equal(fixture.notifications[0]?.recipientEmail, fixture.user.email);
+  assert.match(fixture.notifications[0]?.text ?? "", /FP-REG-00001/);
+});
+
+void test("submission outbox failure rejects the transaction and cleans only newly uploaded files", async () => {
+  const fixture = editFixture("REJECTED");
+  fixture.failEmail();
+  await assert.rejects(
+    fixture.service.submit(fixture.user, retainedBody(fixture), [
+      file("certificate_0"),
+    ]),
+    (error: unknown) => error instanceof HttpError && error.statusCode === 503,
+  );
+  assert.deepEqual(fixture.removed, fixture.uploaded);
+  assert.equal(fixture.notifications.length, 0);
+  assert.ok(!fixture.removed.includes(fixture.document.id));
+});
+
+void test("school first submission also queues a pending confirmation without creating an organization", async () => {
+  const fixture = editFixture(null);
+  fixture.user.orgType = "SCHOOL";
+  fixture.user.role = "SCHOOL_ADMINISTRATION";
+  fixture.row.requestType = "SCHOOL";
+  const result = await fixture.service.submit(fixture.user, { name: "School" });
+  assert.equal(result.requestType, "SCHOOL");
+  assert.equal(result.accountStatus, "UNVERIFIED");
+  assert.equal(fixture.notifications.length, 1);
+  assert.equal(fixture.notifications[0]?.recipientEmail, fixture.user.email);
 });
 
 void test("foreign document IDs and stale form versions fail before any upload or write", async () => {

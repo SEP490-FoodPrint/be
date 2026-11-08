@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomInt, randomUUID } from "node:crypto";
 import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
@@ -92,36 +92,45 @@ void test("registration numbers are unique across concurrent real submissions an
     async () => {
       let retries = 0;
       const settled = await Promise.allSettled(
-        principals.slice(0, 100).map(async (user, index) => {
+        principals.slice(0, 100).map(async (user) => {
           const input = validateSubmission(
             { name: user.fullName },
             user.orgType === "SCHOOL" ? "SCHOOL" : "SUPPLIER",
           );
+          const retryDeadline = Date.now() + 30_000;
           for (let attempt = 0; ; attempt++) {
             try {
               return await service.submit(user, input);
             } catch (error) {
-              // Existing Serializable retries are bounded. Model a caller retrying the
-              // documented 503, without changing runtime isolation or retry policy.
+              // Model bounded caller retries of the documented transient 503.
+              // Jitter avoids synchronizing 100 callers after Serializable conflicts;
+              // runtime isolation, transaction retries and uniqueness checks stay intact.
               if (
                 !(error instanceof HttpError) ||
                 error.statusCode !== 503 ||
-                attempt >= 5
+                attempt >= 20 ||
+                Date.now() >= retryDeadline
               )
                 throw error;
               retries++;
-              await delay(25 * (attempt + 1) + (index % 17));
+              const backoff = Math.min(1000, 50 * 2 ** Math.min(attempt, 5));
+              await delay(
+                Math.min(
+                  randomInt(Math.ceil(backoff / 2), backoff + 1),
+                  Math.max(1, retryDeadline - Date.now()),
+                ),
+              );
             }
           }
         }),
+      );
+      context.diagnostic(
+        `100 concurrent logical submissions; ${retries} client retries of existing transient 503 responses; ${settled.filter((result) => result.status === "rejected").length} failed callers`,
       );
       const results = settled.map((result) => {
         if (result.status === "rejected") throw result.reason;
         return result.value;
       });
-      context.diagnostic(
-        `100 concurrent logical submissions; ${retries} client retries of existing transient 503 responses`,
-      );
       assert.equal(results.length, 100);
       assert.equal(new Set(results.map((row) => row.registrationID)).size, 100);
       for (const row of results) {
@@ -268,7 +277,7 @@ void test("registration numbers are unique across concurrent real submissions an
       assert.equal(approved.id, submitted.id);
       assert.equal(
         await db.emailOutbox.count({ where: { registrationId: submitted.id } }),
-        2,
+        4,
       );
       const { store } = memorySessions();
       const sessions = createSessionService(

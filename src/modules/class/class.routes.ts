@@ -16,3 +16,17 @@ export function createClassRouter(
 }
 
 export default createClassRouter();
+
+export function createClassSchoolRouter(
+  authHandler: RequestHandler = authenticate,
+  service: ClassService = classService,
+) {
+  const router = Router({ mergeParams: true });
+  router.get(
+    "/",
+    authHandler,
+    requireResource("class"),
+    createClassController(service).getBySchool,
+  );
+  return router;
+}

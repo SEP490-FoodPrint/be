@@ -60,11 +60,9 @@ npm run dev
 
 `db:check` chỉ kết nối và chạy `SELECT 1`, sau đó đóng Prisma Client. `redis:check` gửi `PING` và đóng Redis client. API chỉ mở cổng sau khi PostgreSQL và Redis đã sẵn sàng; lỗi kết nối thì startup thất bại. SIGINT/SIGTERM đóng HTTP rồi đóng cả hai kết nối.
 
-Worker gửi email kết quả xét duyệt hồ sơ là process riêng; chạy ở terminal khác khi thử duyệt/từ chối và cần Redis cùng cấu hình Resend hợp lệ:
+Backend tự khởi động bộ xử lý email hồ sơ khi chạy `npm run dev` hoặc `npm start` sau build. Không cần mở terminal worker riêng. Bộ xử lý dùng Redis và cấu hình Resend, tự lấy thư từ outbox mỗi 5 giây và gửi bất đồng bộ; khi dừng backend sẽ chờ lượt dispatch/gửi đang chạy rồi đóng queue trước kết nối DB. Chạy backend cũng bắt đầu xử lý các email đang chờ, vì vậy dùng cấu hình người nhận/môi trường phù hợp khi thử nghiệm.
 
-```bash
-npm run worker:email
-```
+Lệnh `npm run worker:email` vẫn có thể chạy bộ xử lý độc lập khi cần vận hành riêng; không cần chạy thêm lệnh này trong cách chạy backend mặc định.
 
 Worker dùng outbox trong PostgreSQL, không nhận nội dung hồ sơ qua Redis. Xem [hợp đồng hồ sơ và vận hành outbox](docs/ONBOARDING.md#thông-báo-kết-quả-xét-duyệt).
 

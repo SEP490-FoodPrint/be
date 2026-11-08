@@ -8,6 +8,8 @@ import {
 } from "./organization.service";
 import {
   validateCookingMode,
+  validateOrganizationSummaryQuery,
+  validateOrganizationDetailParams,
   validateOrganizationListQuery,
   validatePublicDailyMenuQuery,
   validatePublicSchoolQuery,
@@ -20,6 +22,15 @@ export function createOrganizationController(
   service: OrganizationService = organizationService,
 ) {
   return {
+    getSummary: asyncHandler(async (req, res) => {
+      const q = validateOrganizationSummaryQuery(req.query);
+      sendSuccess(res, await service.getSummary(q, requirePrincipal(req)));
+    }),
+    getById: asyncHandler(async (req, res) => {
+      validateOrganizationSummaryQuery(req.query);
+      const q = validateOrganizationDetailParams(req.params);
+      sendSuccess(res, await service.getById(q, requirePrincipal(req)));
+    }),
     getAll: asyncHandler(async (req, res) => {
       const query = validateOrganizationListQuery(req.query);
       const result = await service.getAll(query, requirePrincipal(req));

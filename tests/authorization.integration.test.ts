@@ -1,3 +1,5 @@
+import { documentStorage } from "../src/utils/onboarding-documents";
+import { withReadTransaction } from "../src/utils/read-transaction";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -360,6 +362,11 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
     },
     download: (document) => `https://documents.example.test/${document.id}`,
   };
+  context.mock.method(
+    documentStorage,
+    "download",
+    (document: OnboardingDocument) => testDocumentStorage.download(document),
+  );
   const http = await startHttp(
     createApp(
       createApiRateLimiter(store, { windowMs: 60_000, limit: 5000 }),
@@ -1282,6 +1289,161 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       headers: headers(id),
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
+  await context.test(
+    "directory filtered totals, literal search and independent summary",
+    async () => {
+      const marker = `directory-${randomUUID()}-%_`;
+      await db.school.createMany({
+        data: Array.from({ length: 100 }, (_, index) => ({
+          name: `${marker}-${index}`,
+          status: index < 85 ? ("ACTIVE" as const) : ("INACTIVE" as const),
+        })),
+      });
+      const first = await request(
+        `/api/schools?limit=5&search=${encodeURIComponent(marker)}&status=ACTIVE`,
+        system.id,
+      );
+      assert.equal(first.status, 200);
+      const data = record(record(first.body).data);
+      assert.equal(record(data.pagination).total, 85);
+      assert.equal(rows(first.body).length, 5);
+      const last = await request(
+        `/api/schools?page=18&limit=5&search=${encodeURIComponent(marker)}&status=ACTIVE`,
+        system.id,
+      );
+      assert.equal(rows(last.body).length, 0);
+      assert.equal(
+        record(record(record(last.body).data).pagination).hasNext,
+        false,
+      );
+      const summary = await request("/api/schools/summary", system.id);
+      assert.equal(summary.status, 200);
+      assert(Number(record(record(summary.body).data).total) >= 100);
+      assert.equal(
+        (await request("/api/schools/summary", adminA.id)).status,
+        403,
+      );
+    },
+  );
+  await context.test(
+    "directory details and child scopes remain independent",
+    async () => {
+      const school = await db.school.create({
+        data: { name: "Directory inactive", status: "INACTIVE" },
+      });
+      assert.equal(
+        (await request(`/api/schools/${school.id}`, system.id)).status,
+        200,
+      );
+      assert.equal(
+        (await request(`/api/schools/${school.id}`, adminA.id)).status,
+        404,
+      );
+      for (const group of ["classes", "suppliers", "accounts"]) {
+        const response = await request(
+          `/api/schools/${school.id}/${group}`,
+          system.id,
+        );
+        assert.equal(response.status, 200, `School detail group: ${group}`);
+        assert.equal(
+          record(record(record(response.body).data).pagination).total,
+          0,
+        );
+      }
+      const supplier = await db.supplier.create({
+        data: { name: "Directory supplier inactive", status: "INACTIVE" },
+      });
+      assert.equal(
+        (await request(`/api/suppliers/${supplier.id}`, system.id)).status,
+        200,
+      );
+      const certificates = await request(
+        `/api/suppliers/${supplier.id}/certifications`,
+        system.id,
+      );
+      assert.equal(certificates.status, 200);
+      assert.equal(
+        record(record(record(certificates.body).data).pagination).total,
+        0,
+      );
+      await withReadTransaction(async (tx) => {
+        const before = await tx.school.findUniqueOrThrow({
+          where: { id: school.id },
+        });
+        await db.school.update({
+          where: { id: school.id },
+          data: { name: "Directory changed" },
+        });
+        const after = await tx.school.findUniqueOrThrow({
+          where: { id: school.id },
+        });
+        assert.equal(after.name, before.name);
+      });
+      assert.equal(
+        (await db.school.findUniqueOrThrow({ where: { id: school.id } })).name,
+        "Directory changed",
+      );
+    },
+  );
+  await context.test(
+    "supplier directory searches codes and literal backslashes before pagination",
+    async () => {
+      const marker = `directory-supplier-${randomUUID()}`;
+      const summaryBefore = await request("/api/suppliers/summary", system.id);
+      const before = record(record(summaryBefore.body).data);
+      await db.supplier.createMany({
+        data: Array.from({ length: 100 }, (_, i) => ({
+          name: `${marker}-${i}`,
+          taxCode: `${marker}-code-${i}`,
+          status: i < 85 ? ("ACTIVE" as const) : ("INACTIVE" as const),
+        })),
+      });
+      const summaryAfter = await request("/api/suppliers/summary", system.id);
+      const after = record(record(summaryAfter.body).data);
+      assert.equal(Number(after.total) - Number(before.total), 100);
+      assert.equal(Number(after.activeCount) - Number(before.activeCount), 85);
+      const byCode = await request(
+        `/api/suppliers?search=${marker}-code-99`,
+        system.id,
+      );
+      assert.equal(rows(byCode.body).length, 1);
+      for (const endpoint of ["schools", "suppliers"]) {
+        const prefix = `${marker}-twelve`;
+        if (endpoint === "schools")
+          await db.school.createMany({
+            data: Array.from({ length: 12 }, (_, i) => ({
+              name: `${prefix}-${i}`,
+            })),
+          });
+        else
+          await db.supplier.createMany({
+            data: Array.from({ length: 12 }, (_, i) => ({
+              name: `${prefix}-${i}`,
+            })),
+          });
+        const seen = new Set<string>();
+        for (let page = 1; page <= 3; page++) {
+          const result = await request(
+            `/api/${endpoint}?search=${prefix}&page=${page}&limit=5`,
+            system.id,
+          );
+          assert.equal(result.status, 200);
+          const items = rows(result.body);
+          assert.equal(items.length, page === 3 ? 2 : 5);
+          const pagination = record(
+            record(record(result.body).data).pagination,
+          );
+          assert.equal(pagination.total, 12);
+          assert.equal(pagination.hasNext, page < 3);
+          for (const item of items) {
+            assert(!seen.has(String(item.id)));
+            seen.add(String(item.id));
+          }
+        }
+        assert.equal(seen.size, 12);
+      }
+    },
+  );
   const applicationCodes = new Map<string, string>();
   const reviewVersion = async (id: string) => {
     const response = await request(
@@ -2428,6 +2590,10 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       assert.equal(data.status, "PENDING");
       assert.equal(data.rejectionReason, null);
       assert.equal(data.reviewedAt, null);
+      const notificationsBeforeStaleReview = await db.emailOutbox.count({
+        where: { registrationId: id },
+      });
+      assert.equal(notificationsBeforeStaleReview, 3);
       const staleReview = await request(
         `/api/registration-requests/${id}/approve`,
         system.id,
@@ -2441,7 +2607,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       );
       assert.equal(
         await db.emailOutbox.count({ where: { registrationId: id } }),
-        1,
+        notificationsBeforeStaleReview,
       );
       assert.equal(
         await db.registrationRequest.count({
@@ -2617,6 +2783,9 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
     async () => {
       for (const type of ["SCHOOL", "SUPPLIER"]) {
         const id = applicationId(type);
+        const notificationsBeforeApproval = await db.emailOutbox.count({
+          where: { registrationId: id },
+        });
         const results = await Promise.all([
           request(
             `/api/registration-requests/${id}/approve`,
@@ -2658,7 +2827,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         );
         assert.equal(
           await db.emailOutbox.count({ where: { registrationId: id } }),
-          2,
+          notificationsBeforeApproval + 1,
         );
         const account = onboardingAccounts.get(type);
         assert(account);
@@ -2731,6 +2900,30 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
                 document.id !== documentId,
             );
           assert(sibling);
+          const certificateList = await request(
+            `/api/suppliers/${after.supplierId}/certifications`,
+            system.id,
+          );
+          assert.equal(certificateList.status, 200);
+          const listed = rows(certificateList.body);
+          assert.equal(listed.length, 2);
+          assert(
+            listed.some(
+              (item) =>
+                Array.isArray(item.documents) && item.documents.length === 2,
+            ),
+          );
+          const cert = certificates.find((item) =>
+            item.documentUrl?.endsWith(`/${documentId}`),
+          );
+          assert(cert);
+          const opened = await request(
+            `/api/supplier-certifications/${cert.id}/documents/${documentId}`,
+            system.id,
+          );
+          assert.equal(opened.status, 200);
+          assert.equal(opened.headers.get("cache-control"), "no-store");
+
           const sameTenantStaff = await user("INGREDIENT_SUPPLIER_STAFF", {
             supplierId: after.supplierId!,
           });

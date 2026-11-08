@@ -1,5 +1,5 @@
 import type { AuthPrincipal } from "../../types/auth";
-import { ROLES } from "../../constants/roles";
+import { ROLES, ORG_TYPES } from "../../constants/roles";
 import type { PrismaClient } from "../../generated/prisma/client";
 import {
   assertPermission,
@@ -7,7 +7,8 @@ import {
 } from "../../utils/authorization";
 import { getPrisma } from "../../utils/database";
 import { HttpError } from "../../utils/http-error";
-import { readListPage } from "../../utils/list-query";
+import { withReadTransaction } from "../../utils/read-transaction";
+import { listScopes } from "../../utils/resource-access";
 import {
   formatDateDMY,
   formatTimeString,
@@ -17,12 +18,16 @@ import {
 import type {
   CookingModeRequestDTO,
   OrganizationListRequestDTO,
+  OrganizationSummaryRequestDTO,
+  OrganizationDetailRequestDTO,
   PublicSchoolListRequestDTO,
   PublicDailyMenuRequestDTO,
   PublicWeeklyMenuRequestDTO,
 } from "./organization.request.dto";
 import type {
   OrganizationListResponseDTO,
+  OrganizationListItemResponseDTO,
+  OrganizationSummaryResponseDTO,
   PublicSchoolDTO,
   PublicSchoolListResult,
   PublicLocationDTO,
@@ -39,8 +44,24 @@ import {
   createOrganizationRepository,
   type OrganizationRepository,
   type PublicSchoolDbRow,
+  type SchoolDirectoryRow,
 } from "./organization.repository";
 
+function mapDirectory(
+  row: SchoolDirectoryRow,
+): OrganizationListItemResponseDTO {
+  return {
+    id: row.id,
+    name: row.name,
+    code: row.code,
+    email: row.email,
+    phone: row.phone,
+    address: row.address,
+    status: row.status,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
 function mapSchoolToDTO(school: PublicSchoolDbRow): PublicSchoolDTO {
   const district = school.location?.name || null;
   const city = school.location?.parent?.name || "Hà Nội";
@@ -108,29 +129,50 @@ export function createOrganizationService(
   const data = repository ?? createOrganizationRepository(getClient);
   return {
     async getAll(
-      query: OrganizationListRequestDTO,
-      principal: AuthPrincipal,
+      q: OrganizationListRequestDTO,
+      p: AuthPrincipal,
     ): Promise<OrganizationListResponseDTO> {
-      const page = await readListPage(
-        () => data.listSchools(query, principal),
-        query,
-      );
-
-      return {
-        items: page.items.map((row) => ({
-          id: row.id,
-          name: row.name,
-          code: row.code,
-          status: row.status,
-          createdAt: row.createdAt.toISOString(),
-          updatedAt: row.updatedAt.toISOString(),
-        })),
-        pagination: {
-          page: page.pagination.page,
-          limit: page.pagination.limit,
-          hasNext: page.pagination.hasNext,
-        },
-      };
+      const scope = listScopes.organization(p);
+      return withReadTransaction(async (tx) => {
+        if (!data.listDirectory)
+          throw new HttpError(503, "Không thể tải danh sách");
+        const result = await data.listDirectory(tx, scope, q);
+        return {
+          items: result.items.map(mapDirectory),
+          pagination: {
+            page: q.page,
+            limit: q.limit,
+            total: result.total,
+            hasNext:
+              (q.page - 1) * q.limit + result.items.length < result.total,
+          },
+        };
+      }, getClient);
+    },
+    async getSummary(
+      _q: OrganizationSummaryRequestDTO,
+      p: AuthPrincipal,
+    ): Promise<OrganizationSummaryResponseDTO> {
+      const scope = listScopes.organization(p);
+      if (p.role !== ROLES.SYSTEM_ADMIN || p.orgType !== ORG_TYPES.SYSTEM)
+        throw new HttpError(403, "Chỉ System Admin được xem tổng quan");
+      return withReadTransaction(async (tx) => {
+        if (!data.summary) throw new HttpError(503, "Không thể tải tổng quan");
+        const counts = await data.summary(tx, scope);
+        return { total: counts.total, activeCount: counts.activeCount };
+      }, getClient);
+    },
+    async getById(
+      q: OrganizationDetailRequestDTO,
+      p: AuthPrincipal,
+    ): Promise<OrganizationListItemResponseDTO> {
+      const scope = listScopes.organization(p);
+      return withReadTransaction(async (tx) => {
+        if (!data.detail) throw new HttpError(503, "Không thể tải chi tiết");
+        const row = await data.detail(tx, scope, q.id);
+        if (!row) throw new HttpError(404, "Không tìm thấy trường học");
+        return mapDirectory(row);
+      }, getClient);
     },
 
     async getCookingMode(
