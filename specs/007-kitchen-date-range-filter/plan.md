@@ -43,3 +43,19 @@ Tác vụ chỉ lưu code đã được user xác nhận; kiến trúc query tro
 ## Verification before commit
 
 Ngày 08/11/2026, trước đồng bộ dev: typecheck PASS, build PASS, lint/Prettier hai file kitchen và định dạng spec PASS, test:unit PASS 189/189, git diff --check PASS. Chạy trên Node.js 22.15.0 hiện có; runtime chuẩn CI theo .nvmrc. Không báo validate toàn repo PASS vì chỉ kiểm tra định dạng trong phạm vi các file commit.
+
+## CI repair: registration concurrency
+
+- Evidence: job PostgreSQL `128622344196`, run `42445131696`, test registration-id thất bại sau caller retry 503; log service PostgreSQL có serialization conflicts. Code quality, Spec gate và migration test đã PASS.
+- Thay giới hạn caller hiện tại 5 lần retry với delay gần đồng bộ bằng tối đa 20 lần retry trong budget 30 giây. Delay exponential được cap 1 giây, có jitter bằng randomInt để các caller không đồng loạt thử lại.
+- Chỉ retry HttpError 503; hết số lần/thời gian vẫn throw lỗi gốc. Ghi số retry và số caller thất bại trước khi assertion để CI có chẩn đoán ngay cả khi test fail.
+- Giữ 100 Promise.allSettled, assert 100 mã duy nhất và count DB 100; các case rollback, boundary, lifecycle không đổi. Không điều chỉnh production authorizationTransaction hoặc giảm isolation.
+- Kiểm tra: lint/format/typecheck/build và chạy integration trên PostgreSQL 18 disposable hai lượt độc lập để đánh giá phần test vốn có timing sensitivity; mỗi lượt vẫn dùng database con mới. Không chạy test với DATABASE_URL Azure.
+- Constitution Check I–VI giữ phạm vi test/spec, không đổi contract HTTP/quyền/schema; ghi đúng kết quả local và chưa kết luận CI PASS khi bản sửa chưa được push.
+
+## CI repair verification — 08/11/2026
+
+- ESLint và Prettier cho test/spec thay đổi PASS; typecheck và build PASS. Spec gate với working tree và `git diff --check` PASS.
+- Chạy test registration-id hai lượt trên PostgreSQL 18.4 disposable tại cổng 55439, mỗi lượt tạo database con mới. Lượt 1: 5/5 tests PASS, 134 caller retries, 0 failed callers; lượt 2: 5/5 tests PASS, 110 caller retries, 0 failed callers. Cả hai giữ đủ 100 hồ sơ đồng thời, 100 mã duy nhất và DB count 100; các case rollback, boundary và lifecycle đều PASS.
+- Dùng snapshot mã nguồn Git cùng test đang sửa, dependency/client hiện có, không sao chép `.env`. Cụm thử nghiệm cũ thiếu thư mục nội bộ nên tạo cụm disposable mới; cụm mới được dừng sau hai lượt test.
+- Môi trường local Windows, Node.js 22.15.0; CI dùng runtime theo `.nvmrc`. Chưa push/chạy lại GitHub CI cho bản sửa này; kết quả local không thay thế kết quả CI mới. Không thực hiện thao tác với database Azure.

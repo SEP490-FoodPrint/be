@@ -20,3 +20,9 @@
 ## Dependencies
 
 T001 → T002 → T003/T004 → T005/T006. Sau kiểm tra, lưu spec trước code; giữ hooks và chuẩn Conventional Commits. Pull/rebase chỉ khi working tree sạch; đây là thao tác đồng bộ, không phải thay đổi hành vi tính năng.
+
+## CI repair
+
+- [x] T007 Đọc job/log run 42445131696 và xác nhận serialization conflicts trong test 100 hồ sơ; ghi FR-006 trong `specs/007-kitchen-date-range-filter/spec.md`.
+- [x] T008 Điều chỉnh caller retry 503 trong `tests/registration-id.integration.test.ts` sang bounded budget/exponential jitter; giữ toàn bộ concurrency và assertions hiện có.
+- [x] T009 Chạy lint/format, typecheck/build và hai lượt integration trên PostgreSQL disposable; ghi kết quả trong `specs/007-kitchen-date-range-filter/plan.md`.

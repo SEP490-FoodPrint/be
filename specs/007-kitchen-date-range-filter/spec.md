@@ -37,7 +37,8 @@ Người dùng có quyền xem danh sách mẻ nấu muốn lọc theo ngày th�
 - **FR-002**: Query danh sách MUST áp gte/lte lên ngày thực đơn khi có mốc tương ứng.
 - **FR-003**: Query MUST giữ date khi không có khoảng và ưu tiên khoảng khi hai loại cùng có mặt.
 - **FR-004**: Thay đổi MUST giữ nguyên tenant scope, quyền truy cập, response và schema database.
-- **FR-005**: Commit MUST chỉ lưu hai file kitchen đã được xác nhận cùng spec; không tự sửa các commit role local đã có.
+- **FR-005**: Commit bộ lọc ban đầu MUST chỉ lưu hai file kitchen đã được xác nhận cùng spec; không tự sửa các commit role local đã có.
+- **FR-006**: Bản sửa CI MUST giữ đủ 100 hồ sơ thực chạy đồng thời và kiểm tra mã duy nhất; chỉ ổn định caller retry của bài integration test khi nhận 503 bằng backoff có jitter, có giới hạn số lần và thời gian. Không đổi isolation/retry runtime, giảm số hồ sơ, bỏ assertion hoặc bỏ qua test.
 
 ### Key Entities
 
@@ -48,9 +49,16 @@ Người dùng có quyền xem danh sách mẻ nấu muốn lọc theo ngày th�
 - **SC-001**: Khoảng hai đầu, khoảng một đầu và date cũ được biểu diễn đúng trong query của implementation đã xác nhận.
 - **SC-002**: Thay đổi qua kiểm tra lint, format, kiểu và build; kết quả bộ test hiện hữu được ghi đúng thực tế.
 - **SC-003**: Code mới từ dev được đồng bộ, các commit và thay đổi local đã xác nhận được bảo toàn.
+- **SC-004**: Kiểm thử đăng ký thực vẫn xác minh 100 hồ sơ thành công có mã duy nhất; retry chỉ áp dụng 503 và kết thúc khi hết budget thay vì lặp vô hạn.
 
 ## Assumptions
 
 - Phạm vi là lưu và đồng bộ code đã làm xong, không thiết kế lại module kitchen hoặc mở rộng API thống kê.
 - Cấu trúc legacy kitchen hiện tại được giữ; không tự tách toàn bộ module chỉ trong tác vụ commit.
 - Không push hoặc triển khai database trong tác vụ này.
+
+## CI repair — 08/11/2026
+
+Run `42445131696` của PR nhánh 007: Code quality và Spec gate PASS, test:migrations PASS 10/10. Bước `test:registration-id` FAIL ở bài 100 hồ sơ đồng thời với HttpError 503; log PostgreSQL ghi serialization conflicts. Thông báo ubuntu-latest là notice, không phải lỗi gây dừng bài test.
+
+Phạm vi sửa FR-006 chỉ là chiến lược caller retry của bài integration test vốn đã chấp nhận retry 503. Giữ nguyên truy vấn, transaction Serializable và mọi kiểm tra số lượng/duy nhất/vòng đời mã; không sửa role, schema, workflow runner hoặc Azure.
