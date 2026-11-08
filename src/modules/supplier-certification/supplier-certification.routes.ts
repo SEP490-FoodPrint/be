@@ -20,7 +20,28 @@ export function createSupplierCertificationRouter(
     requireResource("supplier-certification"),
     controller.getAll,
   );
+  router.get(
+    "/:id/documents/:documentId",
+    authHandler,
+    requireResource("supplier-certification"),
+    controller.document,
+  );
   return router;
 }
 
 export default createSupplierCertificationRouter();
+
+export function createSupplierCertificationsChildRouter(
+  service: SupplierCertificationService = supplierCertificationService,
+  authHandler: RequestHandler = authenticate,
+) {
+  const router = Router({ mergeParams: true });
+  const controller = createSupplierCertificationController(service);
+  router.get(
+    "/",
+    authHandler,
+    requireResource("supplier-certification"),
+    controller.getBySupplier,
+  );
+  return router;
+}

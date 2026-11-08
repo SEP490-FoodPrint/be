@@ -204,7 +204,7 @@ export const onboardingRepository = {
       select: reviewSelect,
     });
   },
-  queueReviewEmail(
+  queueRegistrationEmail(
     tx: AuthorizationClient,
     registrationId: string,
     email: {

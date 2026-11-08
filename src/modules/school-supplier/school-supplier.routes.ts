@@ -24,3 +24,17 @@ export function createSchoolSupplierRouter(
 }
 
 export default createSchoolSupplierRouter();
+
+export function createSchoolSupplierSchoolRouter(
+  authHandler: RequestHandler = authenticate,
+  service: SchoolSupplierService = schoolSupplierService,
+) {
+  const router = Router({ mergeParams: true });
+  router.get(
+    "/",
+    authHandler,
+    requireResource("school-supplier"),
+    createSchoolSupplierController(service).getBySchool,
+  );
+  return router;
+}

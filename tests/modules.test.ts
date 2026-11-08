@@ -609,7 +609,14 @@ void test("a final or empty page has no next page", async () => {
       testAdmin,
     );
     assert.equal(result.pagination.hasNext, false);
-    assert.deepEqual(result.items, rows);
+    assert.deepEqual(
+      result.items,
+      rows.map((row) => ({
+        ...row,
+        createdAt: row.createdAt.toISOString(),
+        updatedAt: row.updatedAt.toISOString(),
+      })),
+    );
   }
 });
 

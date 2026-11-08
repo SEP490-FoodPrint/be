@@ -12,6 +12,18 @@ export function createSupplierRouter(
   const router = Router();
   const controller = createSupplierController(service);
   router.get("/", authHandler, requireResource("supplier"), controller.getAll);
+  router.get(
+    "/summary",
+    authHandler,
+    requireResource("supplier"),
+    controller.getSummary,
+  );
+  router.get(
+    "/:id",
+    authHandler,
+    requireResource("supplier"),
+    controller.getById,
+  );
   return router;
 }
 

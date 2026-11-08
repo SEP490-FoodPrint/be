@@ -7,8 +7,29 @@ import {
 } from "./config/redis";
 import { readRateLimitConfig } from "./config/env";
 import { createApiRateLimiter } from "./middlewares/rate-limit.middleware";
+import { startEmailRuntime } from "./utils/email-runtime";
 
 const PORT = Number(process.env.PORT || 5000);
+let emailRuntime: Awaited<ReturnType<typeof startEmailRuntime>> | undefined;
+let closing: Promise<void> | undefined;
+
+const closeConnections = (): Promise<void> => {
+  closing ??= (async () => {
+    const workerResults = await Promise.allSettled([emailRuntime?.stop()]);
+    const results = await Promise.allSettled([
+      prisma.$disconnect(),
+      disconnectRedis(),
+    ]);
+    if (
+      [...workerResults, ...results].some(
+        (result) => result.status === "rejected",
+      )
+    ) {
+      process.exitCode = 1;
+    }
+  })();
+  return closing;
+};
 
 const startServer = async () => {
   const rateLimitConfig = readRateLimitConfig();
@@ -19,19 +40,12 @@ const startServer = async () => {
     createApiRateLimiter(createRedisRateLimitStore("api"), rateLimitConfig),
   );
 
-  const closeConnections = async () => {
-    const results = await Promise.allSettled([
-      prisma.$disconnect(),
-      disconnectRedis(),
-    ]);
-    if (results.some((result) => result.status === "rejected")) {
-      process.exitCode = 1;
-    }
-  };
+  emailRuntime = await startEmailRuntime(prisma);
 
   // 2. Khởi chạy HTTP Server
   const server = app.listen(PORT, () => {
     console.log(`🚀 FoodPrint Backend đang chạy tại: http://localhost:${PORT}`);
+    console.log("✉️ Bộ xử lý email hồ sơ đã khởi động cùng API.");
     console.log(
       `📡 Health check endpoint: http://localhost:${PORT}/api/health`,
     );
@@ -60,5 +74,5 @@ void startServer().catch(async () => {
     "Không thể khởi động API. Kiểm tra cấu hình và PostgreSQL/Redis local.",
   );
   process.exitCode = 1;
-  await Promise.allSettled([prisma.$disconnect(), disconnectRedis()]);
+  await closeConnections();
 });
