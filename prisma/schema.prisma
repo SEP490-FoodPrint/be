@@ -567,11 +567,24 @@ model IngredientQualityFeedback {
   @@schema("foodprint")
 }
 
+model IngredientCategory {
+  id                  String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  categoryName        String       @map("category_name") @db.VarChar(120)
+  categoryDescription String?      @map("category_description") @db.Text
+  ingredients         Ingredient[]
+
+  @@map("ingredient_categories")
+  @@schema("foodprint")
+}
+
 model Ingredient {
   id                  String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   supplierId          String                  @map("supplier_id") @db.Uuid
   name                String                  @db.VarChar(255)
-  category            String?                 @db.VarChar(120)
+  categoryId          String?                 @map("category_id") @db.Uuid
+  coverImage          String?                 @map("cover_image") @db.Text
+  imageDescription    String[]                @default([]) @map("image_description")
+  ingredientCategory  IngredientCategory?     @relation(fields: [categoryId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_ingredients_category")
   defaultUnit         String                  @map("default_unit") @db.VarChar(30)
   description         String?                 @db.Text
   status              EntityStatus            @default(ACTIVE)
@@ -583,6 +596,7 @@ model Ingredient {
   menuDishIngredients MenuDayDishIngredient[]
 
   @@unique([supplierId, name])
+  @@index([categoryId], map: "idx_ingredients_category_id")
   @@index([supplierId], map: "idx_ingredients_supplier_id")
   @@map("ingredients")
   @@schema("foodprint")

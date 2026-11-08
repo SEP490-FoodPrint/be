@@ -245,3 +245,22 @@ Danh sách `GET /api/schools` và `/api/suppliers` hỗ trợ `search`, `status`
 Nhóm con dùng quyền riêng, không yêu cầu thêm quyền hồ sơ parent. Parent ngoài phạm vi/không tồn tại trả 404; parent hợp lệ nhưng không có dữ liệu trả danh sách rỗng và total=0. Summary không nhận bộ lọc và đếm total/activeCount toàn phạm vi. Không có System Admin bypass permission.
 
 Tệp chứng nhận được xác minh qua anchor hồ sơ APPROVED/SUPPLIER và nhóm certificate_N; quyền sở hữu theo chứng nhận hiện tại, không theo tổ chức hiện tại của applicant. Response danh sách chỉ chứa metadata an toàn, mở tệp trả URL 60 giây và Cache-Control no-store. API review hồ sơ giữ quyền registration.view riêng. Hợp đồng đầy đủ: [admin-directory.md](../specs/006-school-supplier-admin/contracts/admin-directory.md).
+
+## Quản trị nguyên liệu nhà cung cấp
+
+Nhóm `/api/ingredients/management` yêu cầu tài khoản ACTIVE, role `INGREDIENT_SUPPLIER_ADMIN`, tổ chức SUPPLIER hợp lệ đang ACTIVE và permission hiệu lực `ingredient.manage`. Staff bị chặn kể cả được gán permission này; System Admin không có bypass. Mỗi lần ghi nạp lại actor/quyền/membership và supplier trong cùng Serializable transaction với kiểm tra target/category và mutation.
+
+| Method | Endpoint                                       | Kết quả                                                  |
+| ------ | ---------------------------------------------- | -------------------------------------------------------- |
+| GET    | /api/ingredients/management                    | Nguyên liệu thuộc supplier hiện tại, gồm ACTIVE/INACTIVE |
+| GET    | /api/ingredients/management/categories         | Danh mục dùng chung chỉ đọc                              |
+| GET    | /api/ingredients/management/:ingredientId      | Chi tiết thuộc sở hữu                                    |
+| POST   | /api/ingredients/management                    | Tạo nguyên liệu ACTIVE, tự gắn supplier                  |
+| PATCH  | /api/ingredients/management/:ingredientId      | Sửa trường editable, giữ trạng thái                      |
+| POST   | /api/ingredients/management/:ingredientId/hide | Chuyển INACTIVE; gọi lại thành công không đổi timestamp  |
+
+Danh sách chỉ nhận page/limit, mặc định 1/20, limit tối đa 100, envelope items/pagination.hasNext hiện hành. Scope từ principal, không từ supplierId do client gửi. Target ngoài sở hữu và không tồn tại cùng 404. Trùng tên trong cùng supplier kể cả đang ẩn trả 409. Quyền đọc GET `/api/ingredients` hiện có giữ nguyên, gồm staff được cấp quyền đọc hợp lệ.
+
+Input chỉ gồm name/defaultUnit/description/categoryId/coverImage/imageDescription; tạo cần name và defaultUnit. PATCH bỏ qua giữ nguyên, null xóa trường nullable, [] xóa danh sách ảnh. coverImage tối đa một tham chiếu; imageDescription nhiều tham chiếu theo thứ tự. Chấp nhận URL HTTP/HTTPS không credentials hoặc đường dẫn bắt đầu /, tối đa 2048 ký tự; không upload hoặc fetch ảnh. categoryId nullable tham chiếu danh mục có sẵn; chưa có API quản trị danh mục. Chi tiết input/output tại [contract](../specs/008-supplier-ingredient-management/contracts/ingredient-management.md).
+
+Ẩn không xóa dữ liệu hoặc thay đổi hồ sơ đã có. Lựa chọn nguyên liệu mới và supplier discovery chỉ dùng nguyên liệu ACTIVE; menu/hợp đồng/lịch sử kho vẫn đọc được liên kết cũ. Các phản hồi legacy giữ category dạng tên/null suy ra từ quan hệ, không giữ thêm cột category trong DB.
