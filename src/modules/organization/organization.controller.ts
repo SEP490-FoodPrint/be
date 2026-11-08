@@ -8,6 +8,7 @@ import {
 } from "./organization.service";
 import {
   validateCookingMode,
+  validateMealTimes,
   validateOrganizationSummaryQuery,
   validateOrganizationDetailParams,
   validateOrganizationListQuery,
@@ -49,6 +50,19 @@ export function createOrganizationController(
         requirePrincipal(req),
       );
       sendSuccess(res, result, "Cập nhật chế độ nấu thành công");
+    }),
+
+    getMealTimes: asyncHandler(async (req, res) => {
+      const result = await service.getMealTimes(requirePrincipal(req));
+      sendSuccess(res, result, "Lấy giờ phục vụ bữa ăn thành công");
+    }),
+
+    updateMealTimes: asyncHandler(async (req, res) => {
+      const result = await service.updateMealTimes(
+        validateMealTimes(req.body),
+        requirePrincipal(req),
+      );
+      sendSuccess(res, result, "Cập nhật giờ phục vụ bữa ăn thành công");
     }),
 
     getPublicSchools: asyncHandler(async (req, res) => {
