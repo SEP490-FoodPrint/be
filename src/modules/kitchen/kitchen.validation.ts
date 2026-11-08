@@ -59,6 +59,8 @@ export function validateKitchenFilters(query: Record<string, unknown>) {
           "page",
           "limit",
           "date",
+          "startDate",
+          "endDate",
           "mealType",
           "status",
           "menuDayId",
@@ -99,6 +101,10 @@ export function validateKitchenFilters(query: Record<string, unknown>) {
   return {
     ...page,
     date: query.date === undefined ? undefined : calendarDate(query.date),
+    startDate:
+      query.startDate === undefined ? undefined : calendarDate(query.startDate),
+    endDate:
+      query.endDate === undefined ? undefined : calendarDate(query.endDate),
     mealType: query.mealType,
     status: query.status as
       "UNCONFIRMED" | "CONFIRMED" | "COMPLETED" | undefined,
