@@ -19,7 +19,7 @@
 - Migration đã applied bất biến: PASS; không có thay đổi `prisma/**`.
 - Transaction cho assignment và submission/allergy: PASS.
 - Response envelope và serialize thời gian rõ ràng: PASS.
-- Spec/plan/tasks cùng branch `feat/008-conflicted-feature-integration`: PASS.
+- Spec/plan/tasks cùng branch `feat/009-conflicted-feature-integration`: PASS.
 
 ## Kiểm thử
 
