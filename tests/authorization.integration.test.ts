@@ -860,6 +860,13 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           },
         ],
       });
+      await db.classHomeroomAssignment.create({
+        data: {
+          classId: grClass.id,
+          teacherUserId: teacher.id,
+          assignedByUserId: health.id,
+        },
+      });
       const grDaily = await db.dailyMealPortion.create({
         data: {
           classId: grClass.id,
