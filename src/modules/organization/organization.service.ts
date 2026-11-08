@@ -17,6 +17,7 @@ import {
 } from "../../utils/date-time";
 import type {
   CookingModeRequestDTO,
+  MealTimesRequestDTO,
   OrganizationListRequestDTO,
   OrganizationSummaryRequestDTO,
   OrganizationDetailRequestDTO,
@@ -35,6 +36,7 @@ import type {
   PublicWeeklyMenuDTO,
   AvailableWeekSummaryDTO,
   CookingModeResponseDTO,
+  MealTimesResponseDTO,
   DishItemDTO,
   SnackItemDTO,
   PortionGroupDTO,
@@ -122,6 +124,29 @@ function assertCookingModeManager(
     throw new HttpError(403, "Chỉ Ban Giám hiệu được cấu hình chế độ nấu");
 }
 
+const MEAL_TIMES_PERMISSION = "school_meal_times.manage";
+
+function assertMealTimesManager(
+  principal: AuthPrincipal,
+): asserts principal is AuthPrincipal & { schoolId: string } {
+  assertPermission(principal, MEAL_TIMES_PERMISSION);
+  if (
+    principal.role !== ROLES.SCHOOL_MANAGEMENT_BOARD ||
+    principal.orgType !== "SCHOOL" ||
+    !principal.schoolId
+  ) {
+    throw new HttpError(403, "Chỉ Ban Giám hiệu được cấu hình giờ phục vụ");
+  }
+}
+
+function formatMealTime(value: Date | null): string | null {
+  return value ? value.toISOString().slice(11, 16) : null;
+}
+
+function parseMealTime(value: string | null): Date | null {
+  return value ? new Date(`1970-01-01T${value}:00.000Z`) : null;
+}
+
 export function createOrganizationService(
   repository?: OrganizationRepository,
   getClient: () => Promise<PrismaClient> = getPrisma,
@@ -197,6 +222,40 @@ export function createOrganizationService(
           return data.updateCookingMode(tx, schoolId, input.cookingMode);
         },
       );
+    },
+
+    async getMealTimes(
+      principal: AuthPrincipal,
+    ): Promise<MealTimesResponseDTO> {
+      assertMealTimesManager(principal);
+      const value = await data.findMealTimes(principal.schoolId);
+      return {
+        lunchTime: formatMealTime(value.lunchTime),
+        afternoonMealTime: formatMealTime(value.afternoonMealTime),
+      };
+    },
+
+    async updateMealTimes(
+      input: MealTimesRequestDTO,
+      principal: AuthPrincipal,
+    ): Promise<MealTimesResponseDTO> {
+      assertMealTimesManager(principal);
+      const value = await withSchoolTransaction(
+        await getClient(),
+        principal,
+        MEAL_TIMES_PERMISSION,
+        (tx, actor, schoolId) => {
+          assertMealTimesManager(actor);
+          return data.updateMealTimes(tx, schoolId, {
+            lunchTime: parseMealTime(input.lunchTime),
+            afternoonMealTime: parseMealTime(input.afternoonMealTime),
+          });
+        },
+      );
+      return {
+        lunchTime: formatMealTime(value.lunchTime),
+        afternoonMealTime: formatMealTime(value.afternoonMealTime),
+      };
     },
 
     async getPublicSchools(

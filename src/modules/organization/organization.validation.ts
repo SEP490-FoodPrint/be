@@ -51,6 +51,28 @@ export const cookingModeBodySchema = z.strictObject({
   }),
 });
 
+const TIME_REGEX = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+
+export const mealTimesBodySchema = z
+  .strictObject({
+    lunchTime: z
+      .string()
+      .regex(TIME_REGEX, "Giờ bữa trưa phải có định dạng HH:mm")
+      .nullable(),
+    afternoonMealTime: z
+      .string()
+      .regex(TIME_REGEX, "Giờ bữa phụ phải có định dạng HH:mm")
+      .nullable(),
+  })
+  .refine(
+    ({ lunchTime, afternoonMealTime }) =>
+      !lunchTime || !afternoonMealTime || lunchTime < afternoonMealTime,
+    {
+      message: "Giờ bữa trưa phải trước giờ bữa phụ",
+      path: ["afternoonMealTime"],
+    },
+  );
+
 function positiveIntegerQuery(name: string, fallback: number) {
   const message = `${name} phải là số nguyên dương`;
   return z
@@ -222,6 +244,14 @@ export function validateOrganizationListQuery(value: unknown) {
 
 export function validateCookingMode(value: unknown) {
   const result = cookingModeBodySchema.safeParse(value);
+  if (!result.success) {
+    throw new OrganizationValidationError(mapZodIssues(result.error.issues));
+  }
+  return result.data;
+}
+
+export function validateMealTimes(value: unknown) {
+  const result = mealTimesBodySchema.safeParse(value);
   if (!result.success) {
     throw new OrganizationValidationError(mapZodIssues(result.error.issues));
   }
