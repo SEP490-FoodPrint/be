@@ -1,3 +1,4 @@
+import { ingredientService } from "../src/modules/ingredient/ingredient.service";
 import { documentStorage } from "../src/utils/onboarding-documents";
 import { withReadTransaction } from "../src/utils/read-transaction";
 import assert from "node:assert/strict";
@@ -1289,6 +1290,350 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       headers: headers(id),
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
+
+  await context.test(
+    "supplier ingredient management scopes create/edit/hide and preserves history",
+    async () => {
+      const base = "/api/ingredients/management";
+      const category = await db.ingredientCategory.create({
+        data: { categoryName: "Management category" },
+      });
+      const ingredientView = await permission("ingredient.view");
+      const manage = await permission("ingredient.manage");
+      const grant = await db.rolePermission.upsert({
+        where: {
+          roleId_permissionId: {
+            roleId: supplierStaffA.roleId,
+            permissionId: manage.id,
+          },
+        },
+        create: { roleId: supplierStaffA.roleId, permissionId: manage.id },
+        update: {},
+      });
+      for (const actor of [supplierStaffA, system, adminA]) {
+        for (const [method, suffix] of [
+          ["GET", ""],
+          ["GET", "/categories"],
+          ["GET", "/" + ingredientA.id],
+          ["POST", ""],
+          ["PATCH", "/" + ingredientA.id],
+          ["POST", "/" + ingredientA.id + "/hide"],
+        ]) {
+          assert.equal(
+            (await request(base + suffix, actor.id, method)).status,
+            403,
+          );
+        }
+      }
+      await db.rolePermission.delete({
+        where: {
+          roleId_permissionId: {
+            roleId: grant.roleId,
+            permissionId: grant.permissionId,
+          },
+        },
+      });
+      const payload = {
+        name: "Managed " + randomUUID(),
+        defaultUnit: "kg",
+        categoryId: category.id,
+        coverImage: "/cover.jpg",
+        imageDescription: ["/1.jpg", "/2.jpg", "/3.jpg"],
+      };
+      const created = await request(base, supplierAdmin.id, "POST", payload);
+      assert.equal(created.status, 201, JSON.stringify(created.body));
+      const item = record(record(created.body).data);
+      const id = String(item.id);
+      assert.equal(item.supplierId, supplierA.id);
+      assert.deepEqual(item.imageDescription, payload.imageDescription);
+      assert.equal(record(item.category).categoryName, category.categoryName);
+      assert.equal(
+        (await request(base, supplierAdmin.id, "POST", payload)).status,
+        409,
+      );
+      assert.equal(
+        (
+          await request(base, supplierAdmin.id, "POST", {
+            ...payload,
+            name: "Forged",
+            supplierId: supplierB.id,
+          })
+        ).status,
+        400,
+      );
+      const catalog = await request(
+        base + "/categories?limit=1",
+        supplierAdmin.id,
+      );
+      assert.equal(catalog.status, 200);
+      assert.equal(rows(catalog.body).length, 1);
+      const list = await request(base + "?limit=100", supplierAdmin.id);
+      assert.equal(list.status, 200);
+      assert(rows(list.body).every((row) => row.supplierId === supplierA.id));
+      const foreign = await db.ingredient.findFirstOrThrow({
+        where: { supplierId: supplierB.id },
+      });
+      const absent = randomUUID();
+      for (const foreignId of [foreign.id, absent]) {
+        for (const method of ["GET", "PATCH", "POST"]) {
+          const response = await request(
+            base + "/" + foreignId + (method === "POST" ? "/hide" : ""),
+            supplierAdmin.id,
+            method,
+            method === "PATCH" ? { name: "Refused" } : undefined,
+          );
+          assert.equal(response.status, 404);
+          assert.equal(
+            record(response.body).message,
+            "Không tìm thấy nguyên liệu",
+          );
+        }
+      }
+      assert.equal(
+        (
+          await request(base + "/" + id, supplierAdmin.id, "PATCH", {
+            description: "Updated",
+            coverImage: null,
+            imageDescription: [],
+          })
+        ).status,
+        200,
+      );
+      const invalid = await request(
+        base + "/" + id,
+        supplierAdmin.id,
+        "PATCH",
+        { name: "Must rollback", categoryId: randomUUID() },
+      );
+      assert.equal(invalid.status, 400);
+      assert.equal(
+        (await db.ingredient.findUniqueOrThrow({ where: { id } })).name,
+        payload.name,
+      );
+      const race = await Promise.all(
+        [1, 2].map(() =>
+          request(base, supplierAdmin.id, "POST", {
+            name: "Race " + id,
+            defaultUnit: "kg",
+          }),
+        ),
+      );
+      assert.deepEqual(race.map((r) => r.status).sort(), [201, 409]);
+      const raceItems = await Promise.all(
+        [1, 2].map((n) =>
+          db.ingredient.create({
+            data: {
+              supplierId: supplierA.id,
+              name: "Update " + id + " " + n,
+              defaultUnit: "kg",
+            },
+          }),
+        ),
+      );
+      const updateRace = await Promise.all(
+        raceItems.map((r) =>
+          request(base + "/" + r.id, supplierAdmin.id, "PATCH", {
+            name: "Same " + id,
+          }),
+        ),
+      );
+      assert.deepEqual(updateRace.map((r) => r.status).sort(), [200, 409]);
+      // Real history link retained when hidden.
+      const entry = await db.ingredientEntry.create({
+        data: {
+          schoolId: schoolA.id,
+          ingredientId: id,
+          handlingType: "DRY_STOCK",
+        },
+      });
+      assert.equal(
+        (await request(base + "/" + id + "/hide", supplierAdmin.id, "POST"))
+          .status,
+        200,
+      );
+      const hidden = await db.ingredient.findUniqueOrThrow({ where: { id } });
+      assert.equal(hidden.status, "INACTIVE");
+      assert.equal(
+        (await request(base + "/" + id + "/hide", supplierAdmin.id, "POST"))
+          .status,
+        200,
+      );
+      assert.equal(
+        +(await db.ingredient.findUniqueOrThrow({ where: { id } })).updatedAt,
+        +hidden.updatedAt,
+      );
+      assert.equal(
+        (
+          await request(base + "/" + id, supplierAdmin.id, "PATCH", {
+            description: "Hidden edit",
+          })
+        ).status,
+        200,
+      );
+      assert.equal(
+        (
+          await db.ingredientEntry.findUniqueOrThrow({
+            where: { id: entry.id },
+          })
+        ).ingredientId,
+        id,
+      );
+      assert.equal(
+        (await db.ingredient.findUniqueOrThrow({ where: { id } })).status,
+        "INACTIVE",
+      );
+      assert.equal(
+        (await request(base, supplierAdmin.id, "POST", payload)).status,
+        409,
+      );
+      // Same name remains allowed in another supplier.
+      await db.ingredient.create({
+        data: {
+          supplierId: supplierB.id,
+          name: payload.name,
+          defaultUnit: "kg",
+        },
+      });
+      const hideEdit = await Promise.all([
+        request(
+          base + "/" + raceItems[0].id + "/hide",
+          supplierAdmin.id,
+          "POST",
+        ),
+        request(base + "/" + raceItems[0].id, supplierAdmin.id, "PATCH", {
+          description: "Concurrent edit",
+        }),
+      ]);
+      assert(hideEdit.every((r) => r.status === 200));
+      assert.equal(
+        (
+          await db.ingredient.findUniqueOrThrow({
+            where: { id: raceItems[0].id },
+          })
+        ).status,
+        "INACTIVE",
+      );
+      // Middleware reloads current grants/denials on each authenticated request.
+      const staleActor = await loadPrincipal(supplierAdmin.id, db);
+      const denial = await db.userPermissionDenial.create({
+        data: {
+          userId: supplierAdmin.id,
+          permissionId: manage.id,
+          supplierId: supplierA.id,
+          disabledByUserId: system.id,
+        },
+      });
+      assert.equal((await request(base, supplierAdmin.id)).status, 403);
+      assert.equal(
+        (
+          await request(base + "/" + id, supplierAdmin.id, "PATCH", {
+            name: "Denied",
+          })
+        ).status,
+        403,
+      );
+      await assert.rejects(
+        () =>
+          ingredientService.update(
+            { ingredientId: id },
+            { name: "Stale permission" },
+            staleActor,
+          ),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 403,
+      );
+      await db.userPermissionDenial.delete({ where: { id: denial.id } });
+      await db.user.update({
+        where: { id: supplierAdmin.id },
+        data: { status: "LOCKED" },
+      });
+      await assert.rejects(
+        () =>
+          ingredientService.update(
+            { ingredientId: id },
+            { name: "Locked account" },
+            staleActor,
+          ),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 403,
+      );
+      await db.user.update({
+        where: { id: supplierAdmin.id },
+        data: { status: "ACTIVE", supplierId: supplierB.id },
+      });
+      await assert.rejects(
+        () =>
+          ingredientService.update(
+            { ingredientId: id },
+            { name: "Changed membership" },
+            staleActor,
+          ),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 403,
+      );
+      await db.user.update({
+        where: { id: supplierAdmin.id },
+        data: { supplierId: supplierA.id },
+      });
+
+      await db.supplier.update({
+        where: { id: supplierA.id },
+        data: { status: "INACTIVE" },
+      });
+      assert.equal((await request(base, supplierAdmin.id)).status, 403);
+      assert.equal(
+        (
+          await request(base, supplierAdmin.id, "POST", {
+            name: "Inactive supplier",
+            defaultUnit: "kg",
+          })
+        ).status,
+        403,
+      );
+      await db.supplier.update({
+        where: { id: supplierA.id },
+        data: { status: "ACTIVE" },
+      });
+      await db.rolePermission.upsert({
+        where: {
+          roleId_permissionId: {
+            roleId: supplierStaffA.roleId,
+            permissionId: ingredientView.id,
+          },
+        },
+        create: {
+          roleId: supplierStaffA.roleId,
+          permissionId: ingredientView.id,
+        },
+        update: {},
+      });
+      assert.equal(
+        (await request("/api/ingredients", supplierStaffA.id)).status,
+        200,
+      );
+      await db.rolePermission.delete({
+        where: {
+          roleId_permissionId: {
+            roleId: supplierStaffA.roleId,
+            permissionId: ingredientView.id,
+          },
+        },
+      });
+      // Remove only this subtest's disposable fixture so later scope assertions keep their baseline.
+      await db.ingredientEntry.delete({ where: { id: entry.id } });
+      await db.ingredient.deleteMany({
+        where: {
+          OR: [
+            { id },
+            { name: "Race " + id },
+            { name: "Same " + id },
+            { name: { startsWith: "Update " + id } },
+          ],
+        },
+      });
+    },
+  );
+
   await context.test(
     "directory filtered totals, literal search and independent summary",
     async () => {
