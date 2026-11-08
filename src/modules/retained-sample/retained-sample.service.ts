@@ -9,14 +9,10 @@ import { HttpError } from "../../utils/http-error";
 import type {
   FoodSampleInput,
   SampleDisposalInput,
-  RetainedSampleFilters,
-} from "./retained-sample.validation";
+  RetainedSampleListQuery,
+} from "./retained-sample.request.dto";
 import { getPrisma } from "../../utils/database";
-import {
-  listWindow,
-  readListPage,
-  type ListQuery,
-} from "../../utils/list-query";
+import { listWindow, readListPage } from "../../utils/list-query";
 
 const select = {
   id: true,
@@ -223,7 +219,7 @@ export function createRetainedSampleService(
         },
       );
     },
-    getAll(query: RetainedSampleFilters, principal: AuthPrincipal) {
+    getAll(query: RetainedSampleListQuery, principal: AuthPrincipal) {
       const scope = listScopes["retained-sample"](principal);
       const search = query.search;
       const where: Prisma.RetainedFoodSampleWhereInput = {
