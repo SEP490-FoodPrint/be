@@ -25,10 +25,10 @@ export const schoolKitchenStaffOnly: RequestHandler[] = [
 ];
 
 /** Initial read-only samples; tenant-specific permissions need an approved policy. */
-export const schoolHealthStaffOnly: RequestHandler[] = [
+export const schoolNutritionStaffOnly: RequestHandler[] = [
   authenticate,
   requireOrg([ORG_TYPES.SCHOOL]),
-  requireRoles([ROLES.SCHOOL_HEALTH_OFFICER]),
+  requireRoles([ROLES.SCHOOL_NUTRITION_OFFICER]),
 ];
 
 /** Initial read-only samples; tenant-specific permissions need an approved policy. */

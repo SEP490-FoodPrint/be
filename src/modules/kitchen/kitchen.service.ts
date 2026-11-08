@@ -1427,7 +1427,22 @@ export function createKitchenService(
           menuDayId: query.menuDayId,
           dishId: query.dishId,
           cookingModeApplied: query.cookingModeApplied,
-          ...(query.date ? { MenuDay: { menuDate: query.date } } : {}),
+          ...(query.startDate && query.endDate
+            ? {
+                MenuDay: {
+                  menuDate: {
+                    gte: query.startDate,
+                    lte: query.endDate,
+                  },
+                },
+              }
+            : query.startDate
+              ? { MenuDay: { menuDate: { gte: query.startDate } } }
+              : query.endDate
+                ? { MenuDay: { menuDate: { lte: query.endDate } } }
+                : query.date
+                  ? { MenuDay: { menuDate: query.date } }
+                  : {}),
           ...(search
             ? {
                 OR: [

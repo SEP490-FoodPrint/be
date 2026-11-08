@@ -171,8 +171,12 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   const system = await user("SYSTEM_ADMIN");
   const adminA = await user("SCHOOL_ADMINISTRATION", { schoolId: schoolA.id });
   const adminB = await user("SCHOOL_ADMINISTRATION", { schoolId: schoolB.id });
-  const staffA = await user("SCHOOL_HEALTH_OFFICER", { schoolId: schoolA.id });
-  const staffB = await user("SCHOOL_HEALTH_OFFICER", { schoolId: schoolB.id });
+  const staffA = await user("SCHOOL_NUTRITION_OFFICER", {
+    schoolId: schoolA.id,
+  });
+  const staffB = await user("SCHOOL_NUTRITION_OFFICER", {
+    schoolId: schoolB.id,
+  });
   const supplierAdmin = await user("INGREDIENT_SUPPLIER_ADMIN", {
     supplierId: supplierA.id,
   });
@@ -392,7 +396,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           afternoonMealTime: new Date("1970-01-01T15:00:00Z"),
         },
       });
-      const healthAccount = await user("SCHOOL_HEALTH_OFFICER", {
+      const healthAccount = await user("SCHOOL_NUTRITION_OFFICER", {
         schoolId: school.id,
       });
       const chefAccount = await user("SCHOOL_KITCHEN_STAFF", {
@@ -1068,7 +1072,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   await context.test(
     "password change requires the old password, rechecks the account, and revokes every existing session",
     async () => {
-      const account = await user("SCHOOL_HEALTH_OFFICER", {
+      const account = await user("SCHOOL_NUTRITION_OFFICER", {
         schoolId: schoolA.id,
       });
       const first = await passwordLogin(account);
@@ -1127,7 +1131,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   await context.test(
     "real password recovery sends a six-digit code, verifies without changing credentials and consumes the reset grant once",
     async () => {
-      const account = await user("SCHOOL_HEALTH_OFFICER", {
+      const account = await user("SCHOOL_NUTRITION_OFFICER", {
         schoolId: schoolA.id,
       });
       const old = await passwordLogin(account);
@@ -1195,7 +1199,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   await context.test(
     "concurrent password replacement and login cannot leave sessions issued with an old password usable",
     async () => {
-      const account = await user("SCHOOL_HEALTH_OFFICER", {
+      const account = await user("SCHOOL_NUTRITION_OFFICER", {
         schoolId: schoolA.id,
       });
       const cookie = await passwordLogin(account);
@@ -1233,7 +1237,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   await context.test(
     "Redis revocation failure rolls back password replacement and a stale principal cannot change a locked account",
     async () => {
-      const account = await user("SCHOOL_HEALTH_OFFICER", {
+      const account = await user("SCHOOL_NUTRITION_OFFICER", {
         schoolId: schoolA.id,
       });
       const principal = await loadSessionUser(account.id, db);
