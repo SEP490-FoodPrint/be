@@ -486,7 +486,7 @@ function createIngredientOperations(
                 id: true,
                 supplierId: true,
                 name: true,
-                category: true,
+                ingredientCategory: { select: { categoryName: true } },
                 defaultUnit: true,
                 Supplier: { select: { name: true } },
               },
@@ -495,7 +495,8 @@ function createIngredientOperations(
               take: query.limit,
             });
             return {
-              items: rows.map(({ Supplier, ...i }) => ({
+              items: rows.map(({ Supplier, ingredientCategory, ...i }) => ({
+                category: ingredientCategory?.categoryName ?? null,
                 ...i,
                 supplierName: Supplier.name,
                 allergen: null,
@@ -520,7 +521,11 @@ function createIngredientOperations(
               ingredientId: true,
               handlingType: true,
               Ingredient: {
-                select: { name: true, category: true, defaultUnit: true },
+                select: {
+                  name: true,
+                  ingredientCategory: { select: { categoryName: true } },
+                  defaultUnit: true,
+                },
               },
             },
             orderBy: { id: "asc" },
@@ -528,10 +533,16 @@ function createIngredientOperations(
             take: query.limit,
           });
           return {
-            items: rows.map(({ Ingredient, ...i }) => ({
-              ...i,
-              ...Ingredient,
-            })),
+            items: rows.map(
+              ({
+                Ingredient: { ingredientCategory, ...ingredient },
+                ...i
+              }) => ({
+                ...i,
+                ...ingredient,
+                category: ingredientCategory?.categoryName ?? null,
+              }),
+            ),
             pagination: {
               ...query,
               totalItems: await tx.ingredientEntry.count({ where }),
@@ -757,7 +768,7 @@ const menuDetail = {
                 select: {
                   id: true,
                   name: true,
-                  category: true,
+                  ingredientCategory: { select: { categoryName: true } },
                   defaultUnit: true,
                 },
               },
@@ -902,6 +913,30 @@ export function getSchoolWeekSchedule(targetDate: Date) {
   };
 }
 
+function menuCategoryDto(
+  menu: Prisma.WeeklyMenuGetPayload<{ include: typeof menuDetail }>,
+) {
+  return {
+    ...menu,
+    menuDays: menu.menuDays.map((day) => ({
+      ...day,
+      menuDayDishes: day.menuDayDishes.map((dish) => ({
+        ...dish,
+        ingredients: dish.ingredients.map((row) => {
+          const { ingredientCategory, ...ingredient } = row.ingredient;
+          return {
+            ...row,
+            ingredient: {
+              ...ingredient,
+              category: ingredientCategory?.categoryName ?? null,
+            },
+          };
+        }),
+      })),
+    })),
+  };
+}
+
 function createMenuOperations(connect: () => Promise<PrismaClient>) {
   async function owned(tx: Tx, id: string, schoolId: string) {
     const menu = await tx.weeklyMenu.findFirst({
@@ -909,7 +944,7 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
       include: menuDetail,
     });
     if (!menu) throw new HttpError(404, "Không tìm thấy thực đơn của trường");
-    return menu;
+    return menuCategoryDto(menu);
   }
   async function assertUnused(tx: Tx, menuDayId: string) {
     if (
@@ -1228,7 +1263,7 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
         include: menuDetail,
       });
       if (!menu) throw new HttpError(404, "Không tìm thấy thực đơn");
-      return menu;
+      return menuCategoryDto(menu);
     },
     async create(input: MenuWrite, principal: AuthPrincipal) {
       return schoolTransaction(
