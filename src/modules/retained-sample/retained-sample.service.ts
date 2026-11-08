@@ -9,6 +9,7 @@ import { HttpError } from "../../utils/http-error";
 import type {
   FoodSampleInput,
   SampleDisposalInput,
+  RetainedSampleFilters,
 } from "./retained-sample.validation";
 import { getPrisma } from "../../utils/database";
 import {
@@ -222,15 +223,54 @@ export function createRetainedSampleService(
         },
       );
     },
-    getAll(query: ListQuery, principal: AuthPrincipal) {
-      const where = listScopes["retained-sample"](principal);
+    getAll(query: RetainedSampleFilters, principal: AuthPrincipal) {
+      const scope = listScopes["retained-sample"](principal);
+      const search = query.search;
+      const where: Prisma.RetainedFoodSampleWhereInput = {
+        AND: [
+          scope,
+          ...(query.status ? [{ status: query.status }] : []),
+          ...(search
+            ? [
+                {
+                  OR: [
+                    {
+                      storageLocation: {
+                        contains: search,
+                        mode: "insensitive" as const,
+                      },
+                    },
+                    {
+                      CookingBatch: {
+                        batchCode: {
+                          contains: search,
+                          mode: "insensitive" as const,
+                        },
+                      },
+                    },
+                    {
+                      CookingBatch: {
+                        Dish: {
+                          name: {
+                            contains: search,
+                            mode: "insensitive" as const,
+                          },
+                        },
+                      },
+                    },
+                  ],
+                },
+              ]
+            : []),
+        ],
+      };
       return readListPage(
         () =>
           read({
             ...listWindow(query),
             where,
             select,
-            orderBy: [{ id: "asc" }],
+            orderBy: [{ sampledAt: "desc" }, { id: "asc" }],
           }),
         query,
       );
