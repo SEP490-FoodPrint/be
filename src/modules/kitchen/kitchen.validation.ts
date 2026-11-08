@@ -34,7 +34,11 @@ export function validateKitchenUpdate(value: unknown) {
 
 export function validateKitchenComplete(value: unknown) {
   if (value === undefined || value === null) return undefined;
-  const body = objectBody(value, ["note", "inspectionData"]);
+  const body = objectBody(value, [
+    "note",
+    "inspectionData",
+    "preparedPortions",
+  ]);
   if (
     body.note !== undefined &&
     body.note !== null &&

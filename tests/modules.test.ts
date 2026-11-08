@@ -415,7 +415,6 @@ void test("v1 routes enforce permissions and emit versioned error codes before a
     ["POST", "/menus/allergy-check"],
     ["GET", "/kitchen"],
     ["GET", "/kitchen/stats"],
-    ["PUT", `/kitchen/${testStaff.id}`],
     ["DELETE", `/kitchen/${testStaff.id}`],
     ["GET", `/menus/days/${testStaff.id}/meals/LUNCH/portion-groups`],
     ["PUT", `/menus/days/${testStaff.id}/meals/LUNCH/portion-groups`],

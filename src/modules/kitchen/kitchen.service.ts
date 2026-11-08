@@ -963,7 +963,10 @@ export function createKitchenLifecycle(
         async (tx, _actor, schoolId) => {
           const batch = await lockedBatch(tx, id, schoolId);
           if (batch.status !== "UNCONFIRMED")
-            throw new HttpError(409, "Chỉ được xóa mẻ trước khi ấn xác nhận");
+            throw new HttpError(
+              409,
+              "Chỉ được xóa mẻ trước khi ấn xác nhận nấu",
+            );
           const shared = await tx.menuMealSeasoningLot.findMany({
             where: mealKey(batch),
             select: { id: true, usedAt: true },
@@ -1302,10 +1305,7 @@ export function createKitchenLifecycle(
             return completionResult(tx, batch);
           }
           if (batch.status !== "CONFIRMED")
-            throw new HttpError(
-              409,
-              "Phải xác nhận kế hoạch trước khi hoàn thành",
-            );
+            throw new HttpError(409, "Phải xác nhận nấu trước khi hoàn thành");
           await assertMealPortions(tx, batch, schoolId);
           const stock = await checkReservedStock(tx, batch, schoolId);
           if (

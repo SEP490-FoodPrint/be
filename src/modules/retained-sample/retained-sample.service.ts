@@ -30,6 +30,18 @@ const select = {
   disposalNote: true,
   createdAt: true,
   updatedAt: true,
+  CookingBatch: {
+    select: {
+      batchCode: true,
+      mealType: true,
+      plannedPortions: true,
+      Dish: {
+        select: {
+          name: true,
+        },
+      },
+    },
+  },
 } as const satisfies Prisma.RetainedFoodSampleSelect;
 
 type ListRow = Prisma.RetainedFoodSampleGetPayload<{ select: typeof select }>;
