@@ -1,11 +1,11 @@
-﻿# Tasks: API và kiến trúc cho hai role
+# Tasks: API và kiến trúc cho hai role
 
 **Input**: spec/plan/research/data-model/contracts đã cập nhật phạm vi menu/kitchen/retained-sample.
 
 ## Setup
 
-- [x] T001 Đọc quy tắc, audit27routes và bảo toàn7file xác nhận trong `specs/009-api-architecture-completion/research.md`.
-- [x] T002 Thu hẹp spec/plan và hoàn tác thay đổi ngoài phạm vi tại `specs/009-api-architecture-completion/spec.md`.
+- [x] T001 Đọc quy tắc, audit27routes và bảo toàn7file xác nhận trong `specs/010-api-architecture-completion/research.md`.
+- [x] T002 Thu hẹp spec/plan và hoàn tác thay đổi ngoài phạm vi tại `specs/010-api-architecture-completion/spec.md`.
 - [x] T003 Generate client theo schema dev hiện có, dùng shared Zod helpers nguyên trạng tại `src/utils/request-validation.ts`.
 
 ## US1 — Sổ lưu mẫu
@@ -33,10 +33,10 @@
 
 ## Polish and verification
 
-- [ ] T012 Cập nhật mô tả chỉ3module tại `src/modules/README.md`, `specs/009-api-architecture-completion/contracts/api-audit.md`.
-- [ ] T013 Chạy lint/format/typecheck/build/unit và ghi kết quả tại `specs/009-api-architecture-completion/plan.md`.
-- [ ] T014 Chạy integration liên quan trên disposable local khi cần/sẵn sàng, ghi giới hạn thật tại `specs/009-api-architecture-completion/plan.md`.
-- [ ] T015 Chạy spec gate/diff check/scope audit cuối và hoàn tất `specs/009-api-architecture-completion/tasks.md`.
+- [ ] T012 Cập nhật mô tả chỉ3module tại `src/modules/README.md`, `specs/010-api-architecture-completion/contracts/api-audit.md`.
+- [ ] T013 Chạy lint/format/typecheck/build/unit và ghi kết quả tại `specs/010-api-architecture-completion/plan.md`.
+- [ ] T014 Chạy integration liên quan trên disposable local khi cần/sẵn sàng, ghi giới hạn thật tại `specs/010-api-architecture-completion/plan.md`.
+- [ ] T015 Chạy spec gate/diff check/scope audit cuối và hoàn tất `specs/010-api-architecture-completion/tasks.md`.
 
 ## Dependencies and execution
 

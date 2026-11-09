@@ -1,6 +1,6 @@
-﻿# Feature Specification: API và kiến trúc cho nhân viên bếp/dinh dưỡng
+# Feature Specification: API và kiến trúc cho nhân viên bếp/dinh dưỡng
 
-**Feature Branch**: `refactor/009-api-architecture-completion`
+**Feature Branch**: `refactor/010-api-architecture-completion`
 **Created**: 2026-11-08
 **Status**: Ready for implementation
 **Input**: Đối chiếu MD API, bổ sung phần thiếu và chuyển sang kiến trúc BE mới. Người dùng đã thu hẹp: chỉ phần hai role nhân viên bếp/nhân viên dinh dưỡng; các module khác do thành viên khác phụ trách.

@@ -1,6 +1,6 @@
-﻿# Implementation Plan: Menu, kitchen và retained-sample
+# Implementation Plan: Menu, kitchen và retained-sample
 
-**Branch**: `refactor/009-api-architecture-completion` | **Date**: 2026-11-08 | **Spec**: [spec.md](spec.md)
+**Branch**: `refactor/010-api-architecture-completion` | **Date**: 2026-11-08 | **Spec**: [spec.md](spec.md)
 
 ## Summary and scope
 
@@ -19,7 +19,7 @@ TypeScript strict/CommonJS, Express, Prisma7, Zod4 và Node test runner hiện c
 | III. Database         | PASS             | Không schema/migration/deploy/seed/reset                                       |
 | IV. Transaction/cache | PASS             | Service giữ boundary, mọi repo cùng tx và isolation                            |
 | V. HTTP/JSON          | PASS             | Preserve contract, bổ sung lưu mẫu, serialize rõ                               |
-| VI. Spec-driven       | PASS             | Spec009 cập nhật phạm vi trước source tiếp theo                                |
+| VI. Spec-driven       | PASS             | Spec010 cập nhật phạm vi trước source tiếp theo                                |
 
 ## Project structure
 

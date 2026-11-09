@@ -4,7 +4,7 @@
 
 Chỉ triển khai menu/kitchen/retained-sample cho nhân viên dinh dưỡng và bếp. Audit các module khác bên dưới chỉ để tham khảo; mọi thay đổi implementation ngoài ba module đã hoàn tác. Không tiếp tục chuẩn hóa toàn BE, auth, permission, supplier, dish, ingredient, meal hoặc module BGH. Nguồn và kết quả nghiên cứu rộng không cấp quyền sửa những module đó.
 
-Đọc AGENTS.md, constitution, DEV_GUIDE mục 6, DEVELOPMENT_WORKFLOW bước 5 và MD API ngày 08/11/2026. Branch009 tích hợp origin/dev 8d1c000; người dùng xác nhận 7 file trước đó và patch đã lưu riêng trong Temp.
+Đọc AGENTS.md, constitution, DEV_GUIDE mục 6, DEVELOPMENT_WORKFLOW bước 5 và MD API ngày 08/11/2026. Branch010 tích hợp origin/dev 8d1c000; người dùng xác nhận 7 file trước đó và patch đã lưu riêng trong Temp.
 
 ## Decisions
 
