@@ -81,7 +81,13 @@ Thành viên phụ trách hai role có thể tìm riêng tiếp nhận HTTP, ki�
 - **FR-023**: Ingredient options trong module menu MUST hỗ trợ paging/search thật; avoidance options trả IngredientEntry IDs của trường, không dùng Ingredient IDs thay thế. Chỉ đọc catalog existing, không sửa CRUD module của thành viên khác.
 - **FR-024**: Cấu hình API/cookie/CSRF shared MUST giữ nguyên nếu đã đúng. Không thử ghi vào BE đang kết nối database remote; kiểm thử ghi dùng database/API disposable riêng. Runtime/mock regression tests được phép dùng fixtures chỉ trong tests, không đưa vào production bundle.
 
+- **FR-025**: Số tuần học MUST được BE tính từ tuần chứa `SchoolAcademicYear.startDate` của trường đã xác thực: tuần Thứ Hai–Chủ Nhật đầu tiên là tuần 1, tăng liên tục qua năm dương lịch. Không dùng số tuần ISO, không lưu thêm số tuần trong DB. Giữ `WeeklyMenu.weekStartDate` làm khóa ngày nhóm thực đơn; schema hiện không có cột số tuần để xóa.
+- **FR-026**: API menu MUST cung cấp năm học, danh sách tuần, số tuần/nhãn và khoảng ngày từ cấu hình thật. Thiếu cấu hình trả danh sách rỗng; lịch tuần ngoài năm học trả số tuần null, không thay bằng lịch mẫu. Ngày nghỉ không đánh lại số tuần. Giữ nguyên quy tắc gửi duyệt hiện hành.
+- **FR-027**: FE MenuPlanning MUST chọn năm học/tuần bằng dữ liệu API, dùng ngày đầu tuần làm khóa để không trùng qua năm; tiêu đề là `Thực đơn tuần N` với N do BE trả. Không dùng tiêu đề tự nhập hoặc lịch năm học mock để quyết định số tuần.
+
 ### Key Entities
+
+- **FR-028**: Theo yêu cầu rà soát toàn bộ hai role, MUST lập bằng chứng FE → API → repository/Prisma cho từng chức năng đang hiển thị, gồm filter/search/paging, trạng thái, lưu và các ràng buộc. Sửa các hợp đồng sai trong menu/kitchen/retained-sample theo FR017–FR024; chức năng của module khác hoặc đã tạm hoãn phải báo rõ mức độ tích hợp, không tự dựng nghiệp vụ/model mới. Không dùng Azure để kiểm thử ghi và không sửa README/.gitignore.
 
 - Thực đơn/định mức/nhóm suất: giữ quan hệ và trạng thái; BGH duyệt qua module hiện có không thay đổi.
 - Mẻ/tồn kho: giữ nhu cầu đã chốt, reservation, confirm, complete và chống ghi hai lần.

@@ -105,9 +105,14 @@ export const menuIngredientKindSchema = z.enum(["main", "seasoning"], {
 });
 export const menuIdParamsSchema = z.strictObject({ menuId: requestUuidSchema });
 export const menuSubmitSchema = z.strictObject({});
+export const menuAcademicCalendarQuerySchema = z.strictObject({});
 export const menuWeekScheduleQuerySchema = z.strictObject({
   date: calendarDateSchema.default(
-    () => new Date(new Date().toISOString().slice(0, 10) + "T00:00:00.000Z"),
+    () =>
+      new Date(
+        new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10) +
+          "T00:00:00.000Z",
+      ),
   ),
 });
 
@@ -389,6 +394,8 @@ export const validateAllergyCheck = (value: unknown) =>
   parseRequest(menuAllergyCheckSchema, value);
 export const validateMenuWeekSchedule = (value: unknown) =>
   parseRequest(menuWeekScheduleQuerySchema, value);
+export const validateMenuAcademicCalendar = (value: unknown) =>
+  parseRequest(menuAcademicCalendarQuerySchema, value);
 export const validateMenuIdParams = (value: unknown) =>
   parseRequest(menuIdParamsSchema, value);
 export const validateMenuSubmit = (value: unknown) =>

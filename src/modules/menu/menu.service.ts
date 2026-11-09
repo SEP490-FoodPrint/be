@@ -10,6 +10,10 @@ import {
 import type {
   MenuSummaryPageResponseDTO,
   MenuSummaryDTO,
+  MenuAcademicCalendarDTO,
+  MenuAcademicYearDTO,
+  AcademicWeekDTO,
+  MenuWeekScheduleDTO,
 } from "./menu.response.dto";
 import type { AuthPrincipal } from "../../types/auth";
 
@@ -31,6 +35,7 @@ import {
   readPlanningStock,
   readMealPortionDemand,
   assertPortionGroupSafety,
+  readSchoolContext,
 } from "../kitchen/kitchen.service";
 
 import type {
@@ -43,6 +48,7 @@ import type {
   MenuListQuery,
   MenuAllergyCheckInput,
   MenuIngredientKind,
+  MenuAcademicCalendarQuery,
 } from "./menu.request.dto";
 
 type Tx = Prisma.TransactionClient;
@@ -805,6 +811,8 @@ function createIngredientOperations(
 
             portionsFinalized: portions > 0,
 
+            dishPortions: Object.fromEntries(demand.dishPortions),
+
             missingDishIds: day.menuDayDishes
 
               .filter((d) => !main.some((i) => i.dishId === d.dishId))
@@ -843,20 +851,6 @@ export const SCHOOL_DAY_LABELS = [
   "Thứ Bảy",
 ] as const;
 
-export function getISOWeekNumber(d: Date): number {
-  const date = new Date(
-    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()),
-  );
-
-  const dayNum = date.getUTCDay() || 7;
-
-  date.setUTCDate(date.getUTCDate() + 4 - dayNum);
-
-  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
-
-  return Math.ceil(((date.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
-}
-
 export function getSchoolMonday(d: Date): Date {
   const date = new Date(
     Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()),
@@ -871,8 +865,6 @@ export function getSchoolMonday(d: Date): Date {
 
 export function getSchoolWeekSchedule(targetDate: Date) {
   const monday = getSchoolMonday(targetDate);
-
-  const weekNumber = getISOWeekNumber(monday);
 
   const schoolDays: {
     date: string;
@@ -911,10 +903,69 @@ export function getSchoolWeekSchedule(targetDate: Date) {
 
     weekEndDate: friday.toISOString().slice(0, 10),
 
-    weekNumber,
-
     schoolDays,
   };
+}
+
+// School weeks are elapsed Monday-based weeks from the configured start date.
+// Holidays do not renumber weeks, and the number is never persisted.
+function mapAcademicYear(
+  row: Awaited<ReturnType<typeof repository.academicYears>>[number],
+  today: string,
+): MenuAcademicYearDTO {
+  const startDate = row.startDate.toISOString().slice(0, 10);
+  const endDate = row.endDate.toISOString().slice(0, 10);
+  const monday = getSchoolMonday(row.startDate);
+  const todayMonday = getSchoolMonday(new Date(today))
+    .toISOString()
+    .slice(0, 10);
+  const weeks: AcademicWeekDTO[] = [];
+  const dayLabel = (date: string) =>
+    `${date.slice(8, 10)}/${date.slice(5, 7)}/${date.slice(0, 4)}`;
+  while (monday <= row.endDate) {
+    const schedule = getSchoolWeekSchedule(monday);
+    const weekNumber = weeks.length + 1;
+    const weekLabel = `Tuần ${weekNumber}`;
+    weeks.push({
+      weekNumber,
+      weekLabel,
+      label: `${weekLabel} (${dayLabel(schedule.weekStartDate)} – ${dayLabel(schedule.weekEndDate)})`,
+      weekStartDate: schedule.weekStartDate,
+      weekEndDate: schedule.weekEndDate,
+      isCurrentWeek: schedule.weekStartDate === todayMonday,
+    });
+    monday.setUTCDate(monday.getUTCDate() + 7);
+  }
+  const holidays: MenuAcademicYearDTO["holidays"] = [];
+  if (Array.isArray(row.holidays)) {
+    for (const item of row.holidays) {
+      if (
+        item &&
+        typeof item === "object" &&
+        !Array.isArray(item) &&
+        typeof item.date === "string"
+      ) {
+        holidays.push({
+          date: item.date,
+          reason: typeof item.reason === "string" ? item.reason : null,
+        });
+      }
+    }
+  }
+  return {
+    id: row.id,
+    academicYear: row.academicYear,
+    label: `Năm học ${row.academicYear}`,
+    startDate,
+    endDate,
+    isCurrent: startDate <= today && today <= endDate,
+    holidays,
+    weeks,
+  };
+}
+
+function schoolToday() {
+  return new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
 function menuCategoryDto(menu: MenuDetailRow) {
@@ -1600,7 +1651,7 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
             throw new HttpError(
               422,
 
-              `Thực đơn tuần ${weekSchedule.weekNumber} chưa đầy đủ các ngày trong tuần (T2 - T6). Còn thiếu: ${missingNames}. Vui lòng tạo đủ 5 ngày trước khi gửi Ban Giám Hiệu duyệt.`,
+              `Thực đơn từ ${weekSchedule.weekStartDate} đến ${weekSchedule.weekEndDate} chưa đầy đủ các ngày trong tuần (T2 - T6). Còn thiếu: ${missingNames}. Vui lòng tạo đủ 5 ngày trước khi gửi Ban Giám Hiệu duyệt.`,
             );
           }
 
@@ -1694,7 +1745,26 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
       );
     },
 
-    async getWeekSchedule(inputDate: string | Date, principal: AuthPrincipal) {
+    async getContext(principal: AuthPrincipal) {
+      schoolScope(principal);
+      return readSchoolContext(await connect(), principal, "menu.view");
+    },
+
+    async getAcademicCalendar(
+      _query: MenuAcademicCalendarQuery,
+      principal: AuthPrincipal,
+    ): Promise<MenuAcademicCalendarDTO> {
+      const schoolId = schoolScope(principal);
+      const rows = await repository.academicYears(await connect(), schoolId);
+      const today = schoolToday();
+      return { academicYears: rows.map((row) => mapAcademicYear(row, today)) };
+    },
+
+    async getWeekSchedule(
+      inputDate: string | Date,
+      principal: AuthPrincipal,
+    ): Promise<MenuWeekScheduleDTO> {
+      const schoolId = schoolScope(principal);
       const scope = listScopes.menu(principal);
 
       const db = await connect();
@@ -1709,6 +1779,21 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
           : inputDate;
 
       const weekInfo = getSchoolWeekSchedule(date);
+
+      const academicYears = await repository.academicYears(db, schoolId);
+      const academicYear = academicYears.find(
+        (year) =>
+          getSchoolMonday(year.startDate) <= date &&
+          date.getTime() <
+            getSchoolMonday(year.endDate).getTime() + 7 * 86400000,
+      );
+      const weekNumber = academicYear
+        ? Math.floor(
+            (getSchoolMonday(date).getTime() -
+              getSchoolMonday(academicYear.startDate).getTime()) /
+              (7 * 86400000),
+          ) + 1
+        : null;
 
       const weeklyMenu = await repository.weekScheduleMenu(
         db,
@@ -1751,7 +1836,11 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
 
         isTargetSchoolDay: targetDayNum >= 1 && targetDayNum <= 5,
 
-        weekNumber: weekInfo.weekNumber,
+        weekNumber,
+
+        weekLabel: weekNumber === null ? null : `Tuần ${weekNumber}`,
+
+        academicYear: academicYear?.academicYear ?? null,
 
         weekStartDate: weekInfo.weekStartDate,
 
