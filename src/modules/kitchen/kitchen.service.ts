@@ -18,8 +18,20 @@ import {
 import type {
   KitchenFilters,
   KitchenInspection,
-  validateKitchenPlan,
-} from "./kitchen.validation";
+  KitchenPlanInput,
+} from "./kitchen.request.dto";
+import type {
+  CookingBatchListResponseDTO,
+  CookingBatchStatsResponseDTO,
+} from "./kitchen.response.dto";
+import {
+  kitchenRepository as repository,
+  readFromDatabase,
+  type KitchenListReader,
+  type KitchenDetailRow,
+  kitchenDetailSelect as detailSelect,
+  kitchenSummarySelect as select,
+} from "./kitchen.repository";
 
 const Decimal = Prisma.Decimal;
 export interface RecipeLine {
@@ -777,30 +789,9 @@ export async function consumeMealSeasonings(
   }
 }
 
-const detailSelect = {
-  id: true,
-  batchCode: true,
-  menuDayId: true,
-  dishId: true,
-  mealType: true,
-  cookingModeApplied: true,
-  status: true,
-  plannedPortions: true,
-  note: true,
-  confirmedAt: true,
-  completedAt: true,
-  createdAt: true,
-  updatedAt: true,
-  Dish: { select: { name: true } },
-  MenuDay: { select: { menuDate: true } },
-  cookingBatchLots: {
-    select: { ingredientLotId: true, quantityUsed: true, unit: true },
-    orderBy: { ingredientLotId: "asc" },
-  },
-} as const satisfies Prisma.CookingBatchSelect;
-type Detail = Prisma.CookingBatchGetPayload<{ select: typeof detailSelect }>;
+type Detail = KitchenDetailRow;
 type Tx = Prisma.TransactionClient;
-type PlanInput = ReturnType<typeof validateKitchenPlan>;
+type PlanInput = KitchenPlanInput;
 
 function dto(batch: Detail) {
   return {
@@ -963,7 +954,10 @@ export function createKitchenLifecycle(
         async (tx, _actor, schoolId) => {
           const batch = await lockedBatch(tx, id, schoolId);
           if (batch.status !== "UNCONFIRMED")
-            throw new HttpError(409, "Chỉ được xóa mẻ trước khi ấn xác nhận");
+            throw new HttpError(
+              409,
+              "Chỉ được xóa mẻ trước khi ấn xác nhận nấu",
+            );
           const shared = await tx.menuMealSeasoningLot.findMany({
             where: mealKey(batch),
             select: { id: true, usedAt: true },
@@ -1302,10 +1296,7 @@ export function createKitchenLifecycle(
             return completionResult(tx, batch);
           }
           if (batch.status !== "CONFIRMED")
-            throw new HttpError(
-              409,
-              "Phải xác nhận kế hoạch trước khi hoàn thành",
-            );
+            throw new HttpError(409, "Phải xác nhận nấu trước khi hoàn thành");
           await assertMealPortions(tx, batch, schoolId);
           const stock = await checkReservedStock(tx, batch, schoolId);
           if (
@@ -1378,37 +1369,8 @@ export function createKitchenLifecycle(
   };
 }
 
-const select = {
-  id: true,
-  batchCode: true,
-  menuDayId: true,
-  dishId: true,
-  mealType: true,
-  cookingModeApplied: true,
-  status: true,
-  plannedPortions: true,
-  confirmedAt: true,
-  completedAt: true,
-  createdAt: true,
-  updatedAt: true,
-} as const satisfies Prisma.CookingBatchSelect;
-
-type ListRow = Prisma.CookingBatchGetPayload<{ select: typeof select }>;
-type ListArguments = Pick<
-  Prisma.CookingBatchFindManyArgs,
-  "skip" | "take" | "orderBy" | "where"
-> & {
-  select: typeof select;
-};
-type ListReader = (args: ListArguments) => Promise<ListRow[]>;
-
-const readFromDatabase: ListReader = async (args) => {
-  const prisma = await getPrisma();
-  return prisma.cookingBatch.findMany(args);
-};
-
 export function createKitchenService(
-  read: ListReader = readFromDatabase,
+  read: KitchenListReader = readFromDatabase,
   connect: () => Promise<PrismaClient> = getPrisma,
 ) {
   function filtered(
@@ -1471,29 +1433,21 @@ export function createKitchenService(
   }
   return {
     ...createKitchenLifecycle(connect),
-    async list(query: KitchenFilters, principal: AuthPrincipal) {
+    async list(
+      query: KitchenFilters,
+      principal: AuthPrincipal,
+    ): Promise<CookingBatchListResponseDTO> {
       const db = await connect(),
         where = filtered(query, principal);
       return db.$transaction(
         async (tx) => ({
           items: (
-            await tx.cookingBatch.findMany({
+            await repository.findBatchesPaged(
+              tx,
               where,
-              select: {
-                ...detailSelect,
-                RetainedFoodSample: {
-                  select: {
-                    id: true,
-                    status: true,
-                    sampledAt: true,
-                    disposedAt: true,
-                  },
-                },
-              },
-              skip: (query.page - 1) * query.limit,
-              take: query.limit,
-              orderBy: [{ createdAt: "desc" }, { id: "asc" }],
-            })
+              (query.page - 1) * query.limit,
+              query.limit,
+            )
           ).map((batch) => ({
             ...dto(batch),
             retainedFoodSample: batch.RetainedFoodSample,
@@ -1501,35 +1455,29 @@ export function createKitchenService(
           pagination: {
             page: query.page,
             limit: query.limit,
-            totalItems: await tx.cookingBatch.count({ where }),
+            totalItems: await repository.countBatches(tx, where),
           },
         }),
         { isolationLevel: "RepeatableRead" },
       );
     },
-    async stats(query: KitchenFilters, principal: AuthPrincipal) {
+    async stats(
+      query: KitchenFilters,
+      principal: AuthPrincipal,
+    ): Promise<CookingBatchStatsResponseDTO> {
       const db = await connect(),
         where = filtered(query, principal);
       return db.$transaction(
         async (tx) => {
-          const states = await tx.cookingBatch.groupBy({
-            by: ["status"],
-            where,
-            _count: true,
-          });
+          const states = await repository.groupBatchStatus(tx, where);
           const counts = Object.fromEntries(
             states.map((s) => [s.status, s._count]),
           );
-          const samples = await tx.retainedFoodSample.groupBy({
-            by: ["status"],
-            where: { CookingBatch: where },
-            _count: true,
-          });
-          const pendingSamples = await tx.cookingBatch.count({
-            where: {
-              AND: [where, { status: "COMPLETED", RetainedFoodSample: null }],
-            },
-          });
+          const samples = await repository.groupSampleStatus(tx, where);
+          const pendingSamples = await repository.countPendingSamples(
+            tx,
+            where,
+          );
           return {
             total: states.reduce((n, s) => n + s._count, 0),
             unconfirmed: counts.UNCONFIRMED ?? 0,

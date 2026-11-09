@@ -1,294 +1,395 @@
+import { z } from "zod";
 import { Prisma } from "../../generated/prisma/client";
+import { paginationSchema } from "../../utils/directory-validation";
 import {
-  objectBody,
-  uuid,
-  text,
-  calendarDate,
-} from "../../utils/auth-validation";
-import { parseListQuery } from "../../utils/list-query";
-import { HttpError } from "../../utils/http-error";
+  parseRequest,
+  requestUuidSchema,
+  requiredText,
+} from "../../utils/request-validation";
 
-// Extend this parser with approved filters when this module gains business rules.
-export { parseListQuery as validateMenuListQuery } from "../../utils/list-query";
-
-export function validateMenuMeal(menuDayId: unknown, mealType: unknown) {
-  if (mealType !== "LUNCH" && mealType !== "AFTERNOON")
-    throw new HttpError(400, "Bữa ăn không hợp lệ");
-  return { menuDayId: uuid(menuDayId), mealType } as const;
-}
-
-function amount(body: Record<string, unknown>) {
-  if (
-    typeof body.quantityPerPortion !== "string" &&
-    typeof body.quantityPerPortion !== "number"
+const calendarDateSchema = z
+  .string({ error: "Ngày phải có định dạng YYYY-MM-DD" })
+  .regex(/^\d{4}-\d{2}-\d{2}$/, { error: "Ngày phải có định dạng YYYY-MM-DD" })
+  .refine(
+    (value) => {
+      const date = new Date(value + "T00:00:00.000Z");
+      return (
+        Number.isFinite(date.getTime()) &&
+        date.toISOString().slice(0, 10) === value
+      );
+    },
+    { error: "Ngày không hợp lệ" },
   )
-    throw new HttpError(400, "Định mức phải là số hoặc chuỗi số thập phân");
-  const quantity = String(body.quantityPerPortion);
-  if (
-    !/^(?:0|[1-9]\d{0,10})(?:\.\d{1,3})?$/.test(quantity) ||
-    !new Prisma.Decimal(quantity).gt(0)
+  .transform((value) => new Date(value + "T00:00:00.000Z"));
+const mealTypeSchema = z.enum(["LUNCH", "AFTERNOON"], {
+  error: "Ca ăn không hợp lệ",
+});
+const quantitySchema = z
+  .union(
+    [
+      z.string({ error: "Định mức phải là số hoặc chuỗi số thập phân" }),
+      z.number({ error: "Định mức phải là số hoặc chuỗi số thập phân" }),
+    ],
+    { error: "Định mức phải là số hoặc chuỗi số thập phân" },
   )
-    throw new HttpError(
-      400,
-      "Định mức phải dương, tối đa 11 chữ số nguyên và 3 chữ số thập phân",
-    );
-  if (
-    typeof body.unit !== "string" ||
-    !body.unit.trim() ||
-    body.unit.trim().length > 30
-  )
-    throw new HttpError(400, "Đơn vị không hợp lệ");
-  return { quantityPerPortion: quantity, unit: body.unit.trim().toLowerCase() };
-}
+  .transform(String)
+  .refine(
+    (quantity) =>
+      /^(?:0|[1-9]\d{0,10})(?:\.\d{1,3})?$/.test(quantity) &&
+      new Prisma.Decimal(quantity).gt(0),
+    {
+      error:
+        "Định mức phải dương, tối đa 11 chữ số nguyên và 3 chữ số thập phân",
+    },
+  );
+const amountFields = {
+  quantityPerPortion: quantitySchema,
+  unit: requiredText(30).transform((value) => value.toLowerCase()),
+};
 
-function array(value: unknown, max: number): unknown[] {
-  if (!Array.isArray(value) || value.length > max)
-    throw new HttpError(400, "Danh sách định mức không hợp lệ");
-  return value as unknown[];
-}
-function unique(values: readonly string[]) {
-  if (new Set(values).size !== values.length)
-    throw new HttpError(400, "Định mức bị trùng");
-}
-
-export function validateMenuStandards(value: unknown) {
-  const body = objectBody(value, ["dishes", "seasonings"]);
-  const dishes = array(body.dishes, 50).map((value) => {
-    const dish = objectBody(value, ["dishId", "ingredients"]);
-    const ingredients = array(dish.ingredients, 100).map((value) => {
-      const line = objectBody(value, [
-        "ingredientId",
-        "quantityPerPortion",
-        "unit",
-      ]);
-      return { ingredientId: uuid(line.ingredientId), ...amount(line) };
-    });
-    if (!ingredients.length)
-      throw new HttpError(400, "Mỗi món cần ít nhất một nguyên liệu chính");
-    unique(ingredients.map((i) => i.ingredientId));
-    return { dishId: uuid(dish.dishId), ingredients };
+function uniqueIssues(
+  values: readonly string[],
+  context: z.RefinementCtx,
+  field?: string,
+  message = "Định mức bị trùng",
+  pathPrefix: (string | number)[] = [],
+) {
+  const seen = new Set<string>();
+  values.forEach((value, index) => {
+    if (seen.has(value))
+      context.addIssue({
+        code: "custom",
+        message,
+        path: field ? [...pathPrefix, index, field] : [...pathPrefix, index],
+      });
+    seen.add(value);
   });
-  if (
-    !dishes.length ||
-    dishes.reduce((n, d) => n + d.ingredients.length, 0) > 1000
-  )
-    throw new HttpError(400, "Số dòng định mức không hợp lệ");
-  unique(dishes.map((dish) => dish.dishId));
-  const seasonings = array(body.seasonings, 100).map((value) => {
-    const line = objectBody(value, [
+}
+
+const mainIngredientSchema = z.strictObject({
+  ingredientId: requestUuidSchema,
+  ...amountFields,
+});
+const mainIngredientsSchema = z
+  .array(mainIngredientSchema, { error: "Danh sách nguyên liệu không hợp lệ" })
+  .max(100, { error: "Tối đa 100 nguyên liệu cho mỗi món" })
+  .superRefine((rows, context) =>
+    uniqueIssues(
+      rows.map((row) => row.ingredientId),
+      context,
+      "ingredientId",
+    ),
+  );
+const seasoningSchema = z.strictObject({
+  ingredientEntryId: requestUuidSchema,
+  ...amountFields,
+});
+const seasoningsSchema = z
+  .array(seasoningSchema, { error: "Danh sách gia vị không hợp lệ" })
+  .max(100, { error: "Tối đa 100 dòng gia vị" })
+  .superRefine((rows, context) =>
+    uniqueIssues(
+      rows.map((row) => row.ingredientEntryId),
+      context,
       "ingredientEntryId",
-      "quantityPerPortion",
-      "unit",
-    ]);
-    return { ingredientEntryId: uuid(line.ingredientEntryId), ...amount(line) };
-  });
-  unique(seasonings.map((s) => s.ingredientEntryId));
-  return { dishes, seasonings };
-}
-export type MenuStandardsInput = ReturnType<typeof validateMenuStandards>;
-export type MenuMeal = ReturnType<typeof validateMenuMeal>;
+    ),
+  );
 
-export function validateMenuPortionGroups(value: unknown) {
-  const body = objectBody(value, ["groups"]);
-  const groups = array(body.groups, 30).map((value) => {
-    const group = objectBody(value, [
-      "id",
-      "name",
-      "isDefault",
-      "dishIds",
-      "avoidedIngredientEntryIds",
-    ]);
-    if (typeof group.isDefault !== "boolean")
-      throw new HttpError(400, "isDefault phải là boolean");
-    const dishIds = array(group.dishIds, 50).map(uuid),
-      avoidedIngredientEntryIds = array(
-        group.avoidedIngredientEntryIds,
-        100,
-      ).map(uuid);
-    unique(dishIds);
-    unique(avoidedIngredientEntryIds);
-    if (
-      !dishIds.length ||
-      (group.isDefault
-        ? avoidedIngredientEntryIds.length > 0
-        : avoidedIngredientEntryIds.length === 0)
-    )
-      throw new HttpError(
-        400,
-        "Nhóm phải có món; nhóm riêng cần khai báo nguyên liệu cần tránh",
+export const menuListQuerySchema = paginationSchema;
+export const menuMealSchema = z.strictObject({
+  menuDayId: requestUuidSchema,
+  mealType: mealTypeSchema,
+});
+export const menuIngredientKindSchema = z.enum(["main", "seasoning"], {
+  error: "Loại nguyên liệu không hợp lệ",
+});
+export const menuIdParamsSchema = z.strictObject({ menuId: requestUuidSchema });
+export const menuSubmitSchema = z.strictObject({});
+export const menuWeekScheduleQuerySchema = z.strictObject({
+  date: calendarDateSchema.default(
+    () => new Date(new Date().toISOString().slice(0, 10) + "T00:00:00.000Z"),
+  ),
+});
+
+const standardDishSchema = z.strictObject({
+  dishId: requestUuidSchema,
+  ingredients: mainIngredientsSchema.refine(
+    (ingredients) => ingredients.length > 0,
+    { error: "Mỗi món cần ít nhất một nguyên liệu chính" },
+  ),
+});
+export const menuStandardsSchema = z.strictObject({
+  dishes: z
+    .array(standardDishSchema, { error: "Danh sách món không hợp lệ" })
+    .min(1, { error: "Cần ít nhất một món" })
+    .max(50, { error: "Tối đa 50 món" })
+    .superRefine((dishes, context) => {
+      uniqueIssues(
+        dishes.map((dish) => dish.dishId),
+        context,
+        "dishId",
       );
-    return {
-      id: group.id === undefined ? undefined : uuid(group.id),
-      name: text(group.name, 120),
-      isDefault: group.isDefault,
-      dishIds,
-      avoidedIngredientEntryIds,
-    };
-  });
-  unique(groups.flatMap((g) => (g.id ? [g.id] : [])));
-  unique(groups.map((g) => g.name));
-  if (groups.length && groups.filter((g) => g.isDefault).length !== 1)
-    throw new HttpError(400, "Cần đúng một nhóm suất thường");
-  return { groups };
-}
-export type MenuPortionGroupsInput = ReturnType<
-  typeof validateMenuPortionGroups
->;
-
-export function validateMenuIngredientKind(
-  value: unknown,
-): "main" | "seasoning" {
-  if (value !== "main" && value !== "seasoning")
-    throw new HttpError(400, "Loại nguyên liệu không hợp lệ");
-  return value;
-}
-
-export function validateMenuWrite(value: unknown) {
-  const body = objectBody(value, ["weekStartDate", "title", "days"]);
-  const weekStartDate = calendarDate(body.weekStartDate);
-  const days = array(body.days, 7).map((value) => {
-    const day = objectBody(value, ["menuDate", "note", "meals"]);
-    const menuDate = calendarDate(day.menuDate);
-    const dayOfWeek = menuDate.getUTCDay();
-    if (dayOfWeek === 0 || dayOfWeek === 6) {
-      throw new HttpError(
-        400,
-        `Ngày ${menuDate.toISOString().slice(0, 10)} là cuối tuần (${dayOfWeek === 6 ? "Thứ Bảy" : "Chủ Nhật"}). Thực đơn bán trú chỉ áp dụng từ Thứ Hai đến Thứ Sáu (T2 - T6).`,
-      );
-    }
-    if (
-      menuDate < weekStartDate ||
-      menuDate.getTime() >= weekStartDate.getTime() + 7 * 86400000
-    )
-      throw new HttpError(400, "Ngày thực đơn phải thuộc tuần đã chọn");
-    const meals = array(day.meals, 2).map((value) => {
-      const meal = objectBody(value, ["mealType", "dishes", "seasonings"]);
-      if (meal.mealType !== "LUNCH" && meal.mealType !== "AFTERNOON")
-        throw new HttpError(400, "Ca ăn không hợp lệ");
-      const dishes = array(meal.dishes, 50).map((value) => {
-        const dish = objectBody(value, ["dishId", "name", "ingredients"]);
-        if ((dish.dishId === undefined) === (dish.name === undefined))
-          throw new HttpError(400, "Chọn dishId hoặc nhập tên món mới");
-        const ingredients = array(dish.ingredients ?? [], 100).map((value) => {
-          const line = objectBody(value, [
-            "ingredientId",
-            "quantityPerPortion",
-            "unit",
-          ]);
-          return { ingredientId: uuid(line.ingredientId), ...amount(line) };
+      if (
+        dishes.reduce((total, dish) => total + dish.ingredients.length, 0) >
+        1000
+      )
+        context.addIssue({
+          code: "custom",
+          message: "Số dòng định mức không hợp lệ",
         });
-        unique(ingredients.map((i) => i.ingredientId));
-        return {
-          dishId: dish.dishId === undefined ? undefined : uuid(dish.dishId),
-          name: dish.name === undefined ? undefined : text(dish.name, 255),
-          ingredients,
-        };
-      });
-      if (!dishes.length)
-        throw new HttpError(400, "Bữa ăn cần ít nhất một món");
-      unique(dishes.map((d) => d.dishId ?? `name:${d.name}`));
-      const seasonings = array(meal.seasonings ?? [], 100).map((value) => {
-        const line = objectBody(value, [
-          "ingredientEntryId",
-          "quantityPerPortion",
-          "unit",
-        ]);
-        return {
-          ingredientEntryId: uuid(line.ingredientEntryId),
-          ...amount(line),
-        };
-      });
-      unique(seasonings.map((s) => s.ingredientEntryId));
-      return { mealType: meal.mealType, dishes, seasonings } as const;
-    });
-    if (!meals.length)
-      throw new HttpError(400, "Ngày thực đơn cần ít nhất một bữa");
-    unique(meals.map((m) => m.mealType));
-    return {
-      menuDate,
-      note: day.note == null ? null : text(day.note, 2000),
-      meals,
-    };
-  });
-  if (
-    !days.length ||
-    days
-      .flatMap((d) => d.meals)
-      .reduce(
-        (n, m) =>
-          n +
-          m.seasonings.length +
-          m.dishes.reduce((s, d) => s + d.ingredients.length, 0),
-        0,
-      ) > 2000
-  )
-    throw new HttpError(400, "Số dòng thực đơn không hợp lệ");
-  unique(days.map((d) => d.menuDate.toISOString()));
-  return {
-    weekStartDate,
-    title: body.title == null ? null : text(body.title, 255),
-    days,
-  };
-}
-export type MenuWrite = ReturnType<typeof validateMenuWrite>;
-
-export function validateMenuReview(value: unknown) {
-  const body = objectBody(value, ["menuDayId", "decision", "feedback"]);
-  if (body.decision !== "APPROVED" && body.decision !== "REVISION_REQUESTED")
-    throw new HttpError(400, "Quyết định duyệt không hợp lệ");
-  const feedback =
-    body.feedback === undefined || body.feedback === ""
-      ? null
-      : text(body.feedback, 2000);
-  if (body.decision === "REVISION_REQUESTED" && !feedback)
-    throw new HttpError(400, "Cần nêu lý do yêu cầu chỉnh sửa");
-  return {
-    menuDayId: body.menuDayId == null ? null : uuid(body.menuDayId),
-    decision: body.decision,
-    feedback,
-  } as const;
-}
-export type MenuReviewInput = ReturnType<typeof validateMenuReview>;
-
-export function validateMenuFilters(query: Record<string, unknown>) {
-  if (
-    Object.keys(query).some(
-      (k) => !["page", "limit", "date", "weekStartDate", "status"].includes(k),
-    )
-  )
-    throw new HttpError(400, "Bộ lọc thực đơn không hợp lệ");
-  if (
-    query.status !== undefined &&
-    (typeof query.status !== "string" ||
-      !["DRAFT", "PENDING_APPROVAL", "REVISION_REQUIRED", "APPROVED"].includes(
-        query.status,
-      ))
-  )
-    throw new HttpError(400, "Trạng thái thực đơn không hợp lệ");
-  return {
-    ...parseListQuery({
-      ...(query.page === undefined ? {} : { page: query.page }),
-      ...(query.limit === undefined ? {} : { limit: query.limit }),
     }),
-    date: query.date === undefined ? undefined : calendarDate(query.date),
-    weekStartDate:
-      query.weekStartDate === undefined
-        ? undefined
-        : calendarDate(query.weekStartDate),
-    status: query.status as
-      | "DRAFT"
-      | "PENDING_APPROVAL"
-      | "REVISION_REQUIRED"
-      | "APPROVED"
-      | undefined,
-  };
-}
-export type MenuFilters = ReturnType<typeof validateMenuFilters>;
+  seasonings: seasoningsSchema,
+});
 
-export function validateAllergyCheck(value: unknown) {
-  const body = objectBody(value, ["ingredientIds"]);
-  const ids = array(body.ingredientIds, 100).map(uuid);
-  if (!ids.length) throw new HttpError(400, "Cần chọn ít nhất một nguyên liệu");
-  unique(ids);
-  return ids;
-}
+const groupDishIdsSchema = z
+  .array(requestUuidSchema, { error: "Danh sách món không hợp lệ" })
+  .min(1, { error: "Nhóm phải có món" })
+  .max(50, { error: "Tối đa 50 món trong nhóm" })
+  .superRefine((ids, context) => uniqueIssues(ids, context));
+const groupAvoidanceIdsSchema = z
+  .array(requestUuidSchema, {
+    error: "Danh sách nguyên liệu cần tránh không hợp lệ",
+  })
+  .max(100, { error: "Tối đa 100 nguyên liệu cần tránh" })
+  .superRefine((ids, context) => uniqueIssues(ids, context));
+const portionGroupSchema = z
+  .strictObject({
+    id: requestUuidSchema.optional(),
+    name: requiredText(120),
+    isDefault: z.boolean({ error: "isDefault phải là boolean" }),
+    dishIds: groupDishIdsSchema,
+    avoidedIngredientEntryIds: groupAvoidanceIdsSchema,
+  })
+  .superRefine((group, context) => {
+    if (
+      group.isDefault
+        ? group.avoidedIngredientEntryIds.length > 0
+        : group.avoidedIngredientEntryIds.length === 0
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["avoidedIngredientEntryIds"],
+        message:
+          "Nhóm thường không nhận nguyên liệu cần tránh; nhóm riêng cần khai báo nguyên liệu cần tránh",
+      });
+    }
+  })
+  .transform((group) => ({
+    id: group.id,
+    name: group.name,
+    isDefault: group.isDefault,
+    dishIds: group.dishIds,
+    avoidedIngredientEntryIds: group.avoidedIngredientEntryIds,
+  }));
+export const menuPortionGroupsSchema = z.strictObject({
+  groups: z
+    .array(portionGroupSchema, { error: "Danh sách nhóm suất không hợp lệ" })
+    .max(30, { error: "Tối đa 30 nhóm suất" })
+    .superRefine((groups, context) => {
+      const seenIds = new Set<string>();
+      groups.forEach((group, index) => {
+        if (group.id && seenIds.has(group.id))
+          context.addIssue({
+            code: "custom",
+            path: [index, "id"],
+            message: "Nhóm suất bị trùng",
+          });
+        if (group.id) seenIds.add(group.id);
+      });
+      uniqueIssues(
+        groups.map((group) => group.name),
+        context,
+        "name",
+        "Tên nhóm suất bị trùng",
+      );
+      if (
+        groups.length > 0 &&
+        groups.filter((group) => group.isDefault).length !== 1
+      )
+        context.addIssue({
+          code: "custom",
+          message: "Cần đúng một nhóm suất thường",
+        });
+    }),
+});
+
+const writeDishSchema = z
+  .strictObject({
+    dishId: requestUuidSchema.optional(),
+    name: requiredText(255).optional(),
+    ingredients: mainIngredientsSchema
+      .nullish()
+      .transform((value) => value ?? []),
+  })
+  .superRefine((dish, context) => {
+    if ((dish.dishId === undefined) === (dish.name === undefined))
+      context.addIssue({
+        code: "custom",
+        path: ["dishId"],
+        message: "Chọn dishId hoặc nhập tên món mới",
+      });
+  })
+  .transform((dish) => ({
+    dishId: dish.dishId,
+    name: dish.name,
+    ingredients: dish.ingredients,
+  }));
+const writeMealSchema = z.strictObject({
+  mealType: mealTypeSchema,
+  dishes: z
+    .array(writeDishSchema, { error: "Danh sách món không hợp lệ" })
+    .min(1, { error: "Bữa ăn cần ít nhất một món" })
+    .max(50, { error: "Tối đa 50 món trong bữa" })
+    .superRefine((dishes, context) =>
+      uniqueIssues(
+        dishes.map((dish) => dish.dishId ?? `name:${dish.name}`),
+        context,
+      ),
+    ),
+  seasonings: seasoningsSchema.nullish().transform((value) => value ?? []),
+});
+const writeDaySchema = z.strictObject({
+  menuDate: calendarDateSchema.refine(
+    (date) => date.getUTCDay() !== 0 && date.getUTCDay() !== 6,
+    { error: "Thực đơn bán trú chỉ áp dụng từ Thứ Hai đến Thứ Sáu" },
+  ),
+  note: requiredText(2000)
+    .nullish()
+    .transform((value) => value ?? null),
+  meals: z
+    .array(writeMealSchema, { error: "Danh sách bữa ăn không hợp lệ" })
+    .min(1, { error: "Ngày thực đơn cần ít nhất một bữa" })
+    .max(2, { error: "Tối đa hai bữa ăn mỗi ngày" })
+    .superRefine((meals, context) =>
+      uniqueIssues(
+        meals.map((meal) => meal.mealType),
+        context,
+        "mealType",
+        "Ca ăn bị trùng",
+      ),
+    ),
+});
+export const menuWriteSchema = z
+  .strictObject({
+    weekStartDate: calendarDateSchema,
+    title: requiredText(255)
+      .nullish()
+      .transform((value) => value ?? null),
+    days: z
+      .array(writeDaySchema, { error: "Danh sách ngày thực đơn không hợp lệ" })
+      .min(1, { error: "Cần ít nhất một ngày thực đơn" })
+      .max(7, { error: "Tối đa bảy ngày trong thực đơn" }),
+  })
+  .superRefine((menu, context) => {
+    uniqueIssues(
+      menu.days.map((day) => day.menuDate.toISOString()),
+      context,
+      "menuDate",
+      "Ngày thực đơn bị trùng",
+      ["days"],
+    );
+    menu.days.forEach((day, index) => {
+      if (
+        day.menuDate < menu.weekStartDate ||
+        day.menuDate.getTime() >= menu.weekStartDate.getTime() + 7 * 86400000
+      )
+        context.addIssue({
+          code: "custom",
+          path: ["days", index, "menuDate"],
+          message: "Ngày thực đơn phải thuộc tuần đã chọn",
+        });
+    });
+    const lines = menu.days
+      .flatMap((day) => day.meals)
+      .reduce(
+        (total, meal) =>
+          total +
+          meal.seasonings.length +
+          meal.dishes.reduce((sum, dish) => sum + dish.ingredients.length, 0),
+        0,
+      );
+    if (lines > 2000)
+      context.addIssue({
+        code: "custom",
+        path: ["days"],
+        message: "Số dòng thực đơn không hợp lệ",
+      });
+  });
+
+export const menuReviewSchema = z
+  .strictObject({
+    menuDayId: requestUuidSchema.nullish().transform((value) => value ?? null),
+    decision: z.enum(["APPROVED", "REVISION_REQUESTED"], {
+      error: "Quyết định duyệt không hợp lệ",
+    }),
+    feedback: z
+      .union([z.literal("").transform(() => null), requiredText(2000)])
+      .optional()
+      .transform((value) => value ?? null),
+  })
+  .superRefine((review, context) => {
+    if (review.decision === "REVISION_REQUESTED" && !review.feedback)
+      context.addIssue({
+        code: "custom",
+        path: ["feedback"],
+        message: "Cần nêu lý do yêu cầu chỉnh sửa",
+      });
+  });
+export const menuFiltersSchema = paginationSchema
+  .safeExtend({
+    date: calendarDateSchema.optional(),
+    weekStartDate: calendarDateSchema.optional(),
+    status: z
+      .enum(["DRAFT", "PENDING_APPROVAL", "REVISION_REQUIRED", "APPROVED"], {
+        error: "Trạng thái thực đơn không hợp lệ",
+      })
+      .optional(),
+  })
+  .transform((query) => ({
+    page: query.page,
+    limit: query.limit,
+    date: query.date,
+    weekStartDate: query.weekStartDate,
+    status: query.status,
+  }));
+export const menuAllergyCheckSchema = z
+  .strictObject({
+    ingredientIds: z
+      .array(requestUuidSchema, { error: "Danh sách nguyên liệu không hợp lệ" })
+      .min(1, { error: "Cần chọn ít nhất một nguyên liệu" })
+      .max(100, { error: "Tối đa 100 nguyên liệu" })
+      .superRefine((ids, context) => uniqueIssues(ids, context)),
+  })
+  .transform((body) => body.ingredientIds);
+
+export const validateMenuListQuery = (value: unknown) =>
+  parseRequest(menuListQuerySchema, value);
+export const validateMenuMeal = (menuDayId: unknown, mealType: unknown) =>
+  parseRequest(menuMealSchema, { menuDayId, mealType });
+export const validateMenuStandards = (value: unknown) =>
+  parseRequest(menuStandardsSchema, value);
+export const validateMenuPortionGroups = (value: unknown) =>
+  parseRequest(menuPortionGroupsSchema, value);
+export const validateMenuIngredientKind = (value: unknown) =>
+  parseRequest(menuIngredientKindSchema, value);
+export const validateMenuWrite = (value: unknown) =>
+  parseRequest(menuWriteSchema, value);
+export const validateMenuReview = (value: unknown) =>
+  parseRequest(menuReviewSchema, value);
+export const validateMenuFilters = (value: unknown) =>
+  parseRequest(menuFiltersSchema, value);
+export const validateAllergyCheck = (value: unknown) =>
+  parseRequest(menuAllergyCheckSchema, value);
+export const validateMenuWeekSchedule = (value: unknown) =>
+  parseRequest(menuWeekScheduleQuerySchema, value);
+export const validateMenuIdParams = (value: unknown) =>
+  parseRequest(menuIdParamsSchema, value);
+export const validateMenuSubmit = (value: unknown) =>
+  parseRequest(menuSubmitSchema, value ?? {});
+
+export type MenuMeal = z.infer<typeof menuMealSchema>;
+export type MenuStandardsInput = z.infer<typeof menuStandardsSchema>;
+export type MenuWrite = z.infer<typeof menuWriteSchema>;
+export type MenuReviewInput = z.infer<typeof menuReviewSchema>;
+export type MenuFilters = z.infer<typeof menuFiltersSchema>;
+export type MenuPortionGroupsInput = z.infer<typeof menuPortionGroupsSchema>;

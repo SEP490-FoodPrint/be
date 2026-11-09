@@ -31,7 +31,7 @@ export function createKitchenController(
       sendSuccess(
         res,
         await service.remove(uuid(req.params.id), requirePrincipal(req)),
-        "Đã xóa mẻ chưa xác nhận và giải phóng giữ chỗ",
+        "Đã xóa mẻ chưa xác nhận nấu và giải phóng giữ chỗ",
       );
     }),
     list: asyncHandler(
@@ -79,7 +79,7 @@ export function createKitchenController(
       sendSuccess(
         res,
         await service.confirm(uuid(req.params.id), requirePrincipal(req)),
-        "Đã xác nhận kế hoạch",
+        "Đã xác nhận nấu thành công",
       );
     }),
     complete: asyncHandler(async (req, res) => {

@@ -9,13 +9,10 @@ import { HttpError } from "../../utils/http-error";
 import type {
   FoodSampleInput,
   SampleDisposalInput,
-} from "./retained-sample.validation";
+  RetainedSampleListQuery,
+} from "./retained-sample.request.dto";
 import { getPrisma } from "../../utils/database";
-import {
-  listWindow,
-  readListPage,
-  type ListQuery,
-} from "../../utils/list-query";
+import { listWindow, readListPage } from "../../utils/list-query";
 
 const select = {
   id: true,
@@ -30,6 +27,18 @@ const select = {
   disposalNote: true,
   createdAt: true,
   updatedAt: true,
+  CookingBatch: {
+    select: {
+      batchCode: true,
+      mealType: true,
+      plannedPortions: true,
+      Dish: {
+        select: {
+          name: true,
+        },
+      },
+    },
+  },
 } as const satisfies Prisma.RetainedFoodSampleSelect;
 
 type ListRow = Prisma.RetainedFoodSampleGetPayload<{ select: typeof select }>;
@@ -210,15 +219,54 @@ export function createRetainedSampleService(
         },
       );
     },
-    getAll(query: ListQuery, principal: AuthPrincipal) {
-      const where = listScopes["retained-sample"](principal);
+    getAll(query: RetainedSampleListQuery, principal: AuthPrincipal) {
+      const scope = listScopes["retained-sample"](principal);
+      const search = query.search;
+      const where: Prisma.RetainedFoodSampleWhereInput = {
+        AND: [
+          scope,
+          ...(query.status ? [{ status: query.status }] : []),
+          ...(search
+            ? [
+                {
+                  OR: [
+                    {
+                      storageLocation: {
+                        contains: search,
+                        mode: "insensitive" as const,
+                      },
+                    },
+                    {
+                      CookingBatch: {
+                        batchCode: {
+                          contains: search,
+                          mode: "insensitive" as const,
+                        },
+                      },
+                    },
+                    {
+                      CookingBatch: {
+                        Dish: {
+                          name: {
+                            contains: search,
+                            mode: "insensitive" as const,
+                          },
+                        },
+                      },
+                    },
+                  ],
+                },
+              ]
+            : []),
+        ],
+      };
       return readListPage(
         () =>
           read({
             ...listWindow(query),
             where,
             select,
-            orderBy: [{ id: "asc" }],
+            orderBy: [{ sampledAt: "desc" }, { id: "asc" }],
           }),
         query,
       );
