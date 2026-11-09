@@ -60,10 +60,7 @@ import {
   validateMenuPortionGroups,
 } from "../src/modules/menu/menu.validation";
 import { createKitchenService } from "../src/modules/kitchen/kitchen.service";
-import {
-  validateKitchenFilters,
-  validateKitchenUpdate,
-} from "../src/modules/kitchen/kitchen.validation";
+import { validateKitchenFilters } from "../src/modules/kitchen/kitchen.validation";
 import { createRetainedSampleService } from "../src/modules/retained-sample/retained-sample.service";
 import { createMealAttendanceService } from "../src/modules/meal-attendance/meal-attendance.service";
 import { validateDailyPortionGroups } from "../src/modules/meal-attendance/meal-attendance.validation";
@@ -689,7 +686,10 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         (await samples.create(batch.id, sampleInput, chef)).created,
         false,
       );
-      assert.equal(+saved.expiresAt - +saved.sampledAt, 86400000);
+      assert.equal(
+        Date.parse(saved.expiresAt) - Date.parse(saved.sampledAt),
+        86400000,
+      );
       const disposal = validateSampleDisposal({
         disposedAt: new Date(Date.now() + 86400000).toISOString(),
         disposalNote: "Future date must not bypass retention",
@@ -960,16 +960,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         [45, 75],
       );
       const grDeleted = grPlan.batches.find((b) => b.plannedPortions === 75)!;
-      assert.equal(
-        (
-          await batches.update(
-            grDeleted.id,
-            validateKitchenUpdate({ note: "Before confirmation" }),
-            chef,
-          )
-        ).note,
-        "Before confirmation",
-      );
+      assert.equal("update" in batches, false);
       assert.equal(
         (await batches.remove(grDeleted.id, chef))
           .mealSeasoningReservationsReleased,
@@ -981,10 +972,6 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         120,
       );
       await batches.confirm(grPlan.batches[0].id, chef);
-      await assert.rejects(
-        () => batches.update(grPlan.batches[0].id, { note: "Too late" }, chef),
-        (e: unknown) => e instanceof HttpError && e.statusCode === 409,
-      );
       await assert.rejects(
         () => batches.remove(grPlan.batches[0].id, chef),
         (e: unknown) => e instanceof HttpError && e.statusCode === 409,

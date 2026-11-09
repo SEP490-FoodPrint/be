@@ -1,23 +1,15 @@
+﻿import type { z } from "zod";
 import type {
-  validateKitchenPlan,
-  validateKitchenUpdate,
-  validateKitchenComplete,
-  validateKitchenFilters,
+  kitchenPlanSchema,
+  kitchenCompleteSchema,
+  kitchenFiltersSchema,
+  kitchenListQuerySchema,
 } from "./kitchen.validation";
-import type { ListQuery } from "../../utils/list-query";
-
-export type KitchenPlanRequestDTO = ReturnType<typeof validateKitchenPlan>;
-export type KitchenUpdateRequestDTO = ReturnType<typeof validateKitchenUpdate>;
-export type KitchenCompleteRequestDTO = ReturnType<
-  typeof validateKitchenComplete
->;
-export type KitchenFiltersRequestDTO = ReturnType<
-  typeof validateKitchenFilters
->;
-export type KitchenListQueryRequestDTO = ListQuery;
-
+export type KitchenPlanRequestDTO = z.infer<typeof kitchenPlanSchema>;
+export type KitchenCompleteRequestDTO = z.infer<typeof kitchenCompleteSchema>;
+export type KitchenFiltersRequestDTO = z.infer<typeof kitchenFiltersSchema>;
+export type KitchenListQueryRequestDTO = z.infer<typeof kitchenListQuerySchema>;
 export type KitchenPlanInput = KitchenPlanRequestDTO;
-export type KitchenUpdateInput = KitchenUpdateRequestDTO;
 export type KitchenCompleteInput = KitchenCompleteRequestDTO;
 export type KitchenInspection = KitchenCompleteRequestDTO;
 export type KitchenFilters = KitchenFiltersRequestDTO;

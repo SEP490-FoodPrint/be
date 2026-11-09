@@ -20,7 +20,28 @@ export const kitchenDetailSelect = {
   Dish: { select: { name: true } },
   MenuDay: { select: { menuDate: true } },
   cookingBatchLots: {
-    select: { ingredientLotId: true, quantityUsed: true, unit: true },
+    select: {
+      ingredientLotId: true,
+      quantityUsed: true,
+      unit: true,
+      IngredientLot: {
+        select: {
+          lotCode: true,
+          expiryDate: true,
+          DeliveryItem: {
+            select: {
+              SupplyRequestItem: {
+                select: {
+                  IngredientEntry: {
+                    select: { Ingredient: { select: { name: true } } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
     orderBy: { ingredientLotId: "asc" },
   },
 } as const satisfies Prisma.CookingBatchSelect;
@@ -80,7 +101,106 @@ export const readFromDatabase: KitchenListReader = async (args) => {
   return prisma.cookingBatch.findMany(args);
 };
 
+interface KitchenFilterValues {
+  page: number;
+  limit: number;
+  date?: Date;
+  startDate?: Date;
+  endDate?: Date;
+  mealType?: "LUNCH" | "AFTERNOON";
+  status?: "UNCONFIRMED" | "CONFIRMED" | "COMPLETED";
+  menuDayId?: string;
+  dishId?: string;
+  cookingModeApplied?: "COMBINE_LOTS" | "SEPARATE_BY_LOT";
+  search?: string;
+  hasSample?: boolean;
+}
+
+function kitchenFilterWhere(
+  query: KitchenFilterValues,
+  scope: Prisma.CookingBatchWhereInput,
+): Prisma.CookingBatchWhereInput {
+  const search = query.search;
+  const searchPortions =
+    search && /^[0-9]+$/.test(search) ? Number(search) : undefined;
+  return {
+    AND: [
+      scope,
+      {
+        status: query.status,
+        mealType: query.mealType,
+        menuDayId: query.menuDayId,
+        dishId: query.dishId,
+        cookingModeApplied: query.cookingModeApplied,
+        ...(query.hasSample === undefined
+          ? {}
+          : { RetainedFoodSample: query.hasSample ? { isNot: null } : null }),
+        ...(query.startDate && query.endDate
+          ? {
+              MenuDay: {
+                menuDate: {
+                  gte: query.startDate,
+                  lte: query.endDate,
+                },
+              },
+            }
+          : query.startDate
+            ? { MenuDay: { menuDate: { gte: query.startDate } } }
+            : query.endDate
+              ? { MenuDay: { menuDate: { lte: query.endDate } } }
+              : query.date
+                ? { MenuDay: { menuDate: query.date } }
+                : {}),
+        ...(search
+          ? {
+              OR: [
+                {
+                  batchCode: {
+                    contains: search,
+                    mode: "insensitive" as const,
+                  },
+                },
+                {
+                  Dish: {
+                    name: { contains: search, mode: "insensitive" as const },
+                  },
+                },
+                ...(searchPortions !== undefined &&
+                Number.isSafeInteger(searchPortions) &&
+                searchPortions <= 2147483647
+                  ? [{ plannedPortions: searchPortions }]
+                  : []),
+              ],
+            }
+          : {}),
+      },
+    ],
+  };
+}
+
 export const kitchenRepository = {
+  findSchoolContext(client: Tx, schoolId: string) {
+    return client.school.findFirst({
+      where: { id: schoolId, status: "ACTIVE" },
+      select: {
+        id: true,
+        name: true,
+        cookingMode: true,
+        lunchTime: true,
+        afternoonMealTime: true,
+        academicYears: {
+          select: {
+            id: true,
+            academicYear: true,
+            startDate: true,
+            endDate: true,
+            holidays: true,
+          },
+          orderBy: [{ startDate: "desc" }, { id: "asc" }],
+        },
+      },
+    });
+  },
   findBatch(
     client: Tx,
     id: string,
@@ -94,24 +214,33 @@ export const kitchenRepository = {
 
   findBatchesPaged(
     client: Tx,
-    where: Prisma.CookingBatchWhereInput,
-    skip: number,
-    take: number,
+    query: KitchenFilterValues,
+    scope: Prisma.CookingBatchWhereInput,
   ) {
     return client.cookingBatch.findMany({
-      where,
+      where: kitchenFilterWhere(query, scope),
       select: kitchenListSelect,
-      skip,
-      take,
+      skip: (query.page - 1) * query.limit,
+      take: query.limit,
       orderBy: [{ createdAt: "desc" }, { id: "asc" }],
     });
   },
 
-  countBatches(client: Tx, where: Prisma.CookingBatchWhereInput) {
+  countBatches(
+    client: Tx,
+    query: KitchenFilterValues,
+    scope: Prisma.CookingBatchWhereInput,
+  ) {
+    const where = kitchenFilterWhere(query, scope);
     return client.cookingBatch.count({ where });
   },
 
-  groupBatchStatus(client: Tx, where: Prisma.CookingBatchWhereInput) {
+  groupBatchStatus(
+    client: Tx,
+    query: KitchenFilterValues,
+    scope: Prisma.CookingBatchWhereInput,
+  ) {
+    const where = kitchenFilterWhere(query, scope);
     return client.cookingBatch.groupBy({
       by: ["status"],
       where,
@@ -119,7 +248,12 @@ export const kitchenRepository = {
     });
   },
 
-  groupSampleStatus(client: Tx, where: Prisma.CookingBatchWhereInput) {
+  groupSampleStatus(
+    client: Tx,
+    query: KitchenFilterValues,
+    scope: Prisma.CookingBatchWhereInput,
+  ) {
+    const where = kitchenFilterWhere(query, scope);
     return client.retainedFoodSample.groupBy({
       by: ["status"],
       where: { CookingBatch: where },
@@ -127,7 +261,12 @@ export const kitchenRepository = {
     });
   },
 
-  countPendingSamples(client: Tx, where: Prisma.CookingBatchWhereInput) {
+  countPendingSamples(
+    client: Tx,
+    query: KitchenFilterValues,
+    scope: Prisma.CookingBatchWhereInput,
+  ) {
+    const where = kitchenFilterWhere(query, scope);
     return client.cookingBatch.count({
       where: {
         AND: [where, { status: "COMPLETED", RetainedFoodSample: null }],

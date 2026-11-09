@@ -42,6 +42,7 @@ interface MenuFilterValues extends Pagination {
   date?: Date;
   weekStartDate?: Date;
   status?: MenuStatus;
+  search?: string;
 }
 interface ReviewWrite {
   menuDayId: string | null;
@@ -226,6 +227,34 @@ function menuFilterWhere(
         weekStartDate: query.weekStartDate,
 
         ...(query.date ? { menuDays: { some: { menuDate: query.date } } } : {}),
+        ...(query.search
+          ? {
+              OR: [
+                {
+                  title: {
+                    contains: query.search,
+                    mode: "insensitive" as const,
+                  },
+                },
+                {
+                  menuDays: {
+                    some: {
+                      menuDayDishes: {
+                        some: {
+                          Dish: {
+                            name: {
+                              contains: query.search,
+                              mode: "insensitive" as const,
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              ],
+            }
+          : {}),
       },
     ],
   };
