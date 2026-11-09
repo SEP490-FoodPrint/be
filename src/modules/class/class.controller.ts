@@ -5,6 +5,9 @@ import { classService, type ClassService } from "./class.service";
 import {
   validateClassListQuery,
   validateClassSchoolParams,
+  validateClassIdParams,
+  validateEligibleTeachersQuery,
+  validateHomeroomAssignment,
 } from "./class.validation";
 
 export function createClassController(service: ClassService = classService) {
@@ -21,6 +24,37 @@ export function createClassController(service: ClassService = classService) {
       const query = validateClassListQuery(req.query);
       const result = await service.getAll(query, requirePrincipal(req));
       sendSuccess(res, result, "Lấy danh sách lớp học thành công");
+    }),
+    getAcademicYears: asyncHandler(async (req, res) => {
+      sendSuccess(res, await service.getAcademicYears(requirePrincipal(req)));
+    }),
+    getEligibleTeachers: asyncHandler(async (req, res) => {
+      sendSuccess(
+        res,
+        await service.getEligibleTeachers(
+          validateEligibleTeachersQuery(req.query),
+          requirePrincipal(req),
+        ),
+      );
+    }),
+    assignHomeroomTeacher: asyncHandler(async (req, res) => {
+      sendSuccess(
+        res,
+        await service.assignHomeroomTeacher(
+          validateClassIdParams(req.params),
+          validateHomeroomAssignment(req.body),
+          requirePrincipal(req),
+        ),
+      );
+    }),
+    removeHomeroomTeacher: asyncHandler(async (req, res) => {
+      sendSuccess(
+        res,
+        await service.removeHomeroomTeacher(
+          validateClassIdParams(req.params),
+          requirePrincipal(req),
+        ),
+      );
     }),
   };
 }

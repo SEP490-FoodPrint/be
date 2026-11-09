@@ -18,6 +18,26 @@ export function createMealAttendanceRouter(
 ) {
   const router = Router();
   const controller = createMealAttendanceController(service);
+  if (!versioned) {
+    router.get(
+      "/my-class",
+      authHandler,
+      requirePermission("daily_meal_portion.view"),
+      controller.getMyClass,
+    );
+    router.post(
+      "/",
+      authHandler,
+      requirePermission("daily_meal_portion.update"),
+      controller.saveDraft,
+    );
+    router.post(
+      "/:id/finalize",
+      authHandler,
+      requirePermission("daily_meal_portion.update"),
+      controller.finalize,
+    );
+  }
   router.get(
     "/:id/portion-groups",
     authHandler,

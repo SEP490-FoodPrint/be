@@ -98,6 +98,13 @@ export const INITIAL_PERMISSIONS = [
     description: "Xem và cấu hình chế độ nấu của trường trong phiên.",
   },
   {
+    code: "school_meal_times.manage",
+    name: "Cấu hình giờ phục vụ bữa ăn",
+    module: "school",
+    action: "manage_meal_times",
+    description: "Xem và cấu hình giờ phục vụ bữa trưa, bữa phụ của trường.",
+  },
+  {
     code: "school_user.manage",
     name: "Quản lý tài khoản nhân sự trường",
     module: "user",
@@ -519,6 +526,13 @@ export const INITIAL_PERMISSIONS = [
     description: "Xem lớp học",
   },
   {
+    code: "class_assignment.manage",
+    name: "Phân công giáo viên chủ nhiệm",
+    module: "class_assignment",
+    action: "manage",
+    description: "Gán, đổi hoặc bỏ GVCN theo niên khóa.",
+  },
+  {
     code: "supplier_certification.view",
     name: "Xem chứng nhận supplier",
     module: "supplier_certification",
@@ -598,7 +612,10 @@ export const INITIAL_ROLE_PERMISSIONS = [
   ["SCHOOL_MANAGEMENT_BOARD", "food_safety_incident.forward"],
   ["SCHOOL_MANAGEMENT_BOARD", "food_safety_incident.alert_schools"],
   ["SCHOOL_MANAGEMENT_BOARD", "traceability.view"],
+  ["SCHOOL_MANAGEMENT_BOARD", "class.view"],
+  ["SCHOOL_MANAGEMENT_BOARD", "class_assignment.manage"],
   ["SCHOOL_MANAGEMENT_BOARD", "school_cooking_mode.manage"],
+  ["SCHOOL_MANAGEMENT_BOARD", "school_meal_times.manage"],
   ["SCHOOL_KITCHEN_STAFF", "dashboard.view"],
   ["SCHOOL_KITCHEN_STAFF", "menu.view"],
   ["SCHOOL_KITCHEN_STAFF", "cooking_batch.view"],
