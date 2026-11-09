@@ -8,7 +8,10 @@ import {
 } from "../src/middlewares/error.middleware";
 import { createMenuService } from "../src/modules/menu/menu.service";
 import { createMenuRouter } from "../src/modules/menu/menu.routes";
-import { validateMenuFilters } from "../src/modules/menu/menu.validation";
+import {
+  validateMenuFilters,
+  validateMenuWeekSchedule,
+} from "../src/modules/menu/menu.validation";
 import { createKitchenService } from "../src/modules/kitchen/kitchen.service";
 import { createKitchenRouter } from "../src/modules/kitchen/kitchen.routes";
 import { validateKitchenFilters } from "../src/modules/kitchen/kitchen.validation";
@@ -28,6 +31,186 @@ const authenticate: RequestHandler = (req, _res, next) => {
   req.auth = principal;
   next();
 };
+
+function academicCalendarDatabase(configured = true) {
+  const calls: Record<string, unknown>[] = [];
+  const row = {
+    id: "00000000-0000-4000-8000-000000000099",
+    academicYear: "2026-2027",
+    startDate: new Date("2026-09-09T00:00:00Z"),
+    endDate: new Date("2027-05-28T00:00:00Z"),
+    holidays: [
+      { date: "2027-01-01", reason: "Tết Dương lịch", internal: "hidden" },
+    ],
+    secret: "hidden",
+  };
+  return {
+    calls,
+    db: {
+      schoolAcademicYear: {
+        findMany: (args: Record<string, unknown>) => {
+          calls.push(args);
+          return Promise.resolve(configured ? [row] : []);
+        },
+      },
+      weeklyMenu: { findFirst: () => Promise.resolve(null) },
+    },
+  };
+}
+
+void test("nutrition context reads current school meal times with menu.view and rejects tenant overrides", async (context) => {
+  const calls: Record<string, unknown>[] = [];
+  const db = {
+    school: {
+      findFirst: (args: Record<string, unknown>) => {
+        calls.push(args);
+        return Promise.resolve({
+          id: principal.schoolId,
+          name: "Scoped school",
+          cookingMode: "COMBINE_LOTS",
+          lunchTime: new Date("1970-01-01T11:15:00Z"),
+          afternoonMealTime: null,
+          academicYears: [],
+        });
+      },
+    },
+  };
+  const service = createMenuService(undefined, () =>
+    Promise.resolve(db as never),
+  );
+  const result = await service.getContext(principal);
+  assert.equal(result.lunchTime, "11:15");
+  assert.equal(result.afternoonMealTime, null);
+  assert.deepEqual(calls[0].where, {
+    id: principal.schoolId,
+    status: "ACTIVE",
+  });
+  const app = express();
+  app.use("/api/v1/menus", createMenuRouter(service, authenticate, true));
+  app.use(globalErrorHandler);
+  const http = await startHttp(app);
+  context.after(() => http.close());
+  assert.equal(
+    (await http.request("/api/v1/menus/context?schoolId=other")).status,
+    400,
+  );
+  assert.equal(calls.length, 1);
+  assert.equal((await http.request("/api/v1/menus/context")).status, 200);
+  await assert.rejects(
+    service.getContext({ ...principal, permissions: [] }),
+    HttpError,
+  );
+});
+
+void test("academic weeks start at one from the configured school start and continue through January", async (context) => {
+  // Monday in Vietnam while the UTC clock is still Sunday.
+  context.mock.method(Date, "now", () => Date.parse("2026-11-08T18:00:00Z"));
+  const { db, calls } = academicCalendarDatabase();
+  const service = createMenuService(undefined, () =>
+    Promise.resolve(db as never),
+  );
+  const {
+    academicYears: [year],
+  } = await service.getAcademicCalendar({}, principal);
+  assert.deepEqual(calls[0].where, { schoolId: principal.schoolId });
+  assert.equal(year.academicYear, "2026-2027");
+  assert.equal(year.startDate, "2026-09-09");
+  assert.equal(year.isCurrent, true);
+  assert.equal(year.weeks[0].weekStartDate, "2026-09-07");
+  assert.equal(year.weeks[0].weekNumber, 1);
+  assert.equal(
+    year.weeks.find((week) => week.weekStartDate === "2026-11-02")?.weekNumber,
+    9,
+  );
+  assert.equal(year.weeks.find((week) => week.isCurrentWeek)?.weekNumber, 10);
+  assert.equal(
+    year.weeks.find((week) => week.weekStartDate === "2027-01-04")?.weekNumber,
+    18,
+  );
+  assert.equal(year.weeks.at(-1)?.weekEndDate, "2027-05-28");
+  assert(!JSON.stringify(year).includes("hidden"));
+  assert.equal(
+    validateMenuWeekSchedule({}).date.toISOString().slice(0, 10),
+    "2026-11-09",
+  );
+  for (const [date, expected] of [
+    ["2026-08-31", null],
+    ["2026-09-07", 1],
+    ["2026-11-02", 9],
+    ["2027-01-03", 17],
+    ["2027-01-04", 18],
+    ["2027-05-31", null],
+  ] as const) {
+    const schedule = await service.getWeekSchedule(date, principal);
+    assert.equal(schedule.weekNumber, expected);
+    assert.equal(
+      schedule.weekLabel,
+      expected === null ? null : `Tuần ${expected}`,
+    );
+    assert.equal(schedule.academicYear, expected === null ? null : "2026-2027");
+  }
+});
+
+void test("missing calendar stays empty and cannot be replaced by ISO numbering or another school scope", async () => {
+  const { db } = academicCalendarDatabase(false);
+  let connections = 0;
+  const service = createMenuService(undefined, () => {
+    connections++;
+    return Promise.resolve(db as never);
+  });
+  assert.deepEqual(await service.getAcademicCalendar({}, principal), {
+    academicYears: [],
+  });
+  const schedule = await service.getWeekSchedule("2026-11-09", principal);
+  assert.equal(schedule.weekNumber, null);
+  assert.equal(schedule.academicYear, null);
+  assert.equal(schedule.weekStartDate, "2026-11-09");
+  const previousConnections = connections;
+  for (const actor of [
+    { ...principal, permissions: [] },
+    { ...testAdmin, permissions: ["menu.view"] },
+  ]) {
+    await assert.rejects(service.getAcademicCalendar({}, actor), HttpError);
+  }
+  assert.equal(connections, previousConnections);
+});
+
+void test("academic-calendar and week-schedule routes validate input before querying and return school calendar data", async (context) => {
+  const { db, calls } = academicCalendarDatabase();
+  const app = express();
+  app.use(
+    "/api/v1/menus",
+    createMenuRouter(
+      createMenuService(undefined, () => Promise.resolve(db as never)),
+      authenticate,
+      true,
+    ),
+  );
+  app.use(globalErrorHandler);
+  const http = await startHttp(app);
+  context.after(() => http.close());
+  for (const path of [
+    "/academic-calendar?schoolId=foreign-school",
+    "/week-schedule?date=2026-02-30",
+    "/week-schedule?date=2026-11-09&date=2026-11-16",
+  ])
+    assert.equal((await http.request("/api/v1/menus" + path)).status, 400);
+  assert.equal(calls.length, 0);
+  const response = await http.request("/api/v1/menus/academic-calendar");
+  assert.equal(response.status, 200);
+  const calendarBody = response.body as {
+    data: { academicYears: { weeks: { weekNumber: number }[] }[] };
+  };
+  assert.equal(calendarBody.data.academicYears[0].weeks[0].weekNumber, 1);
+  const schedule = await http.request(
+    "/api/v1/menus/week-schedule?date=2027-01-04",
+  );
+  assert.equal(schedule.status, 200);
+  assert.equal(
+    (schedule.body as { data: { weekNumber: number } }).data.weekNumber,
+    18,
+  );
+});
 
 void test("list validators reject tenant overrides, malformed pagination, search and reversed date ranges", () => {
   for (const validate of [

@@ -48,9 +48,18 @@
 - [x] T021 Gỡ in/xuất đúng hai role tại `../fe/src/pages/SCHOOL/MenuPlanning/MenuDetail/` và rà `../fe/src/pages/SCHOOL/KitchenCooking/`, giữ các màn khác.
 - [x] T022 Kiểm tra BE/FE và ghi kết quả thực tại `specs/010-api-architecture-completion/plan.md`, cập nhật contract `contracts/api-audit.md`.
 
+## Academic week numbering
+
+- [x] T030 Add scoped academic-calendar API and replace menu ISO week numbering in `src/modules/menu/` without schema/migration changes.
+- [x] T031 Use API year/week options, date keys and `Thực đơn tuần N` headings in FE MenuPlanning/MenuService; remove calendar mock dependency.
+- [x] T032 Verify calendar boundaries, school scope, missing configuration, validation and FE contract/build; record results in plan.
+
 ## Dependencies and execution
 
 ## Real API integration
+
+- [x] T033 Audit every mounted screen/API for the nutrition/kitchen roles and record verified behavior, missing integration and environment limits in `contracts/api-audit.md`.
+- [x] T034 Fix proven contract defects (week-preserving edit, exact quantities, scoped context/cache, schedule hydration, finalized dish demand, sample null/filter/page, batch response mapping) and add repeatable frontend regression tests. Keep unfinished screen integrations and real DB verification in T024–T029 pending.
 
 - [x] T023 Audit FE/BE/Prisma/transport và ghi FR017–FR024 tại `specs/010-api-architecture-completion/spec.md`.
 - [ ] T024 Thêm school context/ingredient option contract và lot projection thật trong `src/modules/menu/`, `src/modules/kitchen/`.

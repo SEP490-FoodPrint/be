@@ -70,7 +70,22 @@ Trước merge dev: typecheck và217unit tests PASS. Generate client sau merge P
 - Không chạy PostgreSQL/Redis integration trong lượt này; assertion mẫu trong authorization integration được cập nhật sang ISO DTO và đã typecheck. Không thay đổi schema/migration hoặc chạy thao tác database.
 - Chạy local Node22.15.0; chuẩn CI theo .nvmrc. Thay đổi lượt review chưa commit/push trong cả hai repo.
 
+## Academic week numbering (2026-11-09)
+
+- Read `school_academic_years` through menu repository with trusted school scope. Add read-only GET `/api/v1/menus/academic-calendar` and explicit response DTOs. BE calculates Monday-based weeks from the configured start date, including cross-year weeks; holidays do not renumber weeks.
+- Replace ISO numbering in menu week-schedule with configured academic week metadata (null outside configured years). Keep `week_start_date`, all existing migration files, and approval rules unchanged; there is no numeric week column in Prisma/bootstrap to remove.
+- FE loads year/week options from this API, filters requests by `weekStartDate`, and renders `Thực đơn tuần N` using the API number. Empty/error configuration is visible; no mock or hardcoded academic year fallback.
+- Verify boundary dates, timezone, school scope, no configuration, route validation, FE API contract and build. Do not connect to Azure or modify README/.gitignore.
+
+Verification: Prisma validate/generate, BE typecheck/build, ESLint and Prettier for the changed menu/tests files PASS; full infrastructure-free suite 250/250 PASS. Three calendar regression tests cover midweek school start, week 9 versus ISO week 45, cross-year numbering, UTC+07 midnight, school scope, missing configuration and strict HTTP input validation. FE Vite build PASS; inline Vite SSR/transport checks PASS for real calendar endpoint, empty/invalid responses, unchanged server week numbers, cached weekday personalization and date-keyed filter rendering. Working-tree spec gate PASS. No test-only files were created. No live database connection, migration, Azure write, README/.gitignore change, commit or push. Browser/live database persistence was not tested.
+
 ## Real API integration and mock removal
+
+### Full audit requested 2026-11-09
+
+Complete matrix and evidence are in `contracts/api-audit.md`. Live read-only API probes: health200, public school list200 with one DB-backed record, protected menu/kitchen/sample lists401 without a session. No direct remote DB connection or write probes. User confirmed no disposable local DB configured; Docker/initdb and browser hosts are unavailable, so real role-session browser E2E and PostgreSQL write/concurrency tests remain unverified.
+
+Fixed the proven contract/data-loss defects in the current screens/services: remove unknown displayOrder from create; retain per-ingredient decimal standards and fresh full-week snapshots on edit; bind context to menu.view; hydrate week meal content through existing detail API; expose finalized demand by dish for the cooking picker; transmit hasSample; preserve nullable sample response; read all sample pages before current client filters; match READY option; interpret plan response batches; stop sending prepared totals; use explicitly assigned dishes instead of fabricated substitutes. Added FE `test:kitchen-nutrition` regression command (10 fixture tests), extended an existing BE unit file (251 full unit tests pass), BE types/build pass. No schema/migration/role/auth, README/.gitignore, commit or push changes. T024–T029 stay pending where the audit proves remaining runtime mock/integration gaps; this is not a declaration that both roles are production-ready.
 
 - Audit xác minh shared Axios base URL/cookie/CSRF đúng; GET health200, chưa cookie trả401, CORS204. BE5000 đang dùng PostgreSQL remote nên chỉ probe read; write E2E phải chạy instance riêng.
 - FE đang nuốt lỗi bằng mock/fake success kể cả create/delete/confirm/complete/sample. CreateMenu và CreateBatch có nút chỉ toast/state, chưa gọi API; list/detail/edit seed mock và mất dữ liệu khi PUT một bữa thay cả tuần. Sửa source thực, không chỉ tắt VITE_USE_MOCK.

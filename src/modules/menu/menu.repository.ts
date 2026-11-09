@@ -260,6 +260,19 @@ function menuFilterWhere(
   };
 }
 export const menuRepository = {
+  academicYears(client: Tx, schoolId: string) {
+    return client.schoolAcademicYear.findMany({
+      where: { schoolId },
+      orderBy: [{ startDate: "desc" }, { id: "asc" }],
+      select: {
+        id: true,
+        academicYear: true,
+        startDate: true,
+        endDate: true,
+        holidays: true,
+      },
+    });
+  },
   mealDay(client: Tx, meal: MealReference, schoolId: string) {
     return client.menuDay.findFirst({
       where: { id: meal.menuDayId, WeeklyMenu: { schoolId } },
