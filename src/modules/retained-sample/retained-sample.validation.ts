@@ -19,7 +19,7 @@ const timestampSchema = z
       return z.NEVER;
     }
   });
-export const retainedSampleListQuerySchema = paginationSchema.extend({
+export const retainedSampleListQuerySchema = paginationSchema.safeExtend({
   status: z
     .enum(["STORED", "DISPOSED"], { error: "Trạng thái mẫu lưu không hợp lệ" })
     .optional(),

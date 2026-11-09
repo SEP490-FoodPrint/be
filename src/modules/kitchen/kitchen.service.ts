@@ -6,7 +6,10 @@ import {
   type MealType,
 } from "../../generated/prisma/client";
 import type { AuthPrincipal } from "../../types/auth";
-import { withSchoolTransaction } from "../../utils/authorization";
+import {
+  assertPermission,
+  withSchoolTransaction,
+} from "../../utils/authorization";
 import { getPrisma } from "../../utils/database";
 import { HttpError } from "../../utils/http-error";
 import { listScopes } from "../../utils/resource-access";
@@ -23,6 +26,7 @@ import type {
 import type {
   CookingBatchListResponseDTO,
   CookingBatchStatsResponseDTO,
+  SchoolContextResponseDTO,
 } from "./kitchen.response.dto";
 import {
   kitchenRepository as repository,
@@ -800,7 +804,80 @@ function dto(batch: Detail) {
       ingredientLotId: lot.ingredientLotId,
       quantityUsed: lot.quantityUsed.toString(),
       unit: lot.unit,
+      lotCode: lot.IngredientLot?.lotCode ?? null,
+      ingredientName:
+        lot.IngredientLot?.DeliveryItem.SupplyRequestItem.IngredientEntry
+          .Ingredient.name ?? null,
+      expiryDate:
+        lot.IngredientLot?.expiryDate?.toISOString().slice(0, 10) ?? null,
     })),
+  };
+}
+
+export async function readSchoolContext(
+  db: PrismaClient,
+  principal: AuthPrincipal,
+  permission: "menu.view" | "cooking_batch.view",
+): Promise<SchoolContextResponseDTO> {
+  assertPermission(principal, permission);
+  if (principal.orgType !== "SCHOOL" || !principal.schoolId)
+    throw new HttpError(403, "Cần phạm vi trường");
+  const school = await repository.findSchoolContext(db, principal.schoolId);
+  if (!school) throw new HttpError(404, "Không tìm thấy trường hiện hành");
+  const dateValid = (value: unknown): value is string =>
+    typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+    Number.isFinite(Date.parse(value + "T00:00:00Z")) &&
+    new Date(value + "T00:00:00Z").toISOString().slice(0, 10) === value;
+  return {
+    id: school.id,
+    name: school.name,
+    cookingMode: school.cookingMode,
+    lunchTime: school.lunchTime?.toISOString().slice(11, 16) ?? null,
+    afternoonMealTime:
+      school.afternoonMealTime?.toISOString().slice(11, 16) ?? null,
+    academicYears: school.academicYears.map((year) => {
+      if (!Array.isArray(year.holidays))
+        throw new HttpError(
+          409,
+          "Lịch nghỉ của trường không hợp lệ; cần Ban Giám hiệu kiểm tra",
+        );
+      const holidays = year.holidays.map((holiday) => {
+        if (
+          !holiday ||
+          typeof holiday !== "object" ||
+          Array.isArray(holiday) ||
+          typeof holiday.reason !== "string"
+        )
+          throw new HttpError(
+            409,
+            "Lịch nghỉ của trường không hợp lệ; cần Ban Giám hiệu kiểm tra",
+          );
+        if (dateValid(holiday.date))
+          return { date: holiday.date, reason: holiday.reason };
+        if (
+          dateValid(holiday.startDate) &&
+          dateValid(holiday.endDate) &&
+          holiday.startDate <= holiday.endDate
+        )
+          return {
+            startDate: holiday.startDate,
+            endDate: holiday.endDate,
+            reason: holiday.reason,
+          };
+        throw new HttpError(
+          409,
+          "Ngày nghỉ của trường không hợp lệ; cần Ban Giám hiệu kiểm tra",
+        );
+      });
+      return {
+        id: year.id,
+        academicYear: year.academicYear,
+        startDate: year.startDate.toISOString().slice(0, 10),
+        endDate: year.endDate.toISOString().slice(0, 10),
+        holidays,
+      };
+    }),
   };
 }
 
@@ -925,28 +1002,6 @@ export function createKitchenLifecycle(
       };
     },
 
-    update(
-      id: string,
-      input: { note: string | null },
-      principal: AuthPrincipal,
-    ) {
-      return write(
-        principal,
-        "cooking_batch.update",
-        async (tx, _actor, schoolId) => {
-          const batch = await lockedBatch(tx, id, schoolId);
-          if (batch.status !== "UNCONFIRMED")
-            throw new HttpError(409, "Chỉ được sửa mẻ trước khi ấn xác nhận");
-          return dto(
-            await tx.cookingBatch.update({
-              where: { id },
-              data: input,
-              select: detailSelect,
-            }),
-          );
-        },
-      );
-    },
     remove(id: string, principal: AuthPrincipal) {
       return write(
         principal,
@@ -1373,89 +1428,33 @@ export function createKitchenService(
   read: KitchenListReader = readFromDatabase,
   connect: () => Promise<PrismaClient> = getPrisma,
 ) {
-  function filtered(
-    query: KitchenFilters,
-    principal: AuthPrincipal,
-  ): Prisma.CookingBatchWhereInput {
-    const search = query.search;
-    const searchPortions =
-      search && /^[0-9]+$/.test(search) ? Number(search) : undefined;
-    return {
-      AND: [
-        listScopes.kitchen(principal),
-        {
-          status: query.status,
-          mealType: query.mealType,
-          menuDayId: query.menuDayId,
-          dishId: query.dishId,
-          cookingModeApplied: query.cookingModeApplied,
-          ...(query.startDate && query.endDate
-            ? {
-                MenuDay: {
-                  menuDate: {
-                    gte: query.startDate,
-                    lte: query.endDate,
-                  },
-                },
-              }
-            : query.startDate
-              ? { MenuDay: { menuDate: { gte: query.startDate } } }
-              : query.endDate
-                ? { MenuDay: { menuDate: { lte: query.endDate } } }
-                : query.date
-                  ? { MenuDay: { menuDate: query.date } }
-                  : {}),
-          ...(search
-            ? {
-                OR: [
-                  {
-                    batchCode: {
-                      contains: search,
-                      mode: "insensitive" as const,
-                    },
-                  },
-                  {
-                    Dish: {
-                      name: { contains: search, mode: "insensitive" as const },
-                    },
-                  },
-                  ...(searchPortions !== undefined &&
-                  Number.isSafeInteger(searchPortions) &&
-                  searchPortions <= 2147483647
-                    ? [{ plannedPortions: searchPortions }]
-                    : []),
-                ],
-              }
-            : {}),
-        },
-      ],
-    };
-  }
   return {
     ...createKitchenLifecycle(connect),
+    async getContext(principal: AuthPrincipal) {
+      return readSchoolContext(
+        await connect(),
+        principal,
+        "cooking_batch.view",
+      );
+    },
     async list(
       query: KitchenFilters,
       principal: AuthPrincipal,
     ): Promise<CookingBatchListResponseDTO> {
-      const db = await connect(),
-        where = filtered(query, principal);
+      const scope = listScopes.kitchen(principal);
+      const db = await connect();
       return db.$transaction(
         async (tx) => ({
-          items: (
-            await repository.findBatchesPaged(
-              tx,
-              where,
-              (query.page - 1) * query.limit,
-              query.limit,
-            )
-          ).map((batch) => ({
-            ...dto(batch),
-            retainedFoodSample: batch.RetainedFoodSample,
-          })),
+          items: (await repository.findBatchesPaged(tx, query, scope)).map(
+            (batch) => ({
+              ...dto(batch),
+              retainedFoodSample: batch.RetainedFoodSample,
+            }),
+          ),
           pagination: {
             page: query.page,
             limit: query.limit,
-            totalItems: await repository.countBatches(tx, where),
+            totalItems: await repository.countBatches(tx, query, scope),
           },
         }),
         { isolationLevel: "RepeatableRead" },
@@ -1465,18 +1464,19 @@ export function createKitchenService(
       query: KitchenFilters,
       principal: AuthPrincipal,
     ): Promise<CookingBatchStatsResponseDTO> {
-      const db = await connect(),
-        where = filtered(query, principal);
+      const scope = listScopes.kitchen(principal);
+      const db = await connect();
       return db.$transaction(
         async (tx) => {
-          const states = await repository.groupBatchStatus(tx, where);
+          const states = await repository.groupBatchStatus(tx, query, scope);
           const counts = Object.fromEntries(
             states.map((s) => [s.status, s._count]),
           );
-          const samples = await repository.groupSampleStatus(tx, where);
+          const samples = await repository.groupSampleStatus(tx, query, scope);
           const pendingSamples = await repository.countPendingSamples(
             tx,
-            where,
+            query,
+            scope,
           );
           return {
             total: states.reduce((n, s) => n + s._count, 0),

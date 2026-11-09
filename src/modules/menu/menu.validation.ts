@@ -344,6 +344,12 @@ export const menuFiltersSchema = paginationSchema
         error: "Trạng thái thực đơn không hợp lệ",
       })
       .optional(),
+    search: z
+      .string({ error: "Từ khóa phải là văn bản" })
+      .trim()
+      .max(100, { error: "Từ khóa tìm kiếm tối đa 100 ký tự" })
+      .transform((value) => value || undefined)
+      .optional(),
   })
   .transform((query) => ({
     page: query.page,
@@ -351,6 +357,7 @@ export const menuFiltersSchema = paginationSchema
     date: query.date,
     weekStartDate: query.weekStartDate,
     status: query.status,
+    search: query.search,
   }));
 export const menuAllergyCheckSchema = z
   .strictObject({

@@ -1,5 +1,11 @@
 # Module nghiệp vụ FoodPrint
 
+## Query cho nhân viên dinh dưỡng và bếp
+
+Các API v1 của menu/kitchen/retained-sample lọc và phân trang tại DB với page mặc định1, limit mặc định20/tối đa100. Menu nhận search tiêu đề/tên món cùng date/weekStartDate/status. Kitchen nhận ngày/khoảng ngày, trạng thái, ca, phương thức, món/ngày thực đơn và search mã mẻ/tên món/số suất; KPI dùng cùng điều kiện. Lưu mẫu nhận status và search tủ/mẻ/món, trả totalItems/hasNext và expiresAt ISO. Mọi điều kiện kết hợp school scope từ principal, không lấy scope từ query.
+
+Ba module không cung cấp endpoint xuất báo cáo/in. PUT chỉnh sửa mẻ và code xử lý tương ứng đã bỏ; delete/confirm/complete/lưu mẫu vẫn giữ. Xem [query contract](../../specs/010-api-architecture-completion/contracts/api-audit.md#query-đã-kiểm-chứng--09112026).
+
 ## Cấu trúc và phạm vi
 
 31 module bao phủ 41 models trong Prisma: 31 models chính có API GET danh sách; 10 bảng chi tiết/liên kết thuộc module cha, chưa mở endpoint riêng. Tên và field lấy từ `prisma/schema.prisma`, nguồn thiết kế được ghi tại [SCHEMA_BASELINE.md](../../database/SCHEMA_BASELINE.md).

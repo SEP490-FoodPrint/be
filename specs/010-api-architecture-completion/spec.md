@@ -50,6 +50,7 @@ Thành viên phụ trách hai role có thể tìm riêng tiếp nhận HTTP, ki�
 - Quyền vừa bị tắt, scope trường khác, tranh chấp/rollback, kho thiếu hoặc thao tác bị gọi hai lần.
 - Complete giữ body empty/null và inspectionData JSON object legacy; preparedPortions hợp lệ nếu gửi nhưng không quyết định lượng trừ kho.
 - Ví dụ role/permission/ID trong MD không thay thế catalog/UUID approved.
+- Khoảng ngày đảo ngược phải bị từ chối; page/limit không hợp lệ, schoolId từ client và search sai kiểu không được đi vào truy vấn.
 
 ## Requirements
 
@@ -66,6 +67,19 @@ Thành viên phụ trách hai role có thể tìm riêng tiếp nhận HTTP, ki�
 - **FR-009**: Bảy file trước đó được người dùng xác nhận đã nằm trong commit57b83c1; giữ gỡ PUT kitchen, alias retained-samples và các thông báo.
 - **FR-010**: Không sửa auth, permission, supplier, ingredient, dish, menu-approval, meal-attendance, meal-allocation hoặc các module khác; không schema/migration/DB deploy/catalog mới.
 - **FR-011**: Chỉ sửa routes tích hợp, tests/scripts đăng ký test và tài liệu liên quan trực tiếp khi cần để kiểm chứng ba module; không chuẩn hóa toàn BE.
+- **FR-012**: Danh sách thực đơn MUST hỗ trợ search tùy chọn theo tiêu đề tuần hoặc tên món; tối đa 100 ký tự sau trim, chuỗi rỗng tương đương không tìm. Kết hợp với date/weekStartDate/status và school scope, count và danh sách cùng điều kiện.
+- **FR-013**: Danh sách mẻ và KPI MUST dùng cùng bộ lọc DB cho ngày/khoảng ngày, trạng thái, ca, phương thức, món/ngày thực đơn và search mã mẻ/tên món/số suất; startDate lớn hơn endDate MUST trả400. Giữ phân trang mặc định20, tối đa100 và sort ổn định theo khóa phụ.
+- **FR-014**: Danh sách mẫu MUST tìm cùng lúc tủ lưu/mã mẻ/tên món, kết hợp status và school scope, trả totalItems/hasNext và expiresAt đúng24h, thực hiện list/count tại DB với cùng điều kiện.
+- **FR-015**: Chức năng chỉnh sửa mẻ đã loại khỏi phạm vi MUST được gỡ cả controller/service/validator/DTO thừa; API PUT mẻ tiếp tục không tồn tại. Không xóa quyền dùng để xóa mẻ hoặc lịch sử kho cần cho tính toàn vẹn.
+- **FR-016**: Theo xác nhận bổ sung của người dùng, FE của hai role MUST gỡ nút/modal/state/handler và style riêng của chức năng in/xuất không làm. Chỉ sửa màn MenuPlanning/KitchenCooking liên quan; không sửa màn BGH hoặc phân hệ khác. BE hiện không có endpoint xuất/in trong ba module, không tạo endpoint giả hoặc xóa reporting dùng chung.
+- **FR-017**: Luồng FE thực đơn/chế biến/lưu mẫu MUST dùng dữ liệu và kết quả ghi thật từ API. Không runtime mock records, ID/trường/giờ/suất giả, localStorage giả persistence, hoặc báo thành công khi API thất bại; items rỗng phải hiển thị rỗng, data:null là không có dữ liệu, lỗi/abort không biến thành mock.
+- **FR-018**: Create/Save/Submit/Delete/Confirm/Complete/Sample/Dispose MUST await API thành công rồi refresh hoặc cập nhật bằng DTO server. Không timer/toast giả thành công. Không phục hồi chỉnh sửa mẻ/mẫu hoặc phân bổ đang hoãn.
+- **FR-019**: Edit một bữa MUST gửi snapshot tuần đầy đủ được merge từ dữ liệu server, giữ các ngày/bữa/định mức/gia vị không chỉnh. Request chỉ có ID thật, số thập phân không bị parseInt, từng nguyên liệu có định mức riêng; không suy diễn recipe từ tên món.
+- **FR-020**: Bếp và dinh dưỡng MUST đọc context trường/lịch qua quyền view hiện hành và trusted principal, không cần school.manage hoặc hardcode schoolId. Context chỉ whitelist id/name/cookingMode/giờ ăn/academicYears hiện có; chưa cấu hình thì hiển thị rõ, không thay bằng lịch giả.
+- **FR-021**: Mẫu lưu MUST có filter mealType/date/readyToDispose, stats toàn phạm vi và mẻ COMPLETED chưa lấy mẫu qua hasSample=false. READY là derived state từ sampledAt +24h theo đồng hồ server, không thêm enum/column. Date mẫu theo ngày trường UTC+07, list/count/stats cùng filter/scope.
+- **FR-022**: API context/menu/dish/group/ingredient/lot fields MUST được đối chiếu với Prisma schema và test DB disposable. Dữ liệu lot/name/expiry được whitelist từ quan hệ thật hoặc hiển thị thiếu; không bịa mã/hạn/chứng nhận.
+- **FR-023**: Ingredient options trong module menu MUST hỗ trợ paging/search thật; avoidance options trả IngredientEntry IDs của trường, không dùng Ingredient IDs thay thế. Chỉ đọc catalog existing, không sửa CRUD module của thành viên khác.
+- **FR-024**: Cấu hình API/cookie/CSRF shared MUST giữ nguyên nếu đã đúng. Không thử ghi vào BE đang kết nối database remote; kiểm thử ghi dùng database/API disposable riêng. Runtime/mock regression tests được phép dùng fixtures chỉ trong tests, không đưa vào production bundle.
 
 ### Key Entities
 
@@ -79,6 +93,8 @@ Thành viên phụ trách hai role có thể tìm riêng tiếp nhận HTTP, ki�
 - **SC-002**: Hai alias lưu mẫu cùng kết quả/count/scope, expiresAt đúng 24h.
 - **SC-003**: 3/3 module mục tiêu đạt guard phân lớp/DTO; source các module khác không có thay đổi của tác vụ.
 - **SC-004**: Typecheck/build và tests liên quan đạt; các kiểm tra chưa chạy ghi đúng thực tế.
+- **SC-005**: Test chứng minh filter/search/count/pagination giữ school scope; FE hai role không còn handler/nút/modal in/xuất, BE không còn code chỉnh sửa mẻ đã bỏ và không mở route xuất/in.
+- **SC-006**: UI không còn mock fallback ở luồng hai role; lỗi400/401/403/409/422/503 không báo thành công. Reload sau ghi phản ánh dữ liệu server, edit giữ bữa/ngày khác và các contract FE/BE có regression tests.
 
 ## Assumptions
 

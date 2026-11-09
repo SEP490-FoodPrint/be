@@ -36,7 +36,28 @@ PUT kitchen đã gỡ có chủ đích. Meal-allocation ở MD đang hoãn; khô
 
 ## Retained sample contract bổ sung
 
-GET food-samples và retained-samples nhận page/limit hiện có, status theo enum mẫu hiện hành và search trim giới hạn độ dài. Search mã mẻ/tên món case-insensitive; mọi điều kiện kết hợp trusted school scope. Output giữ các field cũ, thêm expiresAt ISO = sampledAt +24h; pagination giữ hasNext và thêm totalItems. Date/Decimal được serialize rõ, không spread persistence record. Count và list dùng cùng WHERE. Sample disposal vẫn dùng thời gian server và hold sự cố, không phụ thuộc expiresAt client.
+GET food-samples và retained-samples nhận page/limit hiện có, status theo enum mẫu hiện hành và search trim giới hạn độ dài. Search tủ lưu/mã mẻ/tên món case-insensitive; mọi điều kiện kết hợp trusted school scope. Output giữ các field cũ, thêm expiresAt ISO = sampledAt +24h; pagination giữ hasNext và thêm totalItems. Date/Decimal được serialize rõ, không spread persistence record. Count và list dùng cùng WHERE. Sample disposal vẫn dùng thời gian server và hold sự cố, không phụ thuộc expiresAt client.
+
+## Query đã kiểm chứng — 09/11/2026
+
+Mặc định page=1, limit=20; limit tối đa100. Search được trim, rỗng tương đương không tìm và tối đa100ký tự; so sánh không phân biệt hoa thường. Không nhận organizationId/schoolId từ query để tự cấp quyền.
+
+| Endpoint                                               | Bộ lọc và tìm kiếm                                                                                                 | Metadata                                                   |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
+| GET /api/v1/menus                                      | status, weekStartDate, date, search tiêu đề tuần/tên món                                                           | page, limit, totalItems                                    |
+| GET /api/v1/kitchen                                    | status, mealType, cookingModeApplied, menuDayId, dishId, date hoặc startDate/endDate; search mã mẻ/tên món/số suất | page, limit, totalItems                                    |
+| GET /api/v1/kitchen/stats                              | Cùng bộ lọc danh sách, không phân trang số đếm                                                                     | total và các KPI trạng thái/mẫu                            |
+| GET /api/v1/food-samples hoặc /api/v1/retained-samples | status, search tủ lưu/mã mẻ/tên món                                                                                | page, limit, totalItems, hasNext; mỗi mẫu có expiresAt ISO |
+| GET /api/v1/menus/ingredient-options/:kind             | kind main/seasoning, page/limit, điều kiện ACTIVE và school scope hiện có                                          | page, limit, totalItems                                    |
+| GET /api/dishes                                        | Phân trang/school scope hiện có; không sửa module danh mục dùng chung                                              | page, limit, hasNext                                       |
+
+Khoảng ngày của kitchen có hai đầu inclusive, ưu tiên khoảng so với date; hỗ trợ chỉ một đầu và từ chối endDate trước startDate. Sort thực đơn weekStartDate desc/id asc, mẻ createdAt desc/id asc, mẫu sampledAt desc/id asc để phân trang ổn định.
+
+## Chức năng loại khỏi hai role
+
+- BE không có endpoint xuất CSV/Excel/PDF/in trong ba module. Gỡ cả controller/service/validator/Request DTO của edit mẻ đã bỏ routePUT; giữ delete và complete.
+- FE MenuPlanning/MenuDetail gỡ nút/prop/state/modal/handler window.print và SCSS riêng. KitchenCooking đã không còn chức năng xuất/in. Giữ MenuApproval của BGH và reporting dùng chung.
+- Không sửa schema/migration/catalog hoặc dữ liệu database. Thay đổi FE nằm trong repo riêng và chưa commit/push cùng BE.
 
 ## Mâu thuẫn được giải quyết
 

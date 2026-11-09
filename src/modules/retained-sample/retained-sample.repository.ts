@@ -49,6 +49,12 @@ function filtered(
           ? {
               OR: [
                 {
+                  storageLocation: {
+                    contains: query.search,
+                    mode: "insensitive",
+                  },
+                },
+                {
                   CookingBatch: {
                     batchCode: { contains: query.search, mode: "insensitive" },
                   },
@@ -79,7 +85,7 @@ export function createRetainedSampleRepository(read?: ListReader) {
         select: retainedSampleSelect,
         skip: (query.page - 1) * query.limit,
         take: query.limit,
-        orderBy: [{ id: "asc" as const }],
+        orderBy: [{ sampledAt: "desc" as const }, { id: "asc" as const }],
       };
       return read ? read(args) : tx.retainedFoodSample.findMany(args);
     },

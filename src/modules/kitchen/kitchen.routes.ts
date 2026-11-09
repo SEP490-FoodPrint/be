@@ -22,6 +22,12 @@ export function createKitchenRouter(
   const router = Router();
   const controller = createKitchenController(service);
   const sampleController = createRetainedSampleController(samples);
+  router.get(
+    "/context",
+    authHandler,
+    requireResource("kitchen"),
+    controller.getContext,
+  );
   // Đã gỡ bỏ API chỉnh sửa lô chế biến (PUT /:id) theo yêu cầu nghiệp vụ
 
   router.delete(

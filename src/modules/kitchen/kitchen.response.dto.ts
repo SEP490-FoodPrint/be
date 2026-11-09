@@ -16,6 +16,9 @@ export interface CookingBatchLotDTO {
   ingredientLotId: string;
   quantityUsed: string;
   unit: string;
+  lotCode: string | null;
+  ingredientName: string | null;
+  expiryDate: string | null;
 }
 
 export interface CookingBatchDetailDTO {
@@ -59,6 +62,26 @@ export interface CookingBatchStatsResponseDTO {
   storedSamples: number;
   disposedSamples: number;
   pendingSamples: number;
+}
+
+export interface SchoolContextResponseDTO {
+  id: string;
+  name: string;
+  cookingMode: CookingMode | null;
+  lunchTime: string | null;
+  afternoonMealTime: string | null;
+  academicYears: {
+    id: string;
+    academicYear: string;
+    startDate: string;
+    endDate: string;
+    holidays: {
+      date?: string;
+      startDate?: string;
+      endDate?: string;
+      reason: string;
+    }[];
+  }[];
 }
 
 export interface CookingBatchSummaryDTO {
