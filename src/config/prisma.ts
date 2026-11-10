@@ -9,10 +9,12 @@ const isAzure = connectionString.includes("azure.com");
 const adapter = new PrismaPg(
   {
     connectionString,
-    max: 10,
-    connectionTimeoutMillis: 10000,
-    idleTimeoutMillis: 10000,
-    statement_timeout: 10000,
+    max: 20,
+    connectionTimeoutMillis: 15000,
+    idleTimeoutMillis: 120000,
+    statement_timeout: 15000,
+    keepAlive: true,
+    keepAliveInitialDelayMillis: 10000,
     ...(isAzure ? { ssl: { rejectUnauthorized: false } } : {}),
   },
   { schema },
