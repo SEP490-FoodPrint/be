@@ -650,6 +650,8 @@ export const INITIAL_ROLE_PERMISSIONS = [
   ["SCHOOL_NUTRITION_OFFICER", "traceability.view"],
   ["HOMEROOM_TEACHER", "dashboard.view"],
   ["HOMEROOM_TEACHER", "menu.view"],
+  ["HOMEROOM_TEACHER", "meal_complaint.submit"],
+  ["HOMEROOM_TEACHER", "meal_complaint.view"],
   ["HOMEROOM_TEACHER", "daily_meal_portion.view"],
   ["HOMEROOM_TEACHER", "daily_meal_portion.update"],
   ["PARENTS_COMMITTEE", "dashboard.view"],
