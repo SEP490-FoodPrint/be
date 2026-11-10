@@ -179,6 +179,10 @@ export function createApiRouter(
     "/v1/food-samples",
     createRetainedSampleRouter(undefined, authHandler),
   );
+  router.use(
+    "/v1/retained-samples",
+    createRetainedSampleRouter(undefined, authHandler),
+  );
 
   return router;
 }

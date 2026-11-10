@@ -35,6 +35,18 @@ export function createMenuRouter(
     controller.allergyCheck,
   );
   router.get(
+    "/context",
+    authHandler,
+    requirePermission("menu.view"),
+    controller.getContext,
+  );
+  router.get(
+    "/academic-calendar",
+    authHandler,
+    requirePermission("menu.view"),
+    controller.getAcademicCalendar,
+  );
+  router.get(
     "/week-schedule",
     authHandler,
     requirePermission("menu.view"),

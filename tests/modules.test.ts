@@ -42,7 +42,6 @@ import {
 import {
   validateKitchenComplete,
   validateKitchenFilters,
-  validateKitchenUpdate,
 } from "../src/modules/kitchen/kitchen.validation";
 import {
   validateFoodSample,
@@ -189,20 +188,6 @@ void test("kitchen list and statistics share school-scoped database filters and 
   });
 });
 
-void test("batch edits accept only notes; plans and inventory quantities stay server owned", () => {
-  assert.deepEqual(validateKitchenUpdate({ note: "  Ghi chú  " }), {
-    note: "Ghi chú",
-  });
-  assert.deepEqual(validateKitchenUpdate({ note: null }), { note: null });
-  for (const body of [
-    {},
-    { note: "x", plannedPortions: 120 },
-    { note: "x", quantityUsed: 6 },
-    { status: "UNCONFIRMED" },
-    { note: "x", dishId: testStaff.id },
-  ])
-    assert.throws(() => validateKitchenUpdate(body), HttpError);
-});
 void test("manually selected portion groups require one normal group and explicit avoidance for separate meals", () => {
   const common = {
     name: "Thường",
@@ -415,7 +400,6 @@ void test("v1 routes enforce permissions and emit versioned error codes before a
     ["POST", "/menus/allergy-check"],
     ["GET", "/kitchen"],
     ["GET", "/kitchen/stats"],
-    ["PUT", `/kitchen/${testStaff.id}`],
     ["DELETE", `/kitchen/${testStaff.id}`],
     ["GET", `/menus/days/${testStaff.id}/meals/LUNCH/portion-groups`],
     ["PUT", `/menus/days/${testStaff.id}/meals/LUNCH/portion-groups`],
