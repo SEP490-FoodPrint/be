@@ -1780,7 +1780,15 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
 
       const weekInfo = getSchoolWeekSchedule(date);
 
-      const academicYears = await repository.academicYears(db, schoolId);
+      const [academicYears, weeklyMenu] = await Promise.all([
+        repository.academicYears(db, schoolId),
+        repository.weekScheduleMenu(
+          db,
+          scope,
+          new Date(weekInfo.weekStartDate + "T00:00:00.000Z"),
+        ),
+      ]);
+
       const academicYear = academicYears.find(
         (year) =>
           getSchoolMonday(year.startDate) <= date &&
@@ -1794,12 +1802,6 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
               (7 * 86400000),
           ) + 1
         : null;
-
-      const weeklyMenu = await repository.weekScheduleMenu(
-        db,
-        scope,
-        new Date(weekInfo.weekStartDate + "T00:00:00.000Z"),
-      );
 
       const existingDays = weeklyMenu?.menuDays ?? [];
 
