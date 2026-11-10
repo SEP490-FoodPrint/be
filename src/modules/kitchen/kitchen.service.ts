@@ -1444,19 +1444,23 @@ export function createKitchenService(
       const scope = listScopes.kitchen(principal);
       const db = await connect();
       return db.$transaction(
-        async (tx) => ({
-          items: (await repository.findBatchesPaged(tx, query, scope)).map(
-            (batch) => ({
+        async (tx) => {
+          const [batches, totalItems] = await Promise.all([
+            repository.findBatchesPaged(tx, query, scope),
+            repository.countBatches(tx, query, scope),
+          ]);
+          return {
+            items: batches.map((batch) => ({
               ...dto(batch),
               retainedFoodSample: batch.RetainedFoodSample,
-            }),
-          ),
-          pagination: {
-            page: query.page,
-            limit: query.limit,
-            totalItems: await repository.countBatches(tx, query, scope),
-          },
-        }),
+            })),
+            pagination: {
+              page: query.page,
+              limit: query.limit,
+              totalItems,
+            },
+          };
+        },
         { isolationLevel: "RepeatableRead" },
       );
     },
@@ -1468,15 +1472,13 @@ export function createKitchenService(
       const db = await connect();
       return db.$transaction(
         async (tx) => {
-          const states = await repository.groupBatchStatus(tx, query, scope);
+          const [states, samples, pendingSamples] = await Promise.all([
+            repository.groupBatchStatus(tx, query, scope),
+            repository.groupSampleStatus(tx, query, scope),
+            repository.countPendingSamples(tx, query, scope),
+          ]);
           const counts = Object.fromEntries(
             states.map((s) => [s.status, s._count]),
-          );
-          const samples = await repository.groupSampleStatus(tx, query, scope);
-          const pendingSamples = await repository.countPendingSamples(
-            tx,
-            query,
-            scope,
           );
           return {
             total: states.reduce((n, s) => n + s._count, 0),

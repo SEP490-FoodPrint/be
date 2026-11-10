@@ -8,6 +8,22 @@ Chỉ sửa `src/modules/menu/`, `src/modules/kitchen/`, `src/modules/retained-s
 
 ## Technical Context
 
+### Performance review — 2026-11-10
+
+Inspect the installed PrismaPg factory and official Prisma transaction documentation before changing connection behavior. Keep the current singleton/lazy client and transaction isolation unless an actual defect is demonstrated. No claim of one pool across processes, no latency claim without measurement. Kitchen week-schedule independent reads may overlap through the pool; kitchen list/stats inside the same transaction remain serialized at the connection.
+
+Replace unscoped FE Map caches with scoped, bounded read stores for batches/stats/context. Use generation and entry-identity checks to prevent stale cache writes/cleanup, independent AbortSignal subscriptions with a shared transport controller, and an explicit refresh path. Add a revision counter to existing storage helpers for user/session mutations without changing auth flows. Test cross-user reuse, relogin, abort, invalidate/refresh races, TTL, bounds and error recovery with Axios fixtures; run FE build and the relevant regression suite. Preserve all pre-existing workspace changes and do not connect to Azure.
+
+Results: reproduced four actual cache defects (cross-user reuse, owner-signal cancellation, stale repopulation after writes, refresh cleanup race). Also found the current KitchenService had removed planBatch/getBatchDetail while mounted screens still call them; restored compatible aliases and the three-field planning request, without creating backend endpoints. Added the empty-page stop to getAllBatches. FE cache is bounded to100entries/store, list/stats TTL20s and context TTL5min. Session revision changes through existing storage helpers prevent same-account relogin reuse. Responses superseded by invalidate/refresh or a session change are cancelled; only the last subscriber aborts transport. Callers receive cloned data.
+
+Checks: kitchen/nutrition regression suite **24/24 PASS**, including14new cases; FE Vite build PASS, JS syntax checks PASS, BE typecheck PASS. In two isolated local processes (development/production),20concurrent getPrisma calls returned the same client in each process with a dummy localhost DSN; no connect/query was executed. Installed PrismaPg factory and official Prisma v7 docs confirm per-process/client pool behavior and serial SQL within interactive transactions. No Azure benchmark was performed, so neither a50% database latency reduction nor absolute cross-client cache synchronization is claimed.
+
+The broader registration regression suite was attempted but blocked at Vite/esbuild setup by filesystem permissions (including parent-directory reads and the existing absolute /tmp cache path); no auth assertions ran. Temporary changes to that harness were reverted. Automatic approval review rejected cleanup of the generated node_modules/.vite-registration-tests cache because execution approval was unavailable; the ignored cache directory remains, with no source/Git artifact. Existing unrelated backend changes and README/.gitignore were preserved.
+
+Separate contract findings left untouched: FE helpers getBatchPlan (GET /v1/kitchen/plan), updateCookingMode (PUT /v1/kitchen/cooking-mode), and updateBatchPortions (PUT /v1/kitchen/:id/portions) have no matching backend routes in the inspected kitchen router. They are not used by the inspected mounted kitchen screens; cache invalidation does not make those endpoints exist. Do not introduce editable teacher-finalized portions as part of this performance change.
+
+Sources: [Prisma connections](https://www.prisma.io/docs/orm/v7/prisma-client/setup-and-configuration/databases-connections), [Prisma transaction concurrency](https://www.prisma.io/docs/orm/v7/prisma-client/queries/transactions#using-transaction-within-promiseall).
+
 TypeScript strict/CommonJS, Express, Prisma7, Zod4 và Node test runner hiện có; không dependency mới. Local Windows/Node22.15, chuẩn CI theo .nvmrc. Không schema/migration/DB deploy. Chỉ tests/scripts/docs tích hợp ba module được thay đổi khi cần.
 
 ## Constitution Check

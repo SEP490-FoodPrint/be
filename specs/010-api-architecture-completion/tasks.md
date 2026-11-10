@@ -56,6 +56,12 @@
 
 ## Dependencies and execution
 
+## Performance review — 2026-11-10
+
+- [x] T035 Verify Prisma lifetime, actual transaction concurrency and FE cache races without connecting to a remote database.
+- [x] T036 Scope and bound kitchen read caches, isolate cancellation, and protect invalidation/refresh/session races in the existing service/storage helpers.
+- [x] T037 Add regression coverage to existing FE tests, run checks/build, and record evidence and limits in plan.
+
 ## Real API integration
 
 - [x] T033 Audit every mounted screen/API for the nutrition/kitchen roles and record verified behavior, missing integration and environment limits in `contracts/api-audit.md`.
