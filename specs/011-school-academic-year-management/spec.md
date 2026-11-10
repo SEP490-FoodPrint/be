@@ -1,6 +1,6 @@
 # Feature Specification: BGH quản lý niên khóa toàn trường
 
-**Feature Branch**: `feat/010-school-academic-year-management`
+**Feature Branch**: `feat/011-school-academic-year-management`
 
 **Created**: 2026-11-07
 
