@@ -170,6 +170,7 @@ export const listScopes = {
         MealAllocation: {
           DailyMealPortion: { Class: { schoolId: school(p) } },
         },
+        ...(p.role === "HOMEROOM_TEACHER" && { submittedByUserId: p.id }),
       };
     throw new HttpError(
       403,
