@@ -95,6 +95,13 @@ Thành viên phụ trách hai role có thể tìm riêng tiếp nhận HTTP, ki�
 
 ## Success Criteria
 
+### Performance review — 2026-11-10
+
+- **FR-029**: Review singleton/pool lifetime and read concurrency against the installed Prisma driver. Retain kitchen RepeatableRead transactions; Promise.all inside one transaction is not a promise of parallel SQL or a 50% speedup. Global singleton is scoped to a Node process/JS isolate; separate workers have separate pools. No remote benchmark or database mutation is authorized.
+- **FR-030**: Kitchen FE list/stats/context caches MUST include user/school/session scope, have bounded size and TTL, and never cache errors or responses superseded by invalidation/force refresh. A late request cannot repopulate invalidated cache or delete the new in-flight entry.
+- **FR-031**: Shared requests MUST isolate subscriber cancellation: one AbortSignal cannot cancel other active callers; cancel transport when the last caller leaves. Invalidation cancels obsolete reads. Session storage writes/deletion invalidate cache scope even when the same user signs in again. Cache hits remain bounded-staleness local reads, not globally synchronized DB state.
+- Scope exception for this confirmed performance review: only `../fe/src/services/KitchenService/index.js`, shared session revision notifications in `../fe/src/lib/storage.js`, the existing kitchen/nutrition FE regression tests, and this spec's plan/tasks. Do not modify authentication business rules, unrelated dirty files, README/.gitignore, SQL/schema, deployment, or transaction isolation.
+
 - **SC-001**: 27 endpoint được đối chiếu, không mất route do refactor; không tạo endpoint trùng.
 - **SC-002**: Hai alias lưu mẫu cùng kết quả/count/scope, expiresAt đúng 24h.
 - **SC-003**: 3/3 module mục tiêu đạt guard phân lớp/DTO; source các module khác không có thay đổi của tác vụ.
