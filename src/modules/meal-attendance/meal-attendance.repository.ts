@@ -49,6 +49,7 @@ export function createMealAttendanceRepository() {
             select: { ingredientEntryId: true, portionCount: true },
             orderBy: { ingredientEntryId: "asc" },
           },
+          MealAllocation: { select: { id: true, status: true } },
         },
       });
     },
