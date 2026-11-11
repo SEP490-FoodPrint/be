@@ -18,6 +18,7 @@ Mỗi trường là một platform riêng và tự đặt tên lớp (ví dụ "
 - **FR-006**: BGH MUST sao chép được các lớp ACTIVE từ niên khóa nguồn sang niên khóa đích. Mỗi lớp được copy giữ `name` và `registeredMealPortions`; không copy GVCN và dị ứng. Những tên đã tồn tại ở năm đích (không phân biệt hoa thường) bị bỏ qua và được liệt kê trong kết quả. Năm đích phải thỏa FR-002 và khác năm nguồn; năm nguồn có thể đã qua. Năm nguồn không có lớp ACTIVE nào trả 404.
 - **FR-007**: Mọi thao tác ghi MUST yêu cầu permission mới `class.manage`, chỉ gán cho `SCHOOL_MANAGEMENT_BOARD`, và actor phải có role BGH. Phạm vi trường lấy từ principal đã xác thực, không bao giờ từ body hay query. Lớp thuộc trường khác trả 404.
 - **FR-008**: Kết quả trả về dùng `ClassItemDTO` hiện có (bao gồm `homeroomTeacher`, `canAssign`) và giữ nguyên envelope HTTP.
+- **FR-009**: Khi tạo lớp, BGH MAY gửi `homeroomTeacherUserId` để phân công GVCN ngay. Khi có trường này, actor MUST có thêm `class_assignment.manage`; giáo viên MUST là tài khoản `HOMEROOM_TEACHER` ACTIVE của trường (nếu không trả 400) và MUST chưa là GVCN hiện tại của lớp khác trong cùng niên khóa (nếu không trả 409). Tạo lớp và tạo phân công nằm trong cùng transaction: nếu phân công bị từ chối thì lớp không được tạo.
 
 ## Acceptance scenarios
 
@@ -29,6 +30,7 @@ Mỗi trường là một platform riêng và tự đặt tên lớp (ví dụ "
 6. Ngừng lớp có GVCN thì phân công bị đóng; kích hoạt lại thì lớp không có GVCN.
 7. Sao chép 2026-2027 sang 2027-2028 khi năm đích đã có "1A" thì tạo các lớp còn lại và trả `skipped: ["1A"]`.
 8. Body thừa trường, `name` rỗng hoặc dài 121 ký tự, số suất âm trả 400.
+9. Tạo "1A" kèm `homeroomTeacherUserId` của GVCN rảnh thì nhận 201 với `homeroomTeacher` đã điền; GVCN đó đang chủ nhiệm lớp khác cùng niên khóa thì 409; tài khoản không phải GVCN ACTIVE của trường thì 400; actor thiếu `class_assignment.manage` thì 403. Cả ba trường hợp lỗi đều không tạo lớp.
 
 ## Constraints and edge cases
 

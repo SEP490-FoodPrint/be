@@ -19,3 +19,10 @@
 - [x] T009 Thêm unit test cho các acceptance scenario 1–8 trong `tests/class-assignment.test.ts`.
 - [x] T010 Chạy `npm run validate`, `npm run test:unit` và spec gate; ghi kết quả vào `plan.md`.
 - [ ] T011 External: chạy `npm run auth:bootstrap` và `npm run test:authorization` trên PostgreSQL local khi được cho phép.
+
+## Bổ sung: gán GVCN khi tạo lớp (FR-009)
+
+- [x] T012 Thêm `homeroomTeacherUserId` tùy chọn vào validation tạo lớp.
+- [x] T013 Thêm truy vấn repository tìm phân công hiện tại của giáo viên trong niên khóa.
+- [x] T014 Service tạo lớp kiểm tra `class_assignment.manage`, giáo viên hợp lệ, giáo viên chưa chủ nhiệm lớp khác, rồi tạo phân công trong cùng transaction.
+- [x] T015 Thêm unit test cho acceptance scenario 9.
