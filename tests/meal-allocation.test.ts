@@ -23,7 +23,7 @@ function fixture(): AllocationDay {
       mealType: "LUNCH",
       totalPortions,
       status: "FINALIZED",
-      Class: { name: `5${index}` },
+      Class: { id: `class${index}`, name: `5${index}` },
       portionGroups: [],
       dailyAllergyPortions: [],
       MealAllocation: null,
@@ -58,6 +58,52 @@ void test("mở màn hình khi đủ suất, ưu tiên nấu trước lưu mẫu
   assert.equal(projectAllocationDay(data, date).action, "COOKING");
   data.batches.pop();
   assert.equal(projectAllocationDay(data, date).status, "COOKING_PENDING");
+});
+
+void test("chỉ mở xác nhận khi cả ngày đủ suất và không cộng lặp các món", () => {
+  const data = fixture();
+  const [lunch, afternoon] = data.batches;
+  lunch.plannedPortions = 75;
+  afternoon.plannedPortions = 25;
+  afternoon.mealType = "AFTERNOON";
+  for (const batch of data.batches) {
+    for (const dish of batch.dishes)
+      dish.plannedPortions = batch.plannedPortions!;
+  }
+  data.menus[0].menuDayDishes.push(
+    ...afternoon.dishes.map(({ dishId }) => ({
+      mealType: "AFTERNOON" as const,
+      dishId,
+    })),
+  );
+  data.demands[2].mealType = "AFTERNOON";
+  const allocate = (index: number, batch: typeof lunch) => {
+    const demand = data.demands[index];
+    demand.MealAllocation = {
+      id: `allocation${index}`,
+      status: "ALLOCATED",
+      mealAllocationBatches: batch.dishes.map(({ dishId }) => ({
+        cookingBatchId: batch.id,
+        dishId,
+        allocatedPortions: demand.totalPortions,
+      })),
+    };
+  };
+  allocate(0, lunch);
+  allocate(1, lunch);
+  const pending = projectAllocationDay(data, date).distribution;
+  assert.equal(pending.status, "PENDING");
+  assert.equal(pending.meals[0].allocatedPortions, 75);
+  allocate(2, afternoon);
+  assert.equal(projectAllocationDay(data, date).distribution.status, "READY");
+  for (const demand of data.demands)
+    demand.MealAllocation!.status = "DISTRIBUTED";
+  assert.equal(
+    projectAllocationDay(data, date).distribution.status,
+    "DISTRIBUTED",
+  );
+  data.demands[2].MealAllocation!.status = "CANCELLED";
+  assert.equal(projectAllocationDay(data, date).distribution.status, "PENDING");
 });
 
 void test("không bù số suất giữa hai bữa và không đoán số suất nhóm chung", () => {

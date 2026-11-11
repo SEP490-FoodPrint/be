@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { ROLES } from "../../constants/roles";
 import {
   assertPermission,
   withSchoolTransaction,
@@ -7,9 +8,13 @@ import { getPrisma } from "../../utils/database";
 import { HttpError } from "../../utils/http-error";
 import { withReadTransaction } from "../../utils/read-transaction";
 import type { AuthPrincipal } from "../../types/auth";
-import type { ApplyAllocationRequest } from "./meal-allocation.request.dto";
+import type {
+  ApplyAllocationRequest,
+  ConfirmDistributionRequest,
+} from "./meal-allocation.request.dto";
 import type { AllocationDayResponse } from "./meal-allocation.response.dto";
 import {
+  confirmAllocationDistribution,
   readAllocationDay,
   writeAllocationDay,
   type AllocationDay,
@@ -24,6 +29,129 @@ function schoolIdFor(principal: AuthPrincipal) {
   if (principal.orgType !== "SCHOOL" || !principal.schoolId)
     throw new HttpError(403, "Phân bổ yêu cầu tài khoản thuộc trường");
   return principal.schoolId;
+}
+
+function projectDistribution(
+  data: AllocationDay,
+): AllocationDayResponse["distribution"] {
+  const batchesById = new Map(data.batches.map((batch) => [batch.id, batch]));
+  const totalsByBatch = new Map<string, number>();
+  let invalid = false;
+  const demands = data.demands.map((demand) => {
+    const allocation = demand.MealAllocation;
+    const byBatch = new Map<
+      string,
+      NonNullable<typeof allocation>["mealAllocationBatches"]
+    >();
+    const allocationRows =
+      allocation?.status === "CANCELLED"
+        ? []
+        : (allocation?.mealAllocationBatches ?? []);
+    for (const row of allocationRows) {
+      const rows = byBatch.get(row.cookingBatchId) ?? [];
+      rows.push(row);
+      byBatch.set(row.cookingBatchId, rows);
+    }
+    const batches = Array.from(byBatch).flatMap(([batchId, rows]) => {
+      const batch = batchesById.get(batchId);
+      const allocatedPortions = rows[0].allocatedPortions;
+      if (
+        !batch ||
+        batch.mealType !== demand.mealType ||
+        allocatedPortions <= 0 ||
+        rows.length !== batch.dishes.length ||
+        batch.dishes.some(
+          (dish) =>
+            !rows.some(
+              (row) =>
+                row.dishId === dish.dishId &&
+                row.allocatedPortions === allocatedPortions,
+            ),
+        )
+      ) {
+        invalid = true;
+        return [];
+      }
+      totalsByBatch.set(
+        batchId,
+        (totalsByBatch.get(batchId) ?? 0) + allocatedPortions,
+      );
+      return [{ batchId, allocatedPortions }];
+    });
+    return {
+      id: demand.id,
+      classId: demand.Class.id,
+      className: demand.Class.name,
+      mealType: demand.mealType,
+      requiredPortions: demand.totalPortions,
+      allocatedPortions: batches.reduce(
+        (sum, batch) => sum + batch.allocatedPortions,
+        0,
+      ),
+      allocationStatus: allocation?.status ?? null,
+      demandFinalized: demand.status === "FINALIZED",
+      batches,
+    };
+  });
+  const meals = mealTypes.flatMap((mealType) => {
+    const rows = demands.filter((demand) => demand.mealType === mealType);
+    return rows.length
+      ? [
+          {
+            mealType,
+            allocatedPortions: rows.reduce(
+              (sum, row) => sum + row.allocatedPortions,
+              0,
+            ),
+          },
+        ]
+      : [];
+  });
+  const required = demands.filter((demand) => demand.requiredPortions > 0);
+  const pending = (message: string) => ({
+    status: "PENDING" as const,
+    canConfirmDistribution: false,
+    message,
+    demands,
+    meals,
+  });
+  if (
+    invalid ||
+    data.batches.some(
+      (batch) =>
+        (totalsByBatch.get(batch.id) ?? 0) > (batch.plannedPortions ?? 0),
+    ) ||
+    demands.some((demand) => demand.allocatedPortions > demand.requiredPortions)
+  )
+    return pending(
+      "Dữ liệu phân bổ cần được đối soát trước khi xác nhận giao.",
+    );
+  if (!required.length) return pending("Hôm nay chưa có suất ăn cần giao.");
+  if (
+    required.some((demand) => !demand.demandFinalized) ||
+    data.menus.some((menu) =>
+      menu.menuDayDishes.some(
+        (dish) => !required.some((demand) => demand.mealType === dish.mealType),
+      ),
+    )
+  )
+    return pending("Chưa chốt đủ nhu cầu suất ăn trong ngày.");
+  if (
+    required.some(
+      (demand) => demand.allocatedPortions !== demand.requiredPortions,
+    )
+  )
+    return pending("Cần phân bổ đủ suất cho tất cả lớp và bữa trong ngày.");
+  const canConfirmDistribution = required.some(
+    (demand) => demand.allocationStatus === "ALLOCATED",
+  );
+  return {
+    status: canConfirmDistribution ? "READY" : "DISTRIBUTED",
+    canConfirmDistribution,
+    message: "",
+    demands,
+    meals,
+  };
 }
 
 export function projectAllocationDay(
@@ -148,6 +276,7 @@ export function projectAllocationDay(
     meals,
     missingSampleBatches,
     revision,
+    distribution: projectDistribution(data),
     batches,
     demands: [],
     status: "READY",
@@ -159,8 +288,22 @@ export function projectAllocationDay(
     status: AllocationDayResponse["status"],
     message: string,
     action: AllocationDayResponse["action"],
-  ) {
-    return { ...response, status, message, action };
+  ): AllocationDayResponse {
+    return {
+      ...response,
+      status,
+      message,
+      action,
+      distribution:
+        response.distribution.status === "READY"
+          ? {
+              ...response.distribution,
+              status: "PENDING",
+              canConfirmDistribution: false,
+              message,
+            }
+          : response.distribution,
+    };
   }
 
   if ((!data.menus.length && !data.batches.length) || !meals.length)
@@ -405,6 +548,66 @@ export function createMealAllocationService(
             assertPermission(actor, "meal_allocation.create");
           if (!changes.length) return view;
           await writeAllocationDay(tx, actor.id, schoolId, day, changes);
+          return projectAllocationDay(
+            await readAllocationDay(tx, schoolId, day),
+            date,
+          );
+        },
+      );
+    },
+    async confirmDistribution(
+      input: ConfirmDistributionRequest,
+      principal: AuthPrincipal,
+    ) {
+      const requireKitchenStaff = (actor: AuthPrincipal) => {
+        if (actor.role !== ROLES.SCHOOL_KITCHEN_STAFF)
+          throw new HttpError(
+            403,
+            "Chỉ nhân viên bếp được xác nhận giao suất ăn",
+          );
+      };
+      requireKitchenStaff(principal);
+      assertPermission(principal, "meal_allocation.update");
+      schoolIdFor(principal);
+      return withSchoolTransaction(
+        await connect(),
+        principal,
+        "meal_allocation.update",
+        async (tx, actor, schoolId) => {
+          requireKitchenStaff(actor);
+          const timestamp = now();
+          const date = dateFormatter.format(timestamp);
+          const day = new Date(date);
+          const data = await readAllocationDay(tx, schoolId, day);
+          const view = projectAllocationDay(data, date);
+          if (view.distribution.status === "DISTRIBUTED") return view;
+          if (view.revision !== input.revision)
+            throw new HttpError(
+              409,
+              "Dữ liệu phân bổ đã thay đổi. Vui lòng tải lại.",
+              "ALLOCATION_STALE",
+            );
+          if (view.distribution.status !== "READY")
+            throw new HttpError(409, view.distribution.message);
+          const ids = data.demands.flatMap((demand) =>
+            demand.totalPortions > 0 &&
+            demand.MealAllocation?.status === "ALLOCATED"
+              ? [demand.MealAllocation.id]
+              : [],
+          );
+          const { count } = await confirmAllocationDistribution(
+            tx,
+            schoolId,
+            day,
+            ids,
+            actor.id,
+            timestamp,
+          );
+          if (count !== ids.length)
+            throw new HttpError(
+              409,
+              "Dữ liệu phân bổ đã thay đổi. Vui lòng tải lại.",
+            );
           return projectAllocationDay(
             await readAllocationDay(tx, schoolId, day),
             date,

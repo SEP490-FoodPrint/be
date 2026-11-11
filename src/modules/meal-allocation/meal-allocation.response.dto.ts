@@ -23,6 +23,24 @@ export interface AllocationDayResponse {
   meals: (Totals & { mealType: MealType })[];
   missingSampleBatches: number;
   revision: string;
+  distribution: {
+    status: "PENDING" | "READY" | "DISTRIBUTED";
+    canConfirmDistribution: boolean;
+    message: string;
+    meals: { mealType: MealType; allocatedPortions: number }[];
+    demands: {
+      id: string;
+      classId: string;
+      className: string;
+      mealType: MealType;
+      requiredPortions: number;
+      allocatedPortions: number;
+      allocationStatus:
+        "ALLOCATED" | "DISTRIBUTED" | "FINALIZED" | "CANCELLED" | null;
+      demandFinalized: boolean;
+      batches: { batchId: string; allocatedPortions: number }[];
+    }[];
+  };
   batches: {
     id: string;
     mealType: MealType;

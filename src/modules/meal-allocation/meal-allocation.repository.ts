@@ -60,7 +60,7 @@ export async function readAllocationDay(
         mealType: true,
         totalPortions: true,
         status: true,
-        Class: { select: { name: true } },
+        Class: { select: { id: true, name: true } },
         portionGroups: {
           orderBy: { portionGroupId: "asc" },
           select: { portionGroupId: true, portionCount: true },
@@ -91,6 +91,28 @@ export async function readAllocationDay(
 }
 
 export type AllocationDay = Awaited<ReturnType<typeof readAllocationDay>>;
+
+export async function confirmAllocationDistribution(
+  tx: Prisma.TransactionClient,
+  schoolId: string,
+  date: Date,
+  allocationIds: string[],
+  actorId: string,
+  distributedAt: Date,
+) {
+  return tx.mealAllocation.updateMany({
+    where: {
+      id: { in: allocationIds },
+      status: "ALLOCATED",
+      DailyMealPortion: { mealDate: date, Class: { schoolId } },
+    },
+    data: {
+      status: "DISTRIBUTED",
+      distributedAt,
+      distributedByUserId: actorId,
+    },
+  });
+}
 
 interface AllocationChange {
   demandId: string;

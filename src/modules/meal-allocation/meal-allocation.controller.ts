@@ -5,6 +5,7 @@ import type { MealAllocationService } from "./meal-allocation.service";
 import {
   validateAllocationApply,
   validateAllocationQuery,
+  validateConfirmDistribution,
 } from "./meal-allocation.validation";
 
 export function createMealAllocationController(service: MealAllocationService) {
@@ -19,6 +20,14 @@ export function createMealAllocationController(service: MealAllocationService) {
         res,
         await service.apply(input, requirePrincipal(req)),
         "Đã áp dụng phân bổ suất ăn",
+      );
+    }),
+    confirmDistribution: asyncHandler(async (req, res) => {
+      const input = validateConfirmDistribution(req.body);
+      sendSuccess(
+        res,
+        await service.confirmDistribution(input, requirePrincipal(req)),
+        "Đã xác nhận giao suất ăn trong ngày",
       );
     }),
   };
