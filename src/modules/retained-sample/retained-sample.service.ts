@@ -26,6 +26,7 @@ function mapSample(row: SampleRow): RetainedSampleResponseDTO {
   return {
     id: row.id,
     cookingBatchId: row.cookingBatchId,
+    dishId: row.dishId,
     recordedByUserId: row.recordedByUserId,
     sampledAt: row.sampledAt.toISOString(),
     expiresAt: new Date(row.sampledAt.getTime() + 24 * 3600000).toISOString(),
@@ -40,8 +41,12 @@ function mapSample(row: SampleRow): RetainedSampleResponseDTO {
     CookingBatch: {
       batchCode: row.CookingBatch.batchCode,
       mealType: row.CookingBatch.mealType,
-      plannedPortions: row.CookingBatch.plannedPortions,
-      Dish: { name: row.CookingBatch.Dish.name },
+      plannedPortions: row.CookingBatchDish.plannedPortions,
+      BatchGroup: {
+        id: row.CookingBatch.BatchGroup.id,
+        batchCode: row.CookingBatch.BatchGroup.batchCode,
+      },
+      Dish: { name: row.CookingBatchDish.Dish.name },
     },
   };
 }
@@ -55,15 +60,15 @@ export function createRetainedSampleService(
     async forBatch(
       cookingBatchId: string,
       principal: AuthPrincipal,
-    ): Promise<RetainedSampleResponseDTO | null> {
+    ): Promise<RetainedSampleResponseDTO[]> {
       assertPermission(principal, "retained_sample.view");
       if (principal.orgType !== "SCHOOL" || !principal.schoolId)
         throw new HttpError(403, "Cần phạm vi trường");
       const db = await connect();
       if (!(await repository.findBatch(db, cookingBatchId, principal.schoolId)))
         throw new HttpError(404, "Không tìm thấy mẻ trong trường");
-      const sample = await repository.findForBatch(db, cookingBatchId);
-      return sample ? mapSample(sample) : null;
+      const samples = await repository.listForBatch(db, cookingBatchId);
+      return samples.map(mapSample);
     },
     async create(
       cookingBatchId: string,
@@ -84,7 +89,16 @@ export function createRetainedSampleService(
             throw new HttpError(404, "Không tìm thấy mẻ trong trường");
           if (batch.status !== "COMPLETED" || !batch.completedAt)
             throw new HttpError(409, "Chỉ lưu mẫu cho mẻ đã hoàn thành");
-          const existing = await repository.findForBatch(tx, cookingBatchId);
+          const dishId =
+            input.dishId ??
+            (batch.dishes.length === 1 ? batch.dishes[0].dishId : undefined);
+          if (!dishId || !batch.dishes.some((d) => d.dishId === dishId))
+            throw new HttpError(400, "Cần chọn đúng món trong mẻ để lưu mẫu");
+          const existing = await repository.findForBatch(
+            tx,
+            cookingBatchId,
+            dishId,
+          );
           if (existing) {
             if (
               existing.quantity?.toString() !==
@@ -108,12 +122,10 @@ export function createRetainedSampleService(
               422,
               "Thời điểm lấy mẫu phải từ lúc hoàn thành mẻ đến hiện tại",
             );
-          const sample = await repository.create(
-            tx,
-            cookingBatchId,
-            actor.id,
-            input,
-          );
+          const sample = await repository.create(tx, cookingBatchId, actor.id, {
+            ...input,
+            dishId,
+          });
           return { ...mapSample(sample), created: true };
         },
       );

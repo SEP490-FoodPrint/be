@@ -25,7 +25,8 @@ const mealTypeSchema = z.enum(["LUNCH", "AFTERNOON"], {
 export const kitchenListQuerySchema = paginationSchema;
 export const kitchenPlanSchema = z.strictObject({
   menuDayId: requestUuidSchema,
-  dishId: requestUuidSchema,
+  // Legacy callers may send a dish; planning always covers the whole meal.
+  dishId: requestUuidSchema.optional(),
   mealType: mealTypeSchema,
 });
 export const kitchenActionSchema = z.strictObject({});

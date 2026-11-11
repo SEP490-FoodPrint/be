@@ -88,6 +88,21 @@ void test("kitchen list and statistics share school-scoped database filters and 
   const row = {
     id: testStaff.id,
     batchCode: "CB-actual",
+    batchGroupId: testAdmin.id,
+    BatchGroup: { id: testAdmin.id, batchCode: "B-actual" },
+    dishId: testAdmin.id,
+    menuDayId: testAdmin.id,
+    mealType: "LUNCH",
+    dishes: [
+      { dishId: testAdmin.id, plannedPortions: 120, Dish: { name: "Cơm" } },
+    ],
+    Dish: { name: "Cơm" },
+    MenuDay: { menuDate: new Date("2026-11-02") },
+    note: null,
+    confirmedAt: null,
+    completedAt: null,
+    createdAt: new Date("2026-11-02"),
+    updatedAt: new Date("2026-11-02"),
     status: "COMPLETED",
     cookingModeApplied: "SEPARATE_BY_LOT",
     plannedPortions: 120,
@@ -98,12 +113,15 @@ void test("kitchen list and statistics share school-scoped database filters and 
         unit: "kg",
       },
     ],
-    RetainedFoodSample: {
-      id: testAdmin.id,
-      status: "STORED",
-      sampledAt: new Date("2026-11-02T05:00:00Z"),
-      disposedAt: null,
-    },
+    RetainedFoodSample: [
+      {
+        dishId: testAdmin.id,
+        id: testAdmin.id,
+        status: "STORED",
+        sampledAt: new Date("2026-11-02T05:00:00Z"),
+        disposedAt: null,
+      },
+    ],
   };
   const tx = {
     cookingBatch: {
@@ -159,7 +177,12 @@ void test("kitchen list and statistics share school-scoped database filters and 
   assert.equal(where.AND[1].status, "COMPLETED");
   assert.deepEqual(where.AND[1].OR, [
     { batchCode: { contains: "120", mode: "insensitive" } },
-    { Dish: { name: { contains: "120", mode: "insensitive" } } },
+    {
+      dishes: {
+        some: { Dish: { name: { contains: "120", mode: "insensitive" } } },
+      },
+    },
+    { BatchGroup: { batchCode: { contains: "120", mode: "insensitive" } } },
     { plannedPortions: 120 },
   ]);
   assert.equal(list.skip, 2);
@@ -174,7 +197,7 @@ void test("kitchen list and statistics share school-scoped database filters and 
     { CookingBatch: where },
   );
   assert.equal(result.items[0].cookingModeApplied, "SEPARATE_BY_LOT");
-  assert.equal(result.items[0].retainedFoodSample?.status, "STORED");
+  assert.equal(result.items[0].retainedFoodSamples?.[0]?.status, "STORED");
   assert.equal(result.items[0].cookingBatchLots[0].quantityUsed, "6");
   assert.equal(result.pagination.totalItems, 3);
   assert.deepEqual(stats, {

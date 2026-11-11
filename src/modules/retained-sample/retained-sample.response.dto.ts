@@ -1,6 +1,7 @@
 export interface RetainedSampleResponseDTO {
   id: string;
   cookingBatchId: string;
+  dishId: string;
   recordedByUserId: string;
   sampledAt: string;
   expiresAt: string;
@@ -14,6 +15,7 @@ export interface RetainedSampleResponseDTO {
   updatedAt: string;
   CookingBatch: {
     batchCode: string;
+    BatchGroup: { id: string; batchCode: string };
     mealType: "LUNCH" | "AFTERNOON";
     plannedPortions: number | null;
     Dish: { name: string };

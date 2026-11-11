@@ -7,12 +7,14 @@ import type {
 
 export interface RetainedSampleBriefDTO {
   id: string;
+  dishId: string;
   status: RetainedSampleStatus;
-  sampledAt: Date;
-  disposedAt: Date | null;
+  sampledAt: string;
+  disposedAt: string | null;
 }
 
 export interface CookingBatchLotDTO {
+  dishId: string;
   ingredientLotId: string;
   quantityUsed: string;
   unit: string;
@@ -25,24 +27,47 @@ export interface CookingBatchDetailDTO {
   id: string;
   batchCode: string;
   menuDayId: string;
-  dishId: string;
+  dishId: string | null;
+  batchGroupId: string;
+  BatchGroup: { id: string; batchCode: string };
+  dishes: {
+    dishId: string;
+    name: string;
+    plannedPortions: number | null;
+    cookingBatchLots: CookingBatchLotDTO[];
+  }[];
   mealType: MealType;
   cookingModeApplied: CookingMode;
   status: CookingBatchStatus;
   plannedPortions: number | null;
   note: string | null;
-  confirmedAt: Date | null;
-  completedAt: Date | null;
-  createdAt: Date;
-  updatedAt: Date;
+  confirmedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
   Dish: {
     name: string;
-  };
+  } | null;
   MenuDay: {
-    menuDate: Date;
+    menuDate: string;
   };
   cookingBatchLots: CookingBatchLotDTO[];
-  retainedFoodSample?: RetainedSampleBriefDTO | null;
+  retainedFoodSamples?: RetainedSampleBriefDTO[];
+}
+
+export interface CookingBatchGroupResponseDTO {
+  id: string;
+  batchCode: string;
+  menuDayId: string;
+  mealType: MealType;
+  status: "UNCONFIRMED" | "IN_PROGRESS" | "COMPLETED";
+  batches: CookingBatchDetailDTO[];
+}
+
+export interface CookingBatchPlanResponseDTO {
+  created: boolean;
+  groups: CookingBatchGroupResponseDTO[];
+  batches: CookingBatchDetailDTO[];
 }
 
 export interface CookingBatchListResponseDTO {
@@ -88,15 +113,18 @@ export interface CookingBatchSummaryDTO {
   id: string;
   batchCode: string;
   menuDayId: string;
-  dishId: string;
+  dishId: string | null;
+  batchGroupId: string;
+  BatchGroup: { id: string; batchCode: string };
+  dishes: { dishId: string; name: string; plannedPortions: number | null }[];
   mealType: MealType;
   cookingModeApplied: CookingMode;
   status: CookingBatchStatus;
   plannedPortions: number | null;
-  confirmedAt: Date | null;
-  completedAt: Date | null;
-  createdAt: Date;
-  updatedAt: Date;
+  confirmedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface CookingBatchAllPageResponseDTO {

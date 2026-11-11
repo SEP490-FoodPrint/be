@@ -605,14 +605,27 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         batches.plan(key, chef),
       ]);
       assert.equal(plans.filter((p) => p.created).length, 1);
-      assert.equal(await db.cookingBatch.count({ where: key }), 1);
+      assert.equal(
+        await db.cookingBatch.count({
+          where: { menuDayId: key.menuDayId, mealType: key.mealType },
+        }),
+        1,
+      );
       const batch = plans[0].batches[0];
       assert.equal(batch.plannedPortions, 120);
-      const allocated = new Map(
-        batch.cookingBatchLots.map((l) => [l.ingredientLotId, l.quantityUsed]),
+      assert.equal(batch.dishes.length, 2);
+      assert.equal(
+        batch.dishes
+          .find((d) => d.dishId === mainDish.dishId)!
+          .cookingBatchLots.reduce((n, l) => n + Number(l.quantityUsed), 0),
+        9.6,
       );
-      assert.equal(allocated.get(rice.lots[0].id), "6");
-      assert.equal(allocated.get(rice.lots[1].id), "3.6");
+      assert.equal(
+        batch.dishes
+          .find((d) => d.dishId === sideDish.dishId)!
+          .cookingBatchLots.reduce((n, l) => n + Number(l.quantityUsed), 0),
+        1.2,
+      );
       await assert.rejects(
         () => batches.plan({ ...key, mealType: "AFTERNOON" }, chef),
         (e: unknown) => e instanceof HttpError && e.statusCode === 409,
@@ -641,15 +654,13 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         batches.complete(batch.id, chef),
       ]);
       assert(
-        completed.every(
-          (c) => c.inventoryDeducted && !c.mealSeasoningsConsumed,
-        ),
+        completed.every((c) => c.inventoryDeducted && c.mealSeasoningsConsumed),
       );
       assert.equal(
         await db.inventoryTransaction.count({
           where: { referenceType: "COOKING_BATCH", referenceId: batch.id },
         }),
-        2,
+        3,
       );
       assert.equal(
         (
@@ -676,6 +687,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         1,
       );
       const sampleInput = validateFoodSample({
+        dishId: mainDish.dishId,
         quantity: 150,
         unit: "g",
         storageLocation: "Fridge 1",
@@ -957,9 +969,9 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       let grPlan = await batches.plan({ ...grKey, dishId: grCommon }, chef);
       assert.deepEqual(
         grPlan.batches.map((b) => b.plannedPortions).sort((a, b) => a! - b!),
-        [45, 75],
+        [13, 13, 32, 62],
       );
-      const grDeleted = grPlan.batches.find((b) => b.plannedPortions === 75)!;
+      const grDeleted = grPlan.batches.find((b) => b.plannedPortions === 62)!;
       assert.equal("update" in batches, false);
       assert.equal(
         (await batches.remove(grDeleted.id, chef))
@@ -981,9 +993,21 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         ).batches,
         grAlternative = (await batches.plan({ ...grKey, dishId: grAlt }, chef))
           .batches;
-      assert.equal(grNormal[0].plannedPortions, 107);
-      assert.equal(grAlternative[0].plannedPortions, 13);
-      const grAll = [...grPlan.batches, ...grNormal, ...grAlternative];
+      assert.equal(
+        grNormal
+          .flatMap((b) => b.dishes)
+          .filter((d) => d.dishId === grRegular)
+          .reduce((n, d) => n + d.plannedPortions!, 0),
+        107,
+      );
+      assert.equal(
+        grAlternative
+          .flatMap((b) => b.dishes)
+          .filter((d) => d.dishId === grAlt)
+          .reduce((n, d) => n + d.plannedPortions!, 0),
+        13,
+      );
+      const grAll = grPlan.batches;
       for (const grBatch of grAll) await batches.confirm(grBatch.id, chef);
       await assert.rejects(
         () =>
@@ -1013,9 +1037,8 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       const grDistributed = new Map<string, number>();
       for (const row of grAllocation.mealAllocationBatches)
         grDistributed.set(
-          row.CookingBatch.dishId,
-          (grDistributed.get(row.CookingBatch.dishId) ?? 0) +
-            row.allocatedPortions,
+          row.dishId,
+          (grDistributed.get(row.dishId) ?? 0) + row.allocatedPortions,
         );
       assert.equal(grDistributed.get(grCommon), 120);
       assert.equal(grDistributed.get(grRegular), 107);

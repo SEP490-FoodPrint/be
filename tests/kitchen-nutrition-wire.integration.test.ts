@@ -627,9 +627,32 @@ void test("kitchen and nutrition wire contracts use real scoped PostgreSQL data"
     completed = true,
   ) {
     const actor = foreign ? chefB : chefA;
+    const batchMenuDayId = foreign ? foreignWeek.menuDays[0].id : menuDay.id;
+    const batchDishId = foreign
+      ? dishB.id
+      : mealType === "AFTERNOON"
+        ? sideA.id
+        : dishA.id;
+    const parent = await db.cookingBatchGroup.create({
+      data: {
+        batchCode: `B-${code}`,
+        menuDayId: batchMenuDayId,
+        mealType,
+        createdByUserId: actor.id,
+      },
+    });
     return db.cookingBatch.create({
       data: {
         batchCode: code,
+        batchGroupId: parent.id,
+        dishes: {
+          create: {
+            dishId: batchDishId,
+            menuDayId: batchMenuDayId,
+            mealType,
+            plannedPortions: 25,
+          },
+        },
         menuDayId: foreign ? foreignWeek.menuDays[0].id : menuDay.id,
         dishId: foreign
           ? dishB.id
@@ -667,6 +690,7 @@ void test("kitchen and nutrition wire contracts use real scoped PostgreSQL data"
   await db.cookingBatchLot.create({
     data: {
       cookingBatchId: emptyBatch.id,
+      dishId: emptyBatch.dishId!,
       ingredientLotId: lot.id,
       quantityUsed: "12.346",
       unit: "g",
@@ -678,9 +702,13 @@ void test("kitchen and nutrition wire contracts use real scoped PostgreSQL data"
     status: "STORED" | "DISPOSED" = "STORED",
     foreign = false,
   ) {
+    const child = await db.cookingBatch.findUniqueOrThrow({
+      where: { id: cookingBatchId },
+    });
     return db.retainedFoodSample.create({
       data: {
         cookingBatchId,
+        dishId: child.dishId!,
         recordedByUserId: foreign ? chefB.id : chefA.id,
         sampledAt: new Date(sampledAt),
         quantity: "150.125",
@@ -755,6 +783,7 @@ void test("kitchen and nutrition wire contracts use real scoped PostgreSQL data"
       const metadata = array(payload(detail.body).cookingBatchLots);
       assert.deepEqual(metadata, [
         {
+          dishId: emptyBatch.dishId,
           ingredientLotId: lot.id,
           quantityUsed: "12.346",
           unit: "g",
@@ -767,23 +796,11 @@ void test("kitchen and nutrition wire contracts use real scoped PostgreSQL data"
         (await request(`/api/v1/kitchen/${foreignBatch.id}`, chefA.id)).status,
         404,
       );
-      assert.equal(
-        (
-          await request(
-            `/api/v1/kitchen/${emptyBatch.id}/food-samples`,
-            chefA.id,
-          )
-        ).body &&
-          record(
-            (
-              await request(
-                `/api/v1/kitchen/${emptyBatch.id}/food-samples`,
-                chefA.id,
-              )
-            ).body,
-          ).data,
-        null,
+      const emptySamples = await request(
+        `/api/v1/kitchen/${emptyBatch.id}/food-samples`,
+        chefA.id,
       );
+      assert.deepEqual(record(emptySamples.body).data, []);
       assert.equal(
         (await request("/api/v1/kitchen?hasSample=unknown", chefA.id)).status,
         400,

@@ -867,4 +867,180 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
       }
     },
   );
+  await context.test(
+    "cooking grouping backfill preserves child/sample history and enforces dish context",
+    async () => {
+      const name = `foodprint_migration_test_cooking_${randomUUID().replaceAll("-", "")}`;
+      await db.query(`CREATE DATABASE "${name}"`);
+      const fresh = new URL(url);
+      fresh.pathname = `/${name}`;
+      const legacy = new Client({ connectionString: fresh.toString() });
+      await legacy.connect();
+      try {
+        const grouping = "20261111000100_cooking_batch_groups";
+        for (const migration of migrationNames.filter(
+          (value) => value < grouping,
+        )) {
+          await legacy.query<{ id: string; n: number; row: unknown }>(
+            await readFile(
+              path.join(root, "prisma/migrations", migration, "migration.sql"),
+              "utf8",
+            ),
+          );
+        }
+        const school = (
+          await legacy.query<{ id: string; n: number; row: unknown }>(
+            "INSERT INTO foodprint.schools(name) VALUES('Group migration school') RETURNING id",
+          )
+        ).rows[0].id;
+        const role = (
+          await legacy.query<{ id: string; n: number; row: unknown }>(
+            "INSERT INTO foodprint.roles(code,name,type) VALUES('SCHOOL_KITCHEN_STAFF','Chef','SCHOOL') RETURNING id",
+          )
+        ).rows[0].id;
+        const user = (
+          await legacy.query<{ id: string; n: number; row: unknown }>(
+            "INSERT INTO foodprint.users(role_id,role_code,school_id,username,email,password_hash,full_name) VALUES($1,'SCHOOL_KITCHEN_STAFF',$2,'group_chef','group-chef@example.test','fixture-only','Chef') RETURNING id",
+            [role, school],
+          )
+        ).rows[0].id;
+        const week = (
+          await legacy.query<{ id: string; n: number; row: unknown }>(
+            "INSERT INTO foodprint.weekly_menus(school_id,created_by_user_id,week_start_date) VALUES($1,$2,'2030-01-07') RETURNING id",
+            [school, user],
+          )
+        ).rows[0].id;
+        const day = (
+          await legacy.query<{ id: string; n: number; row: unknown }>(
+            "INSERT INTO foodprint.menu_days(weekly_menu_id,menu_date) VALUES($1,'2030-01-07') RETURNING id",
+            [week],
+          )
+        ).rows[0].id;
+        const dish = (
+          await legacy.query<{ id: string; n: number; row: unknown }>(
+            "INSERT INTO foodprint.dishes(school_id,name) VALUES($1,'Original dish') RETURNING id",
+            [school],
+          )
+        ).rows[0].id;
+        await legacy.query<{ id: string; n: number; row: unknown }>(
+          "INSERT INTO foodprint.menu_day_dishes(menu_day_id,dish_id,meal_type) VALUES($1,$2,'LUNCH')",
+          [day, dish],
+        );
+        const completed = (
+          await legacy.query<{ id: string; n: number; row: unknown }>(
+            "INSERT INTO foodprint.cooking_batches(batch_code,menu_day_id,dish_id,meal_type,cooking_mode_applied,created_by_user_id,status,planned_portions,confirmed_by_user_id,confirmed_at,completed_by_user_id,completed_at) VALUES('OLD-CB',$1,$2,'LUNCH','COMBINE_LOTS',$3,'COMPLETED',12,$3,'2030-01-07T03:00:00Z',$3,'2030-01-07T04:00:00Z') RETURNING id",
+            [day, dish, user],
+          )
+        ).rows[0].id;
+        await legacy.query<{ id: string; n: number; row: unknown }>(
+          "INSERT INTO foodprint.cooking_batches(batch_code,menu_day_id,dish_id,meal_type,cooking_mode_applied,created_by_user_id) VALUES('UNKNOWN-PLAN',$1,$2,'LUNCH','COMBINE_LOTS',$3)",
+          [day, dish, user],
+        );
+        await legacy.query<{ id: string; n: number; row: unknown }>(
+          "INSERT INTO foodprint.retained_food_samples(cooking_batch_id,recorded_by_user_id,sampled_at,quantity,unit) VALUES($1,$2,'2030-01-07T05:00:00Z',150,'g')",
+          [completed, user],
+        );
+        const before = (
+          await legacy.query<{ id: string; n: number; row: unknown }>(
+            "SELECT to_jsonb(b) AS row FROM foodprint.cooking_batches b ORDER BY id",
+          )
+        ).rows;
+        const beforeSamples = (
+          await legacy.query<{ id: string; n: number; row: unknown }>(
+            "SELECT to_jsonb(s) AS row FROM foodprint.retained_food_samples s ORDER BY id",
+          )
+        ).rows;
+        await legacy.query<{ id: string; n: number; row: unknown }>(
+          await readFile(
+            path.join(root, "prisma/migrations", grouping, "migration.sql"),
+            "utf8",
+          ),
+        );
+        assert.deepEqual(
+          (
+            await legacy.query<{ id: string; n: number; row: unknown }>(
+              "SELECT to_jsonb(b)-'batch_group_id' AS row FROM foodprint.cooking_batches b ORDER BY id",
+            )
+          ).rows,
+          before,
+        );
+        assert.deepEqual(
+          (
+            await legacy.query<{ id: string; n: number; row: unknown }>(
+              "SELECT to_jsonb(s)-'dish_id' AS row FROM foodprint.retained_food_samples s ORDER BY id",
+            )
+          ).rows,
+          beforeSamples,
+        );
+        assert.equal(
+          (
+            await legacy.query<{ id: string; n: number; row: unknown }>(
+              "SELECT count(*)::int AS n FROM foodprint.cooking_batch_groups",
+            )
+          ).rows[0].n,
+          2,
+        );
+        assert.equal(
+          (
+            await legacy.query<{ id: string; n: number; row: unknown }>(
+              "SELECT count(*)::int AS n FROM foodprint.cooking_batch_dishes",
+            )
+          ).rows[0].n,
+          2,
+        );
+        assert.equal(
+          (
+            await legacy.query<{ id: string; n: number; row: unknown }>(
+              "SELECT count(*)::int AS n FROM foodprint.cooking_batch_dishes WHERE planned_portions IS NULL",
+            )
+          ).rows[0].n,
+          1,
+        );
+        const secondDish = (
+          await legacy.query<{ id: string; n: number; row: unknown }>(
+            "INSERT INTO foodprint.dishes(school_id,name) VALUES($1,'Second dish') RETURNING id",
+            [school],
+          )
+        ).rows[0].id;
+        await legacy.query<{ id: string; n: number; row: unknown }>(
+          "INSERT INTO foodprint.menu_day_dishes(menu_day_id,dish_id,meal_type) VALUES($1,$2,'LUNCH')",
+          [day, secondDish],
+        );
+        await legacy.query<{ id: string; n: number; row: unknown }>(
+          "INSERT INTO foodprint.cooking_batch_dishes(cooking_batch_id,dish_id,menu_day_id,meal_type,planned_portions) VALUES($1,$2,$3,'LUNCH',12)",
+          [completed, secondDish, day],
+        );
+        await legacy.query<{ id: string; n: number; row: unknown }>(
+          "INSERT INTO foodprint.retained_food_samples(cooking_batch_id,dish_id,recorded_by_user_id,quantity,unit) VALUES($1,$2,$3,150,'g')",
+          [completed, secondDish, user],
+        );
+        assert.equal(
+          (
+            await legacy.query<{ id: string; n: number; row: unknown }>(
+              "SELECT count(*)::int AS n FROM foodprint.retained_food_samples WHERE cooking_batch_id=$1",
+              [completed],
+            )
+          ).rows[0].n,
+          2,
+        );
+        await assert.rejects(
+          legacy.query<{ id: string; n: number; row: unknown }>(
+            "INSERT INTO foodprint.retained_food_samples(cooking_batch_id,dish_id,recorded_by_user_id,quantity,unit) VALUES($1,$2,$3,150,'g')",
+            [completed, secondDish, user],
+          ),
+          (error) => sqlState(error, "23505"),
+        );
+        await assert.rejects(
+          legacy.query<{ id: string; n: number; row: unknown }>(
+            "UPDATE foodprint.cooking_batch_dishes SET meal_type='AFTERNOON' WHERE cooking_batch_id=$1 AND dish_id=$2",
+            [completed, secondDish],
+          ),
+          (error) => sqlState(error, "23503"),
+        );
+      } finally {
+        await legacy.end();
+      }
+      // Keep the disposable database for inspection, following the suite's existing policy.
+    },
+  );
 });

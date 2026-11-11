@@ -32,6 +32,14 @@ SQL chạy trong transaction tường minh, giữ khóa ACCESS EXCLUSIVE trên r
 
 **Rollout:** review migration và merge qua quy trình dev đã duyệt; dự kiến khoảng khóa theo lượng dữ liệu thực, kiểm tra quyền USAGE sequence của runtime nếu khác migration owner. Áp migration/backfill trước backend mới, sau đó frontend dùng registrationID để hiển thị và vẫn dùng UUID cho thao tác. Backend cũ bỏ qua cột mới vẫn được default cấp số. Rollback ứng dụng giữ nguyên cột, sequence và mã; không reset/đánh số lại hoặc sửa migration đã triển khai.
 
+## Cooking groups — migration chuẩn bị, chưa deploy
+
+`20261111000100_cooking_batch_groups` thêm `cooking_batch_groups` và `cooking_batch_dishes`. Mỗi lô cha chứa các mẻ con; mỗi mẻ chứa nhiều món và lượng nguyên liệu riêng từng món. `cooking_batch_lots` có khóa `(cooking_batch_id, dish_id, ingredient_lot_id)`. Liên kết mẫu lưu và phân bổ suất cũng có `dish_id`; mỗi món trong một mẻ có mẫu và số suất phân bổ riêng.
+
+Migration giữ UUID, mã, số lượng, trạng thái và timestamp cũ; từng mẻ lịch sử được bọc trong một lô cha riêng, không suy diễn các mẻ đã thuộc chung lô. NULL/zero ở kế hoạch cũ được giữ để đối chiếu. Không sửa tồn kho hay inventory transactions. FK ghép bảo đảm ngày/bữa của mẻ khớp lô cha và món thuộc đúng ngày/bữa đó. Cột ngày/bữa của mẻ được giữ làm dữ liệu tương thích có ràng buộc; `dish_id` cũ là NULL với mẻ có nhiều món, bảng món là nguồn chính thức.
+
+Cần rollout migration và BE cùng phiên bản, tạm dừng writer cũ trong lúc chuyển đổi. Không dùng `db push`, reset hay seed. Schema validation và kiểm thử nghiệp vụ không thay thế việc chạy bộ migration trên PostgreSQL disposable local/CI trước khi deploy. Trong tác vụ này, PostgreSQL tạm bị sandbox Windows chặn khi `initdb` tạo restricted token; migration chưa được áp dụng vào Azure.
+
 ## Dữ liệu kiểm thực của CookingBatch
 
 `20261101000100_cooking_batch_inspection_data` nối tiếp migration định mức thực đơn, thêm cột nullable `foodprint.cooking_batches.inspection_data jsonb`, khớp Prisma `inspectionData Json? @db.JsonB`. Không thêm bảng, enum, quyền hay giá trị mặc định. Các batch cũ giữ NULL; không backfill JSON giả hoặc thay đổi dữ liệu nghiệp vụ.
