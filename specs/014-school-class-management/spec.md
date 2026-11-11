@@ -19,6 +19,7 @@ Mỗi trường là một platform riêng và tự đặt tên lớp (ví dụ "
 - **FR-007**: Mọi thao tác ghi MUST yêu cầu permission mới `class.manage`, chỉ gán cho `SCHOOL_MANAGEMENT_BOARD`, và actor phải có role BGH. Phạm vi trường lấy từ principal đã xác thực, không bao giờ từ body hay query. Lớp thuộc trường khác trả 404.
 - **FR-008**: Kết quả trả về dùng `ClassItemDTO` hiện có (bao gồm `homeroomTeacher`, `canAssign`) và giữ nguyên envelope HTTP.
 - **FR-009**: Khi tạo lớp, BGH MAY gửi `homeroomTeacherUserId` để phân công GVCN ngay. Khi có trường này, actor MUST có thêm `class_assignment.manage`; giáo viên MUST là tài khoản `HOMEROOM_TEACHER` ACTIVE của trường (nếu không trả 400) và MUST chưa là GVCN hiện tại của lớp khác trong cùng niên khóa (nếu không trả 409). Tạo lớp và tạo phân công nằm trong cùng transaction: nếu phân công bị từ chối thì lớp không được tạo.
+- **FR-010**: API phân công GVCN hiện có (`PUT /api/classes/:classId/homeroom-teacher`) MUST từ chối với 409 khi giáo viên đang là GVCN hiện tại của một lớp khác trong cùng niên khóa với lớp đích, để quy tắc một GVCN một lớp mỗi niên khóa được bảo đảm ở backend thay vì chỉ ở giao diện. Gán lại đúng GVCN hiện tại của lớp vẫn là thao tác idempotent.
 
 ## Acceptance scenarios
 
@@ -31,6 +32,7 @@ Mỗi trường là một platform riêng và tự đặt tên lớp (ví dụ "
 7. Sao chép 2026-2027 sang 2027-2028 khi năm đích đã có "1A" thì tạo các lớp còn lại và trả `skipped: ["1A"]`.
 8. Body thừa trường, `name` rỗng hoặc dài 121 ký tự, số suất âm trả 400.
 9. Tạo "1A" kèm `homeroomTeacherUserId` của GVCN rảnh thì nhận 201 với `homeroomTeacher` đã điền; GVCN đó đang chủ nhiệm lớp khác cùng niên khóa thì 409; tài khoản không phải GVCN ACTIVE của trường thì 400; actor thiếu `class_assignment.manage` thì 403. Cả ba trường hợp lỗi đều không tạo lớp.
+10. Phân công GVCN đang chủ nhiệm lớp "2B" cùng niên khóa cho lớp "1A" qua API phân công trả 409 và không đóng phân công hiện tại của "1A".
 
 ## Constraints and edge cases
 

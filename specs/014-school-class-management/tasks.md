@@ -26,3 +26,8 @@
 - [x] T013 Thêm truy vấn repository tìm phân công hiện tại của giáo viên trong niên khóa.
 - [x] T014 Service tạo lớp kiểm tra `class_assignment.manage`, giáo viên hợp lệ, giáo viên chưa chủ nhiệm lớp khác, rồi tạo phân công trong cùng transaction.
 - [x] T015 Thêm unit test cho acceptance scenario 9.
+
+## Bổ sung: chặn một GVCN chủ nhiệm nhiều lớp (FR-010)
+
+- [x] T016 API phân công GVCN kiểm tra giáo viên chưa chủ nhiệm lớp khác trong cùng niên khóa trước khi đóng/tạo phân công.
+- [x] T017 Thêm unit test cho acceptance scenario 10.
