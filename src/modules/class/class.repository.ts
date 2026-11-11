@@ -134,6 +134,12 @@ export interface ClassRepository {
     schoolId: string,
     academicYear: string,
   ): Promise<ClassWriteInput[]>;
+  findTeacherClassInYear(
+    tx: Prisma.TransactionClient,
+    teacherUserId: string,
+    schoolId: string,
+    academicYear: string,
+  ): Promise<{ id: string; name: string } | null>;
 }
 
 export interface ClassWriteInput {
@@ -307,6 +313,18 @@ export function createClassRepository(
         select: { name: true, registeredMealPortions: true },
         orderBy: [{ name: "asc" }, { id: "asc" }],
       });
+    },
+
+    async findTeacherClassInYear(tx, teacherUserId, schoolId, academicYear) {
+      const assignment = await tx.classHomeroomAssignment.findFirst({
+        where: {
+          teacherUserId,
+          endedAt: null,
+          Class: { schoolId, academicYear },
+        },
+        select: { Class: { select: { id: true, name: true } } },
+      });
+      return assignment?.Class ?? null;
     },
   };
 }

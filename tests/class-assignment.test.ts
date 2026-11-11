@@ -410,6 +410,8 @@ function fakeRepository(options?: {
   currentAssignment?: boolean;
   source?: Array<{ name: string; registeredMealPortions: number }>;
   createError?: Error;
+  teacherExists?: boolean;
+  teacherBusyIn?: string;
 }) {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const record =
@@ -471,6 +473,19 @@ function fakeRepository(options?: {
       "listActiveClassesForCopy",
       () => options?.source ?? [],
     ),
+    findEligibleTeacher: record("findEligibleTeacher", (_tx, id) =>
+      options?.teacherExists === false
+        ? null
+        : { id: id as string, fullName: "Cô Lan", username: "gvcn_lan" },
+    ),
+    findTeacherClassInYear: record("findTeacherClassInYear", () =>
+      options?.teacherBusyIn
+        ? { id: "other-class", name: options.teacherBusyIn }
+        : null,
+    ),
+    createAssignment: record("createAssignment", () => ({
+      assignedAt: NOV_2026,
+    })),
   } as unknown as ClassRepository;
   const called = (method: string) =>
     calls.filter((call) => call.method === method);
@@ -788,4 +803,88 @@ void test("class name conflicts are queried case-insensitively within the school
     OR: [{ name: { equals: "1A", mode: "insensitive" } }],
     id: { not: CLASS_ID },
   });
+});
+
+const TEACHER_ID = "00000000-0000-4000-8000-0000000000f1";
+
+void test("creating a class can assign an available homeroom teacher in the same transaction", async () => {
+  const { repository, called } = fakeRepository();
+  const result = await managementService(repository).createClass(
+    {
+      name: "1A",
+      academicYear: "2026-2027",
+      registeredMealPortions: 30,
+      homeroomTeacherUserId: TEACHER_ID,
+    },
+    manager,
+  );
+  assert.deepEqual(called("findEligibleTeacher")[0].args, [
+    TEACHER_ID,
+    SCHOOL_ID,
+  ]);
+  assert.deepEqual(called("findTeacherClassInYear")[0].args, [
+    TEACHER_ID,
+    SCHOOL_ID,
+    "2026-2027",
+  ]);
+  assert.deepEqual(called("createAssignment")[0].args[0], {
+    classId: "new-1A",
+    teacherUserId: TEACHER_ID,
+    assignedByUserId: manager.id,
+    assignedAt: NOV_2026,
+  });
+  assert.deepEqual(result.homeroomTeacher, {
+    id: TEACHER_ID,
+    fullName: "Cô Lan",
+    username: "gvcn_lan",
+    assignedAt: NOV_2026.toISOString(),
+  });
+});
+
+void test("an invalid or busy homeroom teacher prevents the class from being created", async () => {
+  const create = (
+    repository: ClassRepository,
+    principal: AuthPrincipal = manager,
+  ) =>
+    managementService(repository, principal).createClass(
+      {
+        name: "1A",
+        academicYear: "2026-2027",
+        registeredMealPortions: 0,
+        homeroomTeacherUserId: TEACHER_ID,
+      },
+      principal,
+    );
+
+  const missing = fakeRepository({ teacherExists: false });
+  await assert.rejects(create(missing.repository), isHttp(400));
+  assert.equal(missing.called("createClass").length, 0);
+
+  const busy = fakeRepository({ teacherBusyIn: "2B" });
+  await assert.rejects(create(busy.repository), isHttp(409));
+  assert.equal(busy.called("createClass").length, 0);
+
+  const noAssignPermission = principalWith("SCHOOL_MANAGEMENT_BOARD", [
+    "class.view",
+    "class.manage",
+  ]);
+  const forbidden = fakeRepository();
+  await assert.rejects(
+    create(forbidden.repository, noAssignPermission),
+    isHttp(403),
+  );
+  assert.equal(forbidden.called("createClass").length, 0);
+  assert.equal(forbidden.called("createAssignment").length, 0);
+});
+
+void test("homeroom teacher id must be a uuid when creating a class", () => {
+  assert.throws(
+    () =>
+      validateCreateClass({
+        name: "1A",
+        academicYear: "2026-2027",
+        homeroomTeacherUserId: "abc",
+      }),
+    isHttp(400),
+  );
 });

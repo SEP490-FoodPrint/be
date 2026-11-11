@@ -41,6 +41,7 @@ export const createClassSchema = z.strictObject({
   name: classNameSchema,
   academicYear: academicYearSchema,
   registeredMealPortions: mealPortionsSchema.default(0),
+  homeroomTeacherUserId: requestUuidSchema.optional(),
 });
 export const updateClassSchema = z
   .strictObject({

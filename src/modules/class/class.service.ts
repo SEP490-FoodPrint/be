@@ -145,6 +145,42 @@ async function assertNameAvailable(
   if (conflicts.length) throw new HttpError(409, DUPLICATE_NAME_MESSAGE);
 }
 
+/** GVCN gán khi tạo lớp: cần quyền phân công, tài khoản GVCN ACTIVE của trường và chưa chủ nhiệm lớp khác trong niên khóa. */
+async function requireAvailableTeacher(
+  repository: ClassRepository,
+  tx: ClassTx,
+  actor: AuthPrincipal,
+  teacherUserId: string,
+  schoolId: string,
+  academicYear: string,
+): Promise<{ id: string; fullName: string; username: string }> {
+  assertPermission(actor, ASSIGN_PERMISSION);
+  const teacher = await repository.findEligibleTeacher(
+    tx,
+    teacherUserId,
+    schoolId,
+  );
+  if (!teacher) {
+    throw new HttpError(
+      400,
+      "Chỉ được chọn tài khoản GVCN đang hoạt động của trường",
+    );
+  }
+  const busy = await repository.findTeacherClassInYear(
+    tx,
+    teacherUserId,
+    schoolId,
+    academicYear,
+  );
+  if (busy) {
+    throw new HttpError(
+      409,
+      `${teacher.fullName} đang chủ nhiệm lớp ${busy.name} trong niên khóa ${academicYear}`,
+    );
+  }
+  return teacher;
+}
+
 /** Vi phạm unique (school_id, name, academic_year) trả 409 thay vì để transaction thử lại. */
 async function uniqueWrite<T>(write: Promise<T>): Promise<T> {
   try {
@@ -390,6 +426,16 @@ export function createClassService(
             academicYear,
             body.name,
           );
+          const teacher = body.homeroomTeacherUserId
+            ? await requireAvailableTeacher(
+                repository,
+                tx,
+                actor,
+                body.homeroomTeacherUserId,
+                schoolId,
+                academicYear,
+              )
+            : null;
           const created = await uniqueWrite(
             repository.createClass(tx, {
               schoolId,
@@ -398,7 +444,21 @@ export function createClassService(
               registeredMealPortions: body.registeredMealPortions,
             }),
           );
-          return classDto(created, now);
+          const dto = classDto(created, now);
+          if (!teacher) return dto;
+          const assignment = await repository.createAssignment(tx, {
+            classId: created.id,
+            teacherUserId: teacher.id,
+            assignedByUserId: actor.id,
+            assignedAt: now,
+          });
+          return {
+            ...dto,
+            homeroomTeacher: {
+              ...teacher,
+              assignedAt: assignment.assignedAt.toISOString(),
+            },
+          };
         },
       );
     },
