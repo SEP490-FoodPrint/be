@@ -1398,7 +1398,6 @@ export function createKitchenLifecycle(
                   plannedPortions: child.plannedPortions,
                   dishes: {
                     create: child.dishes.map((d) => ({
-                      ...meal,
                       dishId: d.dishId,
                       plannedPortions: d.plannedPortions,
                     })),

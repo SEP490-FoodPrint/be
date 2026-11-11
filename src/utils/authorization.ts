@@ -104,6 +104,9 @@ export async function databaseOperation<T>(
     return await operation();
   } catch (error) {
     if (error instanceof HttpError) throw error;
+    process.stderr.write(
+      `[DATABASE_OPERATION_ERROR]: ${error instanceof Error ? error.stack || error.message : String(error)}\n`,
+    );
     throw new HttpError(
       503,
       "Không thể xử lý phân quyền. Vui lòng thử lại sau.",
