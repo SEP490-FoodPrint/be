@@ -128,6 +128,12 @@ Mọi dòng đều yêu cầu một trong các permission liệt kê. SYSTEM có
 
 School xem supplier qua quan hệ ACTIVE/SUSPENDED; ingredient qua IngredientEntry của trường. Supplier xem tài nguyên supplier-owned hoặc delivery của supplier khi có permission phù hợp. ATTP xã chỉ thấy incident/report chuyển tới đơn vị mình; traceability chỉ mở phần liên quan trực tiếp. Với ingredient_quality_feedback.view_own, thêm điều kiện submittedByUserId; view_details vẫn giới hạn tổ chức. Các API cũ giữ phân trang, safe select và serialization Date/Decimal/BigInt.
 
+## API phân bổ suất ăn hôm nay
+
+- `GET /api/meal-allocations` yêu cầu `meal_allocation.view` trong phạm vi trường. Trả trạng thái nấu, lưu mẫu, dữ liệu lô và phiên bản phân bổ.
+- `PUT /api/meal-allocations` yêu cầu `meal_allocation.update`, và `meal_allocation.create` khi tạo hồ sơ lớp. BE kiểm lại điều kiện của cả ngày và ghi nguyên tử.
+- Dùng ngày ăn hiện tại theo giờ Việt Nam. Hợp đồng này thay các route đọc chi tiết, tạo tự động, xác nhận phân phối và alias v1 của module.
+
 ## API Menu và CookingBatch v1
 
 Spec011 đổi lập mẻ sang toàn bữa: POST kitchen nhận `menuDayId`/`mealType` và kiểm tra `dishId` legacy nếu có. BGH quyết định cooking mode; client không được override. GET `/api/v1/kitchen/groups/:id` dùng cùng `cooking_batch.view`, xác thực và phạm vi trường như chi tiết mẻ. Mẻ con chứa `dishes[]`; mẫu lưu và phân bổ suất theo từng món trong mẻ. Confirm/complete/delete vẫn thao tác trên ID mẻ con; kho được ghi một lần theo cặp mẻ/lô nguyên liệu. Xem [hợp đồng grouped cooking](../specs/011-cooking-batch-groups/contracts.md) cho thay đổi response và rollout migration.

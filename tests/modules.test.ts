@@ -428,9 +428,6 @@ void test("v1 routes enforce permissions and emit versioned error codes before a
     ["PUT", `/menus/days/${testStaff.id}/meals/LUNCH/portion-groups`],
     ["GET", `/daily-meal-portions/${testStaff.id}/portion-groups`],
     ["PUT", `/daily-meal-portions/${testStaff.id}/portion-groups`],
-    ["GET", `/meal-allocations/${testStaff.id}`],
-    ["POST", "/meal-allocations"],
-    ["POST", `/meal-allocations/${testStaff.id}/distribute`],
     ["POST", `/kitchen/${testStaff.id}/food-samples`],
     ["GET", `/kitchen/${testStaff.id}/food-samples`],
     ["POST", `/food-samples/${testStaff.id}/dispose`],
@@ -1375,6 +1372,7 @@ void test("every mounted business list rejects forged role claims when the datab
   }
   assert.equal((await http.request("/api/health")).status, 200);
   assert.equal((await http.request("/api/unregistered")).status, 404);
+  assert.equal((await http.request("/api/v1/meal-allocations")).status, 404);
 });
 
 void test("authorized HTTP list validates input before reading and uses the response envelope", async (context) => {
