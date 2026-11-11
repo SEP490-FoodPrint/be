@@ -888,3 +888,38 @@ void test("homeroom teacher id must be a uuid when creating a class", () => {
     isHttp(400),
   );
 });
+
+void test("assigning a teacher who already leads another class in the year is rejected", async () => {
+  const { repository, called } = fakeRepository({
+    currentAssignment: true,
+    teacherBusyIn: "2B",
+  });
+  await assert.rejects(
+    managementService(repository).assignHomeroomTeacher(
+      { classId: CLASS_ID },
+      { teacherUserId: TEACHER_ID },
+      manager,
+    ),
+    (error: unknown) =>
+      isHttp(409)(error) && (error as Error).message.includes("2B"),
+  );
+  assert.deepEqual(called("findTeacherClassInYear")[0].args, [
+    TEACHER_ID,
+    SCHOOL_ID,
+    "2026-2027",
+  ]);
+  assert.equal(called("endAssignment").length, 0);
+  assert.equal(called("createAssignment").length, 0);
+});
+
+void test("assigning a free teacher still replaces the current homeroom teacher", async () => {
+  const { repository, called } = fakeRepository({ currentAssignment: true });
+  const result = await managementService(repository).assignHomeroomTeacher(
+    { classId: CLASS_ID },
+    { teacherUserId: TEACHER_ID },
+    manager,
+  );
+  assert.equal(called("endAssignment").length, 1);
+  assert.equal(called("createAssignment").length, 1);
+  assert.equal(result.homeroomTeacher?.id, TEACHER_ID);
+});

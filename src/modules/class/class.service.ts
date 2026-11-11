@@ -166,19 +166,31 @@ async function requireAvailableTeacher(
       "Chỉ được chọn tài khoản GVCN đang hoạt động của trường",
     );
   }
+  await assertTeacherFree(repository, tx, teacher, schoolId, academicYear);
+  return teacher;
+}
+
+/** Từ chối khi giáo viên đang là GVCN hiện tại của lớp khác trong cùng niên khóa. */
+async function assertTeacherFree(
+  repository: ClassRepository,
+  tx: ClassTx,
+  teacher: { id: string; fullName: string },
+  schoolId: string,
+  academicYear: string,
+  classId?: string,
+): Promise<void> {
   const busy = await repository.findTeacherClassInYear(
     tx,
-    teacherUserId,
+    teacher.id,
     schoolId,
     academicYear,
   );
-  if (busy) {
+  if (busy && busy.id !== classId) {
     throw new HttpError(
       409,
       `${teacher.fullName} đang chủ nhiệm lớp ${busy.name} trong niên khóa ${academicYear}`,
     );
   }
-  return teacher;
 }
 
 /** Vi phạm unique (school_id, name, academic_year) trả 409 thay vì để transaction thử lại. */
@@ -353,6 +365,15 @@ export function createClassService(
               },
             };
           }
+          // Một GVCN chỉ chủ nhiệm một lớp mỗi niên khóa; kiểm tra trước khi đóng phân công cũ.
+          await assertTeacherFree(
+            repository,
+            tx,
+            teacher,
+            schoolId,
+            target.academicYear as string,
+            target.id,
+          );
           if (current) {
             await repository.endAssignment(tx, current.id, now, actor.id);
           }
