@@ -348,7 +348,7 @@ void test("assignment rejects a teacher outside the eligible school role and kee
   assert.equal(writes.length, 0);
 });
 
-// ---- Quản lý lớp học (spec 014) ----
+// ---- Quản lý lớp học (spec 015) ----
 
 const SCHOOL_ID = board.schoolId as string;
 const CLASS_ID = "00000000-0000-4000-8000-0000000000c1";
