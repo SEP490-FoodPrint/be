@@ -15,6 +15,12 @@ export function createKitchenController(
   service: KitchenService = kitchenService,
 ) {
   return {
+    getGroup: asyncHandler(async (req, res) => {
+      sendSuccess(
+        res,
+        await service.getGroup(uuid(req.params.id), requirePrincipal(req)),
+      );
+    }),
     getContext: asyncHandler(async (req, res) => {
       validateKitchenAction(req.query);
       sendSuccess(res, await service.getContext(requirePrincipal(req)));

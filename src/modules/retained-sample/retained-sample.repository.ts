@@ -2,6 +2,10 @@ import type { Prisma } from "../../generated/prisma/client";
 export const retainedSampleSelect = {
   id: true,
   cookingBatchId: true,
+  dishId: true,
+  CookingBatchDish: {
+    select: { plannedPortions: true, Dish: { select: { name: true } } },
+  },
   recordedByUserId: true,
   sampledAt: true,
   quantity: true,
@@ -17,7 +21,7 @@ export const retainedSampleSelect = {
       batchCode: true,
       mealType: true,
       plannedPortions: true,
-      Dish: { select: { name: true } },
+      BatchGroup: { select: { id: true, batchCode: true } },
     },
   },
 } as const satisfies Prisma.RetainedFoodSampleSelect;
@@ -60,7 +64,7 @@ function filtered(
                   },
                 },
                 {
-                  CookingBatch: {
+                  CookingBatchDish: {
                     Dish: {
                       name: { contains: query.search, mode: "insensitive" },
                     },
@@ -99,12 +103,24 @@ export function createRetainedSampleRepository(read?: ListReader) {
     findBatch(tx: Tx, cookingBatchId: string, schoolId: string) {
       return tx.cookingBatch.findFirst({
         where: { id: cookingBatchId, MenuDay: { WeeklyMenu: { schoolId } } },
-        select: { id: true, status: true, completedAt: true },
+        select: {
+          id: true,
+          status: true,
+          completedAt: true,
+          dishes: { select: { dishId: true } },
+        },
       });
     },
-    findForBatch(tx: Tx, cookingBatchId: string) {
-      return tx.retainedFoodSample.findUnique({
+    listForBatch(tx: Tx, cookingBatchId: string) {
+      return tx.retainedFoodSample.findMany({
         where: { cookingBatchId },
+        select: retainedSampleSelect,
+        orderBy: { dishId: "asc" },
+      });
+    },
+    findForBatch(tx: Tx, cookingBatchId: string, dishId: string) {
+      return tx.retainedFoodSample.findUnique({
+        where: { cookingBatchId_dishId: { cookingBatchId, dishId } },
         select: retainedSampleSelect,
       });
     },
@@ -113,6 +129,7 @@ export function createRetainedSampleRepository(read?: ListReader) {
       cookingBatchId: string,
       actorId: string,
       input: {
+        dishId: string;
         quantity: string;
         unit: string;
         storageLocation: string;

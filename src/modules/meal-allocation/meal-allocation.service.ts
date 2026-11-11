@@ -55,9 +55,11 @@ export function createMealAllocationService(
     mealAllocationBatches: {
       select: {
         cookingBatchId: true,
+        dishId: true,
         allocatedPortions: true,
         CookingBatch: {
           select: {
+            batchGroupId: true,
             menuDayId: true,
             dishId: true,
             mealType: true,
@@ -155,10 +157,10 @@ export function createMealAllocationService(
           }
           if (!needs.size || demand.totalPortions <= 0)
             throw new HttpError(409, "Không có món hoặc số suất để phân bổ");
-          const batches = await tx.cookingBatch.findMany({
-            where: { ...meal, status: "COMPLETED" },
+          const batches = await tx.cookingBatchDish.findMany({
+            where: { CookingBatch: { ...meal, status: "COMPLETED" } },
             select: {
-              id: true,
+              cookingBatchId: true,
               dishId: true,
               plannedPortions: true,
               cookingBatchLots: {
@@ -177,23 +179,35 @@ export function createMealAllocationService(
                 },
               },
             },
-            orderBy: [{ completedAt: "asc" }, { id: "asc" }],
+            orderBy: [
+              { CookingBatch: { completedAt: "asc" } },
+              { cookingBatchId: "asc" },
+              { dishId: "asc" },
+            ],
           });
           const usage = await tx.mealAllocationBatch.groupBy({
-            by: ["cookingBatchId"],
-            where: { cookingBatchId: { in: batches.map((b) => b.id) } },
+            by: ["cookingBatchId", "dishId"],
+            where: {
+              cookingBatchId: { in: batches.map((b) => b.cookingBatchId) },
+            },
             _sum: { allocatedPortions: true },
           });
           const used = new Map(
-            usage.map((b) => [b.cookingBatchId, b._sum.allocatedPortions ?? 0]),
+            usage.map((b) => [
+              `${b.cookingBatchId}:${b.dishId}`,
+              b._sum.allocatedPortions ?? 0,
+            ]),
           );
           const allergyIds = new Set(
             demand.dailyAllergyPortions
               .filter((a) => a.portionCount > 0)
               .map((a) => a.ingredientEntryId),
           );
-          const rows: { cookingBatchId: string; allocatedPortions: number }[] =
-            [];
+          const rows: {
+            cookingBatchId: string;
+            dishId: string;
+            allocatedPortions: number;
+          }[] = [];
           for (const [dishId, total] of needs) {
             let remaining = total;
             for (const batch of batches.filter((b) => b.dishId === dishId)) {
@@ -212,7 +226,8 @@ export function createMealAllocationService(
                   "Lớp có dị ứng với món; cần y tế thiết lập nhóm và món phù hợp",
                 );
               const available =
-                (batch.plannedPortions ?? 0) - (used.get(batch.id) ?? 0);
+                (batch.plannedPortions ?? 0) -
+                (used.get(`${batch.cookingBatchId}:${batch.dishId}`) ?? 0);
               if (available < 0)
                 throw new HttpError(
                   409,
@@ -221,7 +236,8 @@ export function createMealAllocationService(
               const count = Math.min(remaining, available);
               if (count > 0) {
                 rows.push({
-                  cookingBatchId: batch.id,
+                  cookingBatchId: batch.cookingBatchId,
+                  dishId: batch.dishId,
                   allocatedPortions: count,
                 });
                 remaining -= count;

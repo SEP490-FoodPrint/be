@@ -351,7 +351,7 @@ void test("kitchen date ranges are inclusive, override single date, and remain i
   });
   assert.equal(
     where.AND[1].OR.length,
-    2,
+    3,
     "an out-of-range integer is only a text search",
   );
   assert.equal(list.skip, 20);
@@ -376,6 +376,8 @@ function sampleDatabase(fail = false) {
   const row = {
     id: testStaff.id,
     cookingBatchId: testAdmin.id,
+    dishId: testAdmin.id,
+    CookingBatchDish: { plannedPortions: 120, Dish: { name: "Cá kho" } },
     recordedByUserId: testStaff.id,
     sampledAt,
     quantity: new Prisma.Decimal("100.000"),
@@ -388,6 +390,7 @@ function sampleDatabase(fail = false) {
     updatedAt: sampledAt,
     CookingBatch: {
       batchCode: "CB-01",
+      BatchGroup: { id: testAdmin.id, batchCode: "B-01" },
       mealType: "LUNCH",
       plannedPortions: 120,
       Dish: { name: "Cá kho", internal: "hidden" },
@@ -447,7 +450,7 @@ void test("retained samples count the same scoped filters, search storage/batch/
     { storageLocation: { contains: "Tủ 01", mode: "insensitive" } },
     { CookingBatch: { batchCode: { contains: "Tủ 01", mode: "insensitive" } } },
     {
-      CookingBatch: {
+      CookingBatchDish: {
         Dish: { name: { contains: "Tủ 01", mode: "insensitive" } },
       },
     },

@@ -5,6 +5,16 @@ export type Tx = Prisma.TransactionClient;
 
 export const kitchenDetailSelect = {
   id: true,
+  batchGroupId: true,
+  BatchGroup: { select: { id: true, batchCode: true } },
+  dishes: {
+    select: {
+      dishId: true,
+      plannedPortions: true,
+      Dish: { select: { name: true } },
+    },
+    orderBy: { dishId: "asc" },
+  },
   batchCode: true,
   menuDayId: true,
   dishId: true,
@@ -21,6 +31,7 @@ export const kitchenDetailSelect = {
   MenuDay: { select: { menuDate: true } },
   cookingBatchLots: {
     select: {
+      dishId: true,
       ingredientLotId: true,
       quantityUsed: true,
       unit: true,
@@ -51,6 +62,7 @@ export const kitchenListSelect = {
   RetainedFoodSample: {
     select: {
       id: true,
+      dishId: true,
       status: true,
       sampledAt: true,
       disposedAt: true,
@@ -60,6 +72,16 @@ export const kitchenListSelect = {
 
 export const kitchenSummarySelect = {
   id: true,
+  batchGroupId: true,
+  BatchGroup: { select: { id: true, batchCode: true } },
+  dishes: {
+    select: {
+      dishId: true,
+      plannedPortions: true,
+      Dish: { select: { name: true } },
+    },
+    orderBy: { dishId: "asc" },
+  },
   batchCode: true,
   menuDayId: true,
   dishId: true,
@@ -126,15 +148,18 @@ function kitchenFilterWhere(
   return {
     AND: [
       scope,
+      ...(query.dishId ? [{ dishes: { some: { dishId: query.dishId } } }] : []),
       {
         status: query.status,
         mealType: query.mealType,
         menuDayId: query.menuDayId,
-        dishId: query.dishId,
+
         cookingModeApplied: query.cookingModeApplied,
         ...(query.hasSample === undefined
           ? {}
-          : { RetainedFoodSample: query.hasSample ? { isNot: null } : null }),
+          : query.hasSample
+            ? { dishes: { every: { retainedFoodSamples: { some: {} } } } }
+            : { dishes: { some: { retainedFoodSamples: { none: {} } } } }),
         ...(query.startDate && query.endDate
           ? {
               MenuDay: {
@@ -161,8 +186,23 @@ function kitchenFilterWhere(
                   },
                 },
                 {
-                  Dish: {
-                    name: { contains: search, mode: "insensitive" as const },
+                  dishes: {
+                    some: {
+                      Dish: {
+                        name: {
+                          contains: search,
+                          mode: "insensitive" as const,
+                        },
+                      },
+                    },
+                  },
+                },
+                {
+                  BatchGroup: {
+                    batchCode: {
+                      contains: search,
+                      mode: "insensitive" as const,
+                    },
                   },
                 },
                 ...(searchPortions !== undefined &&
@@ -179,6 +219,143 @@ function kitchenFilterWhere(
 }
 
 export const kitchenRepository = {
+  findMealDishPlans(
+    client: Tx,
+    meal: { menuDayId: string; mealType: "LUNCH" | "AFTERNOON" },
+  ) {
+    return client.cookingBatchDish.findMany({
+      where: { CookingBatch: meal },
+      select: {
+        dishId: true,
+        plannedPortions: true,
+        CookingBatch: { select: { status: true } },
+      },
+    });
+  },
+  findPlanMeal(
+    client: Tx,
+    menuDayId: string,
+    mealType: "LUNCH" | "AFTERNOON",
+    schoolId: string,
+  ) {
+    return client.menuDay.findFirst({
+      where: { id: menuDayId, WeeklyMenu: { schoolId } },
+      select: {
+        menuDate: true,
+        approvalStatus: true,
+        menuDayDishes: {
+          where: { mealType },
+          orderBy: { dishId: "asc" },
+          select: {
+            dishId: true,
+            Dish: { select: { schoolId: true, status: true } },
+            ingredients: {
+              orderBy: { ingredientId: "asc" },
+              include: {
+                ingredient: {
+                  select: {
+                    ingredientEntries: {
+                      where: { schoolId },
+                      select: { id: true },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+  },
+  listMealBatches(
+    client: Tx,
+    meal: { menuDayId: string; mealType: "LUNCH" | "AFTERNOON" },
+  ) {
+    return client.cookingBatch.findMany({
+      where: meal,
+      select: kitchenDetailSelect,
+      orderBy: { id: "asc" },
+    });
+  },
+  hasRecipeAllergy(
+    client: Tx,
+    menuDate: Date,
+    mealType: "LUNCH" | "AFTERNOON",
+    schoolId: string,
+    entryIds: string[],
+  ) {
+    return client.dailyAllergyPortion.findFirst({
+      where: {
+        DailyMealPortion: {
+          mealDate: menuDate,
+          mealType,
+          status: "FINALIZED",
+          Class: { schoolId },
+        },
+        ingredientEntryId: { in: entryIds },
+        portionCount: { gt: 0 },
+      },
+      select: { dailyMealPortionId: true },
+    });
+  },
+  createPlanGroup(
+    client: Tx,
+    input: {
+      menuDayId: string;
+      mealType: "LUNCH" | "AFTERNOON";
+      createdByUserId: string;
+      batchCode: string;
+    },
+  ) {
+    return client.cookingBatchGroup.create({
+      data: input,
+      select: { id: true, batchCode: true },
+    });
+  },
+  async createPlannedChild(
+    client: Tx,
+    input: Prisma.CookingBatchUncheckedCreateInput,
+    lots: {
+      dishId: string;
+      ingredientLotId: string;
+      quantityUsed: string;
+      unit: string;
+    }[],
+  ) {
+    const child = await client.cookingBatch.create({
+      data: input,
+      select: { id: true },
+    });
+    // Dish rows must exist before the new composite lot FK can be satisfied.
+    await client.cookingBatchLot.createMany({
+      data: lots.map((lot) => ({ ...lot, cookingBatchId: child.id })),
+    });
+    return client.cookingBatch.findUniqueOrThrow({
+      where: { id: child.id },
+      select: kitchenDetailSelect,
+    });
+  },
+  findGroup(client: Tx, id: string, schoolId: string) {
+    return client.cookingBatchGroup.findFirst({
+      where: { id, MenuDay: { WeeklyMenu: { schoolId } } },
+      select: {
+        id: true,
+        batchCode: true,
+        menuDayId: true,
+        mealType: true,
+        createdAt: true,
+        cookingBatches: {
+          select: kitchenDetailSelect,
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        },
+      },
+    });
+  },
+  removeEmptyGroup(client: Tx, id: string) {
+    return client.cookingBatchGroup.deleteMany({
+      where: { id, cookingBatches: { none: {} } },
+    });
+  },
   findSchoolContext(client: Tx, schoolId: string) {
     return client.school.findFirst({
       where: { id: schoolId, status: "ACTIVE" },
@@ -269,7 +446,13 @@ export const kitchenRepository = {
     const where = kitchenFilterWhere(query, scope);
     return client.cookingBatch.count({
       where: {
-        AND: [where, { status: "COMPLETED", RetainedFoodSample: null }],
+        AND: [
+          where,
+          {
+            status: "COMPLETED",
+            dishes: { some: { retainedFoodSamples: { none: {} } } },
+          },
+        ],
       },
     });
   },

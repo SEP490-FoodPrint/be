@@ -37,6 +37,7 @@ export const retainedSampleDisposalParamsSchema = z.strictObject({
   sampleId: requestUuidSchema,
 });
 export const foodSampleSchema = z.strictObject({
+  dishId: requestUuidSchema.optional(),
   quantity: z
     .union([z.number(), z.string()], {
       error: "Lượng mẫu phải là số hoặc chuỗi số thập phân",
