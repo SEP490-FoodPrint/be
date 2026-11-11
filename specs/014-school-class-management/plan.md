@@ -31,4 +31,7 @@ Chạy `npm run validate` và `npm run test:unit`. Test mới được thêm và
 
 ## Verification results
 
-Sẽ được cập nhật sau khi triển khai.
+- ESLint toàn repo PASS. Typecheck PASS, build PASS.
+- `npm run test:unit` PASS 282/282, gồm 13 test mới cho quản lý lớp: validation, tạo lớp, trùng tên không phân biệt hoa thường, P2002 → 409, niên khóa chưa cấu hình/đã qua, chỉ BGH, lớp ngoài trường → 404, đổi tên loại trừ chính lớp, ngừng lớp đóng GVCN, kích hoạt lại không gán GVCN, sao chép bỏ qua tên trùng, năm nguồn rỗng → 404, truy vấn trùng tên `mode: "insensitive"`.
+- Prettier trên các file thay đổi PASS. `npm run format:check` toàn repo báo lỗi trên hầu hết file do working copy dùng CRLF (`core.autocrlf=true` trên máy); lỗi này có từ trước và không do thay đổi này.
+- Chưa chạy `npm run test:authorization` và `npm run auth:bootstrap`: cần PostgreSQL local và cho phép riêng. Không có migration, DDL hay kết nối Azure.

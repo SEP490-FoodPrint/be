@@ -38,6 +38,30 @@ export function createClassRouter(
     requirePermission("class_assignment.manage"),
     controller.removeHomeroomTeacher,
   );
+  router.post(
+    "/copy",
+    authHandler,
+    requirePermission("class.manage"),
+    controller.copyClasses,
+  );
+  router.patch(
+    "/:classId/status",
+    authHandler,
+    requirePermission("class.manage"),
+    controller.changeStatus,
+  );
+  router.patch(
+    "/:classId",
+    authHandler,
+    requirePermission("class.manage"),
+    controller.updateClass,
+  );
+  router.post(
+    "/",
+    authHandler,
+    requirePermission("class.manage"),
+    controller.createClass,
+  );
   router.get("/", authHandler, requireResource("class"), controller.getAll);
   return router;
 }
