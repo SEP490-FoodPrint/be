@@ -199,32 +199,40 @@ export function assertOrganizationManager(principal: AuthPrincipal): void {
     );
 }
 function transactionConflict(error: unknown): boolean {
-  if (!error || typeof error !== "object" || !("code" in error)) return false;
-  if (error.code === "P2034") return true;
-  if (error.code !== "P2010" || !("meta" in error)) return false;
-  const meta: unknown = error.meta;
-  if (
-    meta &&
-    typeof meta === "object" &&
-    "code" in meta &&
-    (meta.code === "40001" || meta.code === "40P01")
-  )
-    return true;
-  if (!meta || typeof meta !== "object" || !("driverAdapterError" in meta))
-    return false;
-  const adapter: unknown = meta.driverAdapterError;
-  if (!adapter || typeof adapter !== "object" || !("cause" in adapter))
-    return false;
-  const cause: unknown = adapter.cause;
-  // PostgreSQL raw row locks report serialization failures through the pg adapter as P2010.
-  return Boolean(
-    cause &&
-    typeof cause === "object" &&
-    "kind" in cause &&
-    cause.kind === "TransactionWriteConflict" &&
-    "originalCode" in cause &&
-    (cause.originalCode === "40001" || cause.originalCode === "40P01"),
-  );
+  if (!error || typeof error !== "object") return false;
+  if ("code" in error) {
+    if (error.code === "P2034" || error.code === "P2002") return true;
+    if (error.code === "40001" || error.code === "40P01") return true;
+  }
+  const meta: unknown = "meta" in error ? error.meta : undefined;
+  if (meta && typeof meta === "object") {
+    if ("code" in meta && (meta.code === "40001" || meta.code === "40P01"))
+      return true;
+    if (
+      "driverAdapterError" in meta &&
+      meta.driverAdapterError &&
+      typeof meta.driverAdapterError === "object"
+    ) {
+      const adapter = meta.driverAdapterError as Record<string, unknown>;
+      const cause = adapter.cause as Record<string, unknown> | undefined;
+      if (cause && typeof cause === "object") {
+        if (
+          cause.code === "40001" ||
+          cause.code === "40P01" ||
+          cause.code === "23505"
+        )
+          return true;
+        if (
+          cause.originalCode === "40001" ||
+          cause.originalCode === "40P01" ||
+          cause.originalCode === "23505"
+        )
+          return true;
+        if (cause.kind === "TransactionWriteConflict") return true;
+      }
+    }
+  }
+  return false;
 }
 export async function authorizationTransaction<T>(
   client: PrismaClient,

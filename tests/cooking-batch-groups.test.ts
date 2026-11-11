@@ -274,6 +274,7 @@ function fixture(mode: CookingMode, shared = false) {
         })),
       findUniqueOrThrow: () =>
         Promise.resolve().then(() => ({ menuDate: date })),
+      update: () => Promise.resolve().then(() => ({ id: "menu-day" })),
     },
     menuDayDish: {
       findMany: () =>

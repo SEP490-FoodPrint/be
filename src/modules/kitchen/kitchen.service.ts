@@ -879,8 +879,8 @@ function dto(batch: Detail): CookingBatchDetailDTO {
     unit: lot.unit,
     lotCode: lot.IngredientLot?.lotCode ?? null,
     ingredientName:
-      lot.IngredientLot?.DeliveryItem.SupplyRequestItem.IngredientEntry
-        .Ingredient.name ?? null,
+      lot.IngredientLot?.DeliveryItem?.SupplyRequestItem?.IngredientEntry
+        ?.Ingredient?.name ?? null,
     expiryDate:
       lot.IngredientLot?.expiryDate?.toISOString().slice(0, 10) ?? null,
   }));
@@ -907,7 +907,7 @@ function dto(batch: Detail): CookingBatchDetailDTO {
     MenuDay: { menuDate: batch.MenuDay.menuDate.toISOString().slice(0, 10) },
     dishes: batch.dishes.map((d) => ({
       dishId: d.dishId,
-      name: d.Dish.name,
+      name: d.Dish?.name ?? "",
       plannedPortions: d.plannedPortions,
       cookingBatchLots: lots.filter((l) => l.dishId === d.dishId),
     })),
@@ -1216,6 +1216,7 @@ export function createKitchenLifecycle(
         principal,
         "cooking_batch.create",
         async (tx, actor, schoolId) => {
+          await tx.$queryRaw`SELECT id FROM foodprint.menu_days WHERE id = ${input.menuDayId}::uuid FOR UPDATE`;
           const school = await repository.findSchoolContext(tx, schoolId);
           if (
             !school?.cookingMode ||
@@ -1416,6 +1417,10 @@ export function createKitchenLifecycle(
             demand.totalPortions,
             mode,
           );
+          await tx.menuDay.update({
+            where: { id: input.menuDayId },
+            data: { updatedAt: new Date() },
+          });
           const batches = [...existing, ...created];
           return {
             created: true,
@@ -1650,7 +1655,7 @@ export function createKitchenService(
           plannedPortions: batch.plannedPortions,
           dishes: batch.dishes.map((d) => ({
             dishId: d.dishId,
-            name: d.Dish.name,
+            name: d.Dish?.name ?? "",
             plannedPortions: d.plannedPortions,
           })),
           confirmedAt: batch.confirmedAt?.toISOString() ?? null,
