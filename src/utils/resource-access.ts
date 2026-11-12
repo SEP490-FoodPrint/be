@@ -57,6 +57,9 @@ export const RESOURCE_PERMISSIONS = {
   "menu-review": ["menu.view", "menu.review", "menu.approve"],
   traceability: ["traceability.view"],
 } as const;
+export const isComplaintSubmitter = (role: string) =>
+  role === ROLES.HOMEROOM_TEACHER || role === ROLES.PARENTS_COMMITTEE;
+
 export const listScopes = {
   auth: (p: AuthPrincipal): Prisma.RoleWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["auth"]);
@@ -164,18 +167,14 @@ export const listScopes = {
   },
   feedback: (p: AuthPrincipal): Prisma.MealComplaintWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["feedback"]);
-    if (p.orgType === "SYSTEM") return {};
-    if (p.orgType === "SCHOOL")
+    if (p.orgType === "SCHOOL" && p.role === ROLES.SCHOOL_MANAGEMENT_BOARD)
+      return { DailyMealPortion: { Class: { schoolId: school(p) } } };
+    if (p.orgType === "SCHOOL" && isComplaintSubmitter(p.role))
       return {
-        MealAllocation: {
-          DailyMealPortion: { Class: { schoolId: school(p) } },
-        },
-        ...(p.role === "HOMEROOM_TEACHER" && { submittedByUserId: p.id }),
+        DailyMealPortion: { Class: { schoolId: school(p) } },
+        submittedByUserId: p.id,
       };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Vai trò không được phép xem khiếu nại");
   },
   inspection: (p: AuthPrincipal): Prisma.FoodSafetyIncidentWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["inspection"]);

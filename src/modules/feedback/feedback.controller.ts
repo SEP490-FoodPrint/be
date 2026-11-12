@@ -4,6 +4,7 @@ import { sendSuccess } from "../../utils/response";
 import { feedbackService, type FeedbackService } from "./feedback.service";
 import {
   validateComplaintId,
+  validateMealOptionsQuery,
   validateCreateComplaint,
   validateFeedbackListQuery,
   validateRespondComplaint,
@@ -22,6 +23,10 @@ export function createFeedbackController(
         ),
         "Lấy danh sách khiếu nại thành công",
       );
+    }),
+    mealOptions: asyncHandler(async (req, res) => {
+      validateMealOptionsQuery(req.query);
+      sendSuccess(res, await service.mealOptions(requirePrincipal(req)));
     }),
     getOne: asyncHandler(async (req, res) => {
       sendSuccess(

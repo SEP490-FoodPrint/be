@@ -77,9 +77,7 @@ void test("overview scopes every data source to the authenticated school and ser
       assert.deepEqual(query.where, { id: "own-school" });
     else if (query.table === "complaints")
       assert.deepEqual(query.where, {
-        MealAllocation: {
-          DailyMealPortion: { Class: { schoolId: "own-school" } },
-        },
+        DailyMealPortion: { Class: { schoolId: "own-school" } },
       });
     else assert.deepEqual(query.where, { schoolId: "own-school" });
   }
