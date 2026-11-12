@@ -547,6 +547,14 @@ export const INITIAL_PERMISSIONS = [
     description: "Gán, đổi hoặc bỏ GVCN theo niên khóa.",
   },
   {
+    code: "class.manage",
+    name: "Quản lý lớp học",
+    module: "class",
+    action: "manage",
+    description:
+      "Tạo, sửa, ngừng/kích hoạt lại và sao chép lớp học theo niên khóa đã cấu hình.",
+  },
+  {
     code: "supplier_certification.view",
     name: "Xem chứng nhận supplier",
     module: "supplier_certification",
@@ -628,6 +636,7 @@ export const INITIAL_ROLE_PERMISSIONS = [
   ["SCHOOL_MANAGEMENT_BOARD", "traceability.view"],
   ["SCHOOL_MANAGEMENT_BOARD", "class.view"],
   ["SCHOOL_MANAGEMENT_BOARD", "class_assignment.manage"],
+  ["SCHOOL_MANAGEMENT_BOARD", "class.manage"],
   ["SCHOOL_MANAGEMENT_BOARD", "school_cooking_mode.manage"],
   ["SCHOOL_MANAGEMENT_BOARD", "school_meal_times.manage"],
   ["SCHOOL_MANAGEMENT_BOARD", "school_academic_year.view"],

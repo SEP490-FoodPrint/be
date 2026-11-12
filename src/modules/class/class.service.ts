@@ -1,4 +1,4 @@
-import type { PrismaClient } from "../../generated/prisma/client";
+import { Prisma, type PrismaClient } from "../../generated/prisma/client";
 import { ROLES } from "../../constants/roles";
 import type { AuthPrincipal } from "../../types/auth";
 import {
@@ -21,19 +21,31 @@ import type {
   ClassIdRequestDTO,
   ClassListRequestDTO,
   ClassSchoolRequestDTO,
+  ClassStatusRequestDTO,
+  CopyClassesRequestDTO,
+  CreateClassRequestDTO,
   EligibleTeachersRequestDTO,
   HomeroomAssignmentRequestDTO,
+  UpdateClassRequestDTO,
 } from "./class.request.dto";
 import type {
   AcademicYearsResponseDTO,
   ClassListItemResponseDTO,
   ClassListResponseDTO,
   ClassSchoolResponseDTO,
+  CopyClassesResponseDTO,
   EligibleTeachersResponseDTO,
   HomeroomAssignmentResponseDTO,
 } from "./class.response.dto";
 
 const ASSIGN_PERMISSION = "class_assignment.manage";
+const MANAGE_PERMISSION = "class.manage";
+const MANAGE_ROLE_MESSAGE = "Chỉ Ban Giám hiệu được quản lý lớp học";
+const DUPLICATE_NAME_MESSAGE =
+  "Tên lớp đã tồn tại trong niên khóa (kể cả lớp đã ngừng hoạt động)";
+type ClassTx = Parameters<ClassRepository["findAssignableClass"]>[0];
+
+const nameKey = (name: string) => name.trim().toLocaleLowerCase("vi");
 
 function classDto(row: ClassListRow, now: Date): ClassListItemResponseDTO {
   const current = row.homeroomAssignments?.[0];
@@ -67,9 +79,132 @@ function schoolOf(principal: AuthPrincipal): string {
   return principal.schoolId;
 }
 
-function assertManagementBoard(principal: AuthPrincipal): void {
+function assertManagementBoard(
+  principal: AuthPrincipal,
+  message = "Chỉ Ban Giám hiệu được phân công GVCN",
+): void {
   if (principal.role !== ROLES.SCHOOL_MANAGEMENT_BOARD) {
-    throw new HttpError(403, "Chỉ Ban Giám hiệu được phân công GVCN");
+    throw new HttpError(403, message);
+  }
+}
+
+/** Niên khóa phải còn là năm hiện tại/sắp tới và đã được trường cấu hình. */
+async function requireWritableYear(
+  repository: ClassRepository,
+  tx: ClassTx,
+  schoolId: string,
+  academicYear: string | null,
+  now: Date,
+): Promise<string> {
+  if (!academicYear || !isAssignableAcademicYear(academicYear, now)) {
+    throw new HttpError(
+      409,
+      "Niên khóa đã kết thúc hoặc không hợp lệ, chỉ được xem lớp học",
+    );
+  }
+  const configured = await repository.findConfiguredAcademicYear(
+    tx,
+    schoolId,
+    academicYear,
+  );
+  if (!configured) {
+    throw new HttpError(
+      409,
+      `Niên khóa ${academicYear} chưa được cấu hình năm học`,
+    );
+  }
+  return academicYear;
+}
+
+async function requireClass(
+  repository: ClassRepository,
+  tx: ClassTx,
+  classId: string,
+  schoolId: string,
+): Promise<AssignableClassRow> {
+  const target = await repository.findAssignableClass(tx, classId, schoolId);
+  if (!target) throw new HttpError(404, "Không tìm thấy lớp học");
+  return target;
+}
+
+async function assertNameAvailable(
+  repository: ClassRepository,
+  tx: ClassTx,
+  schoolId: string,
+  academicYear: string,
+  name: string,
+  excludeClassId?: string,
+): Promise<void> {
+  const conflicts = await repository.findNameConflicts(
+    tx,
+    schoolId,
+    academicYear,
+    [name],
+    excludeClassId,
+  );
+  if (conflicts.length) throw new HttpError(409, DUPLICATE_NAME_MESSAGE);
+}
+
+/** GVCN gán khi tạo lớp: cần quyền phân công, tài khoản GVCN ACTIVE của trường và chưa chủ nhiệm lớp khác trong niên khóa. */
+async function requireAvailableTeacher(
+  repository: ClassRepository,
+  tx: ClassTx,
+  actor: AuthPrincipal,
+  teacherUserId: string,
+  schoolId: string,
+  academicYear: string,
+): Promise<{ id: string; fullName: string; username: string }> {
+  assertPermission(actor, ASSIGN_PERMISSION);
+  const teacher = await repository.findEligibleTeacher(
+    tx,
+    teacherUserId,
+    schoolId,
+  );
+  if (!teacher) {
+    throw new HttpError(
+      400,
+      "Chỉ được chọn tài khoản GVCN đang hoạt động của trường",
+    );
+  }
+  await assertTeacherFree(repository, tx, teacher, schoolId, academicYear);
+  return teacher;
+}
+
+/** Từ chối khi giáo viên đang là GVCN hiện tại của lớp khác trong cùng niên khóa. */
+async function assertTeacherFree(
+  repository: ClassRepository,
+  tx: ClassTx,
+  teacher: { id: string; fullName: string },
+  schoolId: string,
+  academicYear: string,
+  classId?: string,
+): Promise<void> {
+  const busy = await repository.findTeacherClassInYear(
+    tx,
+    teacher.id,
+    schoolId,
+    academicYear,
+  );
+  if (busy && busy.id !== classId) {
+    throw new HttpError(
+      409,
+      `${teacher.fullName} đang chủ nhiệm lớp ${busy.name} trong niên khóa ${academicYear}`,
+    );
+  }
+}
+
+/** Vi phạm unique (school_id, name, academic_year) trả 409 thay vì để transaction thử lại. */
+async function uniqueWrite<T>(write: Promise<T>): Promise<T> {
+  try {
+    return await write;
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === "P2002"
+    ) {
+      throw new HttpError(409, DUPLICATE_NAME_MESSAGE);
+    }
+    throw error;
   }
 }
 
@@ -230,6 +365,15 @@ export function createClassService(
               },
             };
           }
+          // Một GVCN chỉ chủ nhiệm một lớp mỗi niên khóa; kiểm tra trước khi đóng phân công cũ.
+          await assertTeacherFree(
+            repository,
+            tx,
+            teacher,
+            schoolId,
+            target.academicYear as string,
+            target.id,
+          );
           if (current) {
             await repository.endAssignment(tx, current.id, now, actor.id);
           }
@@ -273,6 +417,225 @@ export function createClassService(
           if (!current) throw new HttpError(404, "Lớp chưa có GVCN");
           await repository.endAssignment(tx, current.id, now, actor.id);
           return { classId: target.id, homeroomTeacher: null };
+        },
+      );
+    },
+
+    async createClass(
+      body: CreateClassRequestDTO,
+      principal: AuthPrincipal,
+    ): Promise<ClassListItemResponseDTO> {
+      const db = await connect();
+      const now = clock();
+      return withSchoolTransaction(
+        db,
+        principal,
+        MANAGE_PERMISSION,
+        async (tx, actor, schoolId) => {
+          assertManagementBoard(actor, MANAGE_ROLE_MESSAGE);
+          const academicYear = await requireWritableYear(
+            repository,
+            tx,
+            schoolId,
+            body.academicYear,
+            now,
+          );
+          await assertNameAvailable(
+            repository,
+            tx,
+            schoolId,
+            academicYear,
+            body.name,
+          );
+          const teacher = body.homeroomTeacherUserId
+            ? await requireAvailableTeacher(
+                repository,
+                tx,
+                actor,
+                body.homeroomTeacherUserId,
+                schoolId,
+                academicYear,
+              )
+            : null;
+          const created = await uniqueWrite(
+            repository.createClass(tx, {
+              schoolId,
+              academicYear,
+              name: body.name,
+              registeredMealPortions: body.registeredMealPortions,
+            }),
+          );
+          const dto = classDto(created, now);
+          if (!teacher) return dto;
+          const assignment = await repository.createAssignment(tx, {
+            classId: created.id,
+            teacherUserId: teacher.id,
+            assignedByUserId: actor.id,
+            assignedAt: now,
+          });
+          return {
+            ...dto,
+            homeroomTeacher: {
+              ...teacher,
+              assignedAt: assignment.assignedAt.toISOString(),
+            },
+          };
+        },
+      );
+    },
+
+    async updateClass(
+      params: ClassIdRequestDTO,
+      body: UpdateClassRequestDTO,
+      principal: AuthPrincipal,
+    ): Promise<ClassListItemResponseDTO> {
+      const db = await connect();
+      const now = clock();
+      return withSchoolTransaction(
+        db,
+        principal,
+        MANAGE_PERMISSION,
+        async (tx, actor, schoolId) => {
+          assertManagementBoard(actor, MANAGE_ROLE_MESSAGE);
+          const target = await requireClass(
+            repository,
+            tx,
+            params.classId,
+            schoolId,
+          );
+          const academicYear = await requireWritableYear(
+            repository,
+            tx,
+            schoolId,
+            target.academicYear,
+            now,
+          );
+          if (body.name !== undefined) {
+            await assertNameAvailable(
+              repository,
+              tx,
+              schoolId,
+              academicYear,
+              body.name,
+              target.id,
+            );
+          }
+          const updated = await uniqueWrite(
+            repository.updateClass(tx, target.id, schoolId, {
+              ...(body.name !== undefined ? { name: body.name } : {}),
+              ...(body.registeredMealPortions !== undefined
+                ? { registeredMealPortions: body.registeredMealPortions }
+                : {}),
+            }),
+          );
+          return classDto(updated, now);
+        },
+      );
+    },
+
+    async changeStatus(
+      params: ClassIdRequestDTO,
+      body: ClassStatusRequestDTO,
+      principal: AuthPrincipal,
+    ): Promise<ClassListItemResponseDTO> {
+      const db = await connect();
+      const now = clock();
+      return withSchoolTransaction(
+        db,
+        principal,
+        MANAGE_PERMISSION,
+        async (tx, actor, schoolId) => {
+          assertManagementBoard(actor, MANAGE_ROLE_MESSAGE);
+          const target = await requireClass(
+            repository,
+            tx,
+            params.classId,
+            schoolId,
+          );
+          await requireWritableYear(
+            repository,
+            tx,
+            schoolId,
+            target.academicYear,
+            now,
+          );
+          if (body.status === "INACTIVE") {
+            const current = await repository.findCurrentAssignment(
+              tx,
+              target.id,
+            );
+            if (current) {
+              await repository.endAssignment(tx, current.id, now, actor.id);
+            }
+          }
+          const updated = await repository.updateStatus(
+            tx,
+            target.id,
+            schoolId,
+            body.status,
+          );
+          return classDto(updated, now);
+        },
+      );
+    },
+
+    async copyClasses(
+      body: CopyClassesRequestDTO,
+      principal: AuthPrincipal,
+    ): Promise<CopyClassesResponseDTO> {
+      const db = await connect();
+      const now = clock();
+      return withSchoolTransaction(
+        db,
+        principal,
+        MANAGE_PERMISSION,
+        async (tx, actor, schoolId) => {
+          assertManagementBoard(actor, MANAGE_ROLE_MESSAGE);
+          const toAcademicYear = await requireWritableYear(
+            repository,
+            tx,
+            schoolId,
+            body.toAcademicYear,
+            now,
+          );
+          const source = await repository.listActiveClassesForCopy(
+            tx,
+            schoolId,
+            body.fromAcademicYear,
+          );
+          if (!source.length) {
+            throw new HttpError(
+              404,
+              `Niên khóa ${body.fromAcademicYear} không có lớp đang hoạt động`,
+            );
+          }
+          const existing = await repository.findNameConflicts(
+            tx,
+            schoolId,
+            toAcademicYear,
+            source.map((item) => item.name),
+          );
+          const taken = new Set(existing.map((item) => nameKey(item.name)));
+          const created: ClassListItemResponseDTO[] = [];
+          const skipped: string[] = [];
+          for (const item of source) {
+            const key = nameKey(item.name);
+            if (taken.has(key)) {
+              skipped.push(item.name);
+              continue;
+            }
+            taken.add(key);
+            const row = await uniqueWrite(
+              repository.createClass(tx, {
+                schoolId,
+                academicYear: toAcademicYear,
+                name: item.name,
+                registeredMealPortions: item.registeredMealPortions,
+              }),
+            );
+            created.push(classDto(row, now));
+          }
+          return { toAcademicYear, created, skipped };
         },
       );
     },

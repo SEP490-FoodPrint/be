@@ -44,3 +44,8 @@ export interface HomeroomAssignmentResponseDTO {
   classId: string;
   homeroomTeacher: HomeroomTeacherResponseDTO | null;
 }
+export interface CopyClassesResponseDTO {
+  toAcademicYear: string;
+  created: ClassItemDTO[];
+  skipped: string[];
+}

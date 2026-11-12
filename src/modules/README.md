@@ -123,6 +123,10 @@ Test module dùng HTTP local và reader được inject để kiểm tra quyền
 
 Hai list đơn vị nhận search/status và trả contact/total; nhóm con phân trang riêng. Services dùng scope từ resource-access và helper read-transaction để count/items cùng snapshot; repositories nhận cùng transaction và áp scope vào WHERE. Metadata minh chứng được batch theo hồ sơ, không thêm schema. Xem [hợp đồng API](../../specs/006-school-supplier-admin/contracts/admin-directory.md).
 
+### Quản lý lớp học (016)
+
+`class` sở hữu thêm các thao tác ghi của Ban Giám hiệu: `POST /api/classes`, `POST /api/classes/copy`, `PATCH /api/classes/:classId` và `PATCH /api/classes/:classId/status`, đều yêu cầu `class.manage`. Không có xóa cứng; niên khóa phải được cấu hình qua `school-academic-year`. Xem [hợp đồng API](../../specs/016-school-class-management/contracts.md).
+
 ## Quản lý nguyên liệu nhà cung cấp
 
 Module ingredient đã tách đầy đủ routes/controller/validation/service/repository và hai file Request/Response DTO theo AGENTS.md; phần mô tả bốn file ở trên áp dụng cho các module danh sách legacy chưa chuyển đổi. Controller validate qua Zod; service xác lập scope, transaction và map DTO; repository thực hiện mọi truy vấn/khóa với shared client.
