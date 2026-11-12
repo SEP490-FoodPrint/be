@@ -7,6 +7,10 @@ import {
   type OrganizationService,
 } from "./organization.service";
 import {
+  validateCookingMode,
+  validateMealTimes,
+  validateOrganizationSummaryQuery,
+  validateOrganizationDetailParams,
   validateOrganizationListQuery,
   validatePublicDailyMenuQuery,
   validatePublicSchoolQuery,
@@ -19,10 +23,46 @@ export function createOrganizationController(
   service: OrganizationService = organizationService,
 ) {
   return {
+    getSummary: asyncHandler(async (req, res) => {
+      const q = validateOrganizationSummaryQuery(req.query);
+      sendSuccess(res, await service.getSummary(q, requirePrincipal(req)));
+    }),
+    getById: asyncHandler(async (req, res) => {
+      validateOrganizationSummaryQuery(req.query);
+      const q = validateOrganizationDetailParams(req.params);
+      sendSuccess(res, await service.getById(q, requirePrincipal(req)));
+    }),
     getAll: asyncHandler(async (req, res) => {
       const query = validateOrganizationListQuery(req.query);
       const result = await service.getAll(query, requirePrincipal(req));
       sendSuccess(res, result, "Lấy danh sách trường học thành công");
+    }),
+
+    getCookingMode: asyncHandler(async (req, res) => {
+      const result = await service.getCookingMode(requirePrincipal(req));
+      sendSuccess(res, result, "Lấy chế độ nấu thành công");
+    }),
+
+    updateCookingMode: asyncHandler(async (req, res) => {
+      const input = validateCookingMode(req.body);
+      const result = await service.updateCookingMode(
+        input,
+        requirePrincipal(req),
+      );
+      sendSuccess(res, result, "Cập nhật chế độ nấu thành công");
+    }),
+
+    getMealTimes: asyncHandler(async (req, res) => {
+      const result = await service.getMealTimes(requirePrincipal(req));
+      sendSuccess(res, result, "Lấy giờ phục vụ bữa ăn thành công");
+    }),
+
+    updateMealTimes: asyncHandler(async (req, res) => {
+      const result = await service.updateMealTimes(
+        validateMealTimes(req.body),
+        requirePrincipal(req),
+      );
+      sendSuccess(res, result, "Cập nhật giờ phục vụ bữa ăn thành công");
     }),
 
     getPublicSchools: asyncHandler(async (req, res) => {

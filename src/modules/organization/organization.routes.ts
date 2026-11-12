@@ -1,7 +1,10 @@
 import { Router } from "express";
 import type { ErrorRequestHandler, RequestHandler } from "express";
 import { authenticate } from "../../middlewares/auth.middleware";
-import { requireResource } from "../../middlewares/permission.middleware";
+import {
+  requirePermission,
+  requireResource,
+} from "../../middlewares/permission.middleware";
 import { sendError } from "../../utils/response";
 import { createOrganizationController } from "./organization.controller";
 import {
@@ -45,6 +48,43 @@ export function createOrganizationRouter(
     controller.getAll,
   );
 
+  // schoolId luôn lấy từ phiên, client không truyền trường
+  router.get(
+    "/me/cooking-mode",
+    authHandler,
+    requirePermission("school_cooking_mode.manage"),
+    controller.getCookingMode,
+  );
+  router.patch(
+    "/me/cooking-mode",
+    authHandler,
+    requirePermission("school_cooking_mode.manage"),
+    controller.updateCookingMode,
+  );
+  router.get(
+    "/me/meal-times",
+    authHandler,
+    requirePermission("school_meal_times.manage"),
+    controller.getMealTimes,
+  );
+  router.patch(
+    "/me/meal-times",
+    authHandler,
+    requirePermission("school_meal_times.manage"),
+    controller.updateMealTimes,
+  );
+  router.get(
+    "/summary",
+    authHandler,
+    requireResource("organization"),
+    controller.getSummary,
+  );
+  router.get(
+    "/:id",
+    authHandler,
+    requireResource("organization"),
+    controller.getById,
+  );
   router.use(organizationValidationErrorHandler);
   return router;
 }

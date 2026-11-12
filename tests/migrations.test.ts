@@ -171,7 +171,145 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
         ).rows[0].name,
         null,
       );
+      const legacySupplier = (
+        await db.query<{ id: string }>(
+          "INSERT INTO foodprint.suppliers(name) VALUES ('Category migration fixture') RETURNING id",
+        )
+      ).rows[0].id;
+      const oldCategories = [
+        null,
+        "",
+        "   ",
+        "Grains",
+        "Grains",
+        "grains",
+        " Grains ",
+      ];
+      const legacyIngredientIds: string[] = [];
+      for (const [index, category] of oldCategories.entries()) {
+        legacyIngredientIds.push(
+          (
+            await db.query<{ id: string }>(
+              "INSERT INTO foodprint.ingredients(supplier_id,name,default_unit,category) VALUES ($1,$2,'kg',$3) RETURNING id",
+              [legacySupplier, "Category fixture " + index, category],
+            )
+          ).rows[0].id,
+        );
+      }
+      const linkedEntry = (
+        await db.query<{ id: string }>(
+          "INSERT INTO foodprint.ingredient_entries(school_id,ingredient_id,handling_type) VALUES ($1,$2,'DRY_STOCK') RETURNING id",
+          [schoolId, legacyIngredientIds[3]],
+        )
+      ).rows[0].id;
+      const otherSupplier = (
+        await db.query<{ id: string }>(
+          "INSERT INTO foodprint.suppliers(name) VALUES ('Other category supplier') RETURNING id",
+        )
+      ).rows[0].id;
+      const otherIngredient = (
+        await db.query<{ id: string }>(
+          "INSERT INTO foodprint.ingredients(supplier_id,name,default_unit,category) VALUES ($1,'Other grains','kg','Grains') RETURNING id",
+          [otherSupplier],
+        )
+      ).rows[0].id;
       await runPrisma(url, ["migrate", "deploy"]);
+      const converted = await db.query<{
+        id: string;
+        supplier_id: string;
+        category_name: string | null;
+        cover_image: string | null;
+        image_description: string[];
+        category_id: string | null;
+      }>(
+        "SELECT i.id,i.supplier_id,i.category_id,c.category_name,i.cover_image,i.image_description FROM foodprint.ingredients i LEFT JOIN foodprint.ingredient_categories c ON c.id=i.category_id WHERE i.supplier_id=$1 ORDER BY i.name",
+        [legacySupplier],
+      );
+      assert.deepEqual(
+        converted.rows.map((r) => r.id),
+        legacyIngredientIds,
+      );
+      assert.deepEqual(
+        converted.rows.map((r) => r.category_name),
+        [null, null, null, "Grains", "Grains", "grains", " Grains "],
+      );
+      assert.equal(
+        converted.rows[3].category_id,
+        converted.rows[4].category_id,
+      );
+      assert.equal(
+        (
+          await db.query<{ category_id: string }>(
+            "SELECT category_id FROM foodprint.ingredients WHERE id=$1",
+            [otherIngredient],
+          )
+        ).rows[0].category_id,
+        converted.rows[3].category_id,
+      );
+
+      assert(
+        converted.rows.every(
+          (r) =>
+            r.supplier_id === legacySupplier &&
+            r.cover_image === null &&
+            r.image_description.length === 0,
+        ),
+      );
+      assert.equal(
+        (
+          await db.query<{ ingredient_id: string }>(
+            "SELECT ingredient_id FROM foodprint.ingredient_entries WHERE id=$1",
+            [linkedEntry],
+          )
+        ).rows[0].ingredient_id,
+        legacyIngredientIds[3],
+      );
+      assert.deepEqual(
+        (
+          await db.query<{ column_name: string }>(
+            "SELECT column_name FROM information_schema.columns WHERE table_schema='foodprint' AND table_name='ingredient_categories' ORDER BY ordinal_position",
+          )
+        ).rows.map((r) => r.column_name),
+        ["id", "category_name", "category_description"],
+      );
+      await assert.rejects(
+        () =>
+          db.query("DELETE FROM foodprint.ingredient_categories WHERE id=$1", [
+            converted.rows[3].category_id,
+          ]),
+        (error) => sqlState(error, "23503") || sqlState(error, "23001"),
+      );
+      await assert.rejects(
+        () =>
+          db.query(
+            "INSERT INTO foodprint.ingredient_categories(category_name) VALUES ('  ')",
+          ),
+        (error) => sqlState(error, "23514"),
+      );
+      await assert.rejects(
+        () =>
+          db.query(
+            "UPDATE foodprint.ingredients SET image_description=ARRAY[NULL]::text[] WHERE id=$1",
+            [legacyIngredientIds[0]],
+          ),
+        (error) => sqlState(error, "23514"),
+      );
+      await db.query("DELETE FROM foodprint.ingredients WHERE supplier_id=$1", [
+        otherSupplier,
+      ]);
+      await db.query("DELETE FROM foodprint.suppliers WHERE id=$1", [
+        otherSupplier,
+      ]);
+      // Keep the existing authorization-cardinality assertions isolated from this fixture.
+      await db.query("DELETE FROM foodprint.ingredient_entries WHERE id=$1", [
+        linkedEntry,
+      ]);
+      await db.query("DELETE FROM foodprint.ingredients WHERE supplier_id=$1", [
+        legacySupplier,
+      ]);
+      await db.query("DELETE FROM foodprint.suppliers WHERE id=$1", [
+        legacySupplier,
+      ]);
       const preserved = await db.query<{
         role_id: string;
         role_code: string;
@@ -229,6 +367,142 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
         "prisma/schema.prisma",
         "--exit-code",
       ]);
+    },
+  );
+
+  await context.test(
+    "school academic years preserve school data and enforce dates, ownership, uniqueness and holiday arrays",
+    async () => {
+      assert.equal(
+        (
+          await db.query<{ count: number }>(
+            "SELECT count(*)::int AS count FROM foodprint.school_academic_years",
+          )
+        ).rows[0].count,
+        0,
+        "Migration must not create sample academic years or holidays",
+      );
+      const schoolBefore = (
+        await db.query<{ row: unknown }>(
+          "SELECT to_jsonb(s) AS row FROM foodprint.schools s WHERE id=$1",
+          [schoolId],
+        )
+      ).rows[0];
+      const initial = (
+        await db.query<{
+          id: string;
+          holidays: unknown;
+          start_date: string;
+          end_date: string;
+          created_at: Date;
+          updated_at: Date;
+        }>(
+          "INSERT INTO foodprint.school_academic_years(school_id,academic_year,start_date,end_date) VALUES($1,'2026–2027','2026-09-07','2027-05-28') RETURNING id,holidays,start_date::text,end_date::text,created_at,updated_at",
+          [schoolId],
+        )
+      ).rows[0];
+      assert.match(initial.id, /^[a-f0-9-]{36}$/i);
+      assert.deepEqual(initial.holidays, []);
+      assert.equal(initial.start_date, "2026-09-07");
+      assert.equal(initial.end_date, "2027-05-28");
+      assert(initial.created_at instanceof Date);
+      assert.equal(+initial.created_at, +initial.updated_at);
+
+      const holidays = [
+        { date: "2026-10-22", reason: "Nghỉ theo kế hoạch nhà trường" },
+        { date: "2027-02-15", reason: "Ngày nghỉ được BGH cấu hình" },
+      ];
+      const changed = (
+        await db.query<{ holidays: unknown; updated_at: Date }>(
+          "UPDATE foodprint.school_academic_years SET holidays=$1::jsonb,updated_at=updated_at+interval '1 second' WHERE id=$2 RETURNING holidays,updated_at",
+          [JSON.stringify(holidays), initial.id],
+        )
+      ).rows[0];
+      assert.deepEqual(changed.holidays, holidays);
+      assert(+changed.updated_at > +initial.updated_at);
+      await db.query(
+        "INSERT INTO foodprint.school_academic_years(school_id,academic_year,start_date,end_date) VALUES($1,'2027–2028','2027-09-06','2028-05-26')",
+        [schoolId],
+      );
+      const otherSchoolId = (
+        await db.query<{ id: string }>(
+          "INSERT INTO foodprint.schools(name,address_line) VALUES('Academic calendar fixture','Disposable local fixture') RETURNING id",
+        )
+      ).rows[0].id;
+      await db.query(
+        "INSERT INTO foodprint.school_academic_years(school_id,academic_year,start_date,end_date) VALUES($1,'2026–2027','2026-09-07','2027-05-28')",
+        [otherSchoolId],
+      );
+      await db.query(
+        "INSERT INTO foodprint.school_academic_years(school_id,academic_year,start_date,end_date) VALUES($1,'Single day','2029-01-01','2029-01-01')",
+        [schoolId],
+      );
+
+      await assert.rejects(
+        db.query(
+          "INSERT INTO foodprint.school_academic_years(school_id,academic_year,start_date,end_date) VALUES($1,'2026–2027','2026-09-07','2027-05-28')",
+          [schoolId],
+        ),
+        (error: unknown) =>
+          sqlState(error, "23505", "uq_school_academic_year_school_year"),
+      );
+      await assert.rejects(
+        db.query(
+          "INSERT INTO foodprint.school_academic_years(school_id,academic_year,start_date,end_date) VALUES($1,'Missing school','2026-09-07','2027-05-28')",
+          [randomUUID()],
+        ),
+        (error: unknown) =>
+          sqlState(error, "23503", "school_academic_years_school_id_fkey"),
+      );
+      await assert.rejects(
+        db.query("DELETE FROM foodprint.schools WHERE id=$1", [otherSchoolId]),
+        (error: unknown) =>
+          sqlState(error, "23001", "school_academic_years_school_id_fkey"),
+      );
+      for (const academicYear of ["", "   "]) {
+        await assert.rejects(
+          db.query(
+            "INSERT INTO foodprint.school_academic_years(school_id,academic_year,start_date,end_date) VALUES($1,$2,'2026-09-07','2027-05-28')",
+            [schoolId, academicYear],
+          ),
+          (error: unknown) =>
+            sqlState(error, "23514", "chk_school_academic_year_label"),
+        );
+      }
+      await assert.rejects(
+        db.query(
+          "INSERT INTO foodprint.school_academic_years(school_id,academic_year,start_date,end_date) VALUES($1,'Reversed dates','2027-05-28','2026-09-07')",
+          [schoolId],
+        ),
+        (error: unknown) =>
+          sqlState(error, "23514", "chk_school_academic_year_dates"),
+      );
+      for (const holidaysJson of ["{}", "null", '"closed"', "1", "true"]) {
+        await assert.rejects(
+          db.query(
+            "UPDATE foodprint.school_academic_years SET holidays=$1::jsonb,updated_at=CURRENT_TIMESTAMP WHERE id=$2",
+            [holidaysJson, initial.id],
+          ),
+          (error: unknown) =>
+            sqlState(error, "23514", "chk_school_academic_year_holidays_array"),
+        );
+      }
+      await assert.rejects(
+        db.query(
+          "UPDATE foodprint.school_academic_years SET holidays=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=$1",
+          [initial.id],
+        ),
+        (error: unknown) => sqlState(error, "23502"),
+      );
+      assert.deepEqual(
+        (
+          await db.query<{ row: unknown }>(
+            "SELECT to_jsonb(s) AS row FROM foodprint.schools s WHERE id=$1",
+            [schoolId],
+          )
+        ).rows[0],
+        schoolBefore,
+      );
     },
   );
 
@@ -424,7 +698,349 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
         "prisma/schema.prisma",
         "--exit-code",
       ]);
+      const empty = new Client({ connectionString: fresh.toString() });
+      await empty.connect();
+      try {
+        const initial = (
+          await empty.query<{ last_value: string; is_called: boolean }>(
+            "SELECT last_value,is_called FROM foodprint.registration_requests_registration_number_seq",
+          )
+        ).rows[0];
+        assert.deepEqual(initial, { last_value: "1", is_called: false });
+        assert.equal(
+          (
+            await empty.query<{ value: string }>(
+              "SELECT nextval('foodprint.registration_requests_registration_number_seq') AS value",
+            )
+          ).rows[0].value,
+          "1",
+        );
+      } finally {
+        await empty.end();
+      }
       // This database belongs to the disposable test instance; no database/volume is dropped by tests.
+    },
+  );
+  await context.test(
+    "registration numbering preserves legacy rows, orders ties deterministically and continues the sequence",
+    async () => {
+      const name =
+        "foodprint_migration_test_codes_" + randomUUID().replaceAll("-", "");
+      await db.query(`CREATE DATABASE "${name}"`);
+      const fresh = new URL(url);
+      fresh.pathname = "/" + name;
+      const legacy = new Client({ connectionString: fresh.toString() });
+      await legacy.connect();
+      try {
+        const numbering = "20261106000100_registration_number";
+        for (const migration of migrationNames.filter(
+          (value) => value < numbering,
+        )) {
+          await legacy.query(
+            await readFile(
+              path.join(root, "prisma/migrations", migration, "migration.sql"),
+              "utf8",
+            ),
+          );
+        }
+        const roleId = randomUUID();
+        await legacy.query(
+          "INSERT INTO foodprint.roles(id,code,name,type) VALUES ($1,'SCHOOL_ADMINISTRATION','School admin','SCHOOL')",
+          [roleId],
+        );
+        const supplierRole = randomUUID();
+        await legacy.query(
+          "INSERT INTO foodprint.roles(id,code,name,type) VALUES ($1,'INGREDIENT_SUPPLIER_ADMIN','Supplier admin','SUPPLIER')",
+          [supplierRole],
+        );
+        const ids = [
+          "00000000-0000-4000-8000-000000000003",
+          "00000000-0000-4000-8000-000000000002",
+          "00000000-0000-4000-8000-000000000001",
+        ];
+        for (let index = 0; index < 3; index++) {
+          const userId = randomUUID();
+          const supplier = index % 2 === 1;
+          await legacy.query(
+            "INSERT INTO foodprint.users(id,role_id,role_code,username,email,password_hash,full_name) VALUES($1,$2,$3,$4,$5,'fixture-only','Legacy applicant')",
+            [
+              userId,
+              supplier ? supplierRole : roleId,
+              supplier ? "INGREDIENT_SUPPLIER_ADMIN" : "SCHOOL_ADMINISTRATION",
+              `legacy_${index}`,
+              `legacy_${index}@example.test`,
+            ],
+          );
+          const status = ["PENDING", "APPROVED", "REJECTED"][index];
+          await legacy.query(
+            "INSERT INTO foodprint.registration_requests(id,applicant_user_id,request_type,status,profile_data,supporting_documents,submitted_at,updated_at,reviewed_at,rejection_reason) VALUES($1,$2,$3,$4::foodprint.registration_request_status,'{\"name\":\"Legacy\",\"keep\":true}','[]',$5::timestamptz,'2026-11-01T12:34:56.123456Z',CASE WHEN $4::foodprint.registration_request_status='PENDING' THEN NULL ELSE '2026-11-02T00:00:00Z'::timestamptz END,CASE WHEN $4::foodprint.registration_request_status='REJECTED' THEN 'Keep reason' ELSE NULL END)",
+            [
+              ids[index],
+              userId,
+              supplier ? "SUPPLIER" : "SCHOOL",
+              status,
+              index === 0
+                ? "2026-11-01T00:00:00.123456Z"
+                : "2026-11-01T00:00:00.123457Z",
+            ],
+          );
+        }
+        const before = (
+          await legacy.query<{ row: unknown }>(
+            "SELECT to_jsonb(r) AS row FROM foodprint.registration_requests r ORDER BY id",
+          )
+        ).rows;
+        const migrationSql = await readFile(
+          path.join(root, "prisma/migrations", numbering, "migration.sql"),
+          "utf8",
+        );
+        await legacy.query(migrationSql);
+        assert.deepEqual(
+          (
+            await legacy.query<{ row: unknown }>(
+              "SELECT to_jsonb(r)-'registration_number' AS row FROM foodprint.registration_requests r ORDER BY id",
+            )
+          ).rows,
+          before,
+        );
+        const numbered = (
+          await legacy.query<{ id: string; registration_number: string }>(
+            "SELECT id,registration_number FROM foodprint.registration_requests ORDER BY registration_number",
+          )
+        ).rows;
+        assert.deepEqual(
+          numbered.map((row) => row.id),
+          [ids[0], ids[2], ids[1]],
+        );
+        assert.deepEqual(
+          numbered.map((row) => row.registration_number),
+          ["1", "2", "3"],
+        );
+        const sequence = (
+          await legacy.query<{
+            seqincrement: string;
+            seqmin: string;
+            seqcache: string;
+            seqcycle: boolean;
+          }>(
+            "SELECT seqincrement,seqmin,seqcache,seqcycle FROM pg_sequence WHERE seqrelid='foodprint.registration_requests_registration_number_seq'::regclass",
+          )
+        ).rows[0];
+        assert.deepEqual(sequence, {
+          seqincrement: "1",
+          seqmin: "1",
+          seqcache: "1",
+          seqcycle: false,
+        });
+        assert.equal(
+          (
+            await legacy.query<{ owner: string }>(
+              "SELECT pg_get_serial_sequence('foodprint.registration_requests','registration_number') AS owner",
+            )
+          ).rows[0].owner,
+          "foodprint.registration_requests_registration_number_seq",
+        );
+        assert.equal(
+          (
+            await legacy.query<{ value: string }>(
+              "SELECT nextval('foodprint.registration_requests_registration_number_seq') AS value",
+            )
+          ).rows[0].value,
+          "4",
+        );
+        for (const [value, code] of [
+          [null, "23502"],
+          ["0", "23514"],
+          ["-1", "23514"],
+          ["1", "23505"],
+        ] as const) {
+          await assert.rejects(
+            legacy.query(
+              "UPDATE foodprint.registration_requests SET registration_number=$1 WHERE id=$2",
+              [value, ids[1]],
+            ),
+            (error: unknown) => sqlState(error, code),
+          );
+        }
+      } finally {
+        await legacy.end();
+      }
+    },
+  );
+  await context.test(
+    "cooking grouping backfill preserves child/sample history and enforces dish context",
+    async () => {
+      const name = `foodprint_migration_test_cooking_${randomUUID().replaceAll("-", "")}`;
+      await db.query(`CREATE DATABASE "${name}"`);
+      const fresh = new URL(url);
+      fresh.pathname = `/${name}`;
+      const legacy = new Client({ connectionString: fresh.toString() });
+      await legacy.connect();
+      try {
+        const grouping = "20261111000100_cooking_batch_groups";
+        for (const migration of migrationNames.filter(
+          (value) => value < grouping,
+        )) {
+          await legacy.query<{ id: string; n: number; row: unknown }>(
+            await readFile(
+              path.join(root, "prisma/migrations", migration, "migration.sql"),
+              "utf8",
+            ),
+          );
+        }
+        const school = (
+          await legacy.query<{ id: string; n: number; row: unknown }>(
+            "INSERT INTO foodprint.schools(name) VALUES('Group migration school') RETURNING id",
+          )
+        ).rows[0].id;
+        const role = (
+          await legacy.query<{ id: string; n: number; row: unknown }>(
+            "INSERT INTO foodprint.roles(code,name,type) VALUES('SCHOOL_KITCHEN_STAFF','Chef','SCHOOL') RETURNING id",
+          )
+        ).rows[0].id;
+        const user = (
+          await legacy.query<{ id: string; n: number; row: unknown }>(
+            "INSERT INTO foodprint.users(role_id,role_code,school_id,username,email,password_hash,full_name) VALUES($1,'SCHOOL_KITCHEN_STAFF',$2,'group_chef','group-chef@example.test','fixture-only','Chef') RETURNING id",
+            [role, school],
+          )
+        ).rows[0].id;
+        const week = (
+          await legacy.query<{ id: string; n: number; row: unknown }>(
+            "INSERT INTO foodprint.weekly_menus(school_id,created_by_user_id,week_start_date) VALUES($1,$2,'2030-01-07') RETURNING id",
+            [school, user],
+          )
+        ).rows[0].id;
+        const day = (
+          await legacy.query<{ id: string; n: number; row: unknown }>(
+            "INSERT INTO foodprint.menu_days(weekly_menu_id,menu_date) VALUES($1,'2030-01-07') RETURNING id",
+            [week],
+          )
+        ).rows[0].id;
+        const dish = (
+          await legacy.query<{ id: string; n: number; row: unknown }>(
+            "INSERT INTO foodprint.dishes(school_id,name) VALUES($1,'Original dish') RETURNING id",
+            [school],
+          )
+        ).rows[0].id;
+        await legacy.query<{ id: string; n: number; row: unknown }>(
+          "INSERT INTO foodprint.menu_day_dishes(menu_day_id,dish_id,meal_type) VALUES($1,$2,'LUNCH')",
+          [day, dish],
+        );
+        const completed = (
+          await legacy.query<{ id: string; n: number; row: unknown }>(
+            "INSERT INTO foodprint.cooking_batches(batch_code,menu_day_id,dish_id,meal_type,cooking_mode_applied,created_by_user_id,status,planned_portions,confirmed_by_user_id,confirmed_at,completed_by_user_id,completed_at) VALUES('OLD-CB',$1,$2,'LUNCH','COMBINE_LOTS',$3,'COMPLETED',12,$3,'2030-01-07T03:00:00Z',$3,'2030-01-07T04:00:00Z') RETURNING id",
+            [day, dish, user],
+          )
+        ).rows[0].id;
+        await legacy.query<{ id: string; n: number; row: unknown }>(
+          "INSERT INTO foodprint.cooking_batches(batch_code,menu_day_id,dish_id,meal_type,cooking_mode_applied,created_by_user_id) VALUES('UNKNOWN-PLAN',$1,$2,'LUNCH','COMBINE_LOTS',$3)",
+          [day, dish, user],
+        );
+        await legacy.query<{ id: string; n: number; row: unknown }>(
+          "INSERT INTO foodprint.retained_food_samples(cooking_batch_id,recorded_by_user_id,sampled_at,quantity,unit) VALUES($1,$2,'2030-01-07T05:00:00Z',150,'g')",
+          [completed, user],
+        );
+        const before = (
+          await legacy.query<{ id: string; n: number; row: unknown }>(
+            "SELECT to_jsonb(b) AS row FROM foodprint.cooking_batches b ORDER BY id",
+          )
+        ).rows;
+        const beforeSamples = (
+          await legacy.query<{ id: string; n: number; row: unknown }>(
+            "SELECT to_jsonb(s) AS row FROM foodprint.retained_food_samples s ORDER BY id",
+          )
+        ).rows;
+        await legacy.query<{ id: string; n: number; row: unknown }>(
+          await readFile(
+            path.join(root, "prisma/migrations", grouping, "migration.sql"),
+            "utf8",
+          ),
+        );
+        assert.deepEqual(
+          (
+            await legacy.query<{ id: string; n: number; row: unknown }>(
+              "SELECT to_jsonb(b)-'batch_group_id' AS row FROM foodprint.cooking_batches b ORDER BY id",
+            )
+          ).rows,
+          before,
+        );
+        assert.deepEqual(
+          (
+            await legacy.query<{ id: string; n: number; row: unknown }>(
+              "SELECT to_jsonb(s)-'dish_id' AS row FROM foodprint.retained_food_samples s ORDER BY id",
+            )
+          ).rows,
+          beforeSamples,
+        );
+        assert.equal(
+          (
+            await legacy.query<{ id: string; n: number; row: unknown }>(
+              "SELECT count(*)::int AS n FROM foodprint.cooking_batch_groups",
+            )
+          ).rows[0].n,
+          2,
+        );
+        assert.equal(
+          (
+            await legacy.query<{ id: string; n: number; row: unknown }>(
+              "SELECT count(*)::int AS n FROM foodprint.cooking_batch_dishes",
+            )
+          ).rows[0].n,
+          2,
+        );
+        assert.equal(
+          (
+            await legacy.query<{ id: string; n: number; row: unknown }>(
+              "SELECT count(*)::int AS n FROM foodprint.cooking_batch_dishes WHERE planned_portions IS NULL",
+            )
+          ).rows[0].n,
+          1,
+        );
+        const secondDish = (
+          await legacy.query<{ id: string; n: number; row: unknown }>(
+            "INSERT INTO foodprint.dishes(school_id,name) VALUES($1,'Second dish') RETURNING id",
+            [school],
+          )
+        ).rows[0].id;
+        await legacy.query<{ id: string; n: number; row: unknown }>(
+          "INSERT INTO foodprint.menu_day_dishes(menu_day_id,dish_id,meal_type) VALUES($1,$2,'LUNCH')",
+          [day, secondDish],
+        );
+        await legacy.query<{ id: string; n: number; row: unknown }>(
+          "INSERT INTO foodprint.cooking_batch_dishes(cooking_batch_id,dish_id,menu_day_id,meal_type,planned_portions) VALUES($1,$2,$3,'LUNCH',12)",
+          [completed, secondDish, day],
+        );
+        await legacy.query<{ id: string; n: number; row: unknown }>(
+          "INSERT INTO foodprint.retained_food_samples(cooking_batch_id,dish_id,recorded_by_user_id,quantity,unit) VALUES($1,$2,$3,150,'g')",
+          [completed, secondDish, user],
+        );
+        assert.equal(
+          (
+            await legacy.query<{ id: string; n: number; row: unknown }>(
+              "SELECT count(*)::int AS n FROM foodprint.retained_food_samples WHERE cooking_batch_id=$1",
+              [completed],
+            )
+          ).rows[0].n,
+          2,
+        );
+        await assert.rejects(
+          legacy.query<{ id: string; n: number; row: unknown }>(
+            "INSERT INTO foodprint.retained_food_samples(cooking_batch_id,dish_id,recorded_by_user_id,quantity,unit) VALUES($1,$2,$3,150,'g')",
+            [completed, secondDish, user],
+          ),
+          (error) => sqlState(error, "23505"),
+        );
+        await assert.rejects(
+          legacy.query<{ id: string; n: number; row: unknown }>(
+            "UPDATE foodprint.cooking_batch_dishes SET meal_type='AFTERNOON' WHERE cooking_batch_id=$1 AND dish_id=$2",
+            [completed, secondDish],
+          ),
+          (error) => sqlState(error, "23503"),
+        );
+      } finally {
+        await legacy.end();
+      }
+      // Keep the disposable database for inspection, following the suite's existing policy.
     },
   );
 });

@@ -1,5 +1,45 @@
 # Baseline database và lịch sử migration
 
+## Khôi phục lịch sử phân công GVCN đã có trên Azure
+
+CD tại commit `194ac5c` bị chặn ở `db:deploy:check`: Azure đã hoàn tất `20261107000100_class_homeroom_assignments` lúc `2026-11-06T17:49:59Z`, nhưng nhánh dev thiếu file này. Đây là lỗi thiếu lịch sử trong Git, không phải lỗi SQL tạo bảng năm học.
+
+Đã khôi phục nguyên byte SQL từ `origin/feat/bgh-menu-approval-class-assignment`, file gốc mang tên `20261102000200_class_homeroom_assignments`, vào đúng thư mục đã applied `20261107000100_class_homeroom_assignments`. SHA-256 được đối chiếu chỉ đọc với Azure: `b1fe455a26a60267d045f2602e61dbdeb9a37ec6367909963f423604cb146f5e`. Không đổi migration cũ, lịch sử/checksum Azure hoặc guard triển khai.
+
+Model `ClassHomeroomAssignment`, quan hệ Class/User và hai partial indexes được phục hồi từ cùng nguồn để schema đích phản ánh bảng đã tồn tại. Bản sửa không đưa API, permission hoặc logic phân công GVCN từ nhánh cũ vào dev. Trên database mới, Prisma replay file này; trên Azure đã applied, Prisma chỉ xác minh lịch sử và bỏ qua file đã hoàn tất. Migration năm học tiếp tục là pending migration sau đó.
+
+## Lịch năm học toàn trường
+
+Migration `20261107000100_school_academic_year` chỉ thêm bảng `foodprint.school_academic_years`, được Prisma ánh xạ thành `SchoolAcademicYear`, với quan hệ `School.academicYears`. Mỗi trường có tối đa một bản ghi cho cùng nhãn `academic_year`; các năm và trường khác nhau được lưu độc lập.
+
+- UUID primary key, FK `school_id` tới `schools(id)` với `ON DELETE RESTRICT ON UPDATE NO ACTION`, unique index `(school_id, academic_year)`.
+- `start_date`/`end_date` là DATE bắt buộc; CHECK ngày bắt đầu không sau ngày kết thúc và nhãn năm học không rỗng sau `btrim`.
+- `holidays` là JSONB NOT NULL DEFAULT `[]`, CHECK phải là array. Hình dạng dự kiến: `[{"date":"2026-10-22","reason":"Nghỉ theo kế hoạch nhà trường"}]`.
+- CHECK JSON chỉ bảo đảm array, chưa kiểm tra từng mục, ngày lịch hợp lệ, lý do bắt buộc/không trắng, ngày trùng hay ngày nằm trong khoảng năm học. Các kiểm tra này phải được thực hiện trong validation/service khi triển khai API lịch.
+- `created_at`/`updated_at` có default thời điểm hiện tại; Prisma dùng `@updatedAt`, các thao tác raw SQL phải đặt `updated_at` tường minh khi cập nhật.
+
+Migration tạo bảng rỗng, không thêm function/trigger/seed, không backfill từ `Class.academicYear`, không thay đổi dữ liệu hay FK của lớp, thực đơn, suất ăn hoặc lịch sử hiện có. Không thêm học kỳ hoặc cách đánh số tuần. API/giao diện BGH và việc áp ngày nghỉ vào thực đơn/suất ăn chưa nằm trong thay đổi storage này.
+
+**Triển khai:** tác vụ chỉ chuẩn bị migration và kiểm chứng trên PostgreSQL local disposable; không áp dụng lên database thành viên hoặc Azure. Review/merge vào `dev` để CI/CD đã duyệt xử lý pending migration. Ứng dụng cũ vẫn tương thích; rollback ứng dụng giữ bảng và dữ liệu lịch đã được nhập. Kết quả kiểm chứng thực tế nằm trong [quickstart của spec 005](../specs/005-school-academic-year/quickstart.md).
+
+## Mã hồ sơ đăng ký
+
+Migration mới `20261106000100_registration_number` bổ sung cột bigint bắt buộc `foodprint.registration_requests.registration_number`, unique index và CHECK dương. UUID primary key và `email_outbox.registration_id` giữ nguyên. API ánh xạ số thành `registrationID` dạng `FP-REG-00001`; không lưu thêm chuỗi mã trùng lặp.
+
+SQL chạy trong transaction tường minh, giữ khóa ACCESS EXCLUSIVE trên registration_requests, thêm cột chưa có default rồi đánh số theo submitted_at ASC, id ASC. Backfill chỉ cập nhật cột mới, không thay timestamps, JSON, trạng thái hoặc quan hệ. Sequence cùng schema, có ownership vào cột, tăng 1, CACHE 1 và NO CYCLE; bảng rỗng bắt đầu 1, bảng có dữ liệu tiếp tục sau max. Không thêm function, trigger, seed hay script cấp mã ở startup.
+
+**Trạng thái:** đã kiểm chứng trên PostgreSQL 18 disposable local, gồm database rỗng, nâng cấp đủ hai loại/ba trạng thái, timestamp trùng, snapshot toàn bộ cột cũ, constraints/catalog và Prisma drift. Chưa triển khai lên database thành viên hoặc Azure.
+
+**Rollout:** review migration và merge qua quy trình dev đã duyệt; dự kiến khoảng khóa theo lượng dữ liệu thực, kiểm tra quyền USAGE sequence của runtime nếu khác migration owner. Áp migration/backfill trước backend mới, sau đó frontend dùng registrationID để hiển thị và vẫn dùng UUID cho thao tác. Backend cũ bỏ qua cột mới vẫn được default cấp số. Rollback ứng dụng giữ nguyên cột, sequence và mã; không reset/đánh số lại hoặc sửa migration đã triển khai.
+
+## Cooking groups — migration chuẩn bị, chưa deploy
+
+`20261111000100_cooking_batch_groups` thêm `cooking_batch_groups` và `cooking_batch_dishes`. Mỗi lô cha chứa các mẻ con; mỗi mẻ chứa nhiều món và lượng nguyên liệu riêng từng món. `cooking_batch_lots` có khóa `(cooking_batch_id, dish_id, ingredient_lot_id)`. Liên kết mẫu lưu và phân bổ suất cũng có `dish_id`; mỗi món trong một mẻ có mẫu và số suất phân bổ riêng.
+
+Migration giữ UUID, mã, số lượng, trạng thái và timestamp cũ; từng mẻ lịch sử được bọc trong một lô cha riêng, không suy diễn các mẻ đã thuộc chung lô. NULL/zero ở kế hoạch cũ được giữ để đối chiếu. Không sửa tồn kho hay inventory transactions. FK ghép bảo đảm ngày/bữa của mẻ khớp lô cha và món thuộc đúng ngày/bữa đó. Cột ngày/bữa của mẻ được giữ làm dữ liệu tương thích có ràng buộc; `dish_id` cũ là NULL với mẻ có nhiều món, bảng món là nguồn chính thức.
+
+Cần rollout migration và BE cùng phiên bản, tạm dừng writer cũ trong lúc chuyển đổi. Không dùng `db push`, reset hay seed. Schema validation và kiểm thử nghiệp vụ không thay thế việc chạy bộ migration trên PostgreSQL disposable local/CI trước khi deploy. Trong tác vụ này, PostgreSQL tạm bị sandbox Windows chặn khi `initdb` tạo restricted token; migration chưa được áp dụng vào Azure.
+
 ## Dữ liệu kiểm thực của CookingBatch
 
 `20261101000100_cooking_batch_inspection_data` nối tiếp migration định mức thực đơn, thêm cột nullable `foodprint.cooking_batches.inspection_data jsonb`, khớp Prisma `inspectionData Json? @db.JsonB`. Không thêm bảng, enum, quyền hay giá trị mặc định. Các batch cũ giữ NULL; không backfill JSON giả hoặc thay đổi dữ liệu nghiệp vụ.
@@ -36,19 +76,22 @@ SQL bootstrap root được đồng bộ các migration MenuDay/Supplier/School 
 
 Lịch sử triển khai schema được quản lý tại `prisma/migrations/`, với provider PostgreSQL và Prisma CLI/Client theo lockfile hiện tại (**7.10.1**). `prisma/schema.prisma` mô tả trạng thái đích; các CHECK và SQL riêng của PostgreSQL nằm trong migration.
 
-| Migration                                       | Nội dung                                                                                         |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `0_init`                                        | Baseline cấu trúc v5.4 đang có trên Azure, trước UserPermissionDenial                            |
-| `20261029000100_user_permission_denials`        | Thêm bảng quyền bị tắt theo user/tổ chức, FK, partial unique index và CHECK đúng một tổ chức     |
-| `20261029000200_single_organization_admin`      | Thêm role_code được FK ghép kiểm tra, CHECK loại tổ chức và unique một admin mỗi school/supplier |
-| `20261030000100_menu_day_approval`              | Đồng bộ phê duyệt MenuDay và tham chiếu người phê duyệt                                          |
-| `20261030000200_supplier_contract_linking`      | Đồng bộ liên kết hợp đồng nhà cung ứng và các ràng buộc liên quan                                |
-| `20261031000100_school_profile_baseline`        | Đồng bộ các cột hồ sơ School đã provision và giữ dữ liệu hiện có                                 |
-| `20261031000200_cooking_option_a_expand`        | Phase 1 Cooking Batch: guard lịch sử, backfill lượng còn thiếu, giữ cột legacy để tương thích    |
-| `20261031000300_menu_meal_ingredient_standards` | Định mức chính thức theo thực đơn và phân bổ gia vị dùng chung theo bữa                          |
-| `20261101000100_cooking_batch_inspection_data`  | Thêm inspection_data jsonb nullable, giữ dữ liệu kiểm thực đã có                                 |
-| `20261101000200_meal_portion_groups`            | Suất ăn riêng theo nhóm lớp, đối soát dị ứng và phân bổ món thay thế                             |
-| `20261102000100_registration_review_outbox`     | Thêm email_outbox bền vững cho thông báo kết quả duyệt/từ chối, không backfill dữ liệu cũ        |
+| Migration                                           | Nội dung                                                                                         |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `0_init`                                            | Baseline cấu trúc v5.4 đang có trên Azure, trước UserPermissionDenial                            |
+| `20261029000100_user_permission_denials`            | Thêm bảng quyền bị tắt theo user/tổ chức, FK, partial unique index và CHECK đúng một tổ chức     |
+| `20261029000200_single_organization_admin`          | Thêm role_code được FK ghép kiểm tra, CHECK loại tổ chức và unique một admin mỗi school/supplier |
+| `20261030000100_menu_day_approval`                  | Đồng bộ phê duyệt MenuDay và tham chiếu người phê duyệt                                          |
+| `20261030000200_supplier_contract_linking`          | Đồng bộ liên kết hợp đồng nhà cung ứng và các ràng buộc liên quan                                |
+| `20261031000100_school_profile_baseline`            | Đồng bộ các cột hồ sơ School đã provision và giữ dữ liệu hiện có                                 |
+| `20261031000200_cooking_option_a_expand`            | Phase 1 Cooking Batch: guard lịch sử, backfill lượng còn thiếu, giữ cột legacy để tương thích    |
+| `20261031000300_menu_meal_ingredient_standards`     | Định mức chính thức theo thực đơn và phân bổ gia vị dùng chung theo bữa                          |
+| `20261101000100_cooking_batch_inspection_data`      | Thêm inspection_data jsonb nullable, giữ dữ liệu kiểm thực đã có                                 |
+| `20261101000200_meal_portion_groups`                | Suất ăn riêng theo nhóm lớp, đối soát dị ứng và phân bổ món thay thế                             |
+| `20261102000100_registration_review_outbox`         | Thêm email_outbox bền vững cho thông báo kết quả duyệt/từ chối, không backfill dữ liệu cũ        |
+| `20261103000100_drop_cooking_batch_inspection_data` | Bỏ inspection_data theo migration đã có trong lịch sử                                            |
+| `20261106000100_registration_number`                | Mã hồ sơ đăng ký từ bigint/sequence, giữ UUID và dữ liệu cũ                                      |
+| `20261107000100_school_academic_year`               | Thêm một bảng năm học toàn trường, khoảng ngày và danh sách ngày nghỉ JSONB; không seed          |
 
 Baseline lấy phần DDL từ file gốc `FoodPrint_PostgreSQL_Database_v5_4_FINAL_with_MOCK_DATA.sql`, version v5.4. File SQL ở root FoodPrint hiện đã được đồng bộ sang Phase 1; DDL baseline trong `prisma/migrations/0_init/migration.sql` giữ nguyên. Nguồn SHA-256 gốc tại thời điểm nhận baseline: `770751bf506fa523b50bd6c51d235a6305b584c5e1fb63c3bd4e0eac040f5884`.
 
@@ -206,3 +249,13 @@ MIGRATION_TEST_DATABASE_URL='<local-test-url>' npm run test:authorization
 URL test phải trỏ loopback và database có tên `foodprint_migration_test` hoặc `foodprint_migration_test_<suffix>`, chưa có schema `foodprint`. Test không drop/reset database hoặc xóa volume. Nó kiểm tra replay baseline, phát hiện CHECK bị thiếu, nhận baseline trên database có dữ liệu mẫu để chứng minh dữ liệu được giữ, deploy/redeploy, drift bằng 0, fresh deploy và các tổ hợp tổ chức hợp lệ/không hợp lệ.
 
 CI dựng PostgreSQL 18 tạm cho job migration và integration phân quyền, tách khỏi database thực; job này tự generate Prisma Client trước khi test. Check bắt buộc `Backend quality` tổng hợp kết quả code quality và job PostgreSQL; một nhánh lỗi hoặc bị bỏ qua sẽ làm check tổng hợp thất bại. Sau khi CI của push vào `dev` PASS, workflow CD có thể triển khai pending migrations bằng environment `azure-dev` đã cấu hình. `npm run db:deploy:check` chỉ đọc, xác nhận đúng host/database/schema/SSL và đối chiếu checksum mọi migration đã applied. CD dừng nếu chưa nhận baseline, có migration lỗi, file bị sửa/xóa hoặc database đi trước commit. CD không tự nhận baseline hay xử lý lỗi bằng reset/resolve. Xem [cấu hình và vận hành CD](../README.md#10-cd-migration-azure-từ-dev).
+
+## Migration quản lý nguyên liệu nhà cung cấp — spec 008
+
+Migration mới `20261108000100_supplier_ingredient_management` giữ nguyên baseline/lịch sử đã có. Nó tạo `foodprint.ingredient_categories` với đúng ba cột id/category_name/category_description, thay ingredients.category bằng category_id nullable (FK Restrict, index), thêm cover_image nullable TEXT và image_description NOT NULL TEXT[] mặc định rỗng.
+
+Backfill một danh mục cho mỗi chuỗi category cũ DISTINCT có ý nghĩa, giữ nguyên chữ và khoảng trắng bao quanh; null/chỉ khoảng trắng thành chưa phân loại. Migration kiểm tra mapping trước khi bỏ cột, thực hiện atomic và không tạo seed, stored function hoặc trigger. CHECK chặn tên danh mục rỗng và phần tử null trong mảng ảnh. Ingredient id, supplier ownership và liên kết nghiệp vụ được giữ nguyên.
+
+Đã kiểm chứng trên PostgreSQL 18 disposable riêng: nâng cấp có dữ liệu legacy, backfill, CHECK/FK, fresh deploy và không có Prisma schema drift qua integration supplier-onboarding. Chưa deploy migration này lên database thành viên hoặc Azure. Sinh Prisma Client không thay đổi trạng thái triển khai.
+
+Ứng dụng cũ vẫn truy vấn cột category nên không tương thích sau migration. Khi triển khai được phép, phối hợp cửa sổ bảo trì và phiên bản ứng dụng mới; không rolling hai phiên bản schema này. Không sửa migration đã applied hoặc reset dữ liệu để rollback.

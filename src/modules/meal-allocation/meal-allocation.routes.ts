@@ -2,8 +2,8 @@ import { Router } from "express";
 import type { RequestHandler } from "express";
 import { authenticate } from "../../middlewares/auth.middleware";
 import {
-  requireResource,
   requirePermission,
+  requireResource,
 } from "../../middlewares/permission.middleware";
 import { createMealAllocationController } from "./meal-allocation.controller";
 import {
@@ -18,30 +18,22 @@ export function createMealAllocationRouter(
   const router = Router();
   const controller = createMealAllocationController(service);
   router.get(
-    "/:id",
-    authHandler,
-    requireResource("meal-allocation"),
-    controller.getOne,
-  );
-  router.post(
-    "/",
-    authHandler,
-    requirePermission("meal_allocation.create"),
-    controller.create,
-  );
-  router.post(
-    "/:id/distribute",
-    authHandler,
-    requirePermission("meal_allocation.distribute"),
-    controller.distribute,
-  );
-  router.get(
     "/",
     authHandler,
     requireResource("meal-allocation"),
-    controller.getAll,
+    controller.getToday,
+  );
+  router.put(
+    "/",
+    authHandler,
+    requirePermission("meal_allocation.update"),
+    controller.apply,
+  );
+  router.post(
+    "/confirm-distribution",
+    authHandler,
+    requirePermission("meal_allocation.update"),
+    controller.confirmDistribution,
   );
   return router;
 }
-
-export default createMealAllocationRouter();

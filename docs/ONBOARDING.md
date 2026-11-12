@@ -5,7 +5,7 @@ Hợp đồng theo hai form Figma đã được xác nhận: [nhà trường](ht
 ## Trạng thái
 
 1. Signup tạo tài khoản UNVERIFIED, chưa tạo RegistrationRequest; xác minh mã email rồi login với quyền truy cập giới hạn, không phải chờ System Admin duyệt ở bước này.
-2. Frontend giữ dữ liệu đang soạn. Gửi hồ sơ hợp lệ tạo RegistrationRequest PENDING, tài khoản vẫn UNVERIFIED. Chưa tạo School/Supplier/SupplierCertification.
+2. Frontend giữ dữ liệu đang soạn. Gửi hồ sơ hợp lệ tạo RegistrationRequest PENDING, tài khoản vẫn UNVERIFIED. Cùng transaction tạo email xác nhận tiếp nhận gửi tới email tài khoản hiện hành. Nộp lại sau REJECTED tạo xác nhận mới; sửa hồ sơ đang PENDING không tạo thêm email. Chưa tạo School/Supplier/SupplierCertification.
 3. System Admin duyệt: một transaction tạo tổ chức, chuyển các chứng nhận sang SupplierCertification, gắn tài khoản vào tổ chức và đổi tài khoản thành ACTIVE, hồ sơ thành APPROVED.
 4. System Admin từ chối: hồ sơ REJECTED với lý do, tài khoản vẫn UNVERIFIED. Người dùng sửa và gửi lại cùng hồ sơ; backend xóa kết quả duyệt trước và chuyển lại PENDING.
 
@@ -88,6 +88,12 @@ Quyền được đọc lại từ DB, thao tác duyệt/từ chối kiểm tra 
 
 `GET /api/registration-requests?page=1&limit=5` trả thông tin người đăng ký tại `data.items[i].applicantUser` với cùng các trường như API chi tiết bên dưới. Hai API dùng chung projection an toàn; thông tin lấy từ tài khoản hiện tại. Danh sách giữ hợp đồng phân trang page/limit/hasNext và chỉ trả các trường tóm tắt hồ sơ cùng applicantUser, không nhúng hồ sơ/tệp đầy đủ.
 
+Dùng chung query `search` để tìm mã `registrationID` đầy đủ hoặc tên người nộp `applicantUser.fullName`, ví dụ `GET /api/registration-requests?search=FP-REG-00001&page=1&limit=5` hoặc `GET /api/registration-requests?search=Nguy%E1%BB%85n`. Tên được tìm theo chuỗi con, không phân biệt hoa/thường, vẫn phân biệt dấu; không tìm tên trường/nhà cung cấp, UUID, email hay phone. Các ký tự `%`, `_` và `\` được xem là văn bản thông thường.
+
+`search` nhận một chuỗi tối đa 255 ký tự sau trim; bỏ tham số hoặc gửi chuỗi trắng thì không lọc. Mã chuẩn trong dải 1–9223372036854775807 được đối chiếu chính xác, kể cả `fp-reg-00001` hoặc mã sau 99999 như `FP-REG-100000`. Từ khóa không phải mã chuẩn được tìm trong tên; không có mã/tên khớp trả 200 với `items: []`. Search sai kiểu hoặc quá dài trả 400 kèm field `search`. Quyền và phân trang giữ nguyên; query vẫn tên `search`, field response vẫn tên `registrationID`.
+
+API chi tiết, duyệt, từ chối và mở tài liệu tiếp tục nhận UUID `id` trong đường dẫn; dùng `id` của kết quả tìm kiếm để gọi các API này.
+
 `GET /api/registration-requests/:id` trả trong `data` thông tin hồ sơ và hai object liên quan:
 
 - `applicantUser`: `id`, `username`, `fullName`, `email`, `phone`, `status`, `emailVerifiedAt`, đọc từ tài khoản được liên kết bằng `applicantUserId`. Đây là thông tin tài khoản hiện tại, bao gồm các lần cập nhật profile cá nhân; không phải bản chụp lúc signup. `phone` và `emailVerifiedAt` có thể null; thời điểm được trả theo ISO 8601.
@@ -99,7 +105,7 @@ Response POST thành công trả đầy đủ DTO chi tiết và `emailNotificat
 
 ### Thông báo kết quả xét duyệt
 
-Migration `20261102000100_registration_review_outbox` tạo bảng `foodprint.email_outbox`. Mỗi quyết định ghi một bản email cùng transaction; API chỉ trả `emailNotification.status = PENDING` sau khi commit, không cam kết thư đã đến. Cần áp dụng migration đã review trước khi dùng API xét duyệt mới. Worker riêng đọc outbox, đẩy job vào BullMQ/Redis local và gọi `sendMail` từ Resend. Chạy `npm run worker:email` song song với API.
+Migration `20261102000100_registration_review_outbox` tạo bảng `foodprint.email_outbox`. Nộp lần đầu, nộp lại sau từ chối và mỗi quyết định xét duyệt ghi một bản email cùng transaction; lỗi ghi outbox rollback thao tác đó. API xét duyệt trả `emailNotification.status = PENDING` sau khi commit, không cam kết thư đã đến; response nộp hồ sơ giữ nguyên hợp đồng hiện có. Không cần migration mới cho email xác nhận tiếp nhận. Cần áp dụng migration đã review trước khi dùng luồng outbox. Backend tự khởi động runtime đọc outbox, đẩy job vào BullMQ/Redis local và gọi `sendMail` từ Resend khi chạy `npm run dev` hoặc `npm start` sau build; không cần terminal worker riêng. Cả ba loại thông báo đều được xử lý bất đồng bộ, với dispatcher mỗi 5 giây. Khi dừng backend, runtime dừng timer, chờ lượt dispatch và worker đang chạy rồi đóng queue trước DB. Lệnh `npm run worker:email` vẫn dùng được khi cần chạy độc lập, nhưng không cần chạy thêm cùng backend mặc định. Resend cần được cấu hình trong môi trường backend; khởi động backend sẽ xử lý cả các thư đang chờ.
 
 Lỗi Redis/Resend sau commit không thay đổi quyết định xét duyệt. Worker tự thử tối đa 5 lượt, chờ tăng dần từ 5 giây. Kiểm tra một sự kiện bằng `npm run email:outbox:status -- <UUID>`; gửi lại trạng thái FAILED bằng `npm run email:outbox:retry -- <UUID>`. Nếu lượt gửi đầu đã quá 24 giờ và kết quả chưa rõ, đối soát trên Resend trước rồi dùng `--confirm-possible-duplicate`. Các lệnh mặc định chỉ cho PostgreSQL local; thao tác Azure cần `--azure`, `AZURE_DATABASE_HOST` khớp target và quyền vận hành riêng. Không dùng script này để seed hoặc gửi bù hồ sơ cũ.
 

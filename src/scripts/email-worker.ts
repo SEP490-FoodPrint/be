@@ -1,51 +1,31 @@
 import { getPrisma } from "../utils/database";
-import {
-  closeEmailQueue,
-  closeEmailWorker,
-  createEmailQueue,
-  createEmailWorker,
-  dispatchEmailOutbox,
-} from "../utils/email-outbox";
+import { startEmailRuntime } from "../utils/email-runtime";
 
 async function main() {
   const db = await getPrisma();
   await db.$connect();
-  const queue = createEmailQueue();
-  const worker = createEmailWorker(db);
-  worker.on("error", () => console.error("Email worker gặp lỗi kết nối."));
-  worker.on("failed", (job) => {
-    const data: unknown = job?.data;
-    const outboxId =
-      data &&
-      typeof data === "object" &&
-      "id" in data &&
-      typeof data.id === "string"
-        ? data.id
-        : undefined;
-    console.error("Email chưa được tiếp nhận", { outboxId });
-  });
-  let closing = false;
-  let dispatching = false;
-  const tick = async () => {
-    if (closing || dispatching) return;
-    dispatching = true;
-    try {
-      await dispatchEmailOutbox(db, queue);
-    } catch {
-      console.error("Email dispatcher tạm thời không hoạt động.");
-    } finally {
-      dispatching = false;
-    }
-  };
-  const timer = setInterval(() => void tick(), 5000);
-  void tick();
-  const stop = async () => {
-    if (closing) return;
-    closing = true;
-    clearInterval(timer);
-    await closeEmailWorker(worker);
-    await closeEmailQueue(queue);
+  let runtime: Awaited<ReturnType<typeof startEmailRuntime>>;
+  try {
+    runtime = await startEmailRuntime(db);
+  } catch (error) {
     await db.$disconnect();
+    throw error;
+  }
+  let closing: Promise<void> | undefined;
+  const stop = async () => {
+    closing ??= (async () => {
+      try {
+        await runtime.stop();
+      } finally {
+        await db.$disconnect();
+      }
+    })();
+    try {
+      await closing;
+    } catch {
+      console.error("Không thể đóng đầy đủ email worker.");
+      process.exitCode = 1;
+    }
   };
   process.once("SIGINT", () => void stop());
   process.once("SIGTERM", () => void stop());

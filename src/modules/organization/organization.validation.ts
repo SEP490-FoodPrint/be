@@ -1,3 +1,9 @@
+import {
+  paginationSchema,
+  emptyQuerySchema,
+  idParamsSchema,
+  parse,
+} from "../../utils/directory-validation";
 import { z } from "zod";
 import { HttpError } from "../../utils/http-error";
 
@@ -39,6 +45,34 @@ const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
+export const cookingModeBodySchema = z.strictObject({
+  cookingMode: z.enum(["SEPARATE_BY_LOT", "COMBINE_LOTS"], {
+    error: "Chế độ nấu không hợp lệ",
+  }),
+});
+
+const TIME_REGEX = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+
+export const mealTimesBodySchema = z
+  .strictObject({
+    lunchTime: z
+      .string()
+      .regex(TIME_REGEX, "Giờ bữa trưa phải có định dạng HH:mm")
+      .nullable(),
+    afternoonMealTime: z
+      .string()
+      .regex(TIME_REGEX, "Giờ bữa phụ phải có định dạng HH:mm")
+      .nullable(),
+  })
+  .refine(
+    ({ lunchTime, afternoonMealTime }) =>
+      !lunchTime || !afternoonMealTime || lunchTime < afternoonMealTime,
+    {
+      message: "Giờ bữa trưa phải trước giờ bữa phụ",
+      path: ["afternoonMealTime"],
+    },
+  );
+
 function positiveIntegerQuery(name: string, fallback: number) {
   const message = `${name} phải là số nguyên dương`;
   return z
@@ -51,34 +85,23 @@ function positiveIntegerQuery(name: string, fallback: number) {
     .default(fallback);
 }
 
-export const organizationListQuerySchema = z
-  .strictObject(
-    {
-      page: positiveIntegerQuery("page", 1),
-      limit: positiveIntegerQuery("limit", 20).refine((value) => value <= 100, {
-        error: "limit tối đa 100",
-      }),
-    },
-    {
-      error: (issue) =>
-        issue.code === "unrecognized_keys"
-          ? "Chỉ hỗ trợ tham số page và limit"
-          : "Tham số danh sách trường học không hợp lệ",
-    },
-  )
-  .refine(
-    ({ page, limit }) =>
-      !Number.isSafeInteger(page) ||
-      !Number.isSafeInteger(limit) ||
-      page < 1 ||
-      limit < 1 ||
-      limit > 100 ||
-      (page - 1) * limit <= 2_147_483_647,
-    {
-      path: ["page"],
-      error: "page vượt giới hạn phân trang",
-    },
-  );
+export const organizationListQuerySchema = paginationSchema.safeExtend({
+  search: z
+    .string({ error: "Từ khóa phải là chuỗi" })
+    .trim()
+    .max(255, { error: "Từ khóa tối đa 255 ký tự" })
+    .transform((v) => v || undefined)
+    .optional(),
+  status: z
+    .enum(["ACTIVE", "INACTIVE"], { error: "Trạng thái không hợp lệ" })
+    .optional(),
+});
+export const organizationSummaryQuerySchema = emptyQuerySchema;
+export const organizationDetailParamsSchema = idParamsSchema;
+export const validateOrganizationSummaryQuery = (value: unknown) =>
+  parse(organizationSummaryQuerySchema, value);
+export const validateOrganizationDetailParams = (value: unknown) =>
+  parse(organizationDetailParamsSchema, value);
 
 export const publicSchoolListQuerySchema = z
   .strictObject(
@@ -216,7 +239,19 @@ export const publicWeeklyMenuQuerySchema = z.strictObject(
 );
 
 export function validateOrganizationListQuery(value: unknown) {
-  const result = organizationListQuerySchema.safeParse(value);
+  return parse(organizationListQuerySchema, value);
+}
+
+export function validateCookingMode(value: unknown) {
+  const result = cookingModeBodySchema.safeParse(value);
+  if (!result.success) {
+    throw new OrganizationValidationError(mapZodIssues(result.error.issues));
+  }
+  return result.data;
+}
+
+export function validateMealTimes(value: unknown) {
+  const result = mealTimesBodySchema.safeParse(value);
   if (!result.success) {
     throw new OrganizationValidationError(mapZodIssues(result.error.issues));
   }

@@ -13,6 +13,13 @@ function positiveIntegerQuery(name: string, fallback: number) {
     .default(fallback);
 }
 
+const registrationSearchSchema = z
+  .string({ error: "Từ khóa tìm kiếm phải là chuỗi ký tự" })
+  .trim()
+  .max(255, { error: "Từ khóa tìm kiếm tối đa 255 ký tự" })
+  .transform((value) => value || undefined)
+  .optional();
+
 export const registrationListQuerySchema = z
   .strictObject(
     {
@@ -20,11 +27,12 @@ export const registrationListQuerySchema = z
       limit: positiveIntegerQuery("limit", 20).refine((value) => value <= 100, {
         error: "limit tối đa 100",
       }),
+      search: registrationSearchSchema,
     },
     {
       error: (issue) =>
         issue.code === "unrecognized_keys"
-          ? "Chỉ hỗ trợ tham số page và limit"
+          ? "Chỉ hỗ trợ tham số page, limit và search"
           : "Tham số danh sách đăng ký không hợp lệ",
     },
   )

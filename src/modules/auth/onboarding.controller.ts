@@ -2,9 +2,16 @@ import { asyncHandler } from "../../utils/async-handler";
 import { requireSessionUser } from "../../utils/session-identity";
 import { sendSuccess } from "../../utils/response";
 import { requirePrincipal } from "../../utils/authorization";
-import { objectBody, text, uuid } from "../../utils/auth-validation";
-import { readProfileBody } from "./onboarding.validation";
-import { expectedReviewVersion } from "./registration-review";
+import { parseRequest } from "../../utils/request-validation";
+import {
+  readProfileBody,
+  validateSubmission,
+  registrationParamsSchema,
+  ownDocumentParamsSchema,
+  reviewDocumentParamsSchema,
+  approveBodySchema,
+  rejectBodySchema,
+} from "./onboarding.validation";
 import {
   onboardingService,
   type OnboardingService,
@@ -19,12 +26,16 @@ export function createOnboardingController(
       sendSuccess(res, await service.own(requireSessionUser(req)));
     }),
     submit: asyncHandler(async (req, res) => {
-      const body = readProfileBody(
-        req.body as unknown,
-        Boolean(req.is("multipart/form-data")),
+      const user = requireSessionUser(req);
+      const body = validateSubmission(
+        readProfileBody(
+          req.body as unknown,
+          Boolean(req.is("multipart/form-data")),
+        ),
+        user.orgType === "SCHOOL" ? "SCHOOL" : "SUPPLIER",
       );
       const result = await service.submit(
-        requireSessionUser(req),
+        user,
         body,
         Array.isArray(req.files) ? req.files : [],
       );
@@ -42,7 +53,7 @@ export function createOnboardingController(
         res,
         await service.ownDocument(
           requireSessionUser(req),
-          uuid(req.params.documentId),
+          parseRequest(ownDocumentParamsSchema, req.params),
         ),
       );
     }),
@@ -50,36 +61,29 @@ export function createOnboardingController(
       res.setHeader("Cache-Control", "no-store");
       sendSuccess(
         res,
-        await service.detail(requirePrincipal(req), uuid(req.params.id)),
+        await service.detail(
+          requirePrincipal(req),
+          parseRequest(registrationParamsSchema, req.params),
+        ),
       );
     }),
     approve: asyncHandler(async (req, res) => {
-      const body = objectBody(req.body as unknown, ["expectedReviewVersion"]);
+      const params = parseRequest(registrationParamsSchema, req.params);
+      const body = parseRequest(approveBodySchema, req.body as unknown);
       res.setHeader("Cache-Control", "no-store");
       sendSuccess(
         res,
-        await service.approve(
-          requirePrincipal(req),
-          uuid(req.params.id),
-          expectedReviewVersion(body.expectedReviewVersion),
-        ),
+        await service.approve(requirePrincipal(req), { ...params, ...body }),
         "Đã duyệt hồ sơ và kích hoạt tài khoản",
       );
     }),
     reject: asyncHandler(async (req, res) => {
-      const body = objectBody(req.body as unknown, [
-        "expectedReviewVersion",
-        "rejectionReason",
-      ]);
+      const params = parseRequest(registrationParamsSchema, req.params);
+      const body = parseRequest(rejectBodySchema, req.body as unknown);
       res.setHeader("Cache-Control", "no-store");
       sendSuccess(
         res,
-        await service.reject(
-          requirePrincipal(req),
-          uuid(req.params.id),
-          expectedReviewVersion(body.expectedReviewVersion),
-          text(body.rejectionReason, 4000),
-        ),
+        await service.reject(requirePrincipal(req), { ...params, ...body }),
         "Đã từ chối hồ sơ",
       );
     }),
@@ -89,8 +93,7 @@ export function createOnboardingController(
         res,
         await service.reviewDocument(
           requirePrincipal(req),
-          uuid(req.params.id),
-          uuid(req.params.documentId),
+          parseRequest(reviewDocumentParamsSchema, req.params),
         ),
       );
     }),

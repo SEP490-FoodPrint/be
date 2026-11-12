@@ -22,12 +22,20 @@ export function createKitchenRouter(
   const router = Router();
   const controller = createKitchenController(service);
   const sampleController = createRetainedSampleController(samples);
-  router.put(
-    "/:id",
+  router.get(
+    "/context",
     authHandler,
-    requirePermission("cooking_batch.update"),
-    controller.update,
+    requireResource("kitchen"),
+    controller.getContext,
   );
+  // Đã gỡ bỏ API chỉnh sửa lô chế biến (PUT /:id) theo yêu cầu nghiệp vụ
+  router.get(
+    "/groups/:id",
+    authHandler,
+    requireResource("kitchen"),
+    controller.getGroup,
+  );
+
   router.delete(
     "/:id",
     authHandler,

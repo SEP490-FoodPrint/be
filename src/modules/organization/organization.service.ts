@@ -1,6 +1,14 @@
 import type { AuthPrincipal } from "../../types/auth";
+import { ROLES, ORG_TYPES } from "../../constants/roles";
+import type { PrismaClient } from "../../generated/prisma/client";
+import {
+  assertPermission,
+  withSchoolTransaction,
+} from "../../utils/authorization";
+import { getPrisma } from "../../utils/database";
 import { HttpError } from "../../utils/http-error";
-import { readListPage } from "../../utils/list-query";
+import { withReadTransaction } from "../../utils/read-transaction";
+import { listScopes } from "../../utils/resource-access";
 import {
   formatDateDMY,
   formatTimeString,
@@ -8,30 +16,54 @@ import {
   getWeekNumber,
 } from "../../utils/date-time";
 import type {
+  CookingModeRequestDTO,
+  MealTimesRequestDTO,
   OrganizationListRequestDTO,
+  OrganizationSummaryRequestDTO,
+  OrganizationDetailRequestDTO,
   PublicSchoolListRequestDTO,
   PublicDailyMenuRequestDTO,
   PublicWeeklyMenuRequestDTO,
 } from "./organization.request.dto";
 import type {
   OrganizationListResponseDTO,
+  OrganizationListItemResponseDTO,
+  OrganizationSummaryResponseDTO,
   PublicSchoolDTO,
   PublicSchoolListResult,
   PublicLocationDTO,
   PublicDailyMenuDTO,
   PublicWeeklyMenuDTO,
   AvailableWeekSummaryDTO,
+  CookingModeResponseDTO,
+  MealTimesResponseDTO,
   DishItemDTO,
   SnackItemDTO,
   PortionGroupDTO,
   WeeklyMenuDayDTO,
 } from "./organization.response.dto";
 import {
-  organizationRepository,
+  createOrganizationRepository,
   type OrganizationRepository,
   type PublicSchoolDbRow,
+  type SchoolDirectoryRow,
 } from "./organization.repository";
 
+function mapDirectory(
+  row: SchoolDirectoryRow,
+): OrganizationListItemResponseDTO {
+  return {
+    id: row.id,
+    name: row.name,
+    code: row.code,
+    email: row.email,
+    phone: row.phone,
+    address: row.address,
+    status: row.status,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
 function mapSchoolToDTO(school: PublicSchoolDbRow): PublicSchoolDTO {
   const district = school.location?.name || null;
   const city = school.location?.parent?.name || "Hà Nội";
@@ -78,33 +110,151 @@ function mapSchoolToDTO(school: PublicSchoolDbRow): PublicSchoolDTO {
   };
 }
 
+const COOKING_MODE_PERMISSION = "school_cooking_mode.manage";
+
+function assertCookingModeManager(
+  principal: AuthPrincipal,
+): asserts principal is AuthPrincipal & { schoolId: string } {
+  assertPermission(principal, COOKING_MODE_PERMISSION);
+  if (
+    principal.role !== ROLES.SCHOOL_MANAGEMENT_BOARD ||
+    principal.orgType !== "SCHOOL" ||
+    !principal.schoolId
+  )
+    throw new HttpError(403, "Chỉ Ban Giám hiệu được cấu hình chế độ nấu");
+}
+
+const MEAL_TIMES_PERMISSION = "school_meal_times.manage";
+
+function assertMealTimesManager(
+  principal: AuthPrincipal,
+): asserts principal is AuthPrincipal & { schoolId: string } {
+  assertPermission(principal, MEAL_TIMES_PERMISSION);
+  if (
+    principal.role !== ROLES.SCHOOL_MANAGEMENT_BOARD ||
+    principal.orgType !== "SCHOOL" ||
+    !principal.schoolId
+  ) {
+    throw new HttpError(403, "Chỉ Ban Giám hiệu được cấu hình giờ phục vụ");
+  }
+}
+
+function formatMealTime(value: Date | null): string | null {
+  return value ? value.toISOString().slice(11, 16) : null;
+}
+
+function parseMealTime(value: string | null): Date | null {
+  return value ? new Date(`1970-01-01T${value}:00.000Z`) : null;
+}
+
 export function createOrganizationService(
-  repository: OrganizationRepository = organizationRepository,
+  repository?: OrganizationRepository,
+  getClient: () => Promise<PrismaClient> = getPrisma,
 ) {
+  const data = repository ?? createOrganizationRepository(getClient);
   return {
     async getAll(
-      query: OrganizationListRequestDTO,
-      principal: AuthPrincipal,
+      q: OrganizationListRequestDTO,
+      p: AuthPrincipal,
     ): Promise<OrganizationListResponseDTO> {
-      const page = await readListPage(
-        () => repository.listSchools(query, principal),
-        query,
-      );
+      const scope = listScopes.organization(p);
+      return withReadTransaction(async (tx) => {
+        if (!data.listDirectory)
+          throw new HttpError(503, "Không thể tải danh sách");
+        const result = await data.listDirectory(tx, scope, q);
+        return {
+          items: result.items.map(mapDirectory),
+          pagination: {
+            page: q.page,
+            limit: q.limit,
+            total: result.total,
+            hasNext:
+              (q.page - 1) * q.limit + result.items.length < result.total,
+          },
+        };
+      }, getClient);
+    },
+    async getSummary(
+      _q: OrganizationSummaryRequestDTO,
+      p: AuthPrincipal,
+    ): Promise<OrganizationSummaryResponseDTO> {
+      const scope = listScopes.organization(p);
+      if (p.role !== ROLES.SYSTEM_ADMIN || p.orgType !== ORG_TYPES.SYSTEM)
+        throw new HttpError(403, "Chỉ System Admin được xem tổng quan");
+      return withReadTransaction(async (tx) => {
+        if (!data.summary) throw new HttpError(503, "Không thể tải tổng quan");
+        const counts = await data.summary(tx, scope);
+        return { total: counts.total, activeCount: counts.activeCount };
+      }, getClient);
+    },
+    async getById(
+      q: OrganizationDetailRequestDTO,
+      p: AuthPrincipal,
+    ): Promise<OrganizationListItemResponseDTO> {
+      const scope = listScopes.organization(p);
+      return withReadTransaction(async (tx) => {
+        if (!data.detail) throw new HttpError(503, "Không thể tải chi tiết");
+        const row = await data.detail(tx, scope, q.id);
+        if (!row) throw new HttpError(404, "Không tìm thấy trường học");
+        return mapDirectory(row);
+      }, getClient);
+    },
 
-      return {
-        items: page.items.map((row) => ({
-          id: row.id,
-          name: row.name,
-          code: row.code,
-          status: row.status,
-          createdAt: row.createdAt.toISOString(),
-          updatedAt: row.updatedAt.toISOString(),
-        })),
-        pagination: {
-          page: page.pagination.page,
-          limit: page.pagination.limit,
-          hasNext: page.pagination.hasNext,
+    async getCookingMode(
+      principal: AuthPrincipal,
+    ): Promise<CookingModeResponseDTO> {
+      assertCookingModeManager(principal);
+      return data.findCookingMode(principal.schoolId);
+    },
+
+    // Mẻ đã lập giữ chế độ cũ; giá trị mới chỉ áp dụng cho kế hoạch nấu sau đó.
+    async updateCookingMode(
+      input: CookingModeRequestDTO,
+      principal: AuthPrincipal,
+    ): Promise<CookingModeResponseDTO> {
+      assertCookingModeManager(principal);
+      return withSchoolTransaction(
+        await getClient(),
+        principal,
+        COOKING_MODE_PERMISSION,
+        (tx, actor, schoolId) => {
+          assertCookingModeManager(actor);
+          return data.updateCookingMode(tx, schoolId, input.cookingMode);
         },
+      );
+    },
+
+    async getMealTimes(
+      principal: AuthPrincipal,
+    ): Promise<MealTimesResponseDTO> {
+      assertMealTimesManager(principal);
+      const value = await data.findMealTimes(principal.schoolId);
+      return {
+        lunchTime: formatMealTime(value.lunchTime),
+        afternoonMealTime: formatMealTime(value.afternoonMealTime),
+      };
+    },
+
+    async updateMealTimes(
+      input: MealTimesRequestDTO,
+      principal: AuthPrincipal,
+    ): Promise<MealTimesResponseDTO> {
+      assertMealTimesManager(principal);
+      const value = await withSchoolTransaction(
+        await getClient(),
+        principal,
+        MEAL_TIMES_PERMISSION,
+        (tx, actor, schoolId) => {
+          assertMealTimesManager(actor);
+          return data.updateMealTimes(tx, schoolId, {
+            lunchTime: parseMealTime(input.lunchTime),
+            afternoonMealTime: parseMealTime(input.afternoonMealTime),
+          });
+        },
+      );
+      return {
+        lunchTime: formatMealTime(value.lunchTime),
+        afternoonMealTime: formatMealTime(value.afternoonMealTime),
       };
     },
 
@@ -115,7 +265,7 @@ export function createOrganizationService(
       const limit = query.limit;
       const skip = (page - 1) * limit;
 
-      const { items: schools, total } = await repository.findPublicSchools({
+      const { items: schools, total } = await data.findPublicSchools({
         skip,
         take: limit,
         search: query.search,
@@ -141,26 +291,26 @@ export function createOrganizationService(
     },
 
     async getPublicSchoolByCode(code: string): Promise<PublicSchoolDTO | null> {
-      const school = await repository.findPublicSchoolByCode(code);
+      const school = await data.findPublicSchoolByCode(code);
       if (!school) return null;
       return mapSchoolToDTO(school);
     },
 
     async getPublicSchoolById(id: string): Promise<PublicSchoolDTO | null> {
-      const school = await repository.findPublicSchoolById(id);
+      const school = await data.findPublicSchoolById(id);
       if (!school) return null;
       return mapSchoolToDTO(school);
     },
 
     async getPublicLocations(): Promise<PublicLocationDTO[]> {
-      return repository.findPublicLocations();
+      return data.findPublicLocations();
     },
 
     async getPublicDailyMenu(
       schoolCode: string,
       query: PublicDailyMenuRequestDTO,
     ): Promise<PublicDailyMenuDTO | null> {
-      const school = await repository.findSchoolForMenu(schoolCode);
+      const school = await data.findSchoolForMenu(schoolCode);
       if (!school) {
         throw new HttpError(
           404,
@@ -181,13 +331,10 @@ export function createOrganizationService(
         targetDate = new Date(`${yyyy}-${mm}-${dd}T00:00:00.000Z`);
       }
 
-      let menuDay = await repository.findMenuDayForDailyMenu(
-        school.id,
-        targetDate,
-      );
+      let menuDay = await data.findMenuDayForDailyMenu(school.id, targetDate);
 
       if (!menuDay && !query.date) {
-        menuDay = await repository.findLatestApprovedMenuDay(school.id);
+        menuDay = await data.findLatestApprovedMenuDay(school.id);
       }
 
       if (!menuDay || menuDay.menuDayDishes.length === 0) {
@@ -278,7 +425,7 @@ export function createOrganizationService(
       schoolCode: string,
       query: PublicWeeklyMenuRequestDTO,
     ): Promise<PublicWeeklyMenuDTO | null> {
-      const school = await repository.findSchoolForMenu(schoolCode);
+      const school = await data.findSchoolForMenu(schoolCode);
       if (!school) {
         throw new HttpError(
           404,
@@ -296,13 +443,10 @@ export function createOrganizationService(
         targetWeekMonday = monday;
       }
 
-      let weeklyMenu = await repository.findWeeklyMenu(
-        school.id,
-        targetWeekMonday,
-      );
+      let weeklyMenu = await data.findWeeklyMenu(school.id, targetWeekMonday);
 
       if (!weeklyMenu && !query.week) {
-        weeklyMenu = await repository.findLatestApprovedWeeklyMenu(school.id);
+        weeklyMenu = await data.findLatestApprovedWeeklyMenu(school.id);
       }
 
       if (!weeklyMenu || weeklyMenu.menuDays.length === 0) {
@@ -310,7 +454,7 @@ export function createOrganizationService(
       }
 
       const dayIds = weeklyMenu.menuDays.map((d) => d.id);
-      const rawGroups = await repository.findPortionGroupsRaw(dayIds);
+      const rawGroups = await data.findPortionGroupsRaw(dayIds);
       let dynamicGroups: PortionGroupDTO[] = rawGroups.map((g) => ({
         id: g.id,
         name: g.name,
@@ -405,7 +549,7 @@ export function createOrganizationService(
         };
       });
 
-      const rawAvailableWeeks = await repository.findAvailableWeeklyMenuWeeks(
+      const rawAvailableWeeks = await data.findAvailableWeeklyMenuWeeks(
         school.id,
       );
       const availableWeeks: AvailableWeekSummaryDTO[] = rawAvailableWeeks.map(

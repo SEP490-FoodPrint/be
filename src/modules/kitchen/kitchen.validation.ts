@@ -1,115 +1,115 @@
-import { objectBody, uuid, calendarDate } from "../../utils/auth-validation";
-import { parseListQuery } from "../../utils/list-query";
-import { HttpError } from "../../utils/http-error";
-export { parseListQuery as validateKitchenListQuery } from "../../utils/list-query";
+﻿import { z } from "zod";
+import { calendarDate } from "../../utils/auth-validation";
+import { paginationSchema } from "../../utils/directory-validation";
+import {
+  parseRequest,
+  requestUuidSchema,
+} from "../../utils/request-validation";
 
-export function validateKitchenPlan(value: unknown) {
-  const body = objectBody(value, ["menuDayId", "dishId", "mealType"]);
-  const mealType = body.mealType;
-  if (mealType !== "LUNCH" && mealType !== "AFTERNOON")
-    throw new HttpError(400, "Ca ăn không hợp lệ");
-  return {
-    menuDayId: uuid(body.menuDayId),
-    dishId: uuid(body.dishId),
-    mealType,
-  } as const;
-}
-
-export function validateKitchenAction(value: unknown) {
-  objectBody(value ?? {}, []);
-}
-
-export function validateKitchenUpdate(value: unknown) {
-  const body = objectBody(value, ["note"]);
-  if (
-    !Object.hasOwn(body, "note") ||
-    (body.note !== null &&
-      (typeof body.note !== "string" || body.note.length > 2000))
-  )
-    throw new HttpError(400, "Chỉ được sửa ghi chú, tối đa 2000 ký tự");
-  return {
-    note: body.note === null ? null : body.note.trim() || null,
-  };
-}
-
-export function validateKitchenComplete(value: unknown) {
-  if (value === undefined || value === null) return undefined;
-  const body = objectBody(value, ["note", "inspectionData"]);
-  if (
-    body.note !== undefined &&
-    body.note !== null &&
-    (typeof body.note !== "string" || body.note.length > 2000)
-  )
-    throw new HttpError(400, "Ghi chú tối đa 2000 ký tự");
-  return {
-    note:
-      body.note === null || body.note === undefined
-        ? undefined
-        : body.note.trim() || undefined,
-  };
-}
-export type KitchenCompleteInput = ReturnType<typeof validateKitchenComplete>;
-export type KitchenInspection = KitchenCompleteInput;
-
-export function validateKitchenFilters(query: Record<string, unknown>) {
-  if (
-    Object.keys(query).some(
-      (key) =>
-        ![
-          "page",
-          "limit",
-          "date",
-          "mealType",
-          "status",
-          "menuDayId",
-          "dishId",
-          "cookingModeApplied",
-          "search",
-        ].includes(key),
-    )
-  )
-    throw new HttpError(400, "Bộ lọc mẻ nấu không hợp lệ");
-  const page = parseListQuery({
-    ...(query.page === undefined ? {} : { page: query.page }),
-    ...(query.limit === undefined ? {} : { limit: query.limit }),
+const calendarDateSchema = z
+  .string({ error: "Ngày phải có định dạng YYYY-MM-DD" })
+  .transform((value, context) => {
+    try {
+      return calendarDate(value);
+    } catch {
+      context.addIssue({
+        code: "custom",
+        message: "Ngày phải có định dạng YYYY-MM-DD và tồn tại trên lịch",
+      });
+      return z.NEVER;
+    }
   });
-  if (
-    query.mealType !== undefined &&
-    query.mealType !== "LUNCH" &&
-    query.mealType !== "AFTERNOON"
-  )
-    throw new HttpError(400, "Ca ăn không hợp lệ");
-  if (
-    query.status !== undefined &&
-    (typeof query.status !== "string" ||
-      !["UNCONFIRMED", "CONFIRMED", "COMPLETED"].includes(query.status))
-  )
-    throw new HttpError(400, "Trạng thái mẻ không hợp lệ");
-  if (
-    query.cookingModeApplied !== undefined &&
-    query.cookingModeApplied !== "COMBINE_LOTS" &&
-    query.cookingModeApplied !== "SEPARATE_BY_LOT"
-  )
-    throw new HttpError(400, "Phương thức chế biến không hợp lệ");
-  if (
-    query.search !== undefined &&
-    (typeof query.search !== "string" || query.search.trim().length > 100)
-  )
-    throw new HttpError(400, "Từ khóa tìm kiếm tối đa 100 ký tự");
-  return {
-    ...page,
-    date: query.date === undefined ? undefined : calendarDate(query.date),
+const mealTypeSchema = z.enum(["LUNCH", "AFTERNOON"], {
+  error: "Ca ăn không hợp lệ",
+});
+export const kitchenListQuerySchema = paginationSchema;
+export const kitchenPlanSchema = z.strictObject({
+  menuDayId: requestUuidSchema,
+  // Legacy callers may send a dish; planning always covers the whole meal.
+  dishId: requestUuidSchema.optional(),
+  mealType: mealTypeSchema,
+});
+export const kitchenActionSchema = z.strictObject({});
+export const kitchenCompleteSchema = z
+  .strictObject({
+    note: z
+      .string({ error: "Ghi chú phải là văn bản" })
+      .max(2000, { error: "Ghi chú tối đa 2000 ký tự" })
+      .nullish(),
+    inspectionData: z.record(z.string(), z.json()).optional(),
+    preparedPortions: z
+      .number({ error: "Số suất phải là số nguyên dương" })
+      .int({ error: "Số suất phải là số nguyên dương" })
+      .positive({ error: "Số suất phải là số nguyên dương" })
+      .max(2147483647, { error: "Số suất vượt giới hạn cho phép" })
+      .optional(),
+  })
+  .transform((body) => ({ note: body.note?.trim() || undefined }))
+  .nullish()
+  .transform((body) => body ?? undefined);
+export const kitchenFiltersSchema = paginationSchema
+  .safeExtend({
+    date: calendarDateSchema.optional(),
+    startDate: calendarDateSchema.optional(),
+    endDate: calendarDateSchema.optional(),
+    mealType: mealTypeSchema.optional(),
+    status: z
+      .enum(["UNCONFIRMED", "CONFIRMED", "COMPLETED"], {
+        error: "Trạng thái mẻ không hợp lệ",
+      })
+      .optional(),
+    menuDayId: requestUuidSchema.optional(),
+    dishId: requestUuidSchema.optional(),
+    cookingModeApplied: z
+      .enum(["COMBINE_LOTS", "SEPARATE_BY_LOT"], {
+        error: "Phương thức chế biến không hợp lệ",
+      })
+      .optional(),
+    search: z
+      .string({ error: "Từ khóa phải là văn bản" })
+      .trim()
+      .max(100, { error: "Từ khóa tìm kiếm tối đa 100 ký tự" })
+      .transform((value) => value || undefined)
+      .optional(),
+    hasSample: z
+      .enum(["true", "false"], { error: "hasSample phải là true hoặc false" })
+      .transform((value) => value === "true")
+      .optional(),
+  })
+  .superRefine((query, context) => {
+    if (query.startDate && query.endDate && query.startDate > query.endDate) {
+      context.addIssue({
+        code: "custom",
+        path: ["endDate"],
+        message: "Ngày kết thúc không được trước ngày bắt đầu",
+      });
+    }
+  })
+  .transform((query) => ({
+    page: query.page,
+    limit: query.limit,
+    date: query.date,
+    startDate: query.startDate,
+    endDate: query.endDate,
     mealType: query.mealType,
-    status: query.status as
-      "UNCONFIRMED" | "CONFIRMED" | "COMPLETED" | undefined,
+    status: query.status,
+    menuDayId: query.menuDayId,
+    dishId: query.dishId,
     cookingModeApplied: query.cookingModeApplied,
-    search:
-      typeof query.search === "string"
-        ? query.search.trim() || undefined
-        : undefined,
-    menuDayId:
-      query.menuDayId === undefined ? undefined : uuid(query.menuDayId),
-    dishId: query.dishId === undefined ? undefined : uuid(query.dishId),
-  } as const;
-}
-export type KitchenFilters = ReturnType<typeof validateKitchenFilters>;
+    search: query.search,
+    hasSample: query.hasSample,
+  }));
+export const validateKitchenListQuery = (value: unknown) =>
+  parseRequest(kitchenListQuerySchema, value);
+export const validateKitchenPlan = (value: unknown) =>
+  parseRequest(kitchenPlanSchema, value);
+export const validateKitchenAction = (value: unknown) => {
+  parseRequest(kitchenActionSchema, value ?? {});
+};
+export const validateKitchenComplete = (value: unknown) =>
+  parseRequest(kitchenCompleteSchema, value);
+export const validateKitchenFilters = (value: unknown) =>
+  parseRequest(kitchenFiltersSchema, value);
+export type KitchenFilters = z.infer<typeof kitchenFiltersSchema>;
+export type KitchenCompleteInput = z.infer<typeof kitchenCompleteSchema>;
+export type KitchenInspection = KitchenCompleteInput;

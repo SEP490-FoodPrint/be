@@ -1,4 +1,4 @@
-import type { Prisma, PrismaClient } from "../../generated/prisma/client";
+import type { PrismaClient } from "../../generated/prisma/client";
 import type { SessionUser } from "../../types/session-user";
 import type { AuthPrincipal } from "../../types/auth";
 import { getPrisma } from "../../utils/database";
@@ -20,30 +20,29 @@ import {
   type OnboardingDocument,
 } from "../../utils/onboarding-documents";
 import { validateOnboarding } from "./onboarding.validation";
-import { readSubmission, retainDocuments } from "./onboarding-submission";
+import { retainDocuments } from "./onboarding-submission";
+import { reviewVersion } from "./registration-review";
+import { reviewEmail, submissionEmail } from "./registration-review-email";
 import {
-  reviewSelect,
-  reviewVersion,
+  onboardingRepository,
+  type Application,
   type ReviewRow,
-} from "./registration-review";
-import { reviewEmail } from "./registration-review-email";
-
-const select = {
-  id: true,
-  applicantUserId: true,
-  requestType: true,
-  status: true,
-  profileData: true,
-  supportingDocuments: true,
-  submittedAt: true,
-  reviewedAt: true,
-  rejectionReason: true,
-  updatedAt: true,
-} as const satisfies Prisma.RegistrationRequestSelect;
-const detailSelect = reviewSelect;
-type Application = Prisma.RegistrationRequestGetPayload<{
-  select: typeof select;
-}>;
+} from "./onboarding.repository";
+import { formatRegistrationID } from "../../utils/registration-id";
+import type {
+  OnboardingSubmitRequestDTO,
+  RegistrationParamsRequestDTO,
+  RegistrationApproveRequestDTO,
+  RegistrationRejectRequestDTO,
+  OwnDocumentParamsRequestDTO,
+  ReviewDocumentRequestDTO,
+} from "./auth.request.dto";
+import type {
+  OnboardingResponseDTO,
+  ReviewResponseDTO,
+  SubmissionResponseDTO,
+  ReviewDecisionResponseDTO,
+} from "./auth.response.dto";
 
 function applicant(user: SessionUser): "SCHOOL" | "SUPPLIER" {
   if (
@@ -58,13 +57,20 @@ function applicant(user: SessionUser): "SCHOOL" | "SUPPLIER" {
     );
   return user.orgType as "SCHOOL" | "SUPPLIER";
 }
-function view(row: Application) {
-  const { supportingDocuments, ...fields } = row;
+function view(row: Application): OnboardingResponseDTO {
   return {
-    ...fields,
+    id: row.id,
+    registrationID: formatRegistrationID(row.registrationNumber),
+    applicantUserId: row.applicantUserId,
+    requestType: row.requestType,
+    status: row.status,
     profileData: validateOnboarding(row.profileData, row.requestType)
       .profileData,
-    documents: readDocuments(supportingDocuments, row.applicantUserId).map(
+    submittedAt: row.submittedAt.toISOString(),
+    reviewedAt: row.reviewedAt?.toISOString() ?? null,
+    rejectionReason: row.rejectionReason,
+    updatedAt: row.updatedAt.toISOString(),
+    documents: readDocuments(row.supportingDocuments, row.applicantUserId).map(
       (document) => ({
         id: document.id,
         field: document.field,
@@ -75,14 +81,22 @@ function view(row: Application) {
     ),
   };
 }
-function reviewView(row: ReviewRow) {
-  const { applicantUser, reviewedByUserId, reviewedByUser, ...application } =
-    row;
+function reviewView(row: ReviewRow): ReviewResponseDTO {
   return {
-    ...view(application),
-    applicantUser,
-    reviewedByUserId,
-    reviewedByUser,
+    ...view(row),
+    applicantUser: {
+      id: row.applicantUser.id,
+      username: row.applicantUser.username,
+      fullName: row.applicantUser.fullName,
+      email: row.applicantUser.email,
+      phone: row.applicantUser.phone,
+      status: row.applicantUser.status,
+      emailVerifiedAt: row.applicantUser.emailVerifiedAt?.toISOString() ?? null,
+    },
+    reviewedByUserId: row.reviewedByUserId,
+    reviewedByUser: row.reviewedByUser
+      ? { id: row.reviewedByUser.id, fullName: row.reviewedByUser.fullName }
+      : null,
     reviewVersion: reviewVersion(row),
   };
 }
@@ -104,24 +118,19 @@ async function createOrganization<T>(operation: () => Promise<T>): Promise<T> {
     throw error;
   }
 }
-async function lockApplicant(tx: AuthorizationClient, id: string) {
-  await tx.$queryRaw`SELECT id FROM foodprint.users WHERE id = ${id}::uuid FOR UPDATE`;
-  return loadSessionUser(id, tx);
-}
+const lockApplicant = (tx: AuthorizationClient, id: string) =>
+  onboardingRepository.lockApplicant(tx, id);
 async function editable(tx: AuthorizationClient, userId: string) {
   const user = await lockApplicant(tx, userId);
   const requestType = applicant(user);
-  const current = await tx.registrationRequest.findUnique({
-    where: { applicantUserId: userId },
-    select,
-  });
+  const current = await onboardingRepository.findOwn(tx, userId);
   if (
     current &&
     (current.requestType !== requestType ||
       !["PENDING", "REJECTED"].includes(current.status))
   )
     throw new HttpError(409, "Hồ sơ đã được duyệt và không còn được chỉnh sửa");
-  return { requestType, current };
+  return { requestType, current, user };
 }
 
 export function createOnboardingService(
@@ -132,10 +141,7 @@ export function createOnboardingService(
     const db = await connect();
     return databaseOperation(async () => {
       await loadSessionUser(user.id, db);
-      return db.registrationRequest.findUnique({
-        where: { applicantUserId: user.id },
-        select,
-      });
+      return onboardingRepository.findOwn(db, user.id);
     });
   }
   async function reviewedApplication(
@@ -147,16 +153,19 @@ export function createOnboardingService(
   ) {
     assertSystemManager(await loadPrincipal(actor.id, tx), permission);
     // Lock order matches submission: applicant first, then registration row updates.
-    const header = await tx.registrationRequest.findUnique({
-      where: { id },
-      select: { applicantUserId: true },
-    });
+    const header = await onboardingRepository.findHeader(
+      tx,
+      { kind: "system" },
+      id,
+    );
     if (!header) throw new HttpError(404, "Không tìm thấy hồ sơ");
     const user = await lockApplicant(tx, header.applicantUserId);
-    const row = await tx.registrationRequest.findUniqueOrThrow({
-      where: { id },
-      select: detailSelect,
-    });
+    const row = await onboardingRepository.findReview(
+      tx,
+      { kind: "system" },
+      id,
+    );
+    if (!row) throw new HttpError(404, "Không tìm thấy hồ sơ");
     if (row.status !== "PENDING")
       throw new HttpError(
         409,
@@ -181,13 +190,11 @@ export function createOnboardingService(
     },
     async submit(
       user: SessionUser,
-      value: unknown,
+      input: OnboardingSubmitRequestDTO,
       files: Express.Multer.File[] = [],
-    ) {
-      const { profile, retained, expected } = readSubmission(
-        value,
-        applicant(user),
-      );
+    ): Promise<SubmissionResponseDTO> {
+      applicant(user);
+      const { profile, retained, expected } = input;
       validateProfileFiles(files, profile);
       const db = await connect();
       const snapshot = await authorizationTransaction(db, async (tx) => {
@@ -213,7 +220,11 @@ export function createOnboardingService(
         for (const file of files)
           uploaded.push(await storage.upload(user.id, file));
         const result = await authorizationTransaction(db, async (tx) => {
-          const { current, requestType } = await editable(tx, user.id);
+          const {
+            current,
+            requestType,
+            user: currentUser,
+          } = await editable(tx, user.id);
           if (requestType !== profile.requestType)
             throw new HttpError(
               409,
@@ -231,30 +242,30 @@ export function createOnboardingService(
           obsolete = previous.filter(
             (document) => !kept.some((item) => item.id === document.id),
           );
-          const data = {
-            requestType,
-            status: "PENDING" as const,
-            profileData: JSON.parse(
-              JSON.stringify(profile.profileData),
-            ) as Prisma.InputJsonObject,
-            supportingDocuments: [...kept, ...uploaded].map((document) => ({
-              ...document,
-            })),
+          const submission = {
+            profile,
+            documents: [...kept, ...uploaded],
             submittedAt: new Date(),
-            reviewedAt: null,
-            reviewedByUserId: null,
-            rejectionReason: null,
           };
           const row = current
-            ? await tx.registrationRequest.update({
-                where: { id: current.id },
-                data,
-                select,
-              })
-            : await tx.registrationRequest.create({
-                data: { applicantUserId: user.id, ...data },
-                select,
-              });
+            ? await onboardingRepository.updateSubmission(
+                tx,
+                current.id,
+                user.id,
+                submission,
+              )
+            : await onboardingRepository.createSubmission(
+                tx,
+                user.id,
+                submission,
+              );
+          if (!current || current.status === "REJECTED") {
+            await onboardingRepository.queueRegistrationEmail(
+              tx,
+              row.id,
+              submissionEmail(row, currentUser),
+            );
+          }
           return { ...view(row), accountStatus: "UNVERIFIED" as const };
         });
         // The replacement has committed; cleanup failure must not undo or hide submission success.
@@ -282,22 +293,32 @@ export function createOnboardingService(
         throw error;
       }
     },
-    async detail(actor: AuthPrincipal, id: string) {
+    async detail(
+      actor: AuthPrincipal,
+      { id }: RegistrationParamsRequestDTO,
+    ): Promise<ReviewResponseDTO> {
       const db = await connect();
       return databaseOperation(async () => {
         assertSystemManager(
           await loadPrincipal(actor.id, db),
           "registration.view",
         );
-        const row = await db.registrationRequest.findUnique({
-          where: { id },
-          select: detailSelect,
-        });
+        const row = await onboardingRepository.findReview(
+          db,
+          { kind: "system" },
+          id,
+        );
         if (!row) throw new HttpError(404, "Không tìm thấy hồ sơ");
         return reviewView(row);
       });
     },
-    async approve(actor: AuthPrincipal, id: string, expectedVersion: string) {
+    async approve(
+      actor: AuthPrincipal,
+      {
+        id,
+        expectedReviewVersion: expectedVersion,
+      }: RegistrationApproveRequestDTO,
+    ): Promise<ReviewDecisionResponseDTO> {
       const db = await connect();
       return authorizationTransaction(db, async (tx) => {
         const row = await reviewedApplication(
@@ -316,73 +337,72 @@ export function createOnboardingService(
         if (profile.requestType === "SCHOOL") {
           membership.schoolId = (
             await createOrganization(() =>
-              tx.school.create({
-                data: profile.profileData,
-                select: { id: true },
-              }),
+              onboardingRepository.createSchool(tx, profile.profileData),
             )
           ).id;
         } else {
           const { certifications, ...supplier } = profile.profileData;
           const created = await createOrganization(() =>
-            tx.supplier.create({ data: supplier, select: { id: true } }),
+            onboardingRepository.createSupplier(tx, supplier),
           );
           membership.supplierId = created.id;
           if (certifications.length)
-            await tx.supplierCertification.createMany({
-              data: certifications.map((certificate, index) => {
+            await onboardingRepository.createCertifications(
+              tx,
+              created.id,
+              certifications.map((certificate, index) => {
                 const document = documents.find(
                   (item) => item.field === `certificate_${index}`,
                 );
                 return {
-                  supplierId: created.id,
                   ...certificate,
-                  issuedDate: certificate.issuedDate
-                    ? new Date(certificate.issuedDate + "T00:00:00.000Z")
-                    : null,
-                  expiryDate: certificate.expiryDate
-                    ? new Date(certificate.expiryDate + "T00:00:00.000Z")
-                    : null,
-                  // Store a stable internal path, never an expiring signature or public Cloudinary URL.
                   documentUrl: document
                     ? `/api/registration-requests/${row.id}/documents/${document.id}`
                     : null,
                 };
               }),
-            });
+            );
         }
-        await tx.user.update({
-          where: { id: row.applicantUserId },
-          data: { ...membership, status: "ACTIVE" },
-        });
-        const result = await tx.registrationRequest.update({
-          where: { id },
-          data: {
+        await onboardingRepository.activateApplicant(
+          tx,
+          row.applicantUserId,
+          membership,
+        );
+        const result = await onboardingRepository.updateReview(
+          tx,
+          { kind: "system" },
+          id,
+          {
             status: "APPROVED",
             reviewedByUserId: actor.id,
             reviewedAt: new Date(),
             rejectionReason: null,
           },
-          select: detailSelect,
-        });
-        const notification = await tx.emailOutbox.create({
-          data: { registrationId: id, ...reviewEmail(row) },
-          select: { id: true, status: true },
-        });
+        );
+        const notification = await onboardingRepository.queueRegistrationEmail(
+          tx,
+          id,
+          reviewEmail(row),
+        );
         return {
           ...reviewView(result),
           accountStatus: "ACTIVE" as const,
           ...membership,
-          emailNotification: notification,
+          emailNotification: {
+            id: notification.id,
+            status: notification.status,
+          },
         };
       });
     },
     async reject(
       actor: AuthPrincipal,
-      id: string,
-      expectedVersion: string,
-      rejectionReason: string,
-    ) {
+      {
+        id,
+        expectedReviewVersion: expectedVersion,
+        rejectionReason,
+      }: RegistrationRejectRequestDTO,
+    ): Promise<ReviewDecisionResponseDTO> {
       const db = await connect();
       return authorizationTransaction(db, async (tx) => {
         const original = await reviewedApplication(
@@ -392,31 +412,36 @@ export function createOnboardingService(
           "registration.reject",
           expectedVersion,
         );
-        const row = await tx.registrationRequest.update({
-          where: { id },
-          data: {
+        const row = await onboardingRepository.updateReview(
+          tx,
+          { kind: "system" },
+          id,
+          {
             status: "REJECTED",
             reviewedByUserId: actor.id,
             reviewedAt: new Date(),
             rejectionReason,
           },
-          select: detailSelect,
-        });
-        const notification = await tx.emailOutbox.create({
-          data: {
-            registrationId: id,
-            ...reviewEmail(original, rejectionReason),
-          },
-          select: { id: true, status: true },
-        });
+        );
+        const notification = await onboardingRepository.queueRegistrationEmail(
+          tx,
+          id,
+          reviewEmail(original, rejectionReason),
+        );
         return {
           ...reviewView(row),
           accountStatus: "UNVERIFIED" as const,
-          emailNotification: notification,
+          emailNotification: {
+            id: notification.id,
+            status: notification.status,
+          },
         };
       });
     },
-    async ownDocument(user: SessionUser, documentId: string) {
+    async ownDocument(
+      user: SessionUser,
+      { documentId }: OwnDocumentParamsRequestDTO,
+    ) {
       const row = await readOwn(user);
       if (!row) throw new HttpError(404, "Không tìm thấy tài liệu");
       const document = readDocuments(row.supportingDocuments, user.id).find(
@@ -425,20 +450,19 @@ export function createOnboardingService(
       if (!document) throw new HttpError(404, "Không tìm thấy tài liệu");
       return { url: storage.download(document), expiresIn: 60 };
     },
-    async reviewDocument(actor: AuthPrincipal, id: string, documentId: string) {
+    async reviewDocument(
+      actor: AuthPrincipal,
+      { id, documentId }: ReviewDocumentRequestDTO,
+    ) {
       const db = await connect();
       const row = await databaseOperation(async () => {
         const current = await loadPrincipal(actor.id, db);
-        let where: Prisma.RegistrationRequestWhereInput;
         if (current.orgType === "SYSTEM") {
           assertSystemManager(current, "registration.view");
-          where = { id };
         } else if (current.orgType === "SUPPLIER" && current.supplierId) {
           assertPermission(current, "supplier_certification.view");
-          const application = await db.registrationRequest.findFirst({
-            where: { id, status: "APPROVED", requestType: "SUPPLIER" },
-            select,
-          });
+          const application =
+            await onboardingRepository.findApprovedSupplierApplication(db, id);
           if (!application) throw new HttpError(404, "Không tìm thấy tài liệu");
           const documents = readDocuments(
             application.supportingDocuments,
@@ -456,17 +480,16 @@ export function createOnboardingService(
               (document) =>
                 `/api/registration-requests/${id}/documents/${document.id}`,
             );
-          const certificate = await db.supplierCertification.findFirst({
-            where: {
-              supplierId: current.supplierId,
-              documentUrl: { in: anchors },
-            },
-            select: { id: true },
-          });
+          const certificate =
+            await onboardingRepository.findSupplierCertificate(
+              db,
+              current.supplierId,
+              anchors,
+            );
           if (!certificate) throw new HttpError(404, "Không tìm thấy tài liệu");
           return application;
         } else throw new HttpError(403, "Không có quyền đọc tài liệu này");
-        return db.registrationRequest.findFirst({ where, select });
+        return onboardingRepository.findForDocument(db, { kind: "system" }, id);
       });
       const document =
         row &&

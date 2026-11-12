@@ -13,15 +13,27 @@ import {
   validateMenuFilters,
   validateAllergyCheck,
   validateMenuPortionGroups,
+  validateMenuWeekSchedule,
+  validateMenuAcademicCalendar,
 } from "./menu.validation";
 
 export function createMenuController(service: MenuService = menuService) {
   return {
+    getContext: asyncHandler(async (req, res) => {
+      validateMenuAcademicCalendar(req.query);
+      sendSuccess(res, await service.getContext(requirePrincipal(req)));
+    }),
+    getAcademicCalendar: asyncHandler(async (req, res) => {
+      sendSuccess(
+        res,
+        await service.getAcademicCalendar(
+          validateMenuAcademicCalendar(req.query),
+          requirePrincipal(req),
+        ),
+      );
+    }),
     getWeekSchedule: asyncHandler(async (req, res) => {
-      const date =
-        typeof req.query.date === "string"
-          ? req.query.date
-          : new Date().toISOString().slice(0, 10);
+      const { date } = validateMenuWeekSchedule(req.query);
       sendSuccess(
         res,
         await service.getWeekSchedule(date, requirePrincipal(req)),

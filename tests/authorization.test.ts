@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import express from "express";
-import { INITIAL_PERMISSIONS } from "../src/constants/permission-catalog";
+import {
+  INITIAL_PERMISSIONS,
+  INITIAL_ROLE_PERMISSIONS,
+} from "../src/constants/permission-catalog";
 import { createAuthenticate } from "../src/middlewares/auth.middleware";
 import { requirePermission } from "../src/middlewares/permission.middleware";
 import { globalErrorHandler } from "../src/middlewares/error.middleware";
@@ -88,6 +91,32 @@ void test("all list resources deny absent grants, including System Admin", () =>
       {},
     );
   }
+});
+void test("bootstrap System Admin grants allow directory children and preserve permission checks", () => {
+  const principal = {
+    ...testAdmin,
+    permissions: INITIAL_ROLE_PERMISSIONS.filter(
+      ([role]) => role === "SYSTEM_ADMIN",
+    ).map(([, permission]) => permission),
+  };
+  for (const resource of [
+    "class",
+    "school-supplier",
+    "user",
+    "supplier-certification",
+  ] as const) {
+    assert.deepEqual(listScopes[resource](principal), {}, resource);
+  }
+  const withoutRelationship = {
+    ...principal,
+    permissions: principal.permissions.filter(
+      (permission) => permission !== "supplier_relationship.view",
+    ),
+  };
+  assert.throws(
+    () => listScopes["school-supplier"](withoutRelationship),
+    status(403),
+  );
 });
 void test("organization scope follows trusted membership and nested ownership", () => {
   const p = {

@@ -52,6 +52,16 @@ Admin tổ chức chỉ bật/tắt quyền role đã có cho tài khoản ACTIV
 
 ## HTTP API
 
+### Cấu hình niên khóa của trường
+
+`GET /api/schools/me/academic-years` và `GET /api/schools/me/academic-years/:id` yêu cầu `school_academic_year.view`. `POST` và `PATCH` trên cùng resource yêu cầu `school_academic_year.manage`. Ngoài permission hiệu lực, service bắt buộc role `SCHOOL_MANAGEMENT_BOARD`, tổ chức `SCHOOL` và `schoolId` từ principal; không nhận `schoolId` từ request. Record ngoài trường trả 404. Catalog chỉ khai báo grant mặc định cho Ban Giám hiệu; việc đồng bộ permission vào database đang chạy vẫn là thao tác bootstrap/operator được phê duyệt, không diễn ra khi khởi động API.
+
+### Quản lý lớp học của trường
+
+`POST /api/classes`, `POST /api/classes/copy`, `PATCH /api/classes/:classId` và `PATCH /api/classes/:classId/status` yêu cầu `class.manage`. Service bắt buộc role `SCHOOL_MANAGEMENT_BOARD`, tổ chức `SCHOOL` và lấy `schoolId` từ principal được nạp lại trong transaction khóa trường; không nhận `schoolId` từ request. Lớp ngoài trường trả 404. Niên khóa phải được cấu hình trong `school_academic_years` của trường và còn là năm hiện tại/sắp tới, nếu không trả 409; tên lớp trùng (không phân biệt hoa thường, tính cả lớp INACTIVE) trả 409. Không có xóa cứng: ngừng hoạt động lớp đóng phân công GVCN hiện tại trong cùng transaction. Catalog chỉ khai báo grant mặc định cho Ban Giám hiệu; đồng bộ vào database vẫn qua bootstrap đã được phê duyệt.
+
+`POST /api/classes/import` (nhập lớp từ Excel, frontend gửi dữ liệu đã đọc dưới dạng JSON) cũng yêu cầu `class.manage` và role Ban Giám hiệu; nếu có dòng điền `teacherUsername` thì cần thêm `class_assignment.manage`. Giáo viên được tra cứu trong chính trường của principal (chỉ tài khoản `HOMEROOM_TEACHER` ACTIVE). `dryRun: true` không ghi gì; lưu khi còn dòng lỗi trả 409, nếu không thì mọi lớp và phân công được tạo trong một transaction.
+
 Dùng envelope hiện có. Thiếu/sai token: 401; không ACTIVE khi gọi API nghiệp vụ hoặc thiếu quyền: 403; tài khoản đích ngoài phạm vi: 404; DTO sai: 400; permission trùng: 409; DB không sẵn sàng: 503.
 
 | API                                                        | Điều kiện/nội dung                                                                                                                          |
@@ -124,7 +134,16 @@ Mọi dòng đều yêu cầu một trong các permission liệt kê. SYSTEM có
 
 School xem supplier qua quan hệ ACTIVE/SUSPENDED; ingredient qua IngredientEntry của trường. Supplier xem tài nguyên supplier-owned hoặc delivery của supplier khi có permission phù hợp. ATTP xã chỉ thấy incident/report chuyển tới đơn vị mình; traceability chỉ mở phần liên quan trực tiếp. Với ingredient_quality_feedback.view_own, thêm điều kiện submittedByUserId; view_details vẫn giới hạn tổ chức. Các API cũ giữ phân trang, safe select và serialization Date/Decimal/BigInt.
 
+## API phân bổ suất ăn hôm nay
+
+- `GET /api/meal-allocations` yêu cầu `meal_allocation.view` trong phạm vi trường. Trả trạng thái nấu, lưu mẫu, dữ liệu lô và phiên bản phân bổ.
+- `PUT /api/meal-allocations` yêu cầu `meal_allocation.update`, và `meal_allocation.create` khi tạo hồ sơ lớp. BE kiểm lại điều kiện của cả ngày và ghi nguyên tử.
+- `POST /api/meal-allocations/confirm-distribution` yêu cầu vai trò `SCHOOL_KITCHEN_STAFF` và quyền hiệu lực `meal_allocation.update`. Xác nhận toàn bộ phân bổ đủ điều kiện trong ngày của trường từ phiên đăng nhập. Yêu cầu `revision` để kiểm tra phiên bản dữ liệu trước khi ghi.
+- Dùng ngày ăn hiện tại theo giờ Việt Nam. Hợp đồng này thay các route đọc chi tiết, tạo tự động, xác nhận phân phối và alias v1 của module.
+
 ## API Menu và CookingBatch v1
+
+Spec011 đổi lập mẻ sang toàn bữa: POST kitchen nhận `menuDayId`/`mealType` và kiểm tra `dishId` legacy nếu có. BGH quyết định cooking mode; client không được override. GET `/api/v1/kitchen/groups/:id` dùng cùng `cooking_batch.view`, xác thực và phạm vi trường như chi tiết mẻ. Mẻ con chứa `dishes[]`; mẫu lưu và phân bổ suất theo từng món trong mẻ. Confirm/complete/delete vẫn thao tác trên ID mẻ con; kho được ghi một lần theo cặp mẻ/lô nguyên liệu. Xem [hợp đồng grouped cooking](../specs/011-cooking-batch-groups/contracts.md) cho thay đổi response và rollout migration.
 
 Các route `/api/v1/menus`, `/api/v1/kitchen`, `/api/v1/daily-meal-portions` và `/api/v1/food-samples` dùng cùng session cookie, CSRF header, permission runtime và phạm vi trường của API hiện tại. Request ghi cần `X-CSRF-Protection: 1`; trình duyệt gửi cookie với credentials. Không dùng tên role `SCHOOL_ADMIN`/`CHEF` trong tài liệu giao diện để tạo thêm role: mã thực tế là `SCHOOL_ADMINISTRATION` và `SCHOOL_KITCHEN_STAFF`.
 
@@ -225,3 +244,42 @@ MIGRATION_TEST_DATABASE_URL='<disposable-local-test-url>' npm run test:authoriza
 ```
 
 Integration test tạo database mới trong PostgreSQL local test đã chọn; không drop/reset database hiện có hoặc chạy trên Azure. CI chạy cả migration và authorization integration trước khi Backend quality PASS và gọi CD. Test bao gồm JWT role giả, System không có quyền, role SYSTEM_ADMIN bị bảo vệ, role thay đổi trên hai trường, denial riêng, supplier isolation, ATTP, user/permission inactive và ghi admin đồng thời.
+
+## Danh bạ quản trị trường và nhà cung cấp
+
+Danh sách `GET /api/schools` và `/api/suppliers` hỗ trợ `search`, `status`, `page`, `limit`; kết quả bổ sung email/phone/address và pagination.total sau lọc. Giữ scope hiện hành, thứ tự id tăng dần và hasNext.
+
+| GET dưới /api                                      | Quyền                                                                | Phạm vi                                                    |
+| -------------------------------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------- |
+| /schools/summary                                   | school.manage                                                        | SYSTEM_ADMIN thuộc SYSTEM                                  |
+| /suppliers/summary                                 | supplier.view hoặc supplier.manage                                   | SYSTEM_ADMIN thuộc SYSTEM                                  |
+| /schools/:id                                       | school.manage                                                        | SYSTEM hoặc trường hiện tại                                |
+| /suppliers/:id                                     | supplier.view hoặc supplier.manage                                   | Như danh sách supplier, gồm INACTIVE                       |
+| /schools/:schoolId/classes                         | class.view                                                           | SYSTEM hoặc trường hiện tại                                |
+| /schools/:schoolId/suppliers                       | supplier_relationship.view hoặc supplier_relationship.manage         | SYSTEM, trường hiện tại hoặc quan hệ của supplier hiện tại |
+| /schools/:schoolId/accounts                        | user.manage cho SYSTEM; school_user.manage cho SCHOOL_ADMINISTRATION | SYSTEM hoặc admin trường hiện tại                          |
+| /suppliers/:supplierId/certifications              | supplier_certification.view                                          | SYSTEM hoặc supplier hiện tại                              |
+| /supplier-certifications/:id/documents/:documentId | supplier_certification.view                                          | SYSTEM hoặc supplier sở hữu chứng nhận                     |
+
+Nhóm con dùng quyền riêng, không yêu cầu thêm quyền hồ sơ parent. Parent ngoài phạm vi/không tồn tại trả 404; parent hợp lệ nhưng không có dữ liệu trả danh sách rỗng và total=0. Summary không nhận bộ lọc và đếm total/activeCount toàn phạm vi. Không có System Admin bypass permission.
+
+Tệp chứng nhận được xác minh qua anchor hồ sơ APPROVED/SUPPLIER và nhóm certificate_N; quyền sở hữu theo chứng nhận hiện tại, không theo tổ chức hiện tại của applicant. Response danh sách chỉ chứa metadata an toàn, mở tệp trả URL 60 giây và Cache-Control no-store. API review hồ sơ giữ quyền registration.view riêng. Hợp đồng đầy đủ: [admin-directory.md](../specs/006-school-supplier-admin/contracts/admin-directory.md).
+
+## Quản trị nguyên liệu nhà cung cấp
+
+Nhóm `/api/ingredients/management` yêu cầu tài khoản ACTIVE, role `INGREDIENT_SUPPLIER_ADMIN`, tổ chức SUPPLIER hợp lệ đang ACTIVE và permission hiệu lực `ingredient.manage`. Staff bị chặn kể cả được gán permission này; System Admin không có bypass. Mỗi lần ghi nạp lại actor/quyền/membership và supplier trong cùng Serializable transaction với kiểm tra target/category và mutation.
+
+| Method | Endpoint                                       | Kết quả                                                  |
+| ------ | ---------------------------------------------- | -------------------------------------------------------- |
+| GET    | /api/ingredients/management                    | Nguyên liệu thuộc supplier hiện tại, gồm ACTIVE/INACTIVE |
+| GET    | /api/ingredients/management/categories         | Danh mục dùng chung chỉ đọc                              |
+| GET    | /api/ingredients/management/:ingredientId      | Chi tiết thuộc sở hữu                                    |
+| POST   | /api/ingredients/management                    | Tạo nguyên liệu ACTIVE, tự gắn supplier                  |
+| PATCH  | /api/ingredients/management/:ingredientId      | Sửa trường editable, giữ trạng thái                      |
+| POST   | /api/ingredients/management/:ingredientId/hide | Chuyển INACTIVE; gọi lại thành công không đổi timestamp  |
+
+Danh sách chỉ nhận page/limit, mặc định 1/20, limit tối đa 100, envelope items/pagination.hasNext hiện hành. Scope từ principal, không từ supplierId do client gửi. Target ngoài sở hữu và không tồn tại cùng 404. Trùng tên trong cùng supplier kể cả đang ẩn trả 409. Quyền đọc GET `/api/ingredients` hiện có giữ nguyên, gồm staff được cấp quyền đọc hợp lệ.
+
+Input chỉ gồm name/defaultUnit/description/categoryId/coverImage/imageDescription; tạo cần name và defaultUnit. PATCH bỏ qua giữ nguyên, null xóa trường nullable, [] xóa danh sách ảnh. coverImage tối đa một tham chiếu; imageDescription nhiều tham chiếu theo thứ tự. Chấp nhận URL HTTP/HTTPS không credentials hoặc đường dẫn bắt đầu /, tối đa 2048 ký tự; không upload hoặc fetch ảnh. categoryId nullable tham chiếu danh mục có sẵn; chưa có API quản trị danh mục. Chi tiết input/output tại [contract](../specs/008-supplier-ingredient-management/contracts/ingredient-management.md).
+
+Ẩn không xóa dữ liệu hoặc thay đổi hồ sơ đã có. Lựa chọn nguyên liệu mới và supplier discovery chỉ dùng nguyên liệu ACTIVE; menu/hợp đồng/lịch sử kho vẫn đọc được liên kết cũ. Các phản hồi legacy giữ category dạng tên/null suy ra từ quan hệ, không giữ thêm cột category trong DB.

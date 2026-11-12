@@ -42,7 +42,6 @@ import {
 import {
   validateKitchenComplete,
   validateKitchenFilters,
-  validateKitchenUpdate,
 } from "../src/modules/kitchen/kitchen.validation";
 import {
   validateFoodSample,
@@ -89,6 +88,21 @@ void test("kitchen list and statistics share school-scoped database filters and 
   const row = {
     id: testStaff.id,
     batchCode: "CB-actual",
+    batchGroupId: testAdmin.id,
+    BatchGroup: { id: testAdmin.id, batchCode: "B-actual" },
+    dishId: testAdmin.id,
+    menuDayId: testAdmin.id,
+    mealType: "LUNCH",
+    dishes: [
+      { dishId: testAdmin.id, plannedPortions: 120, Dish: { name: "Cơm" } },
+    ],
+    Dish: { name: "Cơm" },
+    MenuDay: { menuDate: new Date("2026-11-02") },
+    note: null,
+    confirmedAt: null,
+    completedAt: null,
+    createdAt: new Date("2026-11-02"),
+    updatedAt: new Date("2026-11-02"),
     status: "COMPLETED",
     cookingModeApplied: "SEPARATE_BY_LOT",
     plannedPortions: 120,
@@ -99,12 +113,15 @@ void test("kitchen list and statistics share school-scoped database filters and 
         unit: "kg",
       },
     ],
-    RetainedFoodSample: {
-      id: testAdmin.id,
-      status: "STORED",
-      sampledAt: new Date("2026-11-02T05:00:00Z"),
-      disposedAt: null,
-    },
+    RetainedFoodSample: [
+      {
+        dishId: testAdmin.id,
+        id: testAdmin.id,
+        status: "STORED",
+        sampledAt: new Date("2026-11-02T05:00:00Z"),
+        disposedAt: null,
+      },
+    ],
   };
   const tx = {
     cookingBatch: {
@@ -160,7 +177,12 @@ void test("kitchen list and statistics share school-scoped database filters and 
   assert.equal(where.AND[1].status, "COMPLETED");
   assert.deepEqual(where.AND[1].OR, [
     { batchCode: { contains: "120", mode: "insensitive" } },
-    { Dish: { name: { contains: "120", mode: "insensitive" } } },
+    {
+      dishes: {
+        some: { Dish: { name: { contains: "120", mode: "insensitive" } } },
+      },
+    },
+    { BatchGroup: { batchCode: { contains: "120", mode: "insensitive" } } },
     { plannedPortions: 120 },
   ]);
   assert.equal(list.skip, 2);
@@ -175,7 +197,7 @@ void test("kitchen list and statistics share school-scoped database filters and 
     { CookingBatch: where },
   );
   assert.equal(result.items[0].cookingModeApplied, "SEPARATE_BY_LOT");
-  assert.equal(result.items[0].retainedFoodSample?.status, "STORED");
+  assert.equal(result.items[0].retainedFoodSamples?.[0]?.status, "STORED");
   assert.equal(result.items[0].cookingBatchLots[0].quantityUsed, "6");
   assert.equal(result.pagination.totalItems, 3);
   assert.deepEqual(stats, {
@@ -189,20 +211,6 @@ void test("kitchen list and statistics share school-scoped database filters and 
   });
 });
 
-void test("batch edits accept only notes; plans and inventory quantities stay server owned", () => {
-  assert.deepEqual(validateKitchenUpdate({ note: "  Ghi chú  " }), {
-    note: "Ghi chú",
-  });
-  assert.deepEqual(validateKitchenUpdate({ note: null }), { note: null });
-  for (const body of [
-    {},
-    { note: "x", plannedPortions: 120 },
-    { note: "x", quantityUsed: 6 },
-    { status: "UNCONFIRMED" },
-    { note: "x", dishId: testStaff.id },
-  ])
-    assert.throws(() => validateKitchenUpdate(body), HttpError);
-});
 void test("manually selected portion groups require one normal group and explicit avoidance for separate meals", () => {
   const common = {
     name: "Thường",
@@ -415,15 +423,11 @@ void test("v1 routes enforce permissions and emit versioned error codes before a
     ["POST", "/menus/allergy-check"],
     ["GET", "/kitchen"],
     ["GET", "/kitchen/stats"],
-    ["PUT", `/kitchen/${testStaff.id}`],
     ["DELETE", `/kitchen/${testStaff.id}`],
     ["GET", `/menus/days/${testStaff.id}/meals/LUNCH/portion-groups`],
     ["PUT", `/menus/days/${testStaff.id}/meals/LUNCH/portion-groups`],
     ["GET", `/daily-meal-portions/${testStaff.id}/portion-groups`],
     ["PUT", `/daily-meal-portions/${testStaff.id}/portion-groups`],
-    ["GET", `/meal-allocations/${testStaff.id}`],
-    ["POST", "/meal-allocations"],
-    ["POST", `/meal-allocations/${testStaff.id}/distribute`],
     ["POST", `/kitchen/${testStaff.id}/food-samples`],
     ["GET", `/kitchen/${testStaff.id}/food-samples`],
     ["POST", `/food-samples/${testStaff.id}/dispose`],
@@ -609,7 +613,14 @@ void test("a final or empty page has no next page", async () => {
       testAdmin,
     );
     assert.equal(result.pagination.hasNext, false);
-    assert.deepEqual(result.items, rows);
+    assert.deepEqual(
+      result.items,
+      rows.map((row) => ({
+        ...row,
+        createdAt: row.createdAt.toISOString(),
+        updatedAt: row.updatedAt.toISOString(),
+      })),
+    );
   }
 });
 
@@ -666,6 +677,261 @@ void test("registration validation reports multiple fields without reflecting in
   );
 });
 
+void test("registration search trims codes and names and rejects invalid types or overlong text", () => {
+  for (const [input, expected] of [
+    ["  fp-reg-00001  ", "fp-reg-00001"],
+    ["FP-REG-99999", "FP-REG-99999"],
+    ["FP-REG-100000", "FP-REG-100000"],
+    ["FP-REG-9007199254740993", "FP-REG-9007199254740993"],
+    ["FP-REG-9223372036854775807", "FP-REG-9223372036854775807"],
+    ["  Nguyễn Văn An  ", "Nguyễn Văn An"],
+    ["nguyễn", "nguyễn"],
+    ["FP-REG-00000", "FP-REG-00000"],
+    ["FP-REG-9223372036854775808", "FP-REG-9223372036854775808"],
+    ["x".repeat(255), "x".repeat(255)],
+    ["  " + "x".repeat(255) + "  ", "x".repeat(255)],
+    ["", undefined],
+    ["   ", undefined],
+  ]) {
+    const query = validateRegistrationListQuery({ search: input });
+    assert.equal(query.search, expected);
+    assert.equal(query.page, 1);
+    assert.equal(query.limit, 20);
+  }
+  for (const search of [
+    null,
+    1,
+    ["FP-REG-00001"],
+    { equals: "FP-REG-00001" },
+    "x".repeat(256),
+  ]) {
+    assert.throws(
+      () => validateRegistrationListQuery({ search }),
+      (error: unknown) => {
+        assert(error instanceof RegistrationValidationError);
+        assert.equal(error.statusCode, 400);
+        assert(error.fields.every((issue) => issue.field === "search"));
+        assert(!JSON.stringify(error.fields).includes("private-input"));
+        return true;
+      },
+    );
+  }
+  assert.throws(
+    () =>
+      validateRegistrationListQuery({
+        page: "private-input",
+        limit: "101",
+        search: ["private-input"],
+      }),
+    (error: unknown) => {
+      assert(error instanceof RegistrationValidationError);
+      assert.deepEqual(
+        error.fields.map((issue) => issue.field),
+        ["page", "limit", "search"],
+      );
+      assert(!JSON.stringify(error.fields).includes("private-input"));
+      return true;
+    },
+  );
+});
+
+void test("registration search filters the stored number exactly before pagination without losing bigint precision", async () => {
+  const numbers = [1n, 100000n, 9007199254740992n, 9007199254740993n];
+  const rows = numbers.map((registrationNumber, index) => ({
+    id: `00000000-0000-4000-8000-00000000000${index + 1}`,
+    registrationNumber,
+    applicantUserId: testAdmin.id,
+    applicantUser: {
+      id: testAdmin.id,
+      username: "applicant",
+      fullName: "Người nộp",
+      email: "applicant@example.test",
+      phone: null,
+      status: "UNVERIFIED" as const,
+      emailVerifiedAt: now,
+    },
+    requestType: "SCHOOL" as const,
+    status: "PENDING" as const,
+    submittedAt: now,
+    reviewedAt: null,
+    updatedAt: now,
+  }));
+  let expectedNumber: bigint | undefined;
+  let expectedSearch: string | undefined;
+  let calls = 0;
+  const service = createRegistrationService(
+    createRegistrationRepository((args) => {
+      calls++;
+      assert.deepEqual(
+        args.where,
+        expectedNumber === undefined
+          ? {}
+          : {
+              AND: [
+                {},
+                {
+                  OR: [
+                    { registrationNumber: expectedNumber },
+                    {
+                      applicantUser: {
+                        fullName: {
+                          contains: expectedSearch,
+                          mode: "insensitive",
+                        },
+                      },
+                    },
+                  ],
+                },
+              ],
+            },
+      );
+      assert.deepEqual(args.orderBy, [{ id: "asc" }]);
+      const filtered = rows.filter(
+        (row) =>
+          expectedNumber === undefined ||
+          row.registrationNumber === expectedNumber,
+      );
+      const skip = args.skip ?? 0;
+      return Promise.resolve(filtered.slice(skip, skip + (args.take ?? 0)));
+    }),
+  );
+  const principal = { ...testAdmin, permissions: ["registration.view"] };
+  for (const number of [1n, 100000n, 9007199254740993n, 2n]) {
+    expectedNumber = number;
+    const search = `FP-REG-${number.toString().padStart(5, "0")}`;
+    expectedSearch = search;
+    const result = await service.getAll(
+      validateRegistrationListQuery({ search, limit: "1" }),
+      principal,
+    );
+    assert.deepEqual(
+      result.items.map((row) => row.registrationID),
+      number === 2n ? [] : [search],
+    );
+    assert.deepEqual(result.pagination, {
+      page: 1,
+      limit: 1,
+      hasNext: false,
+    });
+    assert(!JSON.stringify(result).includes("registrationNumber"));
+  }
+  expectedNumber = 1n;
+  expectedSearch = "FP-REG-00001";
+  const laterPage = await service.getAll(
+    validateRegistrationListQuery({
+      search: "FP-REG-00001",
+      page: "2",
+      limit: "1",
+    }),
+    principal,
+  );
+  assert.deepEqual(laterPage, {
+    items: [],
+    pagination: { page: 2, limit: 1, hasNext: false },
+  });
+  expectedNumber = undefined;
+  const unfiltered = await service.getAll(
+    validateRegistrationListQuery({ search: "  ", limit: "1" }),
+    principal,
+  );
+  assert.deepEqual(unfiltered.pagination, {
+    page: 1,
+    limit: 1,
+    hasNext: true,
+  });
+  assert.equal(calls, 6);
+});
+
+void test("registration name search uses a literal case-insensitive substring before pagination", async () => {
+  const names = ["Nguyễn Văn An", "NGUYỄN Thị Bình"];
+  const rows = names.map((fullName, index) => ({
+    id: `00000000-0000-4000-8000-00000000000${index + 1}`,
+    registrationNumber: BigInt(index + 1),
+    applicantUserId: testAdmin.id,
+    applicantUser: {
+      id: testAdmin.id,
+      username: "applicant",
+      fullName,
+      email: "applicant@example.test",
+      phone: null,
+      status: "UNVERIFIED" as const,
+      emailVerifiedAt: now,
+    },
+    requestType: "SCHOOL" as const,
+    status: "PENDING" as const,
+    submittedAt: now,
+    reviewedAt: null,
+    updatedAt: now,
+  }));
+  let expectedText = "nguyễn";
+  let returnedRows = rows;
+  const service = createRegistrationService(
+    createRegistrationRepository((args) => {
+      assert.deepEqual(args.where, {
+        AND: [
+          {},
+          {
+            applicantUser: {
+              fullName: { contains: expectedText, mode: "insensitive" },
+            },
+          },
+        ],
+      });
+      assert.deepEqual(args.orderBy, [{ id: "asc" }]);
+      const skip = args.skip ?? 0;
+      return Promise.resolve(returnedRows.slice(skip, skip + (args.take ?? 0)));
+    }),
+  );
+  const principal = { ...testAdmin, permissions: ["registration.view"] };
+  for (const page of [1, 2]) {
+    const result = await service.getAll(
+      validateRegistrationListQuery({
+        search: "  nguyễn  ",
+        page: String(page),
+        limit: "1",
+      }),
+      principal,
+    );
+    assert.deepEqual(
+      result.items.map((row) => row.applicantUser.fullName),
+      [names[page - 1]],
+    );
+    assert.deepEqual(result.pagination, {
+      page,
+      limit: 1,
+      hasNext: page === 1,
+    });
+    assert(!JSON.stringify(result).includes("registrationNumber"));
+  }
+  expectedText = "Nguyễn Văn An";
+  returnedRows = [rows[0]];
+  const fullNameResult = await service.getAll(
+    validateRegistrationListQuery({ search: expectedText }),
+    principal,
+  );
+  assert.equal(fullNameResult.items[0].registrationID, "FP-REG-00001");
+  returnedRows = [];
+  for (const [input, escaped] of [
+    ["Không có tên này", "Không có tên này"],
+    ["FP-REG-1", "FP-REG-1"],
+    ["FP-REG-9223372036854775808", "FP-REG-9223372036854775808"],
+    [testAdmin.id, testAdmin.id],
+    ["%", "\\%"],
+    ["_", "\\_"],
+    ["An\\_%", "An\\\\\\_\\%"],
+  ]) {
+    expectedText = escaped;
+    const result = await service.getAll(
+      validateRegistrationListQuery({ search: input }),
+      principal,
+    );
+    assert.deepEqual(result, {
+      items: [],
+      pagination: { page: 1, limit: 20, hasNext: false },
+    });
+  }
+});
+
 void test("registration list returns safe applicant contacts with stable pagination and nullable metadata", async () => {
   let calls = 0;
   const applicantUser = {
@@ -679,6 +945,7 @@ void test("registration list returns safe applicant contacts with stable paginat
   };
   const row = {
     id: "request-1",
+    registrationNumber: 1n,
     applicantUserId: applicantUser.id,
     applicantUser,
     requestType: "SCHOOL" as const,
@@ -690,6 +957,7 @@ void test("registration list returns safe applicant contacts with stable paginat
   const nullable = {
     ...row,
     id: "request-2",
+    registrationNumber: 2n,
     applicantUser: { ...applicantUser, phone: null, emailVerifiedAt: null },
   };
   const repository = createRegistrationRepository((args) => {
@@ -733,17 +1001,25 @@ void test("registration list returns safe applicant contacts with stable paginat
     result.items.map((item) => item.id),
     ["request-1", "request-2"],
   );
+  assert.equal(result.items[0].registrationID, "FP-REG-00001");
+  assert(!JSON.stringify(result).includes("registrationNumber"));
+  const { registrationNumber: _number, ...publicRow } = row;
+  const { registrationNumber: _nullableNumber, ...publicNullable } = nullable;
+  void _number;
+  void _nullableNumber;
   const json: unknown = JSON.parse(JSON.stringify(result));
   assert.deepEqual(json, {
     items: [
       {
-        ...row,
+        ...publicRow,
+        registrationID: "FP-REG-00001",
         submittedAt: now.toISOString(),
         updatedAt: now.toISOString(),
         applicantUser: { ...applicantUser, emailVerifiedAt: now.toISOString() },
       },
       {
-        ...nullable,
+        ...publicNullable,
+        registrationID: "FP-REG-00002",
         submittedAt: now.toISOString(),
         updatedAt: now.toISOString(),
       },
@@ -768,16 +1044,19 @@ void test("registration contact reads still require an assigned permission and S
     testAdmin,
     { ...testStaff, permissions: ["registration.view"] },
   ]) {
-    assert.throws(
-      () => service.getAll({ page: 1, limit: 5 }, principal),
-      (error: unknown) =>
-        error instanceof HttpError && error.statusCode === 403,
-    );
-    assert.throws(
-      () => repository.listForReview({ page: 1, limit: 5 }, principal),
-      (error: unknown) =>
-        error instanceof HttpError && error.statusCode === 403,
-    );
+    for (const search of [undefined, "FP-REG-00001", "Nguyễn", "%"]) {
+      const query = { page: 1, limit: 5, search };
+      assert.throws(
+        () => service.getAll(query, principal),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 403,
+      );
+      assert.throws(
+        () => repository.listForReview(query, principal),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 403,
+      );
+    }
   }
   assert.equal(reads, 0);
 });
@@ -786,9 +1065,11 @@ void test("registration HTTP preserves envelopes and reports field errors before
   context.mock.method(console, "error", () => undefined);
   let reads = 0;
   let databaseFailure = false;
+  let expectedWhere = {};
   const service = createRegistrationService(
-    createRegistrationRepository(() => {
+    createRegistrationRepository((args) => {
       reads++;
+      assert.deepEqual(args.where, expectedWhere);
       if (databaseFailure)
         throw new Error("postgresql://private:password@localhost/private");
       return Promise.resolve([]);
@@ -821,12 +1102,36 @@ void test("registration HTTP preserves envelopes and reports field errors before
       ],
     },
   });
-  for (const query of ["?page=1&page=2", "?schoolId=other-school"]) {
+  for (const query of [
+    "?page=1&page=2",
+    "?schoolId=other-school",
+    "?search=FP-REG-00001&search=FP-REG-00002",
+    "?search[value]=FP-REG-00001",
+    "?registrationId=FP-REG-00001",
+  ]) {
     assert.equal(
       (await http.request(`/api/registration-requests${query}`)).status,
       400,
     );
   }
+  const invalidSearch = await http.request(
+    `/api/registration-requests?search=${"x".repeat(256)}`,
+  );
+  assert.equal(invalidSearch.status, 400);
+  assert.deepEqual(invalidSearch.body, {
+    success: false,
+    statusCode: 400,
+    message: "Tham số danh sách đăng ký không hợp lệ",
+    error: {
+      fields: [
+        { field: "search", message: "Từ khóa tìm kiếm tối đa 255 ký tự" },
+      ],
+    },
+  });
+  const detailByCode = await http.request(
+    "/api/registration-requests/FP-REG-00001",
+  );
+  assert.equal(detailByCode.status, 400);
   assert.equal(reads, 0);
 
   const success = await http.request("/api/registration-requests");
@@ -842,8 +1147,67 @@ void test("registration HTTP preserves envelopes and reports field errors before
   });
   assert.equal(reads, 1);
 
+  expectedWhere = {
+    AND: [
+      {},
+      {
+        OR: [
+          { registrationNumber: 1n },
+          {
+            applicantUser: {
+              fullName: { contains: "fp-reg-00001", mode: "insensitive" },
+            },
+          },
+        ],
+      },
+    ],
+  };
+  const searched = await http.request(
+    "/api/registration-requests?search=%20fp-reg-00001%20",
+  );
+  assert.equal(searched.status, 200);
+  assert.deepEqual(searched.body, success.body);
+  assert.equal(reads, 2);
+
+  expectedWhere = {
+    AND: [
+      {},
+      {
+        applicantUser: {
+          fullName: { contains: "nguyễn", mode: "insensitive" },
+        },
+      },
+    ],
+  };
+  const nameSearch = await http.request(
+    "/api/registration-requests?search=%20nguy%E1%BB%85n%20",
+  );
+  assert.equal(nameSearch.status, 200);
+  assert.deepEqual(nameSearch.body, success.body);
+  assert.equal(reads, 3);
+
+  expectedWhere = {};
+  const blankSearch = await http.request(
+    "/api/registration-requests?search=%20%20",
+  );
+  assert.equal(blankSearch.status, 200);
+  assert.deepEqual(blankSearch.body, success.body);
+  assert.equal(reads, 4);
+
   databaseFailure = true;
-  const failure = await http.request("/api/registration-requests");
+  expectedWhere = {
+    AND: [
+      {},
+      {
+        applicantUser: {
+          fullName: { contains: "Nguyễn", mode: "insensitive" },
+        },
+      },
+    ],
+  };
+  const failure = await http.request(
+    "/api/registration-requests?search=Nguy%E1%BB%85n",
+  );
   assert.equal(failure.status, 503);
   assert.deepEqual(failure.body, {
     success: false,
@@ -1008,6 +1372,7 @@ void test("every mounted business list rejects forged role claims when the datab
   }
   assert.equal((await http.request("/api/health")).status, 200);
   assert.equal((await http.request("/api/unregistered")).status, 404);
+  assert.equal((await http.request("/api/v1/meal-allocations")).status, 404);
 });
 
 void test("authorized HTTP list validates input before reading and uses the response envelope", async (context) => {

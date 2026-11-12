@@ -3,6 +3,7 @@ import type { AuthPrincipal } from "../../types/auth";
 import { getPrisma } from "../../utils/database";
 import { listWindow, type ListQuery } from "../../utils/list-query";
 import { listScopes } from "../../utils/resource-access";
+import { parseRegistrationID } from "../../utils/registration-id";
 import { registrationListSelect } from "./registration.select";
 
 export type RegistrationListRow = Prisma.RegistrationRequestGetPayload<{
@@ -17,9 +18,13 @@ type ListArguments = Pick<
 };
 type ListReader = (args: ListArguments) => Promise<RegistrationListRow[]>;
 
+interface RegistrationListFilters extends ListQuery {
+  search?: string;
+}
+
 export interface RegistrationRepository {
   listForReview(
-    query: ListQuery,
+    query: RegistrationListFilters,
     principal: AuthPrincipal,
   ): Promise<RegistrationListRow[]>;
 }
@@ -34,7 +39,23 @@ export function createRegistrationRepository(
 ): RegistrationRepository {
   return {
     listForReview(query, principal) {
-      const where = listScopes.registration(principal);
+      let where = listScopes.registration(principal);
+      if (query.search) {
+        const nameFilter: Prisma.RegistrationRequestWhereInput = {
+          applicantUser: {
+            fullName: {
+              contains: query.search.replace(/[\\%_]/g, "\\$&"),
+              mode: "insensitive",
+            },
+          },
+        };
+        const number = parseRegistrationID(query.search);
+        const searchFilter =
+          number === undefined
+            ? nameFilter
+            : { OR: [{ registrationNumber: number }, nameFilter] };
+        where = { AND: [where, searchFilter] };
+      }
       return read({
         ...listWindow(query),
         where,

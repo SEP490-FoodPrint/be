@@ -1,3 +1,4 @@
+import { ROLES, ORG_TYPES } from "../constants/roles";
 import type { Prisma } from "../generated/prisma/client";
 import type { AuthPrincipal } from "../types/auth";
 import { assertPermission, assertOrganizationManager } from "./authorization";
@@ -145,7 +146,17 @@ export const listScopes = {
   "meal-attendance": (p: AuthPrincipal): Prisma.DailyMealPortionWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["meal-attendance"]);
     if (p.orgType === "SYSTEM") return {};
-    if (p.orgType === "SCHOOL") return { Class: { schoolId: school(p) } };
+    if (p.orgType === "SCHOOL")
+      return {
+        Class: {
+          schoolId: school(p),
+          ...(p.role === "HOMEROOM_TEACHER" && {
+            homeroomAssignments: {
+              some: { teacherUserId: p.id, endedAt: null },
+            },
+          }),
+        },
+      };
     throw new HttpError(
       403,
       "Loại tổ chức không có phạm vi truy cập tài nguyên này",
@@ -159,6 +170,7 @@ export const listScopes = {
         MealAllocation: {
           DailyMealPortion: { Class: { schoolId: school(p) } },
         },
+        ...(p.role === "HOMEROOM_TEACHER" && { submittedByUserId: p.id }),
       };
     throw new HttpError(
       403,
@@ -465,3 +477,24 @@ export const listScopes = {
   },
 };
 export type Resource = keyof typeof listScopes;
+
+export interface IngredientManagementScope {
+  readonly supplierId: string;
+}
+export function ingredientManagementScope(
+  principal: AuthPrincipal,
+): IngredientManagementScope {
+  if (
+    principal.role !== ROLES.INGREDIENT_SUPPLIER_ADMIN ||
+    principal.orgType !== ORG_TYPES.SUPPLIER ||
+    !principal.supplierId ||
+    principal.schoolId ||
+    principal.communeFoodSafetyUnitId
+  )
+    throw new HttpError(
+      403,
+      "Chỉ quản trị nhà cung cấp được quản lý nguyên liệu",
+    );
+  assertPermission(principal, "ingredient.manage");
+  return { supplierId: principal.supplierId };
+}

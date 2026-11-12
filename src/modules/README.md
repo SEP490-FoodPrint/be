@@ -1,5 +1,11 @@
 # Module nghiệp vụ FoodPrint
 
+## Query cho nhân viên dinh dưỡng và bếp
+
+Các API v1 của menu/kitchen/retained-sample lọc và phân trang tại DB với page mặc định1, limit mặc định20/tối đa100. Menu nhận search tiêu đề/tên món cùng date/weekStartDate/status. Kitchen nhận ngày/khoảng ngày, trạng thái, ca, phương thức, món/ngày thực đơn và search mã mẻ/tên món/số suất; KPI dùng cùng điều kiện. Lưu mẫu nhận status và search tủ/mẻ/món, trả totalItems/hasNext và expiresAt ISO. Mọi điều kiện kết hợp school scope từ principal, không lấy scope từ query.
+
+Ba module không cung cấp endpoint xuất báo cáo/in. PUT chỉnh sửa mẻ và code xử lý tương ứng đã bỏ; delete/confirm/complete/lưu mẫu vẫn giữ. Xem [query contract](../../specs/010-api-architecture-completion/contracts/api-audit.md#query-đã-kiểm-chứng--09112026).
+
 ## Cấu trúc và phạm vi
 
 31 module bao phủ 41 models trong Prisma: 31 models chính có API GET danh sách; 10 bảng chi tiết/liên kết thuộc module cha, chưa mở endpoint riêng. Tên và field lấy từ `prisma/schema.prisma`, nguồn thiết kế được ghi tại [SCHEMA_BASELINE.md](../../database/SCHEMA_BASELINE.md).
@@ -14,6 +20,15 @@ Mỗi thư mục có bốn file:
 Các router được đăng ký tại [routes/index.ts](../routes/index.ts). Client được lấy khi service thực sự đọc dữ liệu, nên import app để test HTTP không mở kết nối DB.
 
 Module auth còn hỗ trợ đổi mật khẩu bằng mật khẩu cũ và khôi phục qua mã email 6 chữ số; xem [PASSWORD_RECOVERY.md](../../docs/PASSWORD_RECOVERY.md) cho API và luồng frontend.
+
+## Duyệt thực đơn tuần
+
+Ban Giám hiệu quyết định nguyên `WeeklyMenu`; `MenuDay` chỉ là dữ liệu chi tiết và được đồng bộ trạng thái trong cùng transaction.
+
+- `GET /api/v1/menus/:menuId/approval-detail`: hồ sơ duyệt thuộc trường hiện tại, yêu cầu vai trò Ban Giám hiệu và quyền `menu.view`.
+- `POST /api/v1/menus/:menuId/reviews`: body `{ "decision": "APPROVED" | "REVISION_REQUESTED", "feedback": "..." }`. Phê duyệt cần `menu.approve`; yêu cầu chỉnh sửa cần `menu.review` và bắt buộc có `feedback`.
+
+Chỉ tuần `PENDING_APPROVAL` được quyết định. Quyết định cập nhật mọi ngày, cập nhật tuần và ghi một `MenuReviewRecord` có `menuDayId = null` trong cùng transaction. API từ chối `menuDayId` trong body; bản ghi cấp ngày cũ vẫn được giữ làm lịch sử. Số suất hiển thị lấy từ nhu cầu lớp đã `FINALIZED`, không lấy từ kích thước khẩu phần của món.
 
 ## Danh sách API
 
@@ -53,7 +68,15 @@ Tất cả đường dẫn bên dưới dùng phương thức **GET**.
 | `traceability`                | `/api/traceability-anchors`          | `TraceabilityAnchor`         | —                              |
 | `menu-review`                 | `/api/menu-reviews`                  | `MenuReviewRecord`           | —                              |
 
-`auth` cung cấp signup, login, refresh, logout bằng cookie HttpOnly/phiên Redis, thông tin tài khoản/quyền hiện tại, cập nhật hồ sơ cá nhân bằng PATCH /auth/me (fullName/phone) và danh sách Role; xem [AUTH_SESSIONS.md](../../docs/AUTH_SESSIONS.md). Signup tạo tài khoản UNVERIFIED chưa có yêu cầu duyệt; người dùng xác minh email bằng mã Resend rồi đăng nhập để nộp/xem hồ sơ của mình, chưa được gọi API nghiệp vụ. `onboarding` trong auth xử lý nộp hồ sơ/tài liệu; registration gắn API chi tiết/duyệt/từ chối vào cùng service để giữ một luồng transaction; xem [ONBOARDING.md](../../docs/ONBOARDING.md). Hợp đồng API quản trị role/permission ở [docs/AUTHORIZATION.md](../../docs/AUTHORIZATION.md). `organization` hiện quản lý khung cho School; Supplier và CommuneFoodSafetyUnit có module riêng. API traceability chỉ đọc bản ghi, không gửi transaction blockchain.
+`auth` cung cấp signup, login, refresh, logout bằng cookie HttpOnly/phiên Redis, thông tin tài khoản/quyền hiện tại, cập nhật hồ sơ cá nhân bằng PATCH /auth/me (fullName/phone) và danh sách Role; xem [AUTH_SESSIONS.md](../../docs/AUTH_SESSIONS.md). Signup tạo tài khoản UNVERIFIED chưa có yêu cầu duyệt; người dùng xác minh email bằng mã Resend rồi đăng nhập để nộp/xem hồ sơ của mình, chưa được gọi API nghiệp vụ. `onboarding` trong auth xử lý nộp hồ sơ/tài liệu; registration gắn API chi tiết/duyệt/từ chối vào cùng service để giữ một luồng transaction; xem [ONBOARDING.md](../../docs/ONBOARDING.md). Hợp đồng API quản trị role/permission ở [docs/AUTHORIZATION.md](../../docs/AUTHORIZATION.md). `organization` hiện quản lý khung cho School và chế độ nấu của trường trong phiên (`GET|PATCH /api/schools/me/cooking-mode`, quyền `school_cooking_mode.manage`; mẻ đã lập giữ chế độ cũ); Supplier và CommuneFoodSafetyUnit có module riêng. API traceability chỉ đọc bản ghi, không gửi transaction blockchain.
+
+## Mã hồ sơ đăng ký
+
+Các phản hồi chứa hồ sơ có thêm `registrationID` chỉ đọc dạng `FP-REG-00001`, tăng phần số chung cho SCHOOL/SUPPLIER và mở rộng sau 99999. UUID `id` tiếp tục dùng cho URL/FK; danh sách vẫn sắp theo UUID, không dùng mã làm số dòng hoặc tổng số hồ sơ.
+
+Mã xuất hiện ở danh sách, chi tiết, own/submit/approve/reject và summary `registrationRequest` trong login/refresh/GET me/PATCH me. Khi chưa có hồ sơ, summary/own vẫn null. Chỉnh sửa, gửi lại và xét duyệt giữ nguyên mã. Request tự gán mã hoặc số nội bộ bị 400 qua validation strict; không thêm endpoint tìm kiếm theo mã hay mở rộng quyền.
+
+Trong những luồng auth/registration được sửa, controller validate input, service consume Request/Response DTO và map allowlist, repository chứa truy vấn và dùng cùng transaction client. Formatter không phải khóa tra cứu hoặc cơ chế phân quyền. Xem [contract registrationID](../../specs/001-add-registration-id/contracts/registration-id.md) và [migration](../../database/SCHEMA_BASELINE.md#mã-hồ-sơ-đăng-ký) trước khi dùng backend mới.
 
 ## Quyền truy cập và phân trang
 
@@ -93,3 +116,23 @@ npm run validate
 ```
 
 Test module dùng HTTP local và reader được inject để kiểm tra quyền, pagination, projection an toàn, JSON Date/Decimal/BigInt và lỗi; không thay thế kiểm thử tích hợp với PostgreSQL thật. `validate` hiện gồm lint, format:check, typecheck và build, không tự chạy các test trên.
+
+### Danh bạ quản trị đơn vị (006)
+
+`organization` sở hữu school list/summary/detail; `supplier` sở hữu supplier list/summary/detail. Các router con dưới `/schools/:schoolId` thuộc `class` (classes), `school-supplier` (suppliers), `user` (accounts), được nối tại routes/index.ts và giữ quyền riêng. `supplier-certification` sở hữu `/suppliers/:supplierId/certifications` và endpoint `/supplier-certifications/:id/documents/:documentId`.
+
+Hai list đơn vị nhận search/status và trả contact/total; nhóm con phân trang riêng. Services dùng scope từ resource-access và helper read-transaction để count/items cùng snapshot; repositories nhận cùng transaction và áp scope vào WHERE. Metadata minh chứng được batch theo hồ sơ, không thêm schema. Xem [hợp đồng API](../../specs/006-school-supplier-admin/contracts/admin-directory.md).
+
+### Quản lý lớp học (016)
+
+`class` sở hữu thêm các thao tác ghi của Ban Giám hiệu: `POST /api/classes`, `POST /api/classes/copy`, `PATCH /api/classes/:classId` và `PATCH /api/classes/:classId/status`, đều yêu cầu `class.manage`. Không có xóa cứng; niên khóa phải được cấu hình qua `school-academic-year`. Xem [hợp đồng API](../../specs/016-school-class-management/contracts.md).
+
+`POST /api/classes/import` (017) nhập tối đa 300 lớp từ dữ liệu Excel đã được frontend đọc: `dryRun` để xem trước trạng thái từng dòng (`CREATE` / `SKIP` / `ERROR`), lưu theo kiểu tất cả hoặc không. Yêu cầu `class.manage`, thêm `class_assignment.manage` khi có cột GVCN. Xem [hợp đồng API](../../specs/017-class-excel-import/contracts.md).
+
+## Quản lý nguyên liệu nhà cung cấp
+
+Module ingredient đã tách đầy đủ routes/controller/validation/service/repository và hai file Request/Response DTO theo AGENTS.md; phần mô tả bốn file ở trên áp dụng cho các module danh sách legacy chưa chuyển đổi. Controller validate qua Zod; service xác lập scope, transaction và map DTO; repository thực hiện mọi truy vấn/khóa với shared client.
+
+Ngoài GET đọc nghiệp vụ `/api/ingredients`, module có nhóm `/api/ingredients/management` dành riêng cho Supplier Admin với permission ingredient.manage: GET danh sách, GET categories, GET :ingredientId, POST tạo, PATCH :ingredientId và POST :ingredientId/hide. Chi tiết tại [AUTHORIZATION.md](../../docs/AUTHORIZATION.md#quản-trị-nguyên-liệu-nhà-cung-cấp).
+
+IngredientCategory là danh mục dùng chung chỉ đọc trong module ingredient, không có chức năng quản trị danh mục. categoryId thay cột category; coverImage một ảnh và imageDescription nhiều ảnh là các tham chiếu có sẵn. Ẩn chuyển INACTIVE, giữ dữ liệu/lịch sử và không cung cấp bật lại hoặc xóa.

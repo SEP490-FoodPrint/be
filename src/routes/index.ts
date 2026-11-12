@@ -1,3 +1,7 @@
+import { createClassSchoolRouter } from "../modules/class/class.routes";
+import { createSchoolSupplierSchoolRouter } from "../modules/school-supplier/school-supplier.routes";
+import { createUserSchoolRouter } from "../modules/user/user.routes";
+import { createSupplierCertificationsChildRouter } from "../modules/supplier-certification/supplier-certification.routes";
 import { createPermissionRouter } from "../modules/permission/permission.routes";
 import type { RequestHandler } from "express";
 import { authenticate } from "../middlewares/auth.middleware";
@@ -36,6 +40,7 @@ import { createTraceabilityRouter } from "../modules/traceability/traceability.r
 import { createMenuReviewRouter } from "../modules/menu-review/menu-review.routes";
 import { createSchoolOverviewRouter } from "../modules/school-overview/school-overview.routes";
 import { createSupplierOnboardingRouter } from "../modules/supplier-onboarding/supplier-onboarding.routes";
+import { createSchoolAcademicYearRouter } from "../modules/school-academic-year/school-academic-year.routes";
 
 export function createApiRouter(
   authHandler: RequestHandler = authenticate,
@@ -59,7 +64,27 @@ export function createApiRouter(
   router.use("/school-overview", createSchoolOverviewRouter(authHandler));
   router.use("/auth", createAuthRouter(undefined, authHandler, authServices));
   router.use("/users", createUserRouter(undefined, authHandler));
+  router.use(
+    "/schools/:schoolId/classes",
+    createClassSchoolRouter(authHandler),
+  );
+  router.use(
+    "/schools/:schoolId/suppliers",
+    createSchoolSupplierSchoolRouter(authHandler),
+  );
+  router.use(
+    "/schools/:schoolId/accounts",
+    createUserSchoolRouter(authHandler),
+  );
+  router.use(
+    "/suppliers/:supplierId/certifications",
+    createSupplierCertificationsChildRouter(undefined, authHandler),
+  );
   router.use("/schools", createOrganizationRouter(undefined, authHandler));
+  router.use(
+    "/schools/me/academic-years",
+    createSchoolAcademicYearRouter(undefined, authHandler),
+  );
   router.use("/ingredients", createIngredientRouter(undefined, authHandler));
   router.use("/menus", createMenuRouter(undefined, authHandler));
   router.use(
@@ -143,15 +168,15 @@ export function createApiRouter(
   router.use("/v1/menus", createMenuRouter(undefined, authHandler, true));
   router.use("/v1/kitchen", createKitchenRouter(undefined, authHandler, true));
   router.use(
-    "/v1/meal-allocations",
-    createMealAllocationRouter(undefined, authHandler),
-  );
-  router.use(
     "/v1/daily-meal-portions",
     createMealAttendanceRouter(undefined, authHandler, true),
   );
   router.use(
     "/v1/food-samples",
+    createRetainedSampleRouter(undefined, authHandler),
+  );
+  router.use(
+    "/v1/retained-samples",
     createRetainedSampleRouter(undefined, authHandler),
   );
 

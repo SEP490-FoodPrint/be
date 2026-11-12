@@ -108,7 +108,7 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
     [managerB, "managerB", schoolB, "SCHOOL_MANAGEMENT_BOARD"],
     [warehouseA, "warehouseA", schoolA, "INGREDIENT_MANAGEMENT_DEPARTMENT"],
     [randomUUID(), "warehouseB", schoolB, "INGREDIENT_MANAGEMENT_DEPARTMENT"],
-    [healthA, "healthA", schoolA, "SCHOOL_HEALTH_OFFICER"],
+    [healthA, "healthA", schoolA, "SCHOOL_NUTRITION_OFFICER"],
   ]) {
     const role = await db.role.findUniqueOrThrow({ where: { code: roleCode } });
     await db.user.create({
@@ -166,13 +166,19 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
       { supplierId: supplierB, locationId: province },
     ],
   });
+  const grainsCategory = await db.ingredientCategory.create({
+    data: { categoryName: "Grains" },
+  });
+  const vegetablesCategory = await db.ingredientCategory.create({
+    data: { categoryName: "Vegetables" },
+  });
   await db.ingredient.createMany({
     data: [
       {
         id: ingredientA,
         supplierId: supplierA,
         name: "Rice",
-        category: "Grains",
+        categoryId: grainsCategory.id,
         defaultUnit: "kg",
       },
       {
@@ -185,7 +191,7 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
         id: ingredientB,
         supplierId: supplierB,
         name: "Vegetable",
-        category: "Vegetables",
+        categoryId: vegetablesCategory.id,
         defaultUnit: "kg",
       },
     ],
@@ -799,6 +805,138 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
           where: { contractId: activeId },
         }),
         2,
+      );
+    },
+  );
+  await context.test(
+    "hidden supplier ingredients leave new choices but retain menu, contract and order evidence",
+    async () => {
+      const role = await db.role.findUniqueOrThrow({
+        where: { code: "INGREDIENT_SUPPLIER_ADMIN" },
+      });
+      await db.user.create({
+        data: {
+          username: "ingredient-admin",
+          email: "ingredient-admin@test.local",
+          fullName: "Ingredient admin",
+          roleId: role.id,
+          roleCode: role.code,
+          supplierId: supplierA,
+          passwordHash,
+          status: "ACTIVE",
+        },
+      });
+      const admin = await login("ingredient-admin");
+      const menu = await db.weeklyMenu.create({
+        data: {
+          schoolId: schoolA,
+          createdByUserId: healthA,
+          weekStartDate: new Date("2026-10-26"),
+          title: "Hidden history",
+        },
+      });
+      const day = await db.menuDay.create({
+        data: { weeklyMenuId: menu.id, menuDate: new Date("2026-10-26") },
+      });
+      const dish = await db.dish.create({
+        data: { schoolId: schoolA, name: "Hidden history dish" },
+      });
+      await db.menuDayDish.create({
+        data: { menuDayId: day.id, dishId: dish.id, mealType: "LUNCH" },
+      });
+      await db.menuDayDishIngredient.create({
+        data: {
+          menuDayId: day.id,
+          dishId: dish.id,
+          mealType: "LUNCH",
+          ingredientId: ingredientA,
+          quantityPerPortion: 1,
+          unit: "kg",
+        },
+      });
+      const mainBefore = await call(
+        "/v1/menus/ingredient-options/main",
+        health,
+      );
+      assert.equal(mainBefore.status, 200);
+      assert(
+        (mainBefore.data.items as { id: string }[]).some(
+          (row) => row.id === ingredientA,
+        ),
+      );
+      assert.equal(
+        record(
+          (await call("/supplier-directory?category=Grains", tokenA)).data
+            .pagination,
+        ).total,
+        1,
+      );
+      const oldSnapshot = (
+        await db.supplyRequest.findUniqueOrThrow({ where: { id: sentId } })
+      ).contractSnapshot;
+      const hidden = await call(
+        "/ingredients/management/" + ingredientA + "/hide",
+        admin,
+        "POST",
+      );
+      assert.equal(hidden.status, 200);
+      for (const kind of ["main", "seasoning"]) {
+        const choices = await call(
+          "/v1/menus/ingredient-options/" + kind,
+          health,
+        );
+        assert.equal(choices.status, 200);
+        assert(
+          !(choices.data.items as { id: string; ingredientId?: string }[]).some(
+            (row) => row.id === ingredientA || row.ingredientId === ingredientA,
+          ),
+        );
+      }
+      const filtered = await call(
+        "/supplier-directory?category=Grains",
+        tokenA,
+      );
+      assert.equal(record(filtered.data.pagination).total, 0);
+      const filterNames = (await call("/supplier-directory-filters", tokenA))
+        .data.categories;
+      assert(Array.isArray(filterNames));
+      assert(!filterNames.includes("Grains"));
+      const history = await call("/v1/menus/" + menu.id, health);
+      assert.equal(history.status, 200);
+      const days = history.data.menuDays as {
+        menuDayDishes: {
+          ingredients: {
+            ingredient: { id: string; category: string; coverImage?: string };
+          }[];
+        }[];
+      }[];
+      const historicalIngredient =
+        days[0].menuDayDishes[0].ingredients[0].ingredient;
+      assert.equal(historicalIngredient.id, ingredientA);
+      assert.equal(historicalIngredient.category, "Grains");
+      assert.equal(historicalIngredient.coverImage, undefined);
+      const contract = await call("/supplier-contracts/" + activeId, tokenA);
+      assert.equal(contract.status, 200);
+      assert(
+        (
+          contract.data.items as {
+            ingredient: { id: string; category: string };
+          }[]
+        ).some(
+          (row) =>
+            row.ingredient.id === ingredientA &&
+            row.ingredient.category === "Grains",
+        ),
+      );
+      assert.deepEqual(
+        (await db.supplyRequest.findUniqueOrThrow({ where: { id: sentId } }))
+          .contractSnapshot,
+        oldSnapshot,
+      );
+      assert.equal(
+        (await db.ingredientEntry.findUniqueOrThrow({ where: { id: entryA } }))
+          .ingredientId,
+        ingredientA,
       );
     },
   );

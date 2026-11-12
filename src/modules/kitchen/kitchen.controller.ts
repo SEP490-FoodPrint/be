@@ -8,7 +8,6 @@ import {
   validateKitchenPlan,
   validateKitchenComplete,
   validateKitchenFilters,
-  validateKitchenUpdate,
 } from "./kitchen.validation";
 import { uuid } from "../../utils/auth-validation";
 
@@ -16,22 +15,21 @@ export function createKitchenController(
   service: KitchenService = kitchenService,
 ) {
   return {
-    update: asyncHandler(async (req, res) => {
+    getGroup: asyncHandler(async (req, res) => {
       sendSuccess(
         res,
-        await service.update(
-          uuid(req.params.id),
-          validateKitchenUpdate(req.body),
-          requirePrincipal(req),
-        ),
-        "Đã sửa ghi chú mẻ chưa xác nhận",
+        await service.getGroup(uuid(req.params.id), requirePrincipal(req)),
       );
+    }),
+    getContext: asyncHandler(async (req, res) => {
+      validateKitchenAction(req.query);
+      sendSuccess(res, await service.getContext(requirePrincipal(req)));
     }),
     remove: asyncHandler(async (req, res) => {
       sendSuccess(
         res,
         await service.remove(uuid(req.params.id), requirePrincipal(req)),
-        "Đã xóa mẻ chưa xác nhận và giải phóng giữ chỗ",
+        "Đã xóa mẻ chưa xác nhận nấu và giải phóng giữ chỗ",
       );
     }),
     list: asyncHandler(
@@ -79,7 +77,7 @@ export function createKitchenController(
       sendSuccess(
         res,
         await service.confirm(uuid(req.params.id), requirePrincipal(req)),
-        "Đã xác nhận kế hoạch",
+        "Đã xác nhận nấu thành công",
       );
     }),
     complete: asyncHandler(async (req, res) => {

@@ -3,7 +3,10 @@ import type { SessionUser } from "../../types/session-user";
 import { getPrisma } from "../../utils/database";
 import { authorizationTransaction } from "../../utils/authorization";
 import { loadSessionUser } from "../../utils/session-identity";
-import type { PersonalProfileUpdate } from "./profile.validation";
+import type { ProfileUpdateRequestDTO } from "./auth.request.dto";
+import type { SessionUserResponseDTO } from "./auth.response.dto";
+import { profileRepository } from "./profile.repository";
+import { toSessionUserResponseDTO } from "./session.service";
 
 export function createProfileService(
   connect: () => Promise<PrismaClient> = getPrisma,
@@ -11,22 +14,17 @@ export function createProfileService(
   return {
     async update(
       user: SessionUser,
-      input: PersonalProfileUpdate,
-    ): Promise<SessionUser> {
+      input: ProfileUpdateRequestDTO,
+    ): Promise<SessionUserResponseDTO> {
       const db = await connect();
       return authorizationTransaction(db, async (tx) => {
         const current = await loadSessionUser(user.id, tx);
-        const saved = await tx.user.update({
-          where: { id: current.id },
-          data: {
-            ...(input.fullName === undefined
-              ? {}
-              : { fullName: input.fullName }),
-            ...(input.phone === undefined ? {} : { phone: input.phone }),
-          },
-          select: { fullName: true, phone: true },
+        const saved = await profileRepository.update(tx, current.id, input);
+        return toSessionUserResponseDTO({
+          ...current,
+          fullName: saved.fullName,
+          phone: saved.phone,
         });
-        return { ...current, ...saved };
       });
     },
   };

@@ -128,6 +128,9 @@ jobs:
       - name: Verify baseline adoption, migrations and SQL constraints
         run: npm run test:migrations
 
+      - name: Verify registration numbering and concurrent submissions
+        run: npm run test:registration-id
+
       - name: Verify dynamic authorization and tenant isolation on PostgreSQL
         run: npm run test:authorization
 
@@ -182,7 +185,11 @@ jobs:
   deploy_database:
     name: Deploy Azure database
     needs: quality
-    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    if: >-
+      always() &&
+      needs.quality.result == 'success' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/dev'
     uses: ./.github/workflows/cd.yml
     secrets:
       AZURE_DATABASE_URL: ${{ secrets.AZURE_DATABASE_URL }}

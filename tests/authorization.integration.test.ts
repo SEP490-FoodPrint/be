@@ -1,3 +1,6 @@
+import { ingredientService } from "../src/modules/ingredient/ingredient.service";
+import { documentStorage } from "../src/utils/onboarding-documents";
+import { withReadTransaction } from "../src/utils/read-transaction";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -50,20 +53,22 @@ import {
 } from "../src/modules/auth/password.service";
 import { createRedisPasswordResetStore } from "../src/utils/password-reset-store";
 import { createMenuService } from "../src/modules/menu/menu.service";
+import { createOrganizationService } from "../src/modules/organization/organization.service";
 import {
   validateMenuWrite,
   validateMenuReview,
   validateMenuPortionGroups,
 } from "../src/modules/menu/menu.validation";
 import { createKitchenService } from "../src/modules/kitchen/kitchen.service";
-import {
-  validateKitchenFilters,
-  validateKitchenUpdate,
-} from "../src/modules/kitchen/kitchen.validation";
+import { validateKitchenFilters } from "../src/modules/kitchen/kitchen.validation";
 import { createRetainedSampleService } from "../src/modules/retained-sample/retained-sample.service";
 import { createMealAttendanceService } from "../src/modules/meal-attendance/meal-attendance.service";
 import { validateDailyPortionGroups } from "../src/modules/meal-attendance/meal-attendance.validation";
 import { createMealAllocationService } from "../src/modules/meal-allocation/meal-allocation.service";
+import {
+  allocationFixtureClock,
+  loadAllocationFixture,
+} from "./helpers/meal-allocation-fixture";
 import {
   validateFoodSample,
   validateSampleDisposal,
@@ -168,8 +173,12 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   const system = await user("SYSTEM_ADMIN");
   const adminA = await user("SCHOOL_ADMINISTRATION", { schoolId: schoolA.id });
   const adminB = await user("SCHOOL_ADMINISTRATION", { schoolId: schoolB.id });
-  const staffA = await user("SCHOOL_HEALTH_OFFICER", { schoolId: schoolA.id });
-  const staffB = await user("SCHOOL_HEALTH_OFFICER", { schoolId: schoolB.id });
+  const staffA = await user("SCHOOL_NUTRITION_OFFICER", {
+    schoolId: schoolA.id,
+  });
+  const staffB = await user("SCHOOL_NUTRITION_OFFICER", {
+    schoolId: schoolB.id,
+  });
   const supplierAdmin = await user("INGREDIENT_SUPPLIER_ADMIN", {
     supplierId: supplierA.id,
   });
@@ -355,6 +364,11 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
     },
     download: (document) => `https://documents.example.test/${document.id}`,
   };
+  context.mock.method(
+    documentStorage,
+    "download",
+    (document: OnboardingDocument) => testDocumentStorage.download(document),
+  );
   const http = await startHttp(
     createApp(
       createApiRateLimiter(store, { windowMs: 60_000, limit: 5000 }),
@@ -384,7 +398,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           afternoonMealTime: new Date("1970-01-01T15:00:00Z"),
         },
       });
-      const healthAccount = await user("SCHOOL_HEALTH_OFFICER", {
+      const healthAccount = await user("SCHOOL_NUTRITION_OFFICER", {
         schoolId: school.id,
       });
       const chefAccount = await user("SCHOOL_KITCHEN_STAFF", {
@@ -595,14 +609,27 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         batches.plan(key, chef),
       ]);
       assert.equal(plans.filter((p) => p.created).length, 1);
-      assert.equal(await db.cookingBatch.count({ where: key }), 1);
+      assert.equal(
+        await db.cookingBatch.count({
+          where: { menuDayId: key.menuDayId, mealType: key.mealType },
+        }),
+        1,
+      );
       const batch = plans[0].batches[0];
       assert.equal(batch.plannedPortions, 120);
-      const allocated = new Map(
-        batch.cookingBatchLots.map((l) => [l.ingredientLotId, l.quantityUsed]),
+      assert.equal(batch.dishes.length, 2);
+      assert.equal(
+        batch.dishes
+          .find((d) => d.dishId === mainDish.dishId)!
+          .cookingBatchLots.reduce((n, l) => n + Number(l.quantityUsed), 0),
+        9.6,
       );
-      assert.equal(allocated.get(rice.lots[0].id), "6");
-      assert.equal(allocated.get(rice.lots[1].id), "3.6");
+      assert.equal(
+        batch.dishes
+          .find((d) => d.dishId === sideDish.dishId)!
+          .cookingBatchLots.reduce((n, l) => n + Number(l.quantityUsed), 0),
+        1.2,
+      );
       await assert.rejects(
         () => batches.plan({ ...key, mealType: "AFTERNOON" }, chef),
         (e: unknown) => e instanceof HttpError && e.statusCode === 409,
@@ -631,15 +658,13 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         batches.complete(batch.id, chef),
       ]);
       assert(
-        completed.every(
-          (c) => c.inventoryDeducted && !c.mealSeasoningsConsumed,
-        ),
+        completed.every((c) => c.inventoryDeducted && c.mealSeasoningsConsumed),
       );
       assert.equal(
         await db.inventoryTransaction.count({
           where: { referenceType: "COOKING_BATCH", referenceId: batch.id },
         }),
-        2,
+        3,
       );
       assert.equal(
         (
@@ -666,6 +691,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         1,
       );
       const sampleInput = validateFoodSample({
+        dishId: mainDish.dishId,
         quantity: 150,
         unit: "g",
         storageLocation: "Fridge 1",
@@ -676,7 +702,10 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         (await samples.create(batch.id, sampleInput, chef)).created,
         false,
       );
-      assert.equal(+saved.expiresAt - +saved.sampledAt, 86400000);
+      assert.equal(
+        Date.parse(saved.expiresAt) - Date.parse(saved.sampledAt),
+        86400000,
+      );
       const disposal = validateSampleDisposal({
         disposedAt: new Date(Date.now() + 86400000).toISOString(),
         disposalNote: "Future date must not bypass retention",
@@ -696,9 +725,6 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       );
 
       const attendance = createMealAttendanceService(undefined, () =>
-        Promise.resolve(db),
-      );
-      const allocationService = createMealAllocationService(undefined, () =>
         Promise.resolve(db),
       );
       const teacherPrincipal = await loadPrincipal(teacher.id, db);
@@ -848,6 +874,13 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           },
         ],
       });
+      await db.classHomeroomAssignment.create({
+        data: {
+          classId: grClass.id,
+          teacherUserId: teacher.id,
+          assignedByUserId: health.id,
+        },
+      });
       const grDaily = await db.dailyMealPortion.create({
         data: {
           classId: grClass.id,
@@ -913,26 +946,34 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       assert.equal(grRequired.get(grMilk.ingredient.id), "1.07");
       assert.equal(grRequired.get(grPeanut.ingredient.id), "0.535");
       assert.equal(grRequired.get(grBeef.ingredient.id), "0.26");
-      await db.school.update({
-        where: { id: school.id },
-        data: { cookingMode: "SEPARATE_BY_LOT" },
+      const organizations = createOrganizationService(undefined, () =>
+        Promise.resolve(db),
+      );
+      await assert.rejects(
+        organizations.updateCookingMode(
+          { cookingMode: "SEPARATE_BY_LOT" },
+          chef,
+        ),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 403,
+      );
+      assert.deepEqual(
+        await organizations.updateCookingMode(
+          { cookingMode: "SEPARATE_BY_LOT" },
+          reviewer,
+        ),
+        { cookingMode: "SEPARATE_BY_LOT" },
+      );
+      assert.deepEqual(await organizations.getCookingMode(reviewer), {
+        cookingMode: "SEPARATE_BY_LOT",
       });
       let grPlan = await batches.plan({ ...grKey, dishId: grCommon }, chef);
       assert.deepEqual(
         grPlan.batches.map((b) => b.plannedPortions).sort((a, b) => a! - b!),
-        [45, 75],
+        [13, 13, 32, 62],
       );
-      const grDeleted = grPlan.batches.find((b) => b.plannedPortions === 75)!;
-      assert.equal(
-        (
-          await batches.update(
-            grDeleted.id,
-            validateKitchenUpdate({ note: "Before confirmation" }),
-            chef,
-          )
-        ).note,
-        "Before confirmation",
-      );
+      const grDeleted = grPlan.batches.find((b) => b.plannedPortions === 62)!;
+      assert.equal("update" in batches, false);
       assert.equal(
         (await batches.remove(grDeleted.id, chef))
           .mealSeasoningReservationsReleased,
@@ -945,10 +986,6 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       );
       await batches.confirm(grPlan.batches[0].id, chef);
       await assert.rejects(
-        () => batches.update(grPlan.batches[0].id, { note: "Too late" }, chef),
-        (e: unknown) => e instanceof HttpError && e.statusCode === 409,
-      );
-      await assert.rejects(
         () => batches.remove(grPlan.batches[0].id, chef),
         (e: unknown) => e instanceof HttpError && e.statusCode === 409,
       );
@@ -957,18 +994,22 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         ).batches,
         grAlternative = (await batches.plan({ ...grKey, dishId: grAlt }, chef))
           .batches;
-      assert.equal(grNormal[0].plannedPortions, 107);
-      assert.equal(grAlternative[0].plannedPortions, 13);
-      const grAll = [...grPlan.batches, ...grNormal, ...grAlternative];
-      for (const grBatch of grAll) await batches.confirm(grBatch.id, chef);
-      await assert.rejects(
-        () =>
-          allocationService.create(
-            { dailyMealPortionId: grDaily.id, menuDayId: grDay.id },
-            chef,
-          ),
-        (e: unknown) => e instanceof HttpError && e.statusCode === 409,
+      assert.equal(
+        grNormal
+          .flatMap((b) => b.dishes)
+          .filter((d) => d.dishId === grRegular)
+          .reduce((n, d) => n + d.plannedPortions!, 0),
+        107,
       );
+      assert.equal(
+        grAlternative
+          .flatMap((b) => b.dishes)
+          .filter((d) => d.dishId === grAlt)
+          .reduce((n, d) => n + d.plannedPortions!, 0),
+        13,
+      );
+      const grAll = grPlan.batches;
+      for (const grBatch of grAll) await batches.confirm(grBatch.id, chef);
       for (const [index, grBatch] of grAll.entries()) {
         const grComplete = await batches.complete(grBatch.id, chef);
         assert.equal(
@@ -982,32 +1023,221 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         }),
         1,
       );
-      const grAllocation = await allocationService.create(
-        { dailyMealPortionId: grDaily.id, menuDayId: grDay.id },
+      const groupAllocation = createMealAllocationService(
+        () => Promise.resolve(db),
+        () => new Date("2032-01-05T03:00:00Z"),
+      );
+      assert.equal((await groupAllocation.getToday(chef)).status, "RECONCILE");
+
+      const allocationService = createMealAllocationService(
+        () => Promise.resolve(db),
+        allocationFixtureClock,
+      );
+      const seed = (state: "cooking" | "samples" | "ready") =>
+        loadAllocationFixture(db, school.id, chef.id, teacher.id, state);
+      const {
+        batchIds: [a, b],
+        demandIds: [classA, classB, classC],
+      } = await seed("cooking");
+      assert.equal(
+        (await allocationService.getToday(chef)).status,
+        "COOKING_PENDING",
+      );
+      await seed("samples");
+      const sampleGate = await allocationService.getToday(chef);
+      assert.equal(sampleGate.status, "SAMPLES_PENDING");
+      assert.equal(sampleGate.totals.sampled, 60);
+      assert.equal(sampleGate.missingSampleBatches, 1);
+      await seed("ready");
+      const ready = await allocationService.getToday(chef);
+      assert.equal(ready.status, "READY");
+      assert.equal(ready.totals.sampled, 100);
+      const payload = {
+        revision: ready.revision,
+        batches: [
+          {
+            cookingBatchId: a,
+            entries: [
+              { dailyMealPortionId: classA, allocatedPortions: 40 },
+              { dailyMealPortionId: classB, allocatedPortions: 20 },
+            ],
+          },
+          {
+            cookingBatchId: b,
+            entries: [
+              { dailyMealPortionId: classB, allocatedPortions: 15 },
+              { dailyMealPortionId: classC, allocatedPortions: 25 },
+            ],
+          },
+        ],
+      };
+      const otherKitchen = await user("SCHOOL_KITCHEN_STAFF", {
+        schoolId: schoolB.id,
+      });
+      const otherChef = await loadPrincipal(otherKitchen.id, db);
+      assert.equal(
+        (await allocationService.getToday(otherChef)).status,
+        "EMPTY",
+      );
+      await assert.rejects(() => allocationService.apply(payload, otherChef), {
+        statusCode: 409,
+      });
+      const invalid = structuredClone(payload);
+      invalid.batches[1].entries[0].allocatedPortions += 1;
+      await assert.rejects(() => allocationService.apply(invalid, chef), {
+        statusCode: 409,
+      });
+      assert.equal(
+        await db.mealAllocationBatch.count({
+          where: { cookingBatchId: { in: [a, b] } },
+        }),
+        0,
+      );
+      const race = await Promise.allSettled([
+        allocationService.apply(payload, chef),
+        allocationService.apply(payload, chef),
+      ]);
+      assert.equal(
+        race.filter((result) => result.status === "fulfilled").length,
+        1,
+      );
+      assert.equal(
+        race.filter(
+          (result) =>
+            result.status === "rejected" &&
+            result.reason instanceof HttpError &&
+            result.reason.statusCode === 409,
+        ).length,
+        1,
+      );
+      const savedAllocation = await allocationService.getToday(chef);
+      assert.equal(
+        savedAllocation.batches
+          .find((batch) => batch.id === a)
+          ?.entries.reduce((sum, entry) => sum + entry.allocatedPortions, 0),
+        60,
+      );
+      assert.equal(
+        await db.mealAllocationBatch.count({
+          where: { cookingBatchId: { in: [a, b] } },
+        }),
+        8,
+      );
+      const revisedBatches = structuredClone(payload.batches);
+      revisedBatches[0].entries[1].allocatedPortions = 10;
+      const revised = await allocationService.apply(
+        { revision: savedAllocation.revision, batches: revisedBatches },
         chef,
       );
-      const grDistributed = new Map<string, number>();
-      for (const row of grAllocation.mealAllocationBatches)
-        grDistributed.set(
-          row.CookingBatch.dishId,
-          (grDistributed.get(row.CookingBatch.dishId) ?? 0) +
-            row.allocatedPortions,
-        );
-      assert.equal(grDistributed.get(grCommon), 120);
-      assert.equal(grDistributed.get(grRegular), 107);
-      assert.equal(grDistributed.get(grAlt), 13);
-      assert.equal(
-        (
-          await allocationService.create(
-            { dailyMealPortionId: grDaily.id, menuDayId: grDay.id },
-            chef,
-          )
-        ).created,
-        false,
+      const revisedRows = await db.mealAllocationBatch.findMany({
+        where: {
+          cookingBatchId: a,
+          MealAllocation: { dailyMealPortionId: classB },
+        },
+        select: { allocatedPortions: true },
+      });
+      assert.deepEqual(
+        revisedRows.map((row) => row.allocatedPortions),
+        [10, 10],
       );
       assert.equal(
-        (await allocationService.distribute(grAllocation.id, chef)).status,
-        "DISTRIBUTED",
+        revised.batches
+          .find((batch) => batch.id === b)
+          ?.entries.find((entry) => entry.dailyMealPortionId === classB)
+          ?.allocatedPortions,
+        15,
+      );
+      const cleared = await allocationService.apply(
+        {
+          revision: revised.revision,
+          batches: payload.batches.map((batch) => ({ ...batch, entries: [] })),
+        },
+        chef,
+      );
+      assert.equal(cleared.batches.flatMap((batch) => batch.entries).length, 0);
+      const restored = await allocationService.apply(
+        { revision: cleared.revision, batches: payload.batches },
+        chef,
+      );
+      assert.equal(
+        restored.batches.flatMap((batch) => batch.entries).length,
+        4,
+      );
+      const confirmation = { revision: restored.revision };
+      await assert.rejects(
+        () => allocationService.confirmDistribution(confirmation, otherChef),
+        { statusCode: 409 },
+      );
+      await assert.rejects(
+        () =>
+          allocationService.confirmDistribution(confirmation, {
+            ...chef,
+            permissions: [],
+          }),
+        { statusCode: 403 },
+      );
+      await assert.rejects(
+        () =>
+          allocationService.confirmDistribution(confirmation, {
+            ...chef,
+            role: "HOMEROOM_TEACHER",
+          }),
+        { statusCode: 403 },
+      );
+      const distributionRace = await Promise.allSettled([
+        allocationService.confirmDistribution(confirmation, chef),
+        allocationService.apply(
+          { ...confirmation, batches: revisedBatches },
+          chef,
+        ),
+      ]);
+      assert.equal(
+        distributionRace.filter((result) => result.status === "fulfilled")
+          .length,
+        1,
+      );
+      const current = await allocationService.getToday(chef);
+      if (current.distribution.status === "PENDING") {
+        await assert.rejects(
+          () =>
+            allocationService.confirmDistribution(
+              { revision: current.revision },
+              chef,
+            ),
+          { statusCode: 409 },
+        );
+        const complete = await allocationService.apply(
+          { revision: current.revision, batches: payload.batches },
+          chef,
+        );
+        await allocationService.confirmDistribution(
+          { revision: complete.revision },
+          chef,
+        );
+      }
+      const repeated = await allocationService.confirmDistribution(
+        confirmation,
+        chef,
+      );
+      assert.equal(repeated.distribution.status, "DISTRIBUTED");
+      assert.ok(repeated.demands.every((demand) => demand.locked));
+      const delivered = await db.mealAllocation.findMany({
+        where: { dailyMealPortionId: { in: [classA, classB, classC] } },
+      });
+      assert.equal(delivered.length, 3);
+      for (const allocation of delivered) {
+        assert.equal(allocation.status, "DISTRIBUTED");
+        assert.equal(allocation.distributedByUserId, chef.id);
+        assert.deepEqual(allocation.distributedAt, allocationFixtureClock());
+      }
+      const nextDay = createMealAllocationService(
+        () => Promise.resolve(db),
+        () => new Date("2026-11-12T17:00:00Z"),
+      );
+      assert.equal((await nextDay.getToday(chef)).date, "2026-11-13");
+      await assert.rejects(
+        () => nextDay.confirmDistribution(confirmation, chef),
+        { statusCode: 409 },
       );
     },
   );
@@ -1043,7 +1273,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   await context.test(
     "password change requires the old password, rechecks the account, and revokes every existing session",
     async () => {
-      const account = await user("SCHOOL_HEALTH_OFFICER", {
+      const account = await user("SCHOOL_NUTRITION_OFFICER", {
         schoolId: schoolA.id,
       });
       const first = await passwordLogin(account);
@@ -1102,7 +1332,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   await context.test(
     "real password recovery sends a six-digit code, verifies without changing credentials and consumes the reset grant once",
     async () => {
-      const account = await user("SCHOOL_HEALTH_OFFICER", {
+      const account = await user("SCHOOL_NUTRITION_OFFICER", {
         schoolId: schoolA.id,
       });
       const old = await passwordLogin(account);
@@ -1170,7 +1400,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   await context.test(
     "concurrent password replacement and login cannot leave sessions issued with an old password usable",
     async () => {
-      const account = await user("SCHOOL_HEALTH_OFFICER", {
+      const account = await user("SCHOOL_NUTRITION_OFFICER", {
         schoolId: schoolA.id,
       });
       const cookie = await passwordLogin(account);
@@ -1208,7 +1438,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   await context.test(
     "Redis revocation failure rolls back password replacement and a stale principal cannot change a locked account",
     async () => {
-      const account = await user("SCHOOL_HEALTH_OFFICER", {
+      const account = await user("SCHOOL_NUTRITION_OFFICER", {
         schoolId: schoolA.id,
       });
       const principal = await loadSessionUser(account.id, db);
@@ -1260,13 +1490,518 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       headers: headers(id),
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
+
+  await context.test(
+    "supplier ingredient management scopes create/edit/hide and preserves history",
+    async () => {
+      const base = "/api/ingredients/management";
+      const category = await db.ingredientCategory.create({
+        data: { categoryName: "Management category" },
+      });
+      const ingredientView = await permission("ingredient.view");
+      const manage = await permission("ingredient.manage");
+      const grant = await db.rolePermission.upsert({
+        where: {
+          roleId_permissionId: {
+            roleId: supplierStaffA.roleId,
+            permissionId: manage.id,
+          },
+        },
+        create: { roleId: supplierStaffA.roleId, permissionId: manage.id },
+        update: {},
+      });
+      for (const actor of [supplierStaffA, system, adminA]) {
+        for (const [method, suffix] of [
+          ["GET", ""],
+          ["GET", "/categories"],
+          ["GET", "/" + ingredientA.id],
+          ["POST", ""],
+          ["PATCH", "/" + ingredientA.id],
+          ["POST", "/" + ingredientA.id + "/hide"],
+        ]) {
+          assert.equal(
+            (await request(base + suffix, actor.id, method)).status,
+            403,
+          );
+        }
+      }
+      await db.rolePermission.delete({
+        where: {
+          roleId_permissionId: {
+            roleId: grant.roleId,
+            permissionId: grant.permissionId,
+          },
+        },
+      });
+      const payload = {
+        name: "Managed " + randomUUID(),
+        defaultUnit: "kg",
+        categoryId: category.id,
+        coverImage: "/cover.jpg",
+        imageDescription: ["/1.jpg", "/2.jpg", "/3.jpg"],
+      };
+      const created = await request(base, supplierAdmin.id, "POST", payload);
+      assert.equal(created.status, 201, JSON.stringify(created.body));
+      const item = record(record(created.body).data);
+      const id = String(item.id);
+      assert.equal(item.supplierId, supplierA.id);
+      assert.deepEqual(item.imageDescription, payload.imageDescription);
+      assert.equal(record(item.category).categoryName, category.categoryName);
+      assert.equal(
+        (await request(base, supplierAdmin.id, "POST", payload)).status,
+        409,
+      );
+      assert.equal(
+        (
+          await request(base, supplierAdmin.id, "POST", {
+            ...payload,
+            name: "Forged",
+            supplierId: supplierB.id,
+          })
+        ).status,
+        400,
+      );
+      const catalog = await request(
+        base + "/categories?limit=1",
+        supplierAdmin.id,
+      );
+      assert.equal(catalog.status, 200);
+      assert.equal(rows(catalog.body).length, 1);
+      const list = await request(base + "?limit=100", supplierAdmin.id);
+      assert.equal(list.status, 200);
+      assert(rows(list.body).every((row) => row.supplierId === supplierA.id));
+      const foreign = await db.ingredient.findFirstOrThrow({
+        where: { supplierId: supplierB.id },
+      });
+      const absent = randomUUID();
+      for (const foreignId of [foreign.id, absent]) {
+        for (const method of ["GET", "PATCH", "POST"]) {
+          const response = await request(
+            base + "/" + foreignId + (method === "POST" ? "/hide" : ""),
+            supplierAdmin.id,
+            method,
+            method === "PATCH" ? { name: "Refused" } : undefined,
+          );
+          assert.equal(response.status, 404);
+          assert.equal(
+            record(response.body).message,
+            "Không tìm thấy nguyên liệu",
+          );
+        }
+      }
+      assert.equal(
+        (
+          await request(base + "/" + id, supplierAdmin.id, "PATCH", {
+            description: "Updated",
+            coverImage: null,
+            imageDescription: [],
+          })
+        ).status,
+        200,
+      );
+      const invalid = await request(
+        base + "/" + id,
+        supplierAdmin.id,
+        "PATCH",
+        { name: "Must rollback", categoryId: randomUUID() },
+      );
+      assert.equal(invalid.status, 400);
+      assert.equal(
+        (await db.ingredient.findUniqueOrThrow({ where: { id } })).name,
+        payload.name,
+      );
+      const race = await Promise.all(
+        [1, 2].map(() =>
+          request(base, supplierAdmin.id, "POST", {
+            name: "Race " + id,
+            defaultUnit: "kg",
+          }),
+        ),
+      );
+      assert.deepEqual(race.map((r) => r.status).sort(), [201, 409]);
+      const raceItems = await Promise.all(
+        [1, 2].map((n) =>
+          db.ingredient.create({
+            data: {
+              supplierId: supplierA.id,
+              name: "Update " + id + " " + n,
+              defaultUnit: "kg",
+            },
+          }),
+        ),
+      );
+      const updateRace = await Promise.all(
+        raceItems.map((r) =>
+          request(base + "/" + r.id, supplierAdmin.id, "PATCH", {
+            name: "Same " + id,
+          }),
+        ),
+      );
+      assert.deepEqual(updateRace.map((r) => r.status).sort(), [200, 409]);
+      // Real history link retained when hidden.
+      const entry = await db.ingredientEntry.create({
+        data: {
+          schoolId: schoolA.id,
+          ingredientId: id,
+          handlingType: "DRY_STOCK",
+        },
+      });
+      assert.equal(
+        (await request(base + "/" + id + "/hide", supplierAdmin.id, "POST"))
+          .status,
+        200,
+      );
+      const hidden = await db.ingredient.findUniqueOrThrow({ where: { id } });
+      assert.equal(hidden.status, "INACTIVE");
+      assert.equal(
+        (await request(base + "/" + id + "/hide", supplierAdmin.id, "POST"))
+          .status,
+        200,
+      );
+      assert.equal(
+        +(await db.ingredient.findUniqueOrThrow({ where: { id } })).updatedAt,
+        +hidden.updatedAt,
+      );
+      assert.equal(
+        (
+          await request(base + "/" + id, supplierAdmin.id, "PATCH", {
+            description: "Hidden edit",
+          })
+        ).status,
+        200,
+      );
+      assert.equal(
+        (
+          await db.ingredientEntry.findUniqueOrThrow({
+            where: { id: entry.id },
+          })
+        ).ingredientId,
+        id,
+      );
+      assert.equal(
+        (await db.ingredient.findUniqueOrThrow({ where: { id } })).status,
+        "INACTIVE",
+      );
+      assert.equal(
+        (await request(base, supplierAdmin.id, "POST", payload)).status,
+        409,
+      );
+      // Same name remains allowed in another supplier.
+      await db.ingredient.create({
+        data: {
+          supplierId: supplierB.id,
+          name: payload.name,
+          defaultUnit: "kg",
+        },
+      });
+      const hideEdit = await Promise.all([
+        request(
+          base + "/" + raceItems[0].id + "/hide",
+          supplierAdmin.id,
+          "POST",
+        ),
+        request(base + "/" + raceItems[0].id, supplierAdmin.id, "PATCH", {
+          description: "Concurrent edit",
+        }),
+      ]);
+      assert(hideEdit.every((r) => r.status === 200));
+      assert.equal(
+        (
+          await db.ingredient.findUniqueOrThrow({
+            where: { id: raceItems[0].id },
+          })
+        ).status,
+        "INACTIVE",
+      );
+      // Middleware reloads current grants/denials on each authenticated request.
+      const staleActor = await loadPrincipal(supplierAdmin.id, db);
+      const denial = await db.userPermissionDenial.create({
+        data: {
+          userId: supplierAdmin.id,
+          permissionId: manage.id,
+          supplierId: supplierA.id,
+          disabledByUserId: system.id,
+        },
+      });
+      assert.equal((await request(base, supplierAdmin.id)).status, 403);
+      assert.equal(
+        (
+          await request(base + "/" + id, supplierAdmin.id, "PATCH", {
+            name: "Denied",
+          })
+        ).status,
+        403,
+      );
+      await assert.rejects(
+        () =>
+          ingredientService.update(
+            { ingredientId: id },
+            { name: "Stale permission" },
+            staleActor,
+          ),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 403,
+      );
+      await db.userPermissionDenial.delete({ where: { id: denial.id } });
+      await db.user.update({
+        where: { id: supplierAdmin.id },
+        data: { status: "LOCKED" },
+      });
+      await assert.rejects(
+        () =>
+          ingredientService.update(
+            { ingredientId: id },
+            { name: "Locked account" },
+            staleActor,
+          ),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 403,
+      );
+      await db.user.update({
+        where: { id: supplierAdmin.id },
+        data: { status: "ACTIVE", supplierId: supplierB.id },
+      });
+      await assert.rejects(
+        () =>
+          ingredientService.update(
+            { ingredientId: id },
+            { name: "Changed membership" },
+            staleActor,
+          ),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 403,
+      );
+      await db.user.update({
+        where: { id: supplierAdmin.id },
+        data: { supplierId: supplierA.id },
+      });
+
+      await db.supplier.update({
+        where: { id: supplierA.id },
+        data: { status: "INACTIVE" },
+      });
+      assert.equal((await request(base, supplierAdmin.id)).status, 403);
+      assert.equal(
+        (
+          await request(base, supplierAdmin.id, "POST", {
+            name: "Inactive supplier",
+            defaultUnit: "kg",
+          })
+        ).status,
+        403,
+      );
+      await db.supplier.update({
+        where: { id: supplierA.id },
+        data: { status: "ACTIVE" },
+      });
+      await db.rolePermission.upsert({
+        where: {
+          roleId_permissionId: {
+            roleId: supplierStaffA.roleId,
+            permissionId: ingredientView.id,
+          },
+        },
+        create: {
+          roleId: supplierStaffA.roleId,
+          permissionId: ingredientView.id,
+        },
+        update: {},
+      });
+      assert.equal(
+        (await request("/api/ingredients", supplierStaffA.id)).status,
+        200,
+      );
+      await db.rolePermission.delete({
+        where: {
+          roleId_permissionId: {
+            roleId: supplierStaffA.roleId,
+            permissionId: ingredientView.id,
+          },
+        },
+      });
+      // Remove only this subtest's disposable fixture so later scope assertions keep their baseline.
+      await db.ingredientEntry.delete({ where: { id: entry.id } });
+      await db.ingredient.deleteMany({
+        where: {
+          OR: [
+            { id },
+            { name: "Race " + id },
+            { name: "Same " + id },
+            { name: { startsWith: "Update " + id } },
+          ],
+        },
+      });
+    },
+  );
+
+  await context.test(
+    "directory filtered totals, literal search and independent summary",
+    async () => {
+      const marker = `directory-${randomUUID()}-%_`;
+      await db.school.createMany({
+        data: Array.from({ length: 100 }, (_, index) => ({
+          name: `${marker}-${index}`,
+          status: index < 85 ? ("ACTIVE" as const) : ("INACTIVE" as const),
+        })),
+      });
+      const first = await request(
+        `/api/schools?limit=5&search=${encodeURIComponent(marker)}&status=ACTIVE`,
+        system.id,
+      );
+      assert.equal(first.status, 200);
+      const data = record(record(first.body).data);
+      assert.equal(record(data.pagination).total, 85);
+      assert.equal(rows(first.body).length, 5);
+      const last = await request(
+        `/api/schools?page=18&limit=5&search=${encodeURIComponent(marker)}&status=ACTIVE`,
+        system.id,
+      );
+      assert.equal(rows(last.body).length, 0);
+      assert.equal(
+        record(record(record(last.body).data).pagination).hasNext,
+        false,
+      );
+      const summary = await request("/api/schools/summary", system.id);
+      assert.equal(summary.status, 200);
+      assert(Number(record(record(summary.body).data).total) >= 100);
+      assert.equal(
+        (await request("/api/schools/summary", adminA.id)).status,
+        403,
+      );
+    },
+  );
+  await context.test(
+    "directory details and child scopes remain independent",
+    async () => {
+      const school = await db.school.create({
+        data: { name: "Directory inactive", status: "INACTIVE" },
+      });
+      assert.equal(
+        (await request(`/api/schools/${school.id}`, system.id)).status,
+        200,
+      );
+      assert.equal(
+        (await request(`/api/schools/${school.id}`, adminA.id)).status,
+        404,
+      );
+      for (const group of ["classes", "suppliers", "accounts"]) {
+        const response = await request(
+          `/api/schools/${school.id}/${group}`,
+          system.id,
+        );
+        assert.equal(response.status, 200, `School detail group: ${group}`);
+        assert.equal(
+          record(record(record(response.body).data).pagination).total,
+          0,
+        );
+      }
+      const supplier = await db.supplier.create({
+        data: { name: "Directory supplier inactive", status: "INACTIVE" },
+      });
+      assert.equal(
+        (await request(`/api/suppliers/${supplier.id}`, system.id)).status,
+        200,
+      );
+      const certificates = await request(
+        `/api/suppliers/${supplier.id}/certifications`,
+        system.id,
+      );
+      assert.equal(certificates.status, 200);
+      assert.equal(
+        record(record(record(certificates.body).data).pagination).total,
+        0,
+      );
+      await withReadTransaction(async (tx) => {
+        const before = await tx.school.findUniqueOrThrow({
+          where: { id: school.id },
+        });
+        await db.school.update({
+          where: { id: school.id },
+          data: { name: "Directory changed" },
+        });
+        const after = await tx.school.findUniqueOrThrow({
+          where: { id: school.id },
+        });
+        assert.equal(after.name, before.name);
+      });
+      assert.equal(
+        (await db.school.findUniqueOrThrow({ where: { id: school.id } })).name,
+        "Directory changed",
+      );
+    },
+  );
+  await context.test(
+    "supplier directory searches codes and literal backslashes before pagination",
+    async () => {
+      const marker = `directory-supplier-${randomUUID()}`;
+      const summaryBefore = await request("/api/suppliers/summary", system.id);
+      const before = record(record(summaryBefore.body).data);
+      await db.supplier.createMany({
+        data: Array.from({ length: 100 }, (_, i) => ({
+          name: `${marker}-${i}`,
+          taxCode: `${marker}-code-${i}`,
+          status: i < 85 ? ("ACTIVE" as const) : ("INACTIVE" as const),
+        })),
+      });
+      const summaryAfter = await request("/api/suppliers/summary", system.id);
+      const after = record(record(summaryAfter.body).data);
+      assert.equal(Number(after.total) - Number(before.total), 100);
+      assert.equal(Number(after.activeCount) - Number(before.activeCount), 85);
+      const byCode = await request(
+        `/api/suppliers?search=${marker}-code-99`,
+        system.id,
+      );
+      assert.equal(rows(byCode.body).length, 1);
+      for (const endpoint of ["schools", "suppliers"]) {
+        const prefix = `${marker}-twelve`;
+        if (endpoint === "schools")
+          await db.school.createMany({
+            data: Array.from({ length: 12 }, (_, i) => ({
+              name: `${prefix}-${i}`,
+            })),
+          });
+        else
+          await db.supplier.createMany({
+            data: Array.from({ length: 12 }, (_, i) => ({
+              name: `${prefix}-${i}`,
+            })),
+          });
+        const seen = new Set<string>();
+        for (let page = 1; page <= 3; page++) {
+          const result = await request(
+            `/api/${endpoint}?search=${prefix}&page=${page}&limit=5`,
+            system.id,
+          );
+          assert.equal(result.status, 200);
+          const items = rows(result.body);
+          assert.equal(items.length, page === 3 ? 2 : 5);
+          const pagination = record(
+            record(record(result.body).data).pagination,
+          );
+          assert.equal(pagination.total, 12);
+          assert.equal(pagination.hasNext, page < 3);
+          for (const item of items) {
+            assert(!seen.has(String(item.id)));
+            seen.add(String(item.id));
+          }
+        }
+        assert.equal(seen.size, 12);
+      }
+    },
+  );
+  const applicationCodes = new Map<string, string>();
   const reviewVersion = async (id: string) => {
     const response = await request(
       `/api/registration-requests/${id}`,
       system.id,
     );
     assert.equal(response.status, 200);
-    return String(record(record(response.body).data).reviewVersion);
+    const detail = record(record(response.body).data);
+    assert.match(String(detail.registrationID), /^FP-REG-[0-9]{5,}$/);
+    if (applicationCodes.has(id))
+      assert.equal(detail.registrationID, applicationCodes.get(id));
+    assert(!JSON.stringify(response.body).includes("registrationNumber"));
+    return String(detail.reviewVersion);
   };
   async function grantIds(roleId: string) {
     return (await db.rolePermission.findMany({ where: { roleId } })).map(
@@ -2090,6 +2825,8 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         assert.equal(data.accountStatus, "UNVERIFIED");
         const id = String(data.id);
         applicationIds.set(type, id);
+        assert.match(String(data.registrationID), /^FP-REG-[0-9]{5,}$/);
+        applicationCodes.set(id, String(data.registrationID));
         const userAfter = await db.user.findUniqueOrThrow({
           where: { id: account.id },
         });
@@ -2143,6 +2880,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         assert.equal(detail.status, 200);
         assert(!JSON.stringify(detail.body).includes("publicId"));
         const detailData = record(record(detail.body).data);
+        assert.equal(detailData.registrationID, applicationCodes.get(id));
         const applicantData = record(detailData.applicantUser);
         const applicantAccount = await db.user.findUniqueOrThrow({
           where: { id: String(detailData.applicantUserId) },
@@ -2355,6 +3093,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       );
       assert.equal(rejected.status, 200);
       const rejectedData = record(record(rejected.body).data);
+      assert.equal(rejectedData.registrationID, applicationCodes.get(id));
       assert.equal(rejectedData.status, "REJECTED");
       assert.equal(rejectedData.accountStatus, "UNVERIFIED");
       assert.equal(rejectedData.rejectionReason, "Bổ sung mã trường");
@@ -2396,6 +3135,10 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       assert.equal(data.status, "PENDING");
       assert.equal(data.rejectionReason, null);
       assert.equal(data.reviewedAt, null);
+      const notificationsBeforeStaleReview = await db.emailOutbox.count({
+        where: { registrationId: id },
+      });
+      assert.equal(notificationsBeforeStaleReview, 3);
       const staleReview = await request(
         `/api/registration-requests/${id}/approve`,
         system.id,
@@ -2409,7 +3152,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       );
       assert.equal(
         await db.emailOutbox.count({ where: { registrationId: id } }),
-        1,
+        notificationsBeforeStaleReview,
       );
       assert.equal(
         await db.registrationRequest.count({
@@ -2585,6 +3328,9 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
     async () => {
       for (const type of ["SCHOOL", "SUPPLIER"]) {
         const id = applicationId(type);
+        const notificationsBeforeApproval = await db.emailOutbox.count({
+          where: { registrationId: id },
+        });
         const results = await Promise.all([
           request(
             `/api/registration-requests/${id}/approve`,
@@ -2608,6 +3354,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         );
         assert(approvedResponse);
         const approvedData = record(record(approvedResponse.body).data);
+        assert.equal(approvedData.registrationID, applicationCodes.get(id));
         assert.equal(approvedData.status, "APPROVED");
         assert.equal(approvedData.accountStatus, "ACTIVE");
         assert.equal(record(approvedData.applicantUser).status, "ACTIVE");
@@ -2625,7 +3372,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         );
         assert.equal(
           await db.emailOutbox.count({ where: { registrationId: id } }),
-          2,
+          notificationsBeforeApproval + 1,
         );
         const account = onboardingAccounts.get(type);
         assert(account);
@@ -2698,6 +3445,30 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
                 document.id !== documentId,
             );
           assert(sibling);
+          const certificateList = await request(
+            `/api/suppliers/${after.supplierId}/certifications`,
+            system.id,
+          );
+          assert.equal(certificateList.status, 200);
+          const listed = rows(certificateList.body);
+          assert.equal(listed.length, 2);
+          assert(
+            listed.some(
+              (item) =>
+                Array.isArray(item.documents) && item.documents.length === 2,
+            ),
+          );
+          const cert = certificates.find((item) =>
+            item.documentUrl?.endsWith(`/${documentId}`),
+          );
+          assert(cert);
+          const opened = await request(
+            `/api/supplier-certifications/${cert.id}/documents/${documentId}`,
+            system.id,
+          );
+          assert.equal(opened.status, 200);
+          assert.equal(opened.headers.get("cache-control"), "no-store");
+
           const sameTenantStaff = await user("INGREDIENT_SUPPLIER_STAFF", {
             supplierId: after.supplierId!,
           });

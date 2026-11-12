@@ -1,4 +1,8 @@
-import type { Prisma, PrismaClient } from "../../generated/prisma/client";
+import type {
+  CookingMode,
+  Prisma,
+  PrismaClient,
+} from "../../generated/prisma/client";
 import type { AuthPrincipal } from "../../types/auth";
 import { getPrisma } from "../../utils/database";
 import { listWindow, type ListQuery } from "../../utils/list-query";
@@ -17,6 +21,21 @@ export type SchoolListDbRow = Prisma.SchoolGetPayload<{
   select: typeof schoolListSelect;
 }>;
 
+const directorySelect = {
+  ...schoolListSelect,
+  email: true,
+  phone: true,
+  address: true,
+} as const satisfies Prisma.SchoolSelect;
+export type SchoolDirectoryRow = Prisma.SchoolGetPayload<{
+  select: typeof directorySelect;
+}>;
+interface DirectoryFilter {
+  page: number;
+  limit: number;
+  search?: string;
+  status?: "ACTIVE" | "INACTIVE";
+}
 export const publicSchoolInclude = {
   location: {
     include: {
@@ -143,6 +162,36 @@ export interface RawPortionGroup {
 }
 
 export interface OrganizationRepository {
+  listDirectory?(
+    tx: Prisma.TransactionClient,
+    scope: Prisma.SchoolWhereInput,
+    q: DirectoryFilter,
+  ): Promise<{ items: SchoolDirectoryRow[]; total: number }>;
+  summary?(
+    tx: Prisma.TransactionClient,
+    scope: Prisma.SchoolWhereInput,
+  ): Promise<{ total: number; activeCount: number }>;
+  detail?(
+    tx: Prisma.TransactionClient,
+    scope: Prisma.SchoolWhereInput,
+    id: string,
+  ): Promise<SchoolDirectoryRow | null>;
+  findCookingMode(
+    schoolId: string,
+  ): Promise<{ cookingMode: CookingMode | null }>;
+  updateCookingMode(
+    tx: Prisma.TransactionClient,
+    schoolId: string,
+    cookingMode: CookingMode,
+  ): Promise<{ cookingMode: CookingMode | null }>;
+  findMealTimes(
+    schoolId: string,
+  ): Promise<{ lunchTime: Date | null; afternoonMealTime: Date | null }>;
+  updateMealTimes(
+    tx: Prisma.TransactionClient,
+    schoolId: string,
+    data: { lunchTime: Date | null; afternoonMealTime: Date | null },
+  ): Promise<{ lunchTime: Date | null; afternoonMealTime: Date | null }>;
   listSchools(
     query: ListQuery,
     principal: AuthPrincipal,
@@ -176,6 +225,78 @@ export function createOrganizationRepository(
   getClient: () => Promise<PrismaClient> = getPrisma,
 ): OrganizationRepository {
   return {
+    async listDirectory(tx, scope, q) {
+      const search = q.search?.replace(/[\\%_]/g, "\\$&");
+      const where: Prisma.SchoolWhereInput = {
+        AND: [
+          scope,
+          q.status ? { status: q.status } : {},
+          search
+            ? {
+                OR: [
+                  { name: { contains: search, mode: "insensitive" } },
+                  { code: { contains: search, mode: "insensitive" } },
+                ],
+              }
+            : {},
+        ],
+      };
+      const total = await tx.school.count({ where });
+      const items = await tx.school.findMany({
+        where,
+        select: directorySelect,
+        skip: (q.page - 1) * q.limit,
+        take: q.limit,
+        orderBy: { id: "asc" },
+      });
+      return { items, total };
+    },
+    async summary(tx, scope) {
+      return {
+        total: await tx.school.count({ where: scope }),
+        activeCount: await tx.school.count({
+          where: { AND: [scope, { status: "ACTIVE" }] },
+        }),
+      };
+    },
+    detail(tx, scope, id) {
+      return tx.school.findFirst({
+        where: { AND: [scope, { id }] },
+        select: directorySelect,
+      });
+    },
+    async findCookingMode(schoolId) {
+      const prisma = await getClient();
+      return prisma.school.findUniqueOrThrow({
+        where: { id: schoolId },
+        select: { cookingMode: true },
+      });
+    },
+
+    updateCookingMode(tx, schoolId, cookingMode) {
+      return tx.school.update({
+        where: { id: schoolId },
+        data: { cookingMode },
+        select: { cookingMode: true },
+      });
+    },
+
+    async findMealTimes(schoolId) {
+      const prisma = await getClient();
+      return prisma.school.findUniqueOrThrow({
+        where: { id: schoolId },
+        select: { lunchTime: true, afternoonMealTime: true },
+      });
+    },
+
+    updateMealTimes(tx, schoolId, data) {
+      return tx.school.update({
+        where: { id: schoolId },
+        data,
+        select: { lunchTime: true, afternoonMealTime: true },
+      });
+    },
+
     async listSchools(query, principal) {
       const prisma = await getClient();
       const where = listScopes.organization(principal);

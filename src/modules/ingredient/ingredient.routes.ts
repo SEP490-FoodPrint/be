@@ -2,6 +2,8 @@ import { Router } from "express";
 import type { RequestHandler } from "express";
 import { authenticate } from "../../middlewares/auth.middleware";
 import { requireResource } from "../../middlewares/permission.middleware";
+import { ingredientManagementScope } from "../../utils/resource-access";
+import { requirePrincipal } from "../../utils/authorization";
 import { createIngredientController } from "./ingredient.controller";
 import {
   ingredientService,
@@ -14,6 +16,22 @@ export function createIngredientRouter(
 ) {
   const router = Router();
   const controller = createIngredientController(service);
+  const management = Router();
+  management.use(authHandler, (req, _res, next) => {
+    try {
+      ingredientManagementScope(requirePrincipal(req));
+      next();
+    } catch (error) {
+      next(error);
+    }
+  });
+  management.get("/categories", controller.listCategories);
+  management.get("/", controller.listManagement);
+  management.post("/", controller.create);
+  management.get("/:ingredientId", controller.getDetail);
+  management.patch("/:ingredientId", controller.update);
+  management.post("/:ingredientId/hide", controller.hide);
+  router.use("/management", management);
   router.get(
     "/",
     authHandler,
@@ -22,5 +40,4 @@ export function createIngredientRouter(
   );
   return router;
 }
-
 export default createIngredientRouter();
