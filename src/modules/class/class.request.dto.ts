@@ -9,6 +9,7 @@ import type {
   updateClassSchema,
   classStatusSchema,
   copyClassesSchema,
+  importClassesSchema,
 } from "./class.validation";
 export type ClassListRequestDTO = z.infer<typeof classListQuerySchema>;
 export type ClassSchoolRequestDTO = {
@@ -26,3 +27,5 @@ export type CreateClassRequestDTO = z.infer<typeof createClassSchema>;
 export type UpdateClassRequestDTO = z.infer<typeof updateClassSchema>;
 export type ClassStatusRequestDTO = z.infer<typeof classStatusSchema>;
 export type CopyClassesRequestDTO = z.infer<typeof copyClassesSchema>;
+export type ImportClassesRequestDTO = z.infer<typeof importClassesSchema>;
+export type ImportClassRowRequestDTO = ImportClassesRequestDTO["rows"][number];

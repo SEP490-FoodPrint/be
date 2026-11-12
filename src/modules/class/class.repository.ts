@@ -140,6 +140,17 @@ export interface ClassRepository {
     schoolId: string,
     academicYear: string,
   ): Promise<{ id: string; name: string } | null>;
+  findTeachersByUsernames(
+    tx: Prisma.TransactionClient,
+    schoolId: string,
+    usernames: string[],
+  ): Promise<TeacherRow[]>;
+  findBusyTeachers(
+    tx: Prisma.TransactionClient,
+    teacherUserIds: string[],
+    schoolId: string,
+    academicYear: string,
+  ): Promise<Array<{ teacherUserId: string; className: string }>>;
 }
 
 export interface ClassWriteInput {
@@ -325,6 +336,35 @@ export function createClassRepository(
         select: { Class: { select: { id: true, name: true } } },
       });
       return assignment?.Class ?? null;
+    },
+
+    findTeachersByUsernames(tx, schoolId, usernames) {
+      return tx.user.findMany({
+        where: {
+          schoolId,
+          roleCode: ROLES.HOMEROOM_TEACHER,
+          status: "ACTIVE",
+          OR: usernames.map((username) => ({
+            username: { equals: username, mode: "insensitive" as const },
+          })),
+        },
+        select: teacherSelect,
+      });
+    },
+
+    async findBusyTeachers(tx, teacherUserIds, schoolId, academicYear) {
+      const rows = await tx.classHomeroomAssignment.findMany({
+        where: {
+          teacherUserId: { in: teacherUserIds },
+          endedAt: null,
+          Class: { schoolId, academicYear },
+        },
+        select: { teacherUserId: true, Class: { select: { name: true } } },
+      });
+      return rows.map((row) => ({
+        teacherUserId: row.teacherUserId,
+        className: row.Class.name,
+      }));
     },
   };
 }

@@ -127,6 +127,8 @@ Hai list đơn vị nhận search/status và trả contact/total; nhóm con phâ
 
 `class` sở hữu thêm các thao tác ghi của Ban Giám hiệu: `POST /api/classes`, `POST /api/classes/copy`, `PATCH /api/classes/:classId` và `PATCH /api/classes/:classId/status`, đều yêu cầu `class.manage`. Không có xóa cứng; niên khóa phải được cấu hình qua `school-academic-year`. Xem [hợp đồng API](../../specs/016-school-class-management/contracts.md).
 
+`POST /api/classes/import` (017) nhập tối đa 300 lớp từ dữ liệu Excel đã được frontend đọc: `dryRun` để xem trước trạng thái từng dòng (`CREATE` / `SKIP` / `ERROR`), lưu theo kiểu tất cả hoặc không. Yêu cầu `class.manage`, thêm `class_assignment.manage` khi có cột GVCN. Xem [hợp đồng API](../../specs/017-class-excel-import/contracts.md).
+
 ## Quản lý nguyên liệu nhà cung cấp
 
 Module ingredient đã tách đầy đủ routes/controller/validation/service/repository và hai file Request/Response DTO theo AGENTS.md; phần mô tả bốn file ở trên áp dụng cho các module danh sách legacy chưa chuyển đổi. Controller validate qua Zod; service xác lập scope, transaction và map DTO; repository thực hiện mọi truy vấn/khóa với shared client.

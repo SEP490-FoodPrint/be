@@ -15,6 +15,7 @@ import {
   validateUpdateClass,
   validateClassStatus,
   validateCopyClasses,
+  validateImportClasses,
 } from "../src/modules/class/class.validation";
 import {
   createClassRepository,
@@ -412,6 +413,8 @@ function fakeRepository(options?: {
   createError?: Error;
   teacherExists?: boolean;
   teacherBusyIn?: string;
+  teachers?: Array<{ id: string; fullName: string; username: string }>;
+  busyTeachers?: Record<string, string>;
 }) {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const record =
@@ -486,6 +489,22 @@ function fakeRepository(options?: {
     createAssignment: record("createAssignment", () => ({
       assignedAt: NOV_2026,
     })),
+    findTeachersByUsernames: record(
+      "findTeachersByUsernames",
+      (_tx, _school, usernames) => {
+        const wanted = (usernames as string[]).map((name) =>
+          name.toLowerCase(),
+        );
+        return (options?.teachers ?? []).filter((teacher) =>
+          wanted.includes(teacher.username.toLowerCase()),
+        );
+      },
+    ),
+    findBusyTeachers: record("findBusyTeachers", (_tx, ids) =>
+      Object.entries(options?.busyTeachers ?? {})
+        .filter(([id]) => (ids as string[]).includes(id))
+        .map(([teacherUserId, className]) => ({ teacherUserId, className })),
+    ),
   } as unknown as ClassRepository;
   const called = (method: string) =>
     calls.filter((call) => call.method === method);
@@ -922,4 +941,266 @@ void test("assigning a free teacher still replaces the current homeroom teacher"
   assert.equal(called("endAssignment").length, 1);
   assert.equal(called("createAssignment").length, 1);
   assert.equal(result.homeroomTeacher?.id, TEACHER_ID);
+});
+
+const LAN = {
+  id: "00000000-0000-4000-8000-0000000000f2",
+  fullName: "Cô Lan",
+  username: "gvcn_lan",
+};
+const HOA = {
+  id: "00000000-0000-4000-8000-0000000000f3",
+  fullName: "Cô Hoa",
+  username: "gvcn_hoa",
+};
+const importBody = (rows: Array<Record<string, unknown>>, dryRun = true) =>
+  validateImportClasses({ academicYear: "2026-2027", dryRun, rows });
+
+void test("class import payload is validated structurally", () => {
+  assert.throws(
+    () =>
+      validateImportClasses({
+        academicYear: "2026-2027",
+        dryRun: true,
+        rows: [],
+      }),
+    isHttp(400),
+  );
+  assert.throws(
+    () =>
+      validateImportClasses({
+        academicYear: "2026-2027",
+        dryRun: true,
+        rows: Array.from({ length: 301 }, (_, index) => ({
+          rowNumber: index + 2,
+          name: `L${index}`,
+        })),
+      }),
+    isHttp(400),
+  );
+  assert.throws(
+    () => importBody([{ rowNumber: 2, name: "1A", extra: true }]),
+    isHttp(400),
+  );
+  assert.throws(
+    () =>
+      validateImportClasses({
+        academicYear: "2026-2027",
+        dryRun: true,
+        schoolId: SCHOOL_ID,
+        rows: [{ rowNumber: 2, name: "1A" }],
+      }),
+    isHttp(400),
+  );
+});
+
+void test("class import preview reports every row without writing", async () => {
+  const { repository, called } = fakeRepository({ teachers: [LAN] });
+  const result = await managementService(repository).importClasses(
+    importBody([
+      { rowNumber: 2, name: " 1A ", registeredMealPortions: 30 },
+      {
+        rowNumber: 3,
+        name: "1B",
+        registeredMealPortions: "32",
+        teacherUsername: "GVCN_LAN",
+      },
+      { rowNumber: 4, name: "1C", registeredMealPortions: null },
+    ]),
+    manager,
+  );
+  assert.deepEqual(result.summary, { create: 3, skip: 0, error: 0 });
+  assert.deepEqual(
+    result.rows.map((row) => [
+      row.name,
+      row.registeredMealPortions,
+      row.status,
+    ]),
+    [
+      ["1A", 30, "CREATE"],
+      ["1B", 32, "CREATE"],
+      ["1C", 0, "CREATE"],
+    ],
+  );
+  assert.equal(result.rows[1].teacher?.id, LAN.id);
+  assert.equal(called("createClass").length, 0);
+  assert.equal(called("createAssignment").length, 0);
+  assert.deepEqual(result.created, []);
+});
+
+void test("class import commit creates classes and assignments", async () => {
+  const { repository, called } = fakeRepository({ teachers: [LAN] });
+  const result = await managementService(repository).importClasses(
+    importBody(
+      [
+        { rowNumber: 2, name: "1A" },
+        { rowNumber: 3, name: "1B", teacherUsername: "gvcn_lan" },
+      ],
+      false,
+    ),
+    manager,
+  );
+  assert.equal(called("createClass").length, 2);
+  assert.deepEqual(called("createAssignment")[0].args[0], {
+    classId: "new-1B",
+    teacherUserId: LAN.id,
+    assignedByUserId: manager.id,
+    assignedAt: NOV_2026,
+  });
+  assert.deepEqual(
+    result.created.map((item) => [
+      item.name,
+      item.homeroomTeacher?.username ?? null,
+    ]),
+    [
+      ["1A", null],
+      ["1B", "gvcn_lan"],
+    ],
+  );
+});
+
+void test("class import skips names that already exist in the academic year", async () => {
+  const { repository, called } = fakeRepository({
+    existingNames: ["1A"],
+    teachers: [LAN],
+  });
+  const result = await managementService(repository).importClasses(
+    importBody(
+      [
+        { rowNumber: 2, name: "1a", teacherUsername: "gvcn_lan" },
+        { rowNumber: 3, name: "1B" },
+      ],
+      false,
+    ),
+    manager,
+  );
+  assert.deepEqual(
+    result.rows.map((row) => [row.status, row.teacher]),
+    [
+      ["SKIP", null],
+      ["CREATE", null],
+    ],
+  );
+  assert.deepEqual(result.summary, { create: 1, skip: 1, error: 0 });
+  assert.equal(called("createClass").length, 1);
+  assert.equal(called("createAssignment").length, 0);
+});
+
+void test("class import reports row errors with reasons", async () => {
+  const { repository } = fakeRepository({
+    teachers: [LAN, HOA],
+    busyTeachers: { [HOA.id]: "2B" },
+  });
+  const result = await managementService(repository).importClasses(
+    importBody([
+      { rowNumber: 2, name: "   " },
+      { rowNumber: 3, name: "x".repeat(121) },
+      { rowNumber: 4, name: "1A", registeredMealPortions: -1 },
+      { rowNumber: 5, name: "1B", registeredMealPortions: "ba mươi" },
+      { rowNumber: 6, name: "1C", registeredMealPortions: 2.5 },
+      { rowNumber: 7, name: "1D" },
+      { rowNumber: 8, name: "1d" },
+      { rowNumber: 9, name: "1E", teacherUsername: "khong_ton_tai" },
+      { rowNumber: 10, name: "1F", teacherUsername: "gvcn_hoa" },
+      { rowNumber: 11, name: "1G", teacherUsername: "gvcn_lan" },
+      { rowNumber: 12, name: "1H", teacherUsername: "gvcn_lan" },
+    ]),
+    manager,
+  );
+  const byRow = new Map(result.rows.map((row) => [row.rowNumber, row]));
+  const reason = (rowNumber: number) =>
+    byRow.get(rowNumber)?.errors.join(" ") ?? "";
+  assert.match(reason(2), /bắt buộc/);
+  assert.match(reason(3), /120/);
+  assert.match(reason(4), /số nguyên không âm/);
+  assert.match(reason(5), /số nguyên không âm/);
+  assert.match(reason(6), /số nguyên không âm/);
+  assert.equal(byRow.get(7)?.status, "CREATE");
+  assert.match(reason(8), /trùng với dòng 7/);
+  assert.match(reason(9), /khong_ton_tai/);
+  assert.match(reason(10), /đang chủ nhiệm lớp 2B/);
+  assert.equal(byRow.get(11)?.status, "CREATE");
+  assert.match(reason(12), /đã được gán cho dòng 11/);
+  assert.deepEqual(result.summary, { create: 2, skip: 0, error: 9 });
+});
+
+void test("class import commit with errors is rejected without writes", async () => {
+  const { repository, called } = fakeRepository();
+  await assert.rejects(
+    managementService(repository).importClasses(
+      importBody(
+        [
+          { rowNumber: 2, name: "1A" },
+          { rowNumber: 3, name: "" },
+        ],
+        false,
+      ),
+      manager,
+    ),
+    (error: unknown) =>
+      isHttp(409)(error) && (error as Error).message.includes("1 dòng lỗi"),
+  );
+  assert.equal(called("createClass").length, 0);
+});
+
+void test("class import requires a writable year, the board role and assignment permission for teachers", async () => {
+  const { repository, called } = fakeRepository({ configuredYears: [] });
+  await assert.rejects(
+    managementService(repository).importClasses(
+      importBody([{ rowNumber: 2, name: "1A" }]),
+      manager,
+    ),
+    isHttp(409),
+  );
+  assert.equal(called("createClass").length, 0);
+
+  const teacher = principalWith("HOMEROOM_TEACHER", [
+    "class.view",
+    "class.manage",
+  ]);
+  await assert.rejects(
+    managementService(fakeRepository().repository, teacher).importClasses(
+      importBody([{ rowNumber: 2, name: "1A" }]),
+      teacher,
+    ),
+    isHttp(403),
+  );
+
+  const withoutAssign = principalWith("SCHOOL_MANAGEMENT_BOARD", [
+    "class.view",
+    "class.manage",
+  ]);
+  const plain = fakeRepository({ teachers: [LAN] });
+  const preview = await managementService(
+    plain.repository,
+    withoutAssign,
+  ).importClasses(importBody([{ rowNumber: 2, name: "1A" }]), withoutAssign);
+  assert.equal(preview.summary.create, 1);
+  await assert.rejects(
+    managementService(plain.repository, withoutAssign).importClasses(
+      importBody([{ rowNumber: 2, name: "1A", teacherUsername: "gvcn_lan" }]),
+      withoutAssign,
+    ),
+    isHttp(403),
+  );
+});
+
+void test("teacher lookup for import is scoped to active homeroom teachers of the school", async () => {
+  let where: unknown;
+  const repository = createClassRepository();
+  const tx = {
+    user: {
+      findMany: (args: { where: unknown }) => {
+        where = args.where;
+        return Promise.resolve([]);
+      },
+    },
+  } as unknown as Prisma.TransactionClient;
+  await repository.findTeachersByUsernames(tx, SCHOOL_ID, ["GVCN_Lan"]);
+  assert.deepEqual(where, {
+    schoolId: SCHOOL_ID,
+    roleCode: "HOMEROOM_TEACHER",
+    status: "ACTIVE",
+    OR: [{ username: { equals: "GVCN_Lan", mode: "insensitive" } }],
+  });
 });

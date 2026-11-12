@@ -26,6 +26,8 @@ import type {
   CreateClassRequestDTO,
   EligibleTeachersRequestDTO,
   HomeroomAssignmentRequestDTO,
+  ImportClassesRequestDTO,
+  ImportClassRowRequestDTO,
   UpdateClassRequestDTO,
 } from "./class.request.dto";
 import type {
@@ -36,6 +38,8 @@ import type {
   CopyClassesResponseDTO,
   EligibleTeachersResponseDTO,
   HomeroomAssignmentResponseDTO,
+  ImportClassesResponseDTO,
+  ImportRowResponseDTO,
 } from "./class.response.dto";
 
 const ASSIGN_PERMISSION = "class_assignment.manage";
@@ -227,6 +231,96 @@ async function requireAssignableClass(
     );
   }
   return target;
+}
+
+const MAX_PORTIONS = 2147483647;
+
+/** Ô số suất từ Excel: trống là 0; chấp nhận số hoặc chuỗi chữ số. */
+function parsePortions(
+  value: ImportClassRowRequestDTO["registeredMealPortions"],
+): number | null {
+  if (value === undefined || value === null) return 0;
+  const text = typeof value === "number" ? String(value) : value.trim();
+  if (text === "") return 0;
+  if (!/^\d+$/.test(text)) return null;
+  const parsed = Number(text);
+  return parsed <= MAX_PORTIONS ? parsed : null;
+}
+
+export interface ImportLookup {
+  existingNames: Set<string>;
+  teachers: Map<string, { id: string; fullName: string; username: string }>;
+  busyTeachers: Map<string, string>;
+}
+
+/** Tính trạng thái từng dòng nhập lớp từ dữ liệu đã truy vấn sẵn (không truy vấn DB). */
+export function evaluateImportRows(
+  rows: ImportClassRowRequestDTO[],
+  lookup: ImportLookup,
+): ImportRowResponseDTO[] {
+  const seenNames = new Map<string, number>();
+  const usedTeachers = new Map<string, number>();
+  return rows.map((row) => {
+    const name = row.name.trim();
+    const username = row.teacherUsername?.trim() || null;
+    const portions = parsePortions(row.registeredMealPortions);
+    const errors: string[] = [];
+    if (!name) errors.push("Tên lớp là bắt buộc");
+    else if (name.length > 120) errors.push("Tên lớp tối đa 120 ký tự");
+    if (portions === null) {
+      errors.push("Số suất đăng ký phải là số nguyên không âm");
+    }
+    const key = nameKey(name);
+    if (name) {
+      const firstRow = seenNames.get(key);
+      if (firstRow !== undefined) {
+        errors.push(`Tên lớp trùng với dòng ${firstRow} trong file`);
+      } else {
+        seenNames.set(key, row.rowNumber);
+      }
+    }
+    const base = {
+      rowNumber: row.rowNumber,
+      name,
+      registeredMealPortions: portions,
+    };
+    if (!errors.length && lookup.existingNames.has(key)) {
+      return {
+        ...base,
+        teacher: null,
+        status: "SKIP" as const,
+        errors: ["Lớp đã tồn tại trong niên khóa, bỏ qua dòng này"],
+      };
+    }
+    let teacher: ImportRowResponseDTO["teacher"] = null;
+    if (username) {
+      const found = lookup.teachers.get(username.toLocaleLowerCase("vi"));
+      const busyClass = found && lookup.busyTeachers.get(found.id);
+      const usedRow = found && usedTeachers.get(found.id);
+      if (!found) {
+        errors.push(
+          `Không tìm thấy GVCN đang hoạt động có tài khoản "${username}"`,
+        );
+      } else if (busyClass) {
+        errors.push(
+          `${found.fullName} đang chủ nhiệm lớp ${busyClass} trong niên khóa`,
+        );
+      } else if (usedRow !== undefined) {
+        errors.push(
+          `${found.fullName} đã được gán cho dòng ${usedRow} trong file`,
+        );
+      } else {
+        teacher = found;
+        if (!errors.length) usedTeachers.set(found.id, row.rowNumber);
+      }
+    }
+    return {
+      ...base,
+      teacher,
+      status: errors.length ? ("ERROR" as const) : ("CREATE" as const),
+      errors,
+    };
+  });
 }
 
 export function createClassService(
@@ -636,6 +730,119 @@ export function createClassService(
             created.push(classDto(row, now));
           }
           return { toAcademicYear, created, skipped };
+        },
+      );
+    },
+
+    async importClasses(
+      body: ImportClassesRequestDTO,
+      principal: AuthPrincipal,
+    ): Promise<ImportClassesResponseDTO> {
+      const db = await connect();
+      const now = clock();
+      return withSchoolTransaction(
+        db,
+        principal,
+        MANAGE_PERMISSION,
+        async (tx, actor, schoolId) => {
+          assertManagementBoard(actor, MANAGE_ROLE_MESSAGE);
+          const academicYear = await requireWritableYear(
+            repository,
+            tx,
+            schoolId,
+            body.academicYear,
+            now,
+          );
+          const names = [
+            ...new Set(
+              body.rows
+                .map((row) => row.name.trim())
+                .filter((name) => name && name.length <= 120),
+            ),
+          ];
+          const usernames = [
+            ...new Set(
+              body.rows
+                .map((row) => row.teacherUsername?.trim())
+                .filter((value): value is string => Boolean(value)),
+            ),
+          ];
+          if (usernames.length) assertPermission(actor, ASSIGN_PERMISSION);
+          const existing = names.length
+            ? await repository.findNameConflicts(
+                tx,
+                schoolId,
+                academicYear,
+                names,
+              )
+            : [];
+          const teacherRows = usernames.length
+            ? await repository.findTeachersByUsernames(tx, schoolId, usernames)
+            : [];
+          const busy = teacherRows.length
+            ? await repository.findBusyTeachers(
+                tx,
+                teacherRows.map((teacher) => teacher.id),
+                schoolId,
+                academicYear,
+              )
+            : [];
+          const rows = evaluateImportRows(body.rows, {
+            existingNames: new Set(existing.map((item) => nameKey(item.name))),
+            teachers: new Map(
+              teacherRows.map((teacher) => [
+                teacher.username.toLocaleLowerCase("vi"),
+                teacher,
+              ]),
+            ),
+            busyTeachers: new Map(
+              busy.map((item) => [item.teacherUserId, item.className]),
+            ),
+          });
+          const summary = {
+            create: rows.filter((row) => row.status === "CREATE").length,
+            skip: rows.filter((row) => row.status === "SKIP").length,
+            error: rows.filter((row) => row.status === "ERROR").length,
+          };
+          const result = { academicYear, dryRun: body.dryRun, summary, rows };
+          if (body.dryRun) return { ...result, created: [] };
+          if (summary.error) {
+            throw new HttpError(
+              409,
+              `File còn ${summary.error} dòng lỗi, hãy sửa rồi nhập lại`,
+            );
+          }
+          const created: ClassListItemResponseDTO[] = [];
+          for (const row of rows) {
+            if (row.status !== "CREATE") continue;
+            const classRow = await uniqueWrite(
+              repository.createClass(tx, {
+                schoolId,
+                academicYear,
+                name: row.name,
+                registeredMealPortions: row.registeredMealPortions ?? 0,
+              }),
+            );
+            const dto = classDto(classRow, now);
+            if (!row.teacher) {
+              created.push(dto);
+              continue;
+            }
+            const assignment = await repository.createAssignment(tx, {
+              classId: classRow.id,
+              teacherUserId: row.teacher.id,
+              assignedByUserId: actor.id,
+              assignedAt: now,
+            });
+            created.push({
+              ...dto,
+              homeroomTeacher: {
+                ...row.teacher,
+                assignedAt: assignment.assignedAt.toISOString(),
+              },
+            });
+          }
+          return { ...result, created };
         },
       );
     },
