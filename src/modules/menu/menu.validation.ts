@@ -240,6 +240,8 @@ const writeDishSchema = z
     ingredients: dish.ingredients,
   }));
 const writeMealSchema = z.strictObject({
+  useDishRecipes: z.boolean().optional(),
+  portionGroups: menuPortionGroupsSchema.shape.groups.optional(),
   mealType: mealTypeSchema,
   dishes: z
     .array(writeDishSchema, { error: "Danh sách món không hợp lệ" })

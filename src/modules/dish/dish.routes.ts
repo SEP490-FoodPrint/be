@@ -1,7 +1,11 @@
 import { Router } from "express";
 import type { RequestHandler } from "express";
 import { authenticate } from "../../middlewares/auth.middleware";
-import { requireResource } from "../../middlewares/permission.middleware";
+import {
+  requireResource,
+  requirePermission,
+} from "../../middlewares/permission.middleware";
+import { dishRecipeController } from "./dish.controller";
 import { createDishController } from "./dish.controller";
 import { dishService, type DishService } from "./dish.service";
 
@@ -11,6 +15,36 @@ export function createDishRouter(
 ) {
   const router = Router();
   const controller = createDishController(service);
+  router.get(
+    "/catalog",
+    authHandler,
+    requirePermission("menu.view"),
+    dishRecipeController.catalog,
+  );
+  router.get(
+    "/recipe-options",
+    authHandler,
+    requirePermission("menu.view"),
+    dishRecipeController.options,
+  );
+  router.post(
+    "/recipe-preview",
+    authHandler,
+    requirePermission("menu.view"),
+    dishRecipeController.preview,
+  );
+  router.post(
+    "/",
+    authHandler,
+    requirePermission("menu.create"),
+    dishRecipeController.create,
+  );
+  router.put(
+    "/:id",
+    authHandler,
+    requirePermission("menu.update"),
+    dishRecipeController.update,
+  );
   router.get("/", authHandler, requireResource("dish"), controller.getAll);
   return router;
 }

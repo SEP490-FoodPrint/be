@@ -461,13 +461,18 @@ export const menuRepository = {
 
         status: "ACTIVE",
 
-        Supplier: {
-          status: "ACTIVE",
+        OR: [
+          { ingredientEntries: { some: { schoolId, status: "ACTIVE" } } },
+          {
+            Supplier: {
+              status: "ACTIVE",
 
-          schoolSupplierRelationships: {
-            some: { schoolId, status: "ACTIVE" },
+              schoolSupplierRelationships: {
+                some: { schoolId, status: "ACTIVE" },
+              },
+            },
           },
-        },
+        ],
       },
 
       select: { id: true, name: true },
@@ -488,6 +493,7 @@ export const menuRepository = {
       },
 
       select: {
+        ingredientEntryId: true,
         classId: true,
 
         affectedCount: true,

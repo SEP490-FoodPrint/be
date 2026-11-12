@@ -3,6 +3,56 @@ import { asyncHandler } from "../../utils/async-handler";
 import { sendSuccess } from "../../utils/response";
 import { dishService, type DishService } from "./dish.service";
 import { validateDishListQuery } from "./dish.validation";
+import { validateDishRecipe, validateRecipeSelection } from "./dish.validation";
+import { dishRecipeService } from "./dish.service";
+import { uuid } from "../../utils/auth-validation";
+
+export const dishRecipeController = {
+  catalog: asyncHandler(async (req, res) => {
+    sendSuccess(
+      res,
+      await dishRecipeService.catalog(
+        validateDishListQuery(req.query),
+        requirePrincipal(req),
+      ),
+    );
+  }),
+  options: asyncHandler(async (req, res) => {
+    sendSuccess(res, await dishRecipeService.options(requirePrincipal(req)));
+  }),
+  preview: asyncHandler(async (req, res) => {
+    sendSuccess(
+      res,
+      await dishRecipeService.preview(
+        validateRecipeSelection(req.body).dishIds,
+        requirePrincipal(req),
+      ),
+    );
+  }),
+  create: asyncHandler(async (req, res) => {
+    sendSuccess(
+      res,
+      await dishRecipeService.save(
+        undefined,
+        validateDishRecipe(req.body),
+        requirePrincipal(req),
+      ),
+      "Đã lưu món và công thức",
+      201,
+    );
+  }),
+  update: asyncHandler(async (req, res) => {
+    sendSuccess(
+      res,
+      await dishRecipeService.save(
+        uuid(req.params.id),
+        validateDishRecipe(req.body),
+        requirePrincipal(req),
+      ),
+      "Đã cập nhật công thức",
+    );
+  }),
+};
 
 export function createDishController(service: DishService = dishService) {
   return {
