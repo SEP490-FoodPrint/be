@@ -25,3 +25,10 @@ Mở rộng module `src/modules/class/`, không tạo module mới, không đổ
 ## Validation strategy
 
 `npm run validate` và `npm run test:unit`; test mới trong `tests/class-assignment.test.ts` dùng fake repository.
+
+## Verification results
+
+- ESLint toàn repo PASS. Typecheck PASS, build PASS.
+- `npm run test:unit` PASS 300/300, gồm 8 test mới cho nhập lớp: validation cấu trúc (rỗng, hơn 300 dòng, thừa trường, `schoolId` trong body), xem trước không ghi, lưu tạo lớp kèm GVCN, tên đã tồn tại là `SKIP`, lỗi theo từng dòng (tên rỗng/dài, số suất âm/không phải số nguyên, trùng tên trong file, GVCN không tồn tại/đang bận/gán hai dòng), lưu khi còn lỗi trả 409, niên khóa chưa cấu hình 409, không phải BGH 403, thiếu `class_assignment.manage` khi có cột GVCN 403, truy vấn giáo viên lọc theo trường.
+- Prettier trên các file thay đổi PASS. `npm run format:check` toàn repo vẫn báo lỗi CRLF có từ trước (`core.autocrlf=true`).
+- Không có migration, DDL, permission mới hay kết nối Azure.

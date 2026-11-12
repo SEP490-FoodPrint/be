@@ -12,6 +12,7 @@ import {
   validateUpdateClass,
   validateClassStatus,
   validateCopyClasses,
+  validateImportClasses,
 } from "./class.validation";
 
 export function createClassController(service: ClassService = classService) {
@@ -106,6 +107,17 @@ export function createClassController(service: ClassService = classService) {
         "Sao chép danh sách lớp thành công",
         201,
       );
+    }),
+    importClasses: asyncHandler(async (req, res) => {
+      const result = await service.importClasses(
+        validateImportClasses(req.body),
+        requirePrincipal(req),
+      );
+      if (result.dryRun) {
+        sendSuccess(res, result, "Đã kiểm tra file nhập lớp");
+        return;
+      }
+      sendSuccess(res, result, `Đã nhập ${result.created.length} lớp học`, 201);
     }),
   };
 }

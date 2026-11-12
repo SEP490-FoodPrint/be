@@ -49,3 +49,19 @@ export interface CopyClassesResponseDTO {
   created: ClassItemDTO[];
   skipped: string[];
 }
+export type ImportRowStatus = "CREATE" | "SKIP" | "ERROR";
+export interface ImportRowResponseDTO {
+  rowNumber: number;
+  name: string;
+  registeredMealPortions: number | null;
+  teacher: { id: string; fullName: string; username: string } | null;
+  status: ImportRowStatus;
+  errors: string[];
+}
+export interface ImportClassesResponseDTO {
+  academicYear: string;
+  dryRun: boolean;
+  summary: { create: number; skip: number; error: number };
+  rows: ImportRowResponseDTO[];
+  created: ClassItemDTO[];
+}

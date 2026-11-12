@@ -39,6 +39,12 @@ export function createClassRouter(
     controller.removeHomeroomTeacher,
   );
   router.post(
+    "/import",
+    authHandler,
+    requirePermission("class.manage"),
+    controller.importClasses,
+  );
+  router.post(
     "/copy",
     authHandler,
     requirePermission("class.manage"),

@@ -60,6 +60,8 @@ Admin tổ chức chỉ bật/tắt quyền role đã có cho tài khoản ACTIV
 
 `POST /api/classes`, `POST /api/classes/copy`, `PATCH /api/classes/:classId` và `PATCH /api/classes/:classId/status` yêu cầu `class.manage`. Service bắt buộc role `SCHOOL_MANAGEMENT_BOARD`, tổ chức `SCHOOL` và lấy `schoolId` từ principal được nạp lại trong transaction khóa trường; không nhận `schoolId` từ request. Lớp ngoài trường trả 404. Niên khóa phải được cấu hình trong `school_academic_years` của trường và còn là năm hiện tại/sắp tới, nếu không trả 409; tên lớp trùng (không phân biệt hoa thường, tính cả lớp INACTIVE) trả 409. Không có xóa cứng: ngừng hoạt động lớp đóng phân công GVCN hiện tại trong cùng transaction. Catalog chỉ khai báo grant mặc định cho Ban Giám hiệu; đồng bộ vào database vẫn qua bootstrap đã được phê duyệt.
 
+`POST /api/classes/import` (nhập lớp từ Excel, frontend gửi dữ liệu đã đọc dưới dạng JSON) cũng yêu cầu `class.manage` và role Ban Giám hiệu; nếu có dòng điền `teacherUsername` thì cần thêm `class_assignment.manage`. Giáo viên được tra cứu trong chính trường của principal (chỉ tài khoản `HOMEROOM_TEACHER` ACTIVE). `dryRun: true` không ghi gì; lưu khi còn dòng lỗi trả 409, nếu không thì mọi lớp và phân công được tạo trong một transaction.
+
 Dùng envelope hiện có. Thiếu/sai token: 401; không ACTIVE khi gọi API nghiệp vụ hoặc thiếu quyền: 403; tài khoản đích ngoài phạm vi: 404; DTO sai: 400; permission trùng: 409; DB không sẵn sàng: 503.
 
 | API                                                        | Điều kiện/nội dung                                                                                                                          |
