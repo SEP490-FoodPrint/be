@@ -66,6 +66,10 @@ import { createMealAttendanceService } from "../src/modules/meal-attendance/meal
 import { validateDailyPortionGroups } from "../src/modules/meal-attendance/meal-attendance.validation";
 import { createMealAllocationService } from "../src/modules/meal-allocation/meal-allocation.service";
 import {
+  allocationFixtureClock,
+  loadAllocationFixture,
+} from "./helpers/meal-allocation-fixture";
+import {
   validateFoodSample,
   validateSampleDisposal,
 } from "../src/modules/retained-sample/retained-sample.validation";
@@ -723,9 +727,6 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       const attendance = createMealAttendanceService(undefined, () =>
         Promise.resolve(db),
       );
-      const allocationService = createMealAllocationService(undefined, () =>
-        Promise.resolve(db),
-      );
       const teacherPrincipal = await loadPrincipal(teacher.id, db);
       const grRice = await stock("Group rice", [6, 3.6]),
         grMilk = await stock("Group milk", [2]),
@@ -1009,14 +1010,6 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       );
       const grAll = grPlan.batches;
       for (const grBatch of grAll) await batches.confirm(grBatch.id, chef);
-      await assert.rejects(
-        () =>
-          allocationService.create(
-            { dailyMealPortionId: grDaily.id, menuDayId: grDay.id },
-            chef,
-          ),
-        (e: unknown) => e instanceof HttpError && e.statusCode === 409,
-      );
       for (const [index, grBatch] of grAll.entries()) {
         const grComplete = await batches.complete(grBatch.id, chef);
         assert.equal(
@@ -1030,31 +1023,221 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         }),
         1,
       );
-      const grAllocation = await allocationService.create(
-        { dailyMealPortionId: grDaily.id, menuDayId: grDay.id },
+      const groupAllocation = createMealAllocationService(
+        () => Promise.resolve(db),
+        () => new Date("2032-01-05T03:00:00Z"),
+      );
+      assert.equal((await groupAllocation.getToday(chef)).status, "RECONCILE");
+
+      const allocationService = createMealAllocationService(
+        () => Promise.resolve(db),
+        allocationFixtureClock,
+      );
+      const seed = (state: "cooking" | "samples" | "ready") =>
+        loadAllocationFixture(db, school.id, chef.id, teacher.id, state);
+      const {
+        batchIds: [a, b],
+        demandIds: [classA, classB, classC],
+      } = await seed("cooking");
+      assert.equal(
+        (await allocationService.getToday(chef)).status,
+        "COOKING_PENDING",
+      );
+      await seed("samples");
+      const sampleGate = await allocationService.getToday(chef);
+      assert.equal(sampleGate.status, "SAMPLES_PENDING");
+      assert.equal(sampleGate.totals.sampled, 60);
+      assert.equal(sampleGate.missingSampleBatches, 1);
+      await seed("ready");
+      const ready = await allocationService.getToday(chef);
+      assert.equal(ready.status, "READY");
+      assert.equal(ready.totals.sampled, 100);
+      const payload = {
+        revision: ready.revision,
+        batches: [
+          {
+            cookingBatchId: a,
+            entries: [
+              { dailyMealPortionId: classA, allocatedPortions: 40 },
+              { dailyMealPortionId: classB, allocatedPortions: 20 },
+            ],
+          },
+          {
+            cookingBatchId: b,
+            entries: [
+              { dailyMealPortionId: classB, allocatedPortions: 15 },
+              { dailyMealPortionId: classC, allocatedPortions: 25 },
+            ],
+          },
+        ],
+      };
+      const otherKitchen = await user("SCHOOL_KITCHEN_STAFF", {
+        schoolId: schoolB.id,
+      });
+      const otherChef = await loadPrincipal(otherKitchen.id, db);
+      assert.equal(
+        (await allocationService.getToday(otherChef)).status,
+        "EMPTY",
+      );
+      await assert.rejects(() => allocationService.apply(payload, otherChef), {
+        statusCode: 409,
+      });
+      const invalid = structuredClone(payload);
+      invalid.batches[1].entries[0].allocatedPortions += 1;
+      await assert.rejects(() => allocationService.apply(invalid, chef), {
+        statusCode: 409,
+      });
+      assert.equal(
+        await db.mealAllocationBatch.count({
+          where: { cookingBatchId: { in: [a, b] } },
+        }),
+        0,
+      );
+      const race = await Promise.allSettled([
+        allocationService.apply(payload, chef),
+        allocationService.apply(payload, chef),
+      ]);
+      assert.equal(
+        race.filter((result) => result.status === "fulfilled").length,
+        1,
+      );
+      assert.equal(
+        race.filter(
+          (result) =>
+            result.status === "rejected" &&
+            result.reason instanceof HttpError &&
+            result.reason.statusCode === 409,
+        ).length,
+        1,
+      );
+      const savedAllocation = await allocationService.getToday(chef);
+      assert.equal(
+        savedAllocation.batches
+          .find((batch) => batch.id === a)
+          ?.entries.reduce((sum, entry) => sum + entry.allocatedPortions, 0),
+        60,
+      );
+      assert.equal(
+        await db.mealAllocationBatch.count({
+          where: { cookingBatchId: { in: [a, b] } },
+        }),
+        8,
+      );
+      const revisedBatches = structuredClone(payload.batches);
+      revisedBatches[0].entries[1].allocatedPortions = 10;
+      const revised = await allocationService.apply(
+        { revision: savedAllocation.revision, batches: revisedBatches },
         chef,
       );
-      const grDistributed = new Map<string, number>();
-      for (const row of grAllocation.mealAllocationBatches)
-        grDistributed.set(
-          row.dishId,
-          (grDistributed.get(row.dishId) ?? 0) + row.allocatedPortions,
-        );
-      assert.equal(grDistributed.get(grCommon), 120);
-      assert.equal(grDistributed.get(grRegular), 107);
-      assert.equal(grDistributed.get(grAlt), 13);
-      assert.equal(
-        (
-          await allocationService.create(
-            { dailyMealPortionId: grDaily.id, menuDayId: grDay.id },
-            chef,
-          )
-        ).created,
-        false,
+      const revisedRows = await db.mealAllocationBatch.findMany({
+        where: {
+          cookingBatchId: a,
+          MealAllocation: { dailyMealPortionId: classB },
+        },
+        select: { allocatedPortions: true },
+      });
+      assert.deepEqual(
+        revisedRows.map((row) => row.allocatedPortions),
+        [10, 10],
       );
       assert.equal(
-        (await allocationService.distribute(grAllocation.id, chef)).status,
-        "DISTRIBUTED",
+        revised.batches
+          .find((batch) => batch.id === b)
+          ?.entries.find((entry) => entry.dailyMealPortionId === classB)
+          ?.allocatedPortions,
+        15,
+      );
+      const cleared = await allocationService.apply(
+        {
+          revision: revised.revision,
+          batches: payload.batches.map((batch) => ({ ...batch, entries: [] })),
+        },
+        chef,
+      );
+      assert.equal(cleared.batches.flatMap((batch) => batch.entries).length, 0);
+      const restored = await allocationService.apply(
+        { revision: cleared.revision, batches: payload.batches },
+        chef,
+      );
+      assert.equal(
+        restored.batches.flatMap((batch) => batch.entries).length,
+        4,
+      );
+      const confirmation = { revision: restored.revision };
+      await assert.rejects(
+        () => allocationService.confirmDistribution(confirmation, otherChef),
+        { statusCode: 409 },
+      );
+      await assert.rejects(
+        () =>
+          allocationService.confirmDistribution(confirmation, {
+            ...chef,
+            permissions: [],
+          }),
+        { statusCode: 403 },
+      );
+      await assert.rejects(
+        () =>
+          allocationService.confirmDistribution(confirmation, {
+            ...chef,
+            role: "HOMEROOM_TEACHER",
+          }),
+        { statusCode: 403 },
+      );
+      const distributionRace = await Promise.allSettled([
+        allocationService.confirmDistribution(confirmation, chef),
+        allocationService.apply(
+          { ...confirmation, batches: revisedBatches },
+          chef,
+        ),
+      ]);
+      assert.equal(
+        distributionRace.filter((result) => result.status === "fulfilled")
+          .length,
+        1,
+      );
+      const current = await allocationService.getToday(chef);
+      if (current.distribution.status === "PENDING") {
+        await assert.rejects(
+          () =>
+            allocationService.confirmDistribution(
+              { revision: current.revision },
+              chef,
+            ),
+          { statusCode: 409 },
+        );
+        const complete = await allocationService.apply(
+          { revision: current.revision, batches: payload.batches },
+          chef,
+        );
+        await allocationService.confirmDistribution(
+          { revision: complete.revision },
+          chef,
+        );
+      }
+      const repeated = await allocationService.confirmDistribution(
+        confirmation,
+        chef,
+      );
+      assert.equal(repeated.distribution.status, "DISTRIBUTED");
+      assert.ok(repeated.demands.every((demand) => demand.locked));
+      const delivered = await db.mealAllocation.findMany({
+        where: { dailyMealPortionId: { in: [classA, classB, classC] } },
+      });
+      assert.equal(delivered.length, 3);
+      for (const allocation of delivered) {
+        assert.equal(allocation.status, "DISTRIBUTED");
+        assert.equal(allocation.distributedByUserId, chef.id);
+        assert.deepEqual(allocation.distributedAt, allocationFixtureClock());
+      }
+      const nextDay = createMealAllocationService(
+        () => Promise.resolve(db),
+        () => new Date("2026-11-12T17:00:00Z"),
+      );
+      assert.equal((await nextDay.getToday(chef)).date, "2026-11-13");
+      await assert.rejects(
+        () => nextDay.confirmDistribution(confirmation, chef),
+        { statusCode: 409 },
       );
     },
   );

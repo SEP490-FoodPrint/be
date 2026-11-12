@@ -56,6 +56,12 @@ Admin tổ chức chỉ bật/tắt quyền role đã có cho tài khoản ACTIV
 
 `GET /api/schools/me/academic-years` và `GET /api/schools/me/academic-years/:id` yêu cầu `school_academic_year.view`. `POST` và `PATCH` trên cùng resource yêu cầu `school_academic_year.manage`. Ngoài permission hiệu lực, service bắt buộc role `SCHOOL_MANAGEMENT_BOARD`, tổ chức `SCHOOL` và `schoolId` từ principal; không nhận `schoolId` từ request. Record ngoài trường trả 404. Catalog chỉ khai báo grant mặc định cho Ban Giám hiệu; việc đồng bộ permission vào database đang chạy vẫn là thao tác bootstrap/operator được phê duyệt, không diễn ra khi khởi động API.
 
+### Quản lý lớp học của trường
+
+`POST /api/classes`, `POST /api/classes/copy`, `PATCH /api/classes/:classId` và `PATCH /api/classes/:classId/status` yêu cầu `class.manage`. Service bắt buộc role `SCHOOL_MANAGEMENT_BOARD`, tổ chức `SCHOOL` và lấy `schoolId` từ principal được nạp lại trong transaction khóa trường; không nhận `schoolId` từ request. Lớp ngoài trường trả 404. Niên khóa phải được cấu hình trong `school_academic_years` của trường và còn là năm hiện tại/sắp tới, nếu không trả 409; tên lớp trùng (không phân biệt hoa thường, tính cả lớp INACTIVE) trả 409. Không có xóa cứng: ngừng hoạt động lớp đóng phân công GVCN hiện tại trong cùng transaction. Catalog chỉ khai báo grant mặc định cho Ban Giám hiệu; đồng bộ vào database vẫn qua bootstrap đã được phê duyệt.
+
+`POST /api/classes/import` (nhập lớp từ Excel, frontend gửi dữ liệu đã đọc dưới dạng JSON) cũng yêu cầu `class.manage` và role Ban Giám hiệu; nếu có dòng điền `teacherUsername` thì cần thêm `class_assignment.manage`. Giáo viên được tra cứu trong chính trường của principal (chỉ tài khoản `HOMEROOM_TEACHER` ACTIVE). `dryRun: true` không ghi gì; lưu khi còn dòng lỗi trả 409, nếu không thì mọi lớp và phân công được tạo trong một transaction.
+
 Dùng envelope hiện có. Thiếu/sai token: 401; không ACTIVE khi gọi API nghiệp vụ hoặc thiếu quyền: 403; tài khoản đích ngoài phạm vi: 404; DTO sai: 400; permission trùng: 409; DB không sẵn sàng: 503.
 
 | API                                                        | Điều kiện/nội dung                                                                                                                          |
@@ -127,6 +133,13 @@ Mọi dòng đều yêu cầu một trong các permission liệt kê. SYSTEM có
 | `traceability`                | `traceability.view`                                                                | SCHOOL, SUPPLIER, AUTHORITY  |
 
 School xem supplier qua quan hệ ACTIVE/SUSPENDED; ingredient qua IngredientEntry của trường. Supplier xem tài nguyên supplier-owned hoặc delivery của supplier khi có permission phù hợp. ATTP xã chỉ thấy incident/report chuyển tới đơn vị mình; traceability chỉ mở phần liên quan trực tiếp. Với ingredient_quality_feedback.view_own, thêm điều kiện submittedByUserId; view_details vẫn giới hạn tổ chức. Các API cũ giữ phân trang, safe select và serialization Date/Decimal/BigInt.
+
+## API phân bổ suất ăn hôm nay
+
+- `GET /api/meal-allocations` yêu cầu `meal_allocation.view` trong phạm vi trường. Trả trạng thái nấu, lưu mẫu, dữ liệu lô và phiên bản phân bổ.
+- `PUT /api/meal-allocations` yêu cầu `meal_allocation.update`, và `meal_allocation.create` khi tạo hồ sơ lớp. BE kiểm lại điều kiện của cả ngày và ghi nguyên tử.
+- `POST /api/meal-allocations/confirm-distribution` yêu cầu vai trò `SCHOOL_KITCHEN_STAFF` và quyền hiệu lực `meal_allocation.update`. Xác nhận toàn bộ phân bổ đủ điều kiện trong ngày của trường từ phiên đăng nhập. Yêu cầu `revision` để kiểm tra phiên bản dữ liệu trước khi ghi.
+- Dùng ngày ăn hiện tại theo giờ Việt Nam. Hợp đồng này thay các route đọc chi tiết, tạo tự động, xác nhận phân phối và alias v1 của module.
 
 ## API Menu và CookingBatch v1
 

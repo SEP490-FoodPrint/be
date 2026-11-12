@@ -1,50 +1,34 @@
-import { requirePrincipal } from "../../utils/authorization";
 import { asyncHandler } from "../../utils/async-handler";
+import { requirePrincipal } from "../../utils/authorization";
 import { sendSuccess } from "../../utils/response";
+import type { MealAllocationService } from "./meal-allocation.service";
 import {
-  mealAllocationService,
-  type MealAllocationService,
-} from "./meal-allocation.service";
-import {
-  validateMealAllocationListQuery,
-  validateMealAllocationCreate,
+  validateAllocationApply,
+  validateAllocationQuery,
+  validateConfirmDistribution,
 } from "./meal-allocation.validation";
-import { uuid, objectBody } from "../../utils/auth-validation";
 
-export function createMealAllocationController(
-  service: MealAllocationService = mealAllocationService,
-) {
+export function createMealAllocationController(service: MealAllocationService) {
   return {
-    getOne: asyncHandler(async (req, res) => {
+    getToday: asyncHandler(async (req, res) => {
+      validateAllocationQuery(req.query);
+      sendSuccess(res, await service.getToday(requirePrincipal(req)));
+    }),
+    apply: asyncHandler(async (req, res) => {
+      const input = validateAllocationApply(req.body);
       sendSuccess(
         res,
-        await service.getOne(uuid(req.params.id), requirePrincipal(req)),
+        await service.apply(input, requirePrincipal(req)),
+        "Đã áp dụng phân bổ suất ăn",
       );
     }),
-    create: asyncHandler(async (req, res) => {
-      const result = await service.create(
-        validateMealAllocationCreate(req.body),
-        requirePrincipal(req),
-      );
+    confirmDistribution: asyncHandler(async (req, res) => {
+      const input = validateConfirmDistribution(req.body);
       sendSuccess(
         res,
-        result,
-        "Đã phân bổ các món theo nhóm suất đã chốt",
-        result.created ? 201 : 200,
+        await service.confirmDistribution(input, requirePrincipal(req)),
+        "Đã xác nhận giao suất ăn trong ngày",
       );
-    }),
-    distribute: asyncHandler(async (req, res) => {
-      objectBody(req.body ?? {}, []);
-      sendSuccess(
-        res,
-        await service.distribute(uuid(req.params.id), requirePrincipal(req)),
-        "Đã ghi nhận phân phối suất ăn",
-      );
-    }),
-    getAll: asyncHandler(async (req, res) => {
-      const query = validateMealAllocationListQuery(req.query);
-      const result = await service.getAll(query, requirePrincipal(req));
-      sendSuccess(res, result, "Lấy danh sách phân bổ suất ăn thành công");
     }),
   };
 }

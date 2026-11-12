@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from "../../generated/prisma/client";
+import type { EntityStatus } from "../../generated/prisma/enums";
 import type { AuthPrincipal } from "../../types/auth";
 import { ROLES } from "../../constants/roles";
 import { getPrisma } from "../../utils/database";
@@ -100,6 +101,61 @@ export interface ClassRepository {
       assignedAt: Date;
     },
   ): Promise<{ assignedAt: Date }>;
+  findConfiguredAcademicYear(
+    tx: Prisma.TransactionClient,
+    schoolId: string,
+    academicYear: string,
+  ): Promise<{ academicYear: string } | null>;
+  findNameConflicts(
+    tx: Prisma.TransactionClient,
+    schoolId: string,
+    academicYear: string,
+    names: string[],
+    excludeClassId?: string,
+  ): Promise<Array<{ name: string }>>;
+  createClass(
+    tx: Prisma.TransactionClient,
+    input: ClassWriteInput & { schoolId: string; academicYear: string },
+  ): Promise<ClassListRow>;
+  updateClass(
+    tx: Prisma.TransactionClient,
+    classId: string,
+    schoolId: string,
+    input: Partial<ClassWriteInput>,
+  ): Promise<ClassListRow>;
+  updateStatus(
+    tx: Prisma.TransactionClient,
+    classId: string,
+    schoolId: string,
+    status: EntityStatus,
+  ): Promise<ClassListRow>;
+  listActiveClassesForCopy(
+    tx: Prisma.TransactionClient,
+    schoolId: string,
+    academicYear: string,
+  ): Promise<ClassWriteInput[]>;
+  findTeacherClassInYear(
+    tx: Prisma.TransactionClient,
+    teacherUserId: string,
+    schoolId: string,
+    academicYear: string,
+  ): Promise<{ id: string; name: string } | null>;
+  findTeachersByUsernames(
+    tx: Prisma.TransactionClient,
+    schoolId: string,
+    usernames: string[],
+  ): Promise<TeacherRow[]>;
+  findBusyTeachers(
+    tx: Prisma.TransactionClient,
+    teacherUserIds: string[],
+    schoolId: string,
+    academicYear: string,
+  ): Promise<Array<{ teacherUserId: string; className: string }>>;
+}
+
+export interface ClassWriteInput {
+  name: string;
+  registeredMealPortions: number;
 }
 
 export function createClassRepository(
@@ -219,6 +275,96 @@ export function createClassRepository(
         data: input,
         select: { assignedAt: true },
       });
+    },
+
+    findConfiguredAcademicYear(tx, schoolId, academicYear) {
+      return tx.schoolAcademicYear.findFirst({
+        where: { schoolId, academicYear },
+        select: { academicYear: true },
+      });
+    },
+
+    findNameConflicts(tx, schoolId, academicYear, names, excludeClassId) {
+      return tx.class.findMany({
+        where: {
+          schoolId,
+          academicYear,
+          OR: names.map((name) => ({
+            name: { equals: name, mode: "insensitive" as const },
+          })),
+          ...(excludeClassId ? { id: { not: excludeClassId } } : {}),
+        },
+        select: { name: true },
+      });
+    },
+
+    createClass(tx, input) {
+      return tx.class.create({ data: input, select: classListSelect });
+    },
+
+    updateClass(tx, classId, schoolId, input) {
+      return tx.class.update({
+        where: { id: classId, schoolId },
+        data: input,
+        select: classListSelect,
+      });
+    },
+
+    updateStatus(tx, classId, schoolId, status) {
+      return tx.class.update({
+        where: { id: classId, schoolId },
+        data: { status },
+        select: classListSelect,
+      });
+    },
+
+    listActiveClassesForCopy(tx, schoolId, academicYear) {
+      return tx.class.findMany({
+        where: { schoolId, academicYear, status: "ACTIVE" },
+        select: { name: true, registeredMealPortions: true },
+        orderBy: [{ name: "asc" }, { id: "asc" }],
+      });
+    },
+
+    async findTeacherClassInYear(tx, teacherUserId, schoolId, academicYear) {
+      const assignment = await tx.classHomeroomAssignment.findFirst({
+        where: {
+          teacherUserId,
+          endedAt: null,
+          Class: { schoolId, academicYear },
+        },
+        select: { Class: { select: { id: true, name: true } } },
+      });
+      return assignment?.Class ?? null;
+    },
+
+    findTeachersByUsernames(tx, schoolId, usernames) {
+      return tx.user.findMany({
+        where: {
+          schoolId,
+          roleCode: ROLES.HOMEROOM_TEACHER,
+          status: "ACTIVE",
+          OR: usernames.map((username) => ({
+            username: { equals: username, mode: "insensitive" as const },
+          })),
+        },
+        select: teacherSelect,
+      });
+    },
+
+    async findBusyTeachers(tx, teacherUserIds, schoolId, academicYear) {
+      const rows = await tx.classHomeroomAssignment.findMany({
+        where: {
+          teacherUserId: { in: teacherUserIds },
+          endedAt: null,
+          Class: { schoolId, academicYear },
+        },
+        select: { teacherUserId: true, Class: { select: { name: true } } },
+      });
+      return rows.map((row) => ({
+        teacherUserId: row.teacherUserId,
+        className: row.Class.name,
+      }));
     },
   };
 }

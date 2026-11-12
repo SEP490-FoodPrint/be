@@ -8,6 +8,11 @@ import {
   validateClassIdParams,
   validateEligibleTeachersQuery,
   validateHomeroomAssignment,
+  validateCreateClass,
+  validateUpdateClass,
+  validateClassStatus,
+  validateCopyClasses,
+  validateImportClasses,
 } from "./class.validation";
 
 export function createClassController(service: ClassService = classService) {
@@ -55,6 +60,64 @@ export function createClassController(service: ClassService = classService) {
           requirePrincipal(req),
         ),
       );
+    }),
+    createClass: asyncHandler(async (req, res) => {
+      sendSuccess(
+        res,
+        await service.createClass(
+          validateCreateClass(req.body),
+          requirePrincipal(req),
+        ),
+        "Tạo lớp học thành công",
+        201,
+      );
+    }),
+    updateClass: asyncHandler(async (req, res) => {
+      sendSuccess(
+        res,
+        await service.updateClass(
+          validateClassIdParams(req.params),
+          validateUpdateClass(req.body),
+          requirePrincipal(req),
+        ),
+        "Cập nhật lớp học thành công",
+      );
+    }),
+    changeStatus: asyncHandler(async (req, res) => {
+      const body = validateClassStatus(req.body);
+      sendSuccess(
+        res,
+        await service.changeStatus(
+          validateClassIdParams(req.params),
+          body,
+          requirePrincipal(req),
+        ),
+        body.status === "ACTIVE"
+          ? "Kích hoạt lại lớp học thành công"
+          : "Ngừng hoạt động lớp học thành công",
+      );
+    }),
+    copyClasses: asyncHandler(async (req, res) => {
+      sendSuccess(
+        res,
+        await service.copyClasses(
+          validateCopyClasses(req.body),
+          requirePrincipal(req),
+        ),
+        "Sao chép danh sách lớp thành công",
+        201,
+      );
+    }),
+    importClasses: asyncHandler(async (req, res) => {
+      const result = await service.importClasses(
+        validateImportClasses(req.body),
+        requirePrincipal(req),
+      );
+      if (result.dryRun) {
+        sendSuccess(res, result, "Đã kiểm tra file nhập lớp");
+        return;
+      }
+      sendSuccess(res, result, `Đã nhập ${result.created.length} lớp học`, 201);
     }),
   };
 }
