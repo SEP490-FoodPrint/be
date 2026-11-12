@@ -10,8 +10,13 @@ import { authorizationTransaction } from "./authorization";
 export async function bootstrapAuthorization(client: PrismaClient) {
   return authorizationTransaction(client, async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(73412026)`;
-    const existing = new Set(
+    const existingRoles = new Set(
       (await tx.role.findMany({ select: { code: true } })).map(
+        (row) => row.code,
+      ),
+    );
+    const existingPermissions = new Set(
+      (await tx.permission.findMany({ select: { code: true } })).map(
         (row) => row.code,
       ),
     );
@@ -34,7 +39,10 @@ export async function bootstrapAuthorization(client: PrismaClient) {
       ),
     );
     const data = INITIAL_ROLE_PERMISSIONS.filter(
-      ([code]) => !existing.has(code) || code === "SYSTEM_ADMIN",
+      ([roleCode, permissionCode]) =>
+        !existingRoles.has(roleCode) ||
+        !existingPermissions.has(permissionCode) ||
+        roleCode === "SYSTEM_ADMIN",
     ).map(([roleCode, permissionCode]) => {
       const roleId = roles.get(roleCode);
       const permissionId = permissions.get(permissionCode);
