@@ -1163,6 +1163,82 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         restored.batches.flatMap((batch) => batch.entries).length,
         4,
       );
+      const confirmation = { revision: restored.revision };
+      await assert.rejects(
+        () => allocationService.confirmDistribution(confirmation, otherChef),
+        { statusCode: 409 },
+      );
+      await assert.rejects(
+        () =>
+          allocationService.confirmDistribution(confirmation, {
+            ...chef,
+            permissions: [],
+          }),
+        { statusCode: 403 },
+      );
+      await assert.rejects(
+        () =>
+          allocationService.confirmDistribution(confirmation, {
+            ...chef,
+            role: "HOMEROOM_TEACHER",
+          }),
+        { statusCode: 403 },
+      );
+      const distributionRace = await Promise.allSettled([
+        allocationService.confirmDistribution(confirmation, chef),
+        allocationService.apply(
+          { ...confirmation, batches: revisedBatches },
+          chef,
+        ),
+      ]);
+      assert.equal(
+        distributionRace.filter((result) => result.status === "fulfilled")
+          .length,
+        1,
+      );
+      const current = await allocationService.getToday(chef);
+      if (current.distribution.status === "PENDING") {
+        await assert.rejects(
+          () =>
+            allocationService.confirmDistribution(
+              { revision: current.revision },
+              chef,
+            ),
+          { statusCode: 409 },
+        );
+        const complete = await allocationService.apply(
+          { revision: current.revision, batches: payload.batches },
+          chef,
+        );
+        await allocationService.confirmDistribution(
+          { revision: complete.revision },
+          chef,
+        );
+      }
+      const repeated = await allocationService.confirmDistribution(
+        confirmation,
+        chef,
+      );
+      assert.equal(repeated.distribution.status, "DISTRIBUTED");
+      assert.ok(repeated.demands.every((demand) => demand.locked));
+      const delivered = await db.mealAllocation.findMany({
+        where: { dailyMealPortionId: { in: [classA, classB, classC] } },
+      });
+      assert.equal(delivered.length, 3);
+      for (const allocation of delivered) {
+        assert.equal(allocation.status, "DISTRIBUTED");
+        assert.equal(allocation.distributedByUserId, chef.id);
+        assert.deepEqual(allocation.distributedAt, allocationFixtureClock());
+      }
+      const nextDay = createMealAllocationService(
+        () => Promise.resolve(db),
+        () => new Date("2026-11-12T17:00:00Z"),
+      );
+      assert.equal((await nextDay.getToday(chef)).date, "2026-11-13");
+      await assert.rejects(
+        () => nextDay.confirmDistribution(confirmation, chef),
+        { statusCode: 409 },
+      );
     },
   );
   const postPassword = (path: string, body: unknown, cookie?: string) =>
