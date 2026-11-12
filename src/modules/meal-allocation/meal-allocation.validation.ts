@@ -5,10 +5,13 @@ import {
 } from "../../utils/request-validation";
 
 export const allocationQuerySchema = z.strictObject({});
-export const allocationApplySchema = z.strictObject({
+export const confirmDistributionSchema = z.strictObject({
   revision: z
     .string()
     .regex(/^[a-f0-9]{64}$/, "Phiên bản phân bổ không hợp lệ"),
+});
+export const allocationApplySchema = z.strictObject({
+  ...confirmDistributionSchema.shape,
   batches: z.array(
     z.strictObject({
       cookingBatchId: requestUuidSchema,
@@ -30,3 +33,5 @@ export const validateAllocationQuery = (value: unknown) =>
   parseRequest(allocationQuerySchema, value);
 export const validateAllocationApply = (value: unknown) =>
   parseRequest(allocationApplySchema, value);
+export const validateConfirmDistribution = (value: unknown) =>
+  parseRequest(confirmDistributionSchema, value);
