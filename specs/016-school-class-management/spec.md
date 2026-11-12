@@ -1,6 +1,6 @@
 # Feature Specification: Quản lý lớp học cho Ban Giám hiệu
 
-**Feature Branch**: `feat/015-school-class-management`  
+**Feature Branch**: `feat/016-school-class-management`  
 **Status**: In progress  
 **Liên quan**: spec 011 (cấu hình năm học), luồng phân công GVCN hiện có trong module `class`
 

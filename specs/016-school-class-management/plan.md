@@ -1,6 +1,6 @@
 # Implementation Plan: Quản lý lớp học cho Ban Giám hiệu
 
-**Branch**: `feat/015-school-class-management` | **Spec**: [spec.md](spec.md) | **Contracts**: [contracts.md](contracts.md)
+**Branch**: `feat/016-school-class-management` | **Spec**: [spec.md](spec.md) | **Contracts**: [contracts.md](contracts.md)
 
 ## Design
 
