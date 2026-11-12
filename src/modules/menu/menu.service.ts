@@ -1,4 +1,5 @@
 import { Prisma, type PrismaClient } from "../../generated/prisma/client";
+import { readDatabaseMealRecipe } from "../dish/dish.service";
 
 import {
   menuRepository as repository,
@@ -936,22 +937,7 @@ function mapAcademicYear(
     });
     monday.setUTCDate(monday.getUTCDate() + 7);
   }
-  const holidays: MenuAcademicYearDTO["holidays"] = [];
-  if (Array.isArray(row.holidays)) {
-    for (const item of row.holidays) {
-      if (
-        item &&
-        typeof item === "object" &&
-        !Array.isArray(item) &&
-        typeof item.date === "string"
-      ) {
-        holidays.push({
-          date: item.date,
-          reason: typeof item.reason === "string" ? item.reason : null,
-        });
-      }
-    }
-  }
+  const holidays = expandMenuHolidays(row.holidays, startDate, endDate);
   return {
     id: row.id,
     academicYear: row.academicYear,
@@ -966,6 +952,47 @@ function mapAcademicYear(
 
 function schoolToday() {
   return new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+export function expandMenuHolidays(
+  value: Prisma.JsonValue,
+  firstDate: string,
+  lastDate: string,
+): MenuAcademicYearDTO["holidays"] {
+  if (!Array.isArray(value))
+    throw new HttpError(409, "Cấu hình ngày nghỉ không hợp lệ");
+  const days = new Map<string, string | null>();
+  const valid = (date: unknown): date is string => {
+    if (typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date))
+      return false;
+    const parsed = new Date(`${date}T00:00:00Z`);
+    return (
+      Number.isFinite(+parsed) && parsed.toISOString().slice(0, 10) === date
+    );
+  };
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item))
+      throw new HttpError(409, "Cấu hình ngày nghỉ không hợp lệ");
+    const start = item.date ?? item.startDate;
+    const end = item.date ?? item.endDate;
+    if (!valid(start) || !valid(end) || start > end)
+      throw new HttpError(409, "Khoảng ngày nghỉ không hợp lệ");
+    const from = start < firstDate ? firstDate : start;
+    const to = end > lastDate ? lastDate : end;
+    for (
+      const day = new Date(`${from}T00:00:00Z`);
+      day.toISOString().slice(0, 10) <= to;
+      day.setUTCDate(day.getUTCDate() + 1)
+    ) {
+      days.set(
+        day.toISOString().slice(0, 10),
+        typeof item.reason === "string" ? item.reason : null,
+      );
+    }
+  }
+  return [...days]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, reason]) => ({ date, reason }));
 }
 
 function menuCategoryDto(menu: MenuDetailRow) {
@@ -1178,6 +1205,26 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
       const desired: { dishId: string; mealType: "LUNCH" | "AFTERNOON" }[] = [];
 
       for (const meal of day.meals) {
+        if (meal.useDishRecipes) {
+          if (meal.dishes.some((d) => !d.dishId))
+            throw new HttpError(
+              422,
+              "Chọn món đã lưu trong danh mục của trường",
+            );
+          const recipe = await readDatabaseMealRecipe(
+            tx,
+            schoolId,
+            meal.dishes.map((d) => d.dishId!),
+          );
+          meal.dishes = recipe.dishes.map((d) => ({ ...d, name: undefined }));
+          meal.seasonings = recipe.seasonings.map(
+            ({ ingredientEntryId, quantityPerPortion, unit }) => ({
+              ingredientEntryId,
+              quantityPerPortion,
+              unit,
+            }),
+          );
+        }
         const dishes: MenuStandardsInput["dishes"] = [];
 
         for (const [displayOrder, item] of meal.dishes.entries()) {
@@ -1237,6 +1284,70 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
             meal.mealType,
             meal.seasonings,
           );
+        if (meal.portionGroups !== undefined) {
+          const key = { menuDayId: saved.id, mealType: meal.mealType };
+          if (await repository.dailyGroupCount(tx, key))
+            throw new HttpError(
+              409,
+              "Nhóm suất đã được giáo viên chốt; không được thay đổi",
+            );
+          const expected = new Set(dishes.map((d) => d.dishId));
+          if (
+            meal.portionGroups.length &&
+            (meal.portionGroups.some((g) =>
+              g.dishIds.some((id) => !expected.has(id)),
+            ) ||
+              [...expected].some(
+                (id) =>
+                  !meal.portionGroups!.some((g) => g.dishIds.includes(id)),
+              ))
+          )
+            throw new HttpError(
+              422,
+              "Nhóm suất phải chọn đúng và bao phủ các món của bữa",
+            );
+          const oldGroups = await repository.portionGroupIds(tx, key);
+          if (
+            meal.portionGroups.some(
+              (g) => g.id && !oldGroups.some((old) => old.id === g.id),
+            )
+          )
+            throw new HttpError(404, "Nhóm suất không thuộc bữa của trường");
+          const avoided = [
+            ...new Set(
+              meal.portionGroups.flatMap((g) => g.avoidedIngredientEntryIds),
+            ),
+          ];
+          if (
+            (await repository.activeAvoidanceCount(tx, avoided, schoolId)) !==
+            avoided.length
+          )
+            throw new HttpError(
+              422,
+              "Nguyên liệu cần tránh phải thuộc danh mục trường",
+            );
+          await repository.clearDefaultGroups(tx, key);
+          await repository.removeObsoleteGroups(tx, key, meal.portionGroups);
+          for (const group of meal.portionGroups) {
+            const data = {
+              ...key,
+              name: group.name,
+              isDefault: group.isDefault,
+            };
+            const row = group.id
+              ? await repository.updateGroup(tx, group.id, data)
+              : await repository.createGroup(tx, data);
+            await repository.clearGroupDishes(tx, row.id);
+            await repository.clearGroupAvoidances(tx, row.id);
+            await repository.insertGroupDishes(tx, key, row.id, group.dishIds);
+            if (group.avoidedIngredientEntryIds.length)
+              await repository.insertGroupAvoidances(
+                tx,
+                row.id,
+                group.avoidedIngredientEntryIds,
+              );
+          }
+        }
       }
 
       const oldDishes = await repository.removedMealDishes(
@@ -1330,14 +1441,48 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
           schoolId,
         );
 
-      for (const mealType of new Set(day.menuDayDishes.map((d) => d.mealType)))
-        await assertPortionGroupSafety(
+      for (const mealType of new Set(
+        day.menuDayDishes.map((d) => d.mealType),
+      )) {
+        const groups = await assertPortionGroupSafety(
           tx,
 
           { menuDayId: day.id, mealType },
 
           schoolId,
         );
+        const ingredientIds = [
+          ...new Set([
+            ...day.menuDayDishes
+              .filter((d) => d.mealType === mealType)
+              .flatMap((d) => d.ingredients.map((i) => i.ingredientId)),
+            ...day.mealSeasonings
+              .filter((s) => s.mealType === mealType)
+              .map((s) => s.ingredientEntry.ingredientId),
+          ]),
+        ];
+        const conflicts = await repository.classAllergies(
+          tx,
+          ingredientIds,
+          schoolId,
+        );
+        if (
+          conflicts.some(
+            (c) =>
+              !groups.some(
+                (g) =>
+                  !g.isDefault &&
+                  g.avoidances.some(
+                    (a) => a.ingredientEntryId === c.ingredientEntryId,
+                  ),
+              ),
+          )
+        )
+          throw new HttpError(
+            422,
+            "Thực đơn có nguyên liệu gây dị ứng chưa được bố trí nhóm suất riêng an toàn",
+          );
+      }
     }
   }
 
@@ -1634,8 +1779,26 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
             menu.menuDays.map((d) => d.menuDate.toISOString().slice(0, 10)),
           );
 
+          const academicYears = await repository.academicYears(tx, schoolId);
+          const holidayDates = new Set(
+            academicYears.flatMap((year) =>
+              expandMenuHolidays(
+                year.holidays,
+                year.startDate.toISOString().slice(0, 10) >
+                  weekSchedule.weekStartDate
+                  ? year.startDate.toISOString().slice(0, 10)
+                  : weekSchedule.weekStartDate,
+                year.endDate.toISOString().slice(0, 10) <
+                  weekSchedule.weekEndDate
+                  ? year.endDate.toISOString().slice(0, 10)
+                  : weekSchedule.weekEndDate,
+              ).map((day) => day.date),
+            ),
+          );
+
           const missingSchoolDays = weekSchedule.schoolDays.filter(
-            (sd) => !existingDateStrs.has(sd.date),
+            (sd) =>
+              !existingDateStrs.has(sd.date) && !holidayDates.has(sd.date),
           );
 
           if (missingSchoolDays.length > 0) {
@@ -1651,7 +1814,7 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
             throw new HttpError(
               422,
 
-              `Thực đơn từ ${weekSchedule.weekStartDate} đến ${weekSchedule.weekEndDate} chưa đầy đủ các ngày trong tuần (T2 - T6). Còn thiếu: ${missingNames}. Vui lòng tạo đủ 5 ngày trước khi gửi Ban Giám Hiệu duyệt.`,
+              `Thực đơn từ ${weekSchedule.weekStartDate} đến ${weekSchedule.weekEndDate} chưa đầy đủ các ngày phục vụ ăn. Còn thiếu: ${missingNames}. Vui lòng bổ sung các ngày học không nghỉ trước khi gửi duyệt.`,
             );
           }
 
@@ -1804,6 +1967,13 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
         : null;
 
       const existingDays = weeklyMenu?.menuDays ?? [];
+      const holidays = academicYear
+        ? expandMenuHolidays(
+            academicYear.holidays,
+            weekInfo.weekStartDate,
+            weekInfo.weekEndDate,
+          )
+        : [];
 
       const days = weekInfo.schoolDays.map((sd) => {
         const found = existingDays.find(
@@ -1812,6 +1982,10 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
 
         return {
           ...sd,
+          isHoliday: holidays.some((h) => h.date === sd.date),
+          holidayReason:
+            holidays.find((h) => h.date === sd.date)?.reason ?? null,
+          isSchoolDay: !holidays.some((h) => h.date === sd.date),
 
           hasMenu: !!found,
 
@@ -1823,9 +1997,14 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
         };
       });
 
-      const completedDays = days.filter((d) => d.hasMenu).length;
+      const completedDays = days.filter(
+        (d) => d.isSchoolDay && d.hasMenu,
+      ).length;
+      const totalSchoolDays = days.filter((d) => d.isSchoolDay).length;
 
-      const missingDays = days.filter((d) => !d.hasMenu).map((d) => d.date);
+      const missingDays = days
+        .filter((d) => d.isSchoolDay && !d.hasMenu)
+        .map((d) => d.date);
 
       const targetDayNum = date.getUTCDay();
 
@@ -1836,7 +2015,10 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
 
         targetDayLabel: SCHOOL_DAY_LABELS[targetDayNum],
 
-        isTargetSchoolDay: targetDayNum >= 1 && targetDayNum <= 5,
+        isTargetSchoolDay:
+          targetDayNum >= 1 &&
+          targetDayNum <= 5 &&
+          !holidays.some((h) => h.date === date.toISOString().slice(0, 10)),
 
         weekNumber,
 
@@ -1856,13 +2038,13 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
 
         days,
 
-        totalSchoolDays: 5,
+        totalSchoolDays,
 
         completedDays,
 
         missingDays,
 
-        isWeekComplete: completedDays === 5,
+        isWeekComplete: completedDays === totalSchoolDays,
       };
     },
 

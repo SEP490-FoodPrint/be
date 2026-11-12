@@ -42,6 +42,8 @@ export interface MenuWeekScheduleDTO {
     dayOfWeek: number;
     dayLabel: string;
     isSchoolDay: boolean;
+    isHoliday?: boolean;
+    holidayReason?: string | null;
     hasMenu: boolean;
     menuDayId: string | null;
     status: string;

@@ -321,6 +321,7 @@ model DeliveryItem {
 
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
 model DishIngredientEntry {
+  ingredientRole    String?         @map("ingredient_role") @db.VarChar(12)
   dishId            String          @map("dish_id") @db.Uuid
   ingredientEntryId String          @map("ingredient_entry_id") @db.Uuid
   /// Ingredient quantity for ONE standard serving of this Dish. Total demand = required_quantity times serving count (convert units consistently).
