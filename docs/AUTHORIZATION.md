@@ -109,7 +109,7 @@ Mọi dòng đều yêu cầu một trong các permission liệt kê. SYSTEM có
 | `warehouse`                   | `inventory.view`                                                                   | SCHOOL, SUPPLIER             |
 | `kitchen`                     | `cooking_batch.view`                                                               | SCHOOL                       |
 | `meal-attendance`             | `daily_meal_portion.view`                                                          | SCHOOL                       |
-| `feedback`                    | `meal_complaint.view`                                                              | SCHOOL                       |
+| `feedback`                    | `meal_complaint.view`                                                              | SYSTEM, SCHOOL               |
 | `inspection`                  | `food_safety_incident.view`                                                        | SCHOOL, AUTHORITY            |
 | `supplier`                    | `supplier.view`, `supplier.manage`                                                 | SUPPLIER, SCHOOL             |
 | `authority`                   | `authority.view`, `food_safety_report.view`                                        | AUTHORITY                    |

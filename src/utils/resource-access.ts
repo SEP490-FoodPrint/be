@@ -167,6 +167,7 @@ export const listScopes = {
   },
   feedback: (p: AuthPrincipal): Prisma.MealComplaintWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["feedback"]);
+    if (p.orgType === "SYSTEM") return {};
     if (p.orgType === "SCHOOL" && p.role === ROLES.SCHOOL_MANAGEMENT_BOARD)
       return { DailyMealPortion: { Class: { schoolId: school(p) } } };
     if (p.orgType === "SCHOOL" && isComplaintSubmitter(p.role))
