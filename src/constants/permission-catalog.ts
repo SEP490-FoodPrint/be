@@ -506,6 +506,14 @@ export const INITIAL_PERMISSIONS = [
       "Cán bộ đơn vị an toàn thực phẩm cấp xã xem báo cáo được chuyển đến đơn vị.",
   },
   {
+    code: "food_safety_report.receive",
+    name: "Tiếp nhận yêu cầu kiểm tra an toàn thực phẩm",
+    module: "food_safety_report",
+    action: "receive",
+    description:
+      "Tiếp nhận yêu cầu kiểm tra được gửi tới cán bộ an toàn thực phẩm cấp xã.",
+  },
+  {
     code: "role.view",
     name: "Xem danh sách role",
     module: "role",
@@ -724,6 +732,7 @@ export const INITIAL_ROLE_PERMISSIONS = [
   ["INGREDIENT_SUPPLIER_STAFF", "ingredient_quality_feedback.respond"],
   ["COMMUNE_FOOD_SAFETY_OFFICER", "dashboard.view"],
   ["COMMUNE_FOOD_SAFETY_OFFICER", "food_safety_report.view"],
+  ["COMMUNE_FOOD_SAFETY_OFFICER", "food_safety_report.receive"],
   ["COMMUNE_FOOD_SAFETY_OFFICER", "food_safety_incident.view"],
   ["SYSTEM_ADMIN", "role.view"],
   ["SYSTEM_ADMIN", "permission.view"],

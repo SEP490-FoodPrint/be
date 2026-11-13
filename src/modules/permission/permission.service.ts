@@ -19,6 +19,7 @@ import {
   type ListQuery,
 } from "../../utils/list-query";
 import type { validatePermission } from "./permission.validation";
+import { permissionConcurrencyRepository } from "./permission.repository";
 const permissionSelect = {
   id: true,
   code: true,
@@ -187,6 +188,7 @@ export function createPermissionService(
               permissionId,
             })),
           });
+        await permissionConcurrencyRepository.touchRole(tx, roleId);
         return { roleId, permissionIds };
       });
     },
@@ -230,12 +232,14 @@ export function createPermissionService(
           supplierId: actor.supplierId,
           communeFoodSafetyUnitId: actor.communeFoodSafetyUnitId,
         };
-        if (disabled)
-          await tx.userPermissionDenial.createMany({
-            data: [{ ...scope, disabledByUserId: actor.id }],
-            skipDuplicates: true,
-          });
-        else await tx.userPermissionDenial.deleteMany({ where: scope });
+        const result = disabled
+          ? await tx.userPermissionDenial.createMany({
+              data: [{ ...scope, disabledByUserId: actor.id }],
+              skipDuplicates: true,
+            })
+          : await tx.userPermissionDenial.deleteMany({ where: scope });
+        if (result.count > 0)
+          await permissionConcurrencyRepository.touchUser(tx, userId);
         return detail(tx, actor, userId);
       });
     },

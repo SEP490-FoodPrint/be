@@ -2,7 +2,12 @@ import { requirePrincipal } from "../../utils/authorization";
 import { asyncHandler } from "../../utils/async-handler";
 import { sendSuccess } from "../../utils/response";
 import { reportingService, type ReportingService } from "./reporting.service";
-import { validateReportingListQuery } from "./reporting.validation";
+import {
+  validateReportingListQuery,
+  validateReportingReceiveParams,
+  validateReportingReceiveBody,
+  validateReportingReceiveQuery,
+} from "./reporting.validation";
 
 export function createReportingController(
   service: ReportingService = reportingService,
@@ -16,6 +21,12 @@ export function createReportingController(
         result,
         "Lấy danh sách chuyển tiếp báo cáo sự cố thành công",
       );
+    }),
+    receive: asyncHandler(async (req, res) => {
+      const params = validateReportingReceiveParams(req.params);
+      validateReportingReceiveQuery(req.query);
+      validateReportingReceiveBody(req.body);
+      sendSuccess(res, await service.receive(params, requirePrincipal(req)));
     }),
   };
 }

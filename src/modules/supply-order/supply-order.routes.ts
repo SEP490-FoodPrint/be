@@ -14,6 +14,7 @@ export function createSupplyOrderRouter(
 ) {
   const router = Router();
   const controller = createSupplyOrderController(service);
+  router.post("/:id/accept", authHandler, controller.accept);
   router.get(
     "/",
     authHandler,

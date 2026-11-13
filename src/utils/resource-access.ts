@@ -18,6 +18,14 @@ function authority(p: AuthPrincipal): string {
     throw new HttpError(403, "Không có phạm vi ATTP xã");
   return p.communeFoodSafetyUnitId;
 }
+function authorityReports(
+  p: AuthPrincipal,
+): Prisma.FoodSafetyReportForwardingWhereInput {
+  return {
+    recipientCommuneFoodSafetyUnitId: authority(p),
+    OR: [{ recipientUserId: p.id }, { recipientUserId: null }],
+  };
+}
 export const RESOURCE_PERMISSIONS = {
   auth: ["role.view"],
   user: ["user.manage", "school_user.manage", "supplier_staff.manage"],
@@ -184,7 +192,7 @@ export const listScopes = {
     if (p.orgType === "AUTHORITY")
       return {
         foodSafetyReportForwardings: {
-          some: { recipientCommuneFoodSafetyUnitId: authority(p) },
+          some: authorityReports(p),
         },
       };
     throw new HttpError(
@@ -383,8 +391,7 @@ export const listScopes = {
     if (p.orgType === "SYSTEM") return {};
     if (p.orgType === "SCHOOL")
       return { FoodSafetyIncident: { schoolId: school(p) } };
-    if (p.orgType === "AUTHORITY")
-      return { recipientCommuneFoodSafetyUnitId: authority(p) };
+    if (p.orgType === "AUTHORITY") return authorityReports(p);
     throw new HttpError(
       403,
       "Loại tổ chức không có phạm vi truy cập tài nguyên này",
@@ -399,7 +406,7 @@ export const listScopes = {
       return {
         FoodSafetyIncident: {
           foodSafetyReportForwardings: {
-            some: { recipientCommuneFoodSafetyUnitId: authority(p) },
+            some: authorityReports(p),
           },
         },
       };
@@ -466,7 +473,7 @@ export const listScopes = {
       return {
         FoodSafetyIncident: {
           foodSafetyReportForwardings: {
-            some: { recipientCommuneFoodSafetyUnitId: authority(p) },
+            some: authorityReports(p),
           },
         },
       };

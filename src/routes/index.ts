@@ -9,6 +9,7 @@ import { Router } from "express";
 import { createAuthRouter } from "../modules/auth/auth.routes";
 import type { AuthServices } from "../modules/auth/auth.routes";
 import { createUserRouter } from "../modules/user/user.routes";
+import { createAccountLifecycleRouter } from "../modules/account-lifecycle/account-lifecycle.routes";
 import { createOrganizationRouter } from "../modules/organization/organization.routes";
 import { createIngredientRouter } from "../modules/ingredient/ingredient.routes";
 import { createMenuRouter } from "../modules/menu/menu.routes";
@@ -65,6 +66,7 @@ export function createApiRouter(
   router.use("/school-overview", createSchoolOverviewRouter(authHandler));
   router.use("/auth", createAuthRouter(undefined, authHandler, authServices));
   router.use("/users", createUserRouter(undefined, authHandler));
+  router.use("/users", createAccountLifecycleRouter(undefined, authHandler));
   router.use(
     "/schools/:schoolId/classes",
     createClassSchoolRouter(authHandler),

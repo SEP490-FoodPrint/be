@@ -3,6 +3,7 @@ import type { AuthPrincipal } from "../../types/auth";
 import {
   assertPermission,
   authorizationTransaction,
+  databaseOperation,
   loadPrincipal,
 } from "../../utils/authorization";
 import { getPrisma } from "../../utils/database";
@@ -18,41 +19,31 @@ import {
 import type {
   contractPayload,
   listQuery,
-  orderPayload,
 } from "./supplier-onboarding.validation";
+import {
+  contractInclude,
+  lockSupplier,
+  supplierOrderRepository,
+} from "./supplier-onboarding.repository";
+import { createIntakeAccessRepository } from "../account-lifecycle/intake-access.repository";
+import { createIntakeAccessService } from "../account-lifecycle/intake-access.service";
+import type {
+  OrderDraftRequestDTO,
+  OrderSendParamsRequestDTO,
+  OrderSendRequestDTO,
+} from "./supplier-onboarding.request.dto";
+import type {
+  OrderDraftResponseDTO,
+  OrderSendResponseDTO,
+} from "./supplier-onboarding.response.dto";
+
+const intakeRepository = createIntakeAccessRepository();
+const intakeAccess = createIntakeAccessService(intakeRepository);
 
 type Tx = Prisma.TransactionClient;
 type Filters = ReturnType<typeof listQuery>;
 type Draft = ReturnType<typeof contractPayload>;
 
-const documentSelect = {
-  id: true,
-  kind: true,
-  fileName: true,
-  mimeType: true,
-  size: true,
-  sha256: true,
-  createdAt: true,
-} as const;
-const contractInclude = {
-  items: {
-    include: {
-      ingredient: {
-        select: {
-          id: true,
-          name: true,
-          ingredientCategory: { select: { categoryName: true } },
-          defaultUnit: true,
-          status: true,
-        },
-      },
-    },
-  },
-  documents: { select: documentSelect, orderBy: { createdAt: "asc" } },
-  certification: true,
-  createdBy: { select: { fullName: true } },
-  activatedBy: { select: { fullName: true } },
-} as const satisfies Prisma.SupplierContractInclude;
 type ContractRow = Prisma.SupplierContractGetPayload<{
   include: typeof contractInclude;
 }>;
@@ -107,14 +98,6 @@ function currentContractIssues(contract: ContractRow, on: Date) {
   return issues;
 }
 
-export async function lockSupplier(
-  tx: Tx,
-  schoolId: string,
-  supplierId: string,
-) {
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${schoolId + ":" + supplierId}, 0))`;
-}
-
 async function write<T>(
   principal: AuthPrincipal,
   supplierId: string,
@@ -125,9 +108,9 @@ async function write<T>(
     permission === "supplier_relationship.manage"
       ? assertContractManager(principal)
       : schoolScope(principal, permission);
-  const db = await getPrisma();
+  const db = await databaseOperation(getPrisma);
   return authorizationTransaction(db, async (tx) => {
-    const actor = await loadPrincipal(principal.id, tx);
+    let actor = await loadPrincipal(principal.id, tx);
     const currentSchool =
       permission === "supplier_relationship.manage"
         ? assertContractManager(actor)
@@ -137,7 +120,25 @@ async function write<T>(
         403,
         "Phạm vi tài khoản đã thay đổi. Vui lòng tải lại trang.",
       );
+    // All callers take the same parent locks before the pair advisory lock;
+    // otherwise contract writes can deadlock with lifecycle changes.
+    await intakeRepository.lockParents(tx, {
+      schoolId,
+      supplierId,
+      userIds: [actor.id],
+      roleIds: [actor.roleId],
+    });
     await lockSupplier(tx, schoolId, supplierId);
+    actor = await loadPrincipal(principal.id, tx);
+    const lockedSchool =
+      permission === "supplier_relationship.manage"
+        ? assertContractManager(actor)
+        : schoolScope(actor, permission);
+    if (lockedSchool !== schoolId)
+      throw new HttpError(
+        403,
+        "Phạm vi tài khoản đã thay đổi. Vui lòng tải lại trang.",
+      );
     try {
       return await operation(tx, actor, schoolId);
     } catch (error) {
@@ -907,146 +908,149 @@ export async function changeRelationship(
   });
 }
 
-export async function createOrderDraft(
-  principal: AuthPrincipal,
-  body: ReturnType<typeof orderPayload>,
+export function createOrderIntakeService(
+  dependencies: {
+    repository?: typeof supplierOrderRepository;
+    guard?: Pick<typeof intakeAccess, "assertAccess">;
+    write?: typeof write;
+  } = {},
 ) {
-  return write(
-    principal,
-    body.supplierId,
-    async (tx, actor, schoolId) => {
-      const entries = await tx.ingredientEntry.findMany({
-        where: {
-          id: { in: body.items.map((item) => item.ingredientEntryId) },
+  const orderRepository = dependencies.repository ?? supplierOrderRepository;
+  const guard = dependencies.guard ?? intakeAccess;
+  const writeOrder = dependencies.write ?? write;
+  async function createOrderDraft(
+    principal: AuthPrincipal,
+    body: OrderDraftRequestDTO,
+  ): Promise<OrderDraftResponseDTO> {
+    return writeOrder(
+      principal,
+      body.supplierId,
+      async (tx, actor, schoolId) => {
+        await guard.assertAccess(tx, actor, {
+          operation: "SCHOOL_CREATE_ORDER",
+          supplierId: body.supplierId,
+        });
+        const entries = await orderRepository.findEntries(
+          tx,
+          body.items.map((item) => item.ingredientEntryId),
           schoolId,
-          status: "ACTIVE",
-          Ingredient: { supplierId: body.supplierId, status: "ACTIVE" },
-        },
-        include: { Ingredient: { select: { defaultUnit: true } } },
-      });
-      if (entries.length !== body.items.length)
-        throw new HttpError(
-          400,
-          "Nguyên liệu phải thuộc trường và đúng nhà cung cấp.",
+          body.supplierId,
         );
-      return tx.supplyRequest.create({
-        data: {
+        if (entries.length !== body.items.length)
+          throw new HttpError(
+            400,
+            "Nguyên liệu phải thuộc trường và đúng nhà cung cấp.",
+          );
+        const result = await orderRepository.createDraft(tx, {
           schoolId,
           supplierId: body.supplierId,
           createdByUserId: actor.id,
           requestNo: body.requestNo,
-          requestedDeliveryDate: body.deliveryDate,
-          supplyRequestItems: {
-            create: body.items.map((item) => ({
-              ingredientEntryId: item.ingredientEntryId,
-              requestedQuantity: item.quantity,
-              unit: entries.find(
-                (entry) => entry.id === item.ingredientEntryId,
-              )!.Ingredient.defaultUnit,
-            })),
-          },
-        },
-        select: { id: true, status: true, requestNo: true },
-      });
-    },
-    "supply_request.create",
-  );
+          deliveryDate: body.deliveryDate,
+          items: body.items.map((item) => ({
+            ...item,
+            unit: entries.find((entry) => entry.id === item.ingredientEntryId)!
+              .Ingredient.defaultUnit,
+          })),
+        });
+        return {
+          id: result.id,
+          status: result.status,
+          requestNo: result.requestNo,
+        };
+      },
+      "supply_request.create",
+    );
+  }
+
+  async function sendOrder(
+    principal: AuthPrincipal,
+    params: OrderSendParamsRequestDTO,
+    input: OrderSendRequestDTO,
+  ): Promise<OrderSendResponseDTO> {
+    const { id } = params;
+    const { contractId } = input;
+    const schoolId = schoolScope(principal, "supply_request.create");
+    const owner = await databaseOperation(() =>
+      orderRepository.findOwner(id, schoolId),
+    );
+    if (!owner)
+      throw new HttpError(404, "Không tìm thấy đơn đặt hàng của trường.");
+    return writeOrder(
+      principal,
+      owner.supplierId,
+      async (tx, actor) => {
+        const order = await orderRepository.findOrderForSend(tx, id, schoolId);
+        if (!order || order.supplierId !== owner.supplierId)
+          throw new HttpError(404, "Không tìm thấy đơn đặt hàng của trường.");
+        if (order.status === "SENT" && order.contractId === contractId)
+          return { id, status: order.status, contractId };
+        if (
+          order.status !== "DRAFT" ||
+          !order.requestedDeliveryDate ||
+          !order.supplyRequestItems.length
+        )
+          throw new HttpError(
+            409,
+            "Đơn chưa ở trạng thái nháp hoặc thiếu ngày giao/nguyên liệu.",
+          );
+        await guard.assertAccess(tx, actor, {
+          operation: "SCHOOL_SEND_ORDER",
+          orderId: id,
+        });
+        const contract = await orderRepository.findEligibleContract(
+          tx,
+          contractId,
+          schoolId,
+          order.supplierId,
+        );
+        if (!contract)
+          throw new HttpError(
+            409,
+            "NCC phải đang liên kết và có hợp đồng được kích hoạt.",
+          );
+        const issues = currentContractIssues(
+          contract,
+          order.requestedDeliveryDate,
+        );
+        if (order.requestedDeliveryDate < schoolToday())
+          issues.push("Ngày giao dự kiến đã qua.");
+        if (
+          order.supplyRequestItems.some(
+            (item) =>
+              item.IngredientEntry.schoolId !== schoolId ||
+              item.IngredientEntry.status !== "ACTIVE" ||
+              item.IngredientEntry.Ingredient.status !== "ACTIVE" ||
+              item.IngredientEntry.Ingredient.supplierId !== order.supplierId ||
+              !contract.items.some(
+                (scope) =>
+                  scope.ingredientId === item.IngredientEntry.ingredientId,
+              ),
+          )
+        )
+          issues.push(
+            "Có nguyên liệu ngoài phạm vi hợp đồng hoặc đã ngừng hoạt động.",
+          );
+        if (issues.length) throw new HttpError(409, issues.join(" "));
+        const result = await orderRepository.markSent(tx, id, contractId, {
+          contractId,
+          contract: contract.snapshot,
+          deliveryDate: dayString(order.requestedDeliveryDate),
+        });
+        return {
+          id: result.id,
+          status: result.status,
+          contractId: result.contractId,
+        };
+      },
+      "supply_request.create",
+    );
+  }
+
+  return { createOrderDraft, sendOrder };
 }
 
-export async function sendOrder(
-  principal: AuthPrincipal,
-  id: string,
-  contractId: string,
-) {
-  const schoolId = schoolScope(principal, "supply_request.create");
-  const db = await getPrisma();
-  const owner = await db.supplyRequest.findFirst({ where: { id, schoolId } });
-  if (!owner)
-    throw new HttpError(404, "Không tìm thấy đơn đặt hàng của trường.");
-  return write(
-    principal,
-    owner.supplierId,
-    async (tx) => {
-      const order = await tx.supplyRequest.findFirstOrThrow({
-        where: { id, schoolId },
-        include: {
-          supplyRequestItems: {
-            include: { IngredientEntry: { include: { Ingredient: true } } },
-          },
-        },
-      });
-      if (order.status === "SENT" && order.contractId === contractId)
-        return { id, status: order.status, contractId };
-      if (
-        order.status !== "DRAFT" ||
-        !order.requestedDeliveryDate ||
-        !order.supplyRequestItems.length
-      )
-        throw new HttpError(
-          409,
-          "Đơn chưa ở trạng thái nháp hoặc thiếu ngày giao/nguyên liệu.",
-        );
-      const contract = await tx.supplierContract.findFirst({
-        where: {
-          id: contractId,
-          schoolId,
-          supplierId: order.supplierId,
-          status: "ACTIVE",
-          relationship: {
-            status: "ACTIVE",
-            schoolId,
-            supplierId: order.supplierId,
-          },
-          supplier: { status: "ACTIVE" },
-        },
-        include: contractInclude,
-      });
-      if (!contract)
-        throw new HttpError(
-          409,
-          "NCC phải đang liên kết và có hợp đồng được kích hoạt.",
-        );
-      const issues = currentContractIssues(
-        contract,
-        order.requestedDeliveryDate,
-      );
-      if (order.requestedDeliveryDate < schoolToday())
-        issues.push("Ngày giao dự kiến đã qua.");
-      if (
-        order.supplyRequestItems.some(
-          (item) =>
-            item.IngredientEntry.schoolId !== schoolId ||
-            item.IngredientEntry.status !== "ACTIVE" ||
-            item.IngredientEntry.Ingredient.status !== "ACTIVE" ||
-            item.IngredientEntry.Ingredient.supplierId !== order.supplierId ||
-            !contract.items.some(
-              (scope) =>
-                scope.ingredientId === item.IngredientEntry.ingredientId,
-            ),
-        )
-      )
-        issues.push(
-          "Có nguyên liệu ngoài phạm vi hợp đồng hoặc đã ngừng hoạt động.",
-        );
-      if (issues.length) throw new HttpError(409, issues.join(" "));
-      return tx.supplyRequest.update({
-        where: { id },
-        data: {
-          status: "SENT",
-          sentAt: new Date(),
-          contractId,
-          contractSnapshot: {
-            contractId,
-            contract: contract.snapshot,
-            deliveryDate: dayString(order.requestedDeliveryDate),
-          },
-        },
-        select: { id: true, status: true, contractId: true },
-      });
-    },
-    "supply_request.create",
-  );
-}
+export const { createOrderDraft, sendOrder } = createOrderIntakeService();
 
 export async function orderEvidence(principal: AuthPrincipal, id: string) {
   assertPermission(principal, "supply_request.view", "traceability.view");

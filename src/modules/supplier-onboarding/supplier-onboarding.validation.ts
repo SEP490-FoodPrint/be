@@ -1,3 +1,9 @@
+import { z } from "zod";
+import {
+  parseRequest,
+  requiredText,
+  requestUuidSchema,
+} from "../../utils/request-validation";
 import { objectBody, text, uuid } from "../../utils/auth-validation";
 import { parseListQuery } from "../../utils/list-query";
 import { HttpError } from "../../utils/http-error";
@@ -109,47 +115,62 @@ export function reasonPayload(value: unknown) {
   return text(objectBody(value, ["reason"]).reason, 4000);
 }
 
-export function orderPayload(value: unknown) {
-  const body = objectBody(value, [
-    "supplierId",
-    "requestNo",
-    "requestedDeliveryDate",
-    "items",
-  ]);
-  if (
-    !Array.isArray(body.items) ||
-    !body.items.length ||
-    body.items.length > 100
-  )
-    throw new HttpError(400, "Đơn phải có từ 1 đến 100 dòng nguyên liệu.");
-  const items = body.items.map((value: unknown) => {
-    const item = objectBody(value, ["ingredientEntryId", "quantity"]);
+const orderDate = z.string({ error: "Cần ngày giao dự kiến" }).refine(
+  (value) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const parsed = new Date(`${value}T00:00:00.000Z`);
+    return (
+      Number.isFinite(parsed.getTime()) &&
+      parsed.toISOString().slice(0, 10) === value
+    );
+  },
+  { error: "Ngày giao dự kiến không hợp lệ" },
+);
+const orderItemSchema = z.strictObject({
+  ingredientEntryId: requestUuidSchema,
+  quantity: z
+    .number({ error: "Số lượng phải là số" })
+    .finite()
+    .positive({ error: "Số lượng phải dương" })
+    .max(1e9, { error: "Số lượng vượt giới hạn" })
+    .refine(
+      (value) => Math.abs(Math.round(value * 1000) - value * 1000) <= 1e-5,
+      { error: "Số lượng tối đa 3 chữ số thập phân" },
+    ),
+});
+export const orderDraftSchema = z
+  .strictObject({
+    supplierId: requestUuidSchema,
+    requestNo: requiredText(80),
+    requestedDeliveryDate: orderDate,
+    items: z
+      .array(orderItemSchema, { error: "Đơn phải có danh sách nguyên liệu" })
+      .min(1, { error: "Đơn phải có từ 1 đến 100 dòng nguyên liệu" })
+      .max(100, { error: "Đơn phải có từ 1 đến 100 dòng nguyên liệu" }),
+  })
+  .superRefine((value, ctx) => {
     if (
-      typeof item.quantity !== "number" ||
-      !Number.isFinite(item.quantity) ||
-      item.quantity <= 0 ||
-      item.quantity > 1e9 ||
-      Math.abs(Math.round(item.quantity * 1000) - item.quantity * 1000) > 1e-5
-    )
-      throw new HttpError(
-        400,
-        "Số lượng phải dương, tối đa 3 chữ số thập phân.",
-      );
-    return {
-      ingredientEntryId: uuid(item.ingredientEntryId),
-      quantity: item.quantity,
-    };
-  });
-  if (
-    new Set(items.map((item) => item.ingredientEntryId)).size !== items.length
-  )
-    throw new HttpError(400, "Không lặp nguyên liệu trong đơn.");
-  const deliveryDate = date(body.requestedDeliveryDate);
-  if (!deliveryDate) throw new HttpError(400, "Cần ngày giao dự kiến.");
-  return {
-    supplierId: uuid(body.supplierId),
-    requestNo: text(body.requestNo, 80),
-    deliveryDate,
-    items,
-  };
-}
+      new Set(value.items.map((item) => item.ingredientEntryId)).size !==
+      value.items.length
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["items"],
+        message: "Không lặp nguyên liệu trong đơn",
+      });
+    }
+  })
+  .transform(({ requestedDeliveryDate, ...value }) => ({
+    ...value,
+    deliveryDate: new Date(`${requestedDeliveryDate}T00:00:00.000Z`),
+  }));
+export const orderSendParamsSchema = z.strictObject({ id: requestUuidSchema });
+export const orderSendSchema = z.strictObject({
+  contractId: requestUuidSchema,
+});
+export const orderPayload = (value: unknown) =>
+  parseRequest(orderDraftSchema, value);
+export const validateOrderSendParams = (value: unknown) =>
+  parseRequest(orderSendParamsSchema, value);
+export const validateOrderSendBody = (value: unknown) =>
+  parseRequest(orderSendSchema, value);
