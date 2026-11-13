@@ -259,3 +259,9 @@ Backfill một danh mục cho mỗi chuỗi category cũ DISTINCT có ý nghĩa,
 Đã kiểm chứng trên PostgreSQL 18 disposable riêng: nâng cấp có dữ liệu legacy, backfill, CHECK/FK, fresh deploy và không có Prisma schema drift qua integration supplier-onboarding. Chưa deploy migration này lên database thành viên hoặc Azure. Sinh Prisma Client không thay đổi trạng thái triển khai.
 
 Ứng dụng cũ vẫn truy vấn cột category nên không tương thích sau migration. Khi triển khai được phép, phối hợp cửa sổ bảo trì và phiên bản ứng dụng mới; không rolling hai phiên bản schema này. Không sửa migration đã applied hoặc reset dữ liệu để rollback.
+
+## Feature 022 — trạng thái tiếp nhận và cán bộ ATTP xã
+
+Migration mới `prisma/migrations/20261112000100_account_lifecycle_intake/migration.sql` bổ sung trạng thái tiếp nhận độc lập, uniqueness cán bộ theo xã và người nhận/thời điểm nhận báo cáo. Đã kiểm chứng fresh/upgrade/rejection trên PostgreSQL 18 disposable của tác vụ 016 (12/12 migration tests); **chưa triển khai trên database vận hành hoặc Azure**; manifest baseline ban đầu và các migration cũ không thay đổi.
+
+Trước deployment, chạy preflight chỉ đọc `npm run db:account-lifecycle:check` theo chính sách môi trường; trùng cán bộ, sai membership hoặc báo cáo nội bộ chưa xác định người nhận cần operator xử lý riêng. Không suy diễn `received_at` từ `forwarded_at`/trạng thái thông báo và không tự xóa, gộp hay tạo tài khoản. Các kiểm thử fresh/upgrade/rollback và race phải chạy trên instance PostgreSQL local disposable được chọn rõ. Deploy chỉ qua workflow được duyệt hoặc khi có ủy quyền tường minh cho mục tiêu đó.

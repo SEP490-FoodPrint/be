@@ -138,6 +138,7 @@ void test("organization service maps school rows correctly and respects paginati
     afternoonMealTime: new Date("1970-01-01T14:30:00.000Z"),
     boardingScale: "1000",
     status: "ACTIVE",
+    intakeState: "ACTIVE",
     createdAt: dummyDate,
     updatedAt: dummyDate,
     location: {

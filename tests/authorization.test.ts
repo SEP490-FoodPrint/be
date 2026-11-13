@@ -1,8 +1,10 @@
+import { bootstrapAuthorization } from "../src/utils/authorization-bootstrap";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import express from "express";
 import {
   INITIAL_PERMISSIONS,
+  INITIAL_ROLES,
   INITIAL_ROLE_PERMISSIONS,
 } from "../src/constants/permission-catalog";
 import { createAuthenticate } from "../src/middlewares/auth.middleware";
@@ -143,6 +145,28 @@ void test("organization scope follows trusted membership and nested ownership", 
   };
   assert.deepEqual(listScopes.reporting(authority), {
     recipientCommuneFoodSafetyUnitId: testAdmin.id,
+    OR: [{ recipientUserId: authority.id }, { recipientUserId: null }],
+  });
+  const reportScope = {
+    recipientCommuneFoodSafetyUnitId: testAdmin.id,
+    OR: [{ recipientUserId: authority.id }, { recipientUserId: null }],
+  };
+  const authorizedOfficer = {
+    ...authority,
+    permissions: [
+      "food_safety_incident.view",
+      "food_analysis_result.view",
+      "traceability.view",
+    ],
+  };
+  assert.deepEqual(listScopes.inspection(authorizedOfficer), {
+    foodSafetyReportForwardings: { some: reportScope },
+  });
+  assert.deepEqual(listScopes["food-analysis"](authorizedOfficer), {
+    FoodSafetyIncident: { foodSafetyReportForwardings: { some: reportScope } },
+  });
+  assert.deepEqual(listScopes.traceability(authorizedOfficer), {
+    FoodSafetyIncident: { foodSafetyReportForwardings: { some: reportScope } },
   });
   assert.throws(() => listScopes.menu(authority), status(403));
 });
@@ -257,7 +281,11 @@ void test("the same token observes revoked grants on the next request and ignore
     401,
   );
 });
-void test("database errors fail closed and do not expose connection credentials", async () => {
+void test("database errors fail closed and do not expose connection credentials", async (context) => {
+  const logs: unknown[][] = [];
+  context.mock.method(console, "error", (...values: unknown[]) => {
+    logs.push(values);
+  });
   await assert.rejects(
     () =>
       databaseOperation(() =>
@@ -268,6 +296,8 @@ void test("database errors fail closed and do not expose connection credentials"
       error.statusCode === 503 &&
       !error.message.includes("secret"),
   );
+  assert.equal(logs.length, 1);
+  assert(!JSON.stringify(logs).includes("secret"));
 });
 
 void test("malformed login JSON and unexpected errors never expose password bodies or driver messages", async (context) => {
@@ -332,4 +362,62 @@ void test("the bootstrap command refuses a remote target without the explicit Az
       return true;
     },
   );
+});
+
+void test("bootstrap preserves existing officer assignments while provisioning new roles", async () => {
+  const officerCode = "COMMUNE_FOOD_SAFETY_OFFICER";
+  for (const officerExists of [true, false]) {
+    let roleReads = 0;
+    let permissionCreate: { skipDuplicates?: boolean } | undefined;
+    let inserted: { roleId: string; permissionId: string }[] = [];
+    const roles = INITIAL_ROLES.map((role) => ({
+      id: role.code,
+      code: role.code,
+    }));
+    const permissions = INITIAL_PERMISSIONS.map((permission) => ({
+      id: permission.code,
+      code: permission.code,
+    }));
+    const mockTx = {
+      $executeRaw: () => Promise.resolve(0),
+      role: {
+        findMany: () =>
+          Promise.resolve(
+            ++roleReads === 1 && !officerExists
+              ? roles.filter((role) => role.code !== officerCode)
+              : roles,
+          ),
+        createMany: () => Promise.resolve({ count: 0 }),
+      },
+      permission: {
+        findMany: () => Promise.resolve(permissions),
+        createMany: (args: { skipDuplicates?: boolean }) => {
+          permissionCreate = args;
+          return Promise.resolve({ count: 0 });
+        },
+      },
+      rolePermission: {
+        createMany: (args: {
+          data: { roleId: string; permissionId: string }[];
+        }) => {
+          inserted = args.data;
+          return Promise.resolve({ count: args.data.length });
+        },
+      },
+    };
+    const client = {
+      $transaction: (fn: (value: typeof mockTx) => Promise<unknown>) =>
+        fn(mockTx),
+    } as unknown as import("../src/generated/prisma/client").PrismaClient;
+    await bootstrapAuthorization(client);
+    assert.equal(permissionCreate?.skipDuplicates, true);
+    assert.equal(
+      inserted.some(
+        (row) =>
+          row.roleId === officerCode &&
+          row.permissionId === "food_safety_report.receive",
+      ),
+      !officerExists,
+    );
+  }
 });
