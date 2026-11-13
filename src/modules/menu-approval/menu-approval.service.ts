@@ -130,6 +130,7 @@ function mapDetail(
     status: menu.status,
     canDecide: menu.status === "PENDING_APPROVAL",
     submittedAt: formatDateTime(menu.submittedAt),
+    submissionVersion: menu.submittedAt?.toISOString() ?? null,
     summary: {
       audience: "Toàn trường",
       audienceDetail: "Số suất ăn được xác định theo kế hoạch phục vụ",
@@ -221,6 +222,15 @@ export function createMenuApprovalService(
           }
           if (menu.status !== "PENDING_APPROVAL") {
             throw new HttpError(409, "Thực đơn chưa chờ duyệt");
+          }
+          if (
+            input.submissionVersion &&
+            input.submissionVersion !== menu.submittedAt?.toISOString()
+          ) {
+            throw new HttpError(
+              409,
+              "Thực đơn đã được chỉnh sửa và gửi lại. Vui lòng tải lại trước khi duyệt.",
+            );
           }
           if (input.decision === "APPROVED") assertReady(menu);
 

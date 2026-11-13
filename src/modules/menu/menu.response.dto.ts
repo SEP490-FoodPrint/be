@@ -75,3 +75,20 @@ export interface MenuSummaryPageResponseDTO {
     hasNext: boolean;
   };
 }
+export interface MenuCreationAllergyReportDTO {
+  hasUnresolvedAllergies: boolean;
+  allergyChecks: {
+    menuDayId: string;
+    menuDate: string;
+    mealType: "LUNCH" | "AFTERNOON";
+    hasConflict: boolean;
+    hasUnresolvedConflicts: boolean;
+    conflicts: {
+      ingredientId: string;
+      ingredientEntryId: string;
+      ingredientName: string;
+      coveredBySeparateGroup: boolean;
+      affectedClasses: { classId: string; className: string; count: number }[];
+    }[];
+  }[];
+}

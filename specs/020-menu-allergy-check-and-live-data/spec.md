@@ -1,0 +1,55 @@
+# Server allergy review on menu creation and live menu data
+
+POST menus must inspect all relevant class allergy records from the authenticated school against persisted main ingredients and shared seasonings, inside the create transaction. This applies to both a new week and adding/replacing a day in an existing draft week. Never trust client allergy results or infer replacement dishes. Preserve the normal dishes and manually selected separate-group alternatives.
+
+Return per-date/per-meal checks, per-ingredient/per-class counts and whether a safe non-default group covers the conflict. Avoid summing counts as unique pupils. Keep draft saves possible for unresolved conflicts; submission remains blocked until explicit safe group coverage. Existing group safety checks reject unsafe substitute dishes or shared seasonings. Require the live class_allergy.view permission before exposing health information; failure rolls the create transaction back.
+
+Remove menu production mock files, fictitious academic calendars, localStorage dish catalogs and their fallback data. Keep production enum/label dictionaries and pure formatting helpers. Wire the active dish catalog and kitchen menu to existing database APIs with loading/error/empty states. Delete only confirmed unused mock-dependent components. Do not remove test fixtures or unrelated kitchen mock modules being edited by the user.
+
+The existing catalog delete action must use a school-scoped API for unused dishes; reject deletion when a dish is referenced by any menu or cooking batch. Preserve legacy unclassified recipe lines until the nutrition user explicitly assigns their roles.
+
+## School allergy catalogue follow-up
+
+Read-only Azure verification found three positive peanut-allergy records for the current school (3A: 1, 3B: 2, 4A: 1); the user's conditional request to insert only if absent therefore does not authorize duplicate seed writes. Provide a paginated school-only class allergy catalogue using actual class names, years, ingredient names/categories, counts and timestamps. Both class and IngredientEntry must belong to the trusted school; require class_allergy.view. Preserve the legacy list endpoint.
+
+Replace mock allergy pages, dashboard allergy rows/KPI and name-based substitute reconstruction with real catalogue/group identities. Never sum multiple ingredient counts as unique pupils. Catalogue failures are errors, not zero cases. Keep real DB records and infrastructure test fixtures intact.
+
+No schema change, Azure mutation, permission seed, README or gitignore edit, commit or push is authorized as part of this implementation request.
+
+## Allergy checks while selecting dishes
+
+Selecting a dish must inspect all database recipe ingredient identities, including unclassified legacy lines and seasonings. Recipe aggregation errors must not suppress the independent allergy request. Missing recipes and failed allergy requests must remain visible as incomplete checks, never a claim that every pupil is safe. Keep recipe validation for saving/submitting unchanged, preserve manually selected substitutes, and avoid inferring ingredients from dish names. Check selected dishes immediately without waiting for strict recipe aggregation to succeed; ignore results from superseded selections.
+
+## Persisted dish categories (explicit follow-up authorization)
+
+### School-managed category follow-up
+
+The user requires each school to manage its own dish categories with create, list, rename and delete operations. The dish catalog opens the category list beside the add-dish action. Use a black-and-white interface; category colors are not editable and identifiers are not displayed. Preserve existing dish classifications when moving from the shared enum to school-scoped categories, and prevent deletion of a category while dishes reference it. Enforce school ownership and permissions on every operation. Prepare a reviewed migration without deploying it to a remote database as part of implementation.
+
+The user subsequently authorized adding dish categories to the database and classifying existing dishes. Add a nullable DishCategory enum column to dishes with RICE_STARCH, MAIN_DISH, VEGETABLE, SOUP and DESSERT through a new additive migration. Backfill explicitly reviewed legacy IDs only when their current names match and category remains NULL; unknown or ambiguous names remain unclassified. Do not alter recipes, quantities, roles or existing migration files. Synchronize the maintained SQL bootstrap without running it against Azure.
+
+Expose category values and canonical Vietnamese category options through dish APIs. Support category writes, preserving the previous category when an older caller omits it. Both the dish catalog and menu selection must display/filter the saved category, including an explicit unclassified state. Remove name-based category inference. Existing clients may omit the field; new UI requires selecting a category when saving a dish.
+
+Read-only inspection found Azure migration history ahead of both this checkout and fetched origin/dev by 20261113000100_link_meal_complaints_to_daily_meal_portions and 20261113000200_grant_parent_meal_complaint_view. Do not deploy new changes until the missing migration source/history is reconciled; never bypass the deployment preflight or mark migrations applied manually. Prepare the reviewable category migration/backfill and report this blocker.
+
+Subsequent observation: concurrent workspace work restored those migration sources and deployed the pending migrations. Read-only verification confirmed every completed Azure migration matches its on-disk checksum, and 20261114000100_dish_categories is finished. The category backfill is now present on Azure; this task itself issued no Azure mutation or deployment command. The earlier migration-source blocker is resolved.
+
+## Delivery inspection shared screen
+
+The user requests real inspection APIs and the shared UI for SCHOOL_NUTRITION_OFFICER, SCHOOL_KITCHEN_STAFF, INGREDIENT_MANAGEMENT_DEPARTMENT and PARENTS_COMMITTEE. Inspect each Delivery independently: two deliveries against one supply request have separate immutable decisions for each role. Use existing DeliveryApproval uniqueness and trusted actor identity; never accept userId/roleId/schoolId from a decision body or hardcode a nutrition identity in the UI.
+
+Provide school-scoped filtered/paginated delivery inspection reads, safe detail including actual lots and role decisions, and shared UI loading/error/empty states. Preserve the legacy GET deliveries endpoint and do not change the unrelated food-safety-incident inspection module. Remove production delivery mock usage on this screen. No Azure write/seed or migration deployment is authorized for this delivery implementation request by implication.
+
+Confirmed answers: all four roles must approve before an individual Delivery is RECEIVED and its blocked lots are made available with one initial RECEIPT per lot. One rejection closes that delivery and requires a new delivery/inspection; never reset or overwrite its decisions. Aggregate the required redeliveries across both initial deliveries under the same SupplyRequest: count distinct deliveries with at least one REJECT decision. When that total exceeds two (a third delivery attempt is rejected), cancel the SupplyRequest and all its not-yet-received deliveries, block further receipt, and return a persistent cancellation notice on the shared four-role screen. Preserve already RECEIVED deliveries, lots and inventory history. Existing historical decisions count toward the shared limit; retries do not add to it.
+
+Use existing Delivery/DeliveryApproval/SupplyRequest and inventory tables; no new business table or enum is needed. Add only a dedicated delivery.inspect permission for the four inspecting roles and delivery.view for PARENTS_COMMITTEE through a new migration/catalog alignment; keep delivery.evaluate_quality distinct, existing denials/inactive flags intact. Serialize decisions, request cancellation and initial receipts in one school/request/delivery/lot transaction. Reject receipt when lots have inconsistent quantities, wrong school/supplier/request, invalid dates/units or prior inventory history. Same actor replay with identical content is idempotent; another actor in the same role or altered content is a conflict. The cancellation notice is in-app, persisted through source states/decisions; no external email/message or generic notification subsystem is in scope.
+
+## Menu creation, pending revisions and approved locks
+
+The user reports failed create/edit integration and requires approved menus to be completely immutable. Hide the day add/edit plus and all edit actions for approved days/weeks; enforce the same rules on POST merge, PUT, ingredient and portion-group writes. Preserve approved snapshots and reject title changes affecting an approved day. Editable states include draft, revision-required and pending approval.
+
+The user's final clarification requires one primary action when editing a pending menu: "Lưu và gửi BGH duyệt lại" saves into the same menu and resubmits it, without a separate draft/save/send step. Add an atomic revise-and-submit action sharing normal readiness, allergy and school-week completeness checks. A separate explicit draft save may reset pending approval to DRAFT. Preserve review history. Expose the new submission version to the management-board screen and reject a supplied stale submission version during review. No status enum/schema change is needed.
+
+Fix both weekly creation and detail editing to retain current menu title, day approval flags, notes, untouched meals/days, and explicit portion groups. For edited catalog dishes, send recipe identities/useDishRecipes so BE reads actual recipes; do not fabricate quantities from ingredient IDs. Await persistence before closing edit dialogs, retain form/errors after rejection, show schedule loading failures and invalidate menu caches after committed writes. Approved rows stay visible for viewing. Failed atomic resubmission rolls changes back.
+
+The user separately authorized clearing this week's test data and explicitly confirmed deletion of the related completed batches/samples/allocations. A read-only backup was created at FoodPrint/.local-backups/menu-week-2026-11-09-2026-11-13T13-35-31-791Z.json (SHA256 f9bca5f212571b45262b29d86bcc2dc2c2fda41771a60bc6dc2321945badebb6). A scoped serializable operator transaction then removed the one weekly menu for school 4eabb820-f445-52db-8aeb-2fd0f6cb882a, week 2026-11-09 through 2026-11-15, plus its 2 completed batches, 1 group, 4 retained samples, 6 allocation links and 3 allocation parents. Exact snapshots/dependencies were checked before deletion; post-delete equality checks confirmed 4 lots, 5 inventory transactions and 3 attendance records unchanged. No other school/week, stock, attendance, migrations or schema was altered. This explicit cleanup authorization supersedes the earlier no-Azure-mutation restriction only for those records; it is not a production test or a migration.

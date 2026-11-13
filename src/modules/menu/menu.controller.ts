@@ -100,6 +100,17 @@ export function createMenuController(service: MenuService = menuService) {
           "Đã cập nhật thực đơn",
         ),
     ),
+    reviseAndSubmit: asyncHandler(async (req, res) => {
+      sendSuccess(
+        res,
+        await service.reviseAndSubmit(
+          uuid(req.params.menuId),
+          validateMenuWrite(req.body),
+          requirePrincipal(req),
+        ),
+        "Đã lưu và gửi Ban Giám hiệu duyệt lại",
+      );
+    }),
     remove: asyncHandler(
       async (req, res) =>
         void sendSuccess(

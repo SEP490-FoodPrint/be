@@ -15,6 +15,7 @@ import type {
   MenuAcademicYearDTO,
   AcademicWeekDTO,
   MenuWeekScheduleDTO,
+  MenuCreationAllergyReportDTO,
 } from "./menu.response.dto";
 import type { AuthPrincipal } from "../../types/auth";
 
@@ -53,6 +54,74 @@ import type {
 } from "./menu.request.dto";
 
 type Tx = Prisma.TransactionClient;
+
+export async function reviewMenuAllergies(
+  tx: Tx,
+  days: ReturnType<typeof menuCategoryDto>["menuDays"],
+  schoolId: string,
+): Promise<MenuCreationAllergyReportDTO> {
+  const allergyChecks: MenuCreationAllergyReportDTO["allergyChecks"] = [];
+  for (const day of days) {
+    for (const mealType of new Set(day.menuDayDishes.map((d) => d.mealType))) {
+      const names = new Map<string, string>();
+      for (const dish of day.menuDayDishes.filter(
+        (d) => d.mealType === mealType,
+      ))
+        for (const line of dish.ingredients)
+          names.set(line.ingredientId, line.ingredient.name);
+      for (const line of day.mealSeasonings.filter(
+        (s) => s.mealType === mealType,
+      ))
+        names.set(
+          line.ingredientEntry.ingredientId,
+          line.ingredientEntry.Ingredient.name,
+        );
+      const rows = await repository.classAllergies(
+        tx,
+        [...names.keys()],
+        schoolId,
+      );
+      const conflicts = [
+        ...new Set(rows.map((row) => row.ingredientEntryId)),
+      ].map((entryId) => {
+        const matches = rows.filter((row) => row.ingredientEntryId === entryId);
+        const ingredientId = matches[0].IngredientEntry.ingredientId;
+        return {
+          ingredientId,
+          ingredientEntryId: entryId,
+          ingredientName: names.get(ingredientId) ?? "Nguyên liệu",
+          coveredBySeparateGroup: day.portionGroups.some(
+            (group) =>
+              group.mealType === mealType &&
+              !group.isDefault &&
+              group.avoidances.some((a) => a.ingredientEntryId === entryId),
+          ),
+          affectedClasses: matches.map((row) => ({
+            classId: row.classId,
+            className: row.Class.name,
+            count: row.affectedCount,
+          })),
+        };
+      });
+      allergyChecks.push({
+        menuDayId: day.id,
+        menuDate: day.menuDate.toISOString().slice(0, 10),
+        mealType,
+        hasConflict: conflicts.length > 0,
+        hasUnresolvedConflicts: conflicts.some(
+          (c) => !c.coveredBySeparateGroup,
+        ),
+        conflicts,
+      });
+    }
+  }
+  return {
+    hasUnresolvedAllergies: allergyChecks.some(
+      (check) => check.hasUnresolvedConflicts,
+    ),
+    allergyChecks,
+  };
+}
 
 function schoolScope(principal: AuthPrincipal) {
   assertPermission(principal, "menu.view");
@@ -167,10 +236,10 @@ function createIngredientOperations(
         async (tx, _actor, schoolId) => {
           const day = await mealDay(tx, meal, schoolId);
 
-          const editable =
-            ["DRAFT", "REVISION_REQUIRED"].includes(day.approvalStatus) ||
-            (day.WeeklyMenu.status === "DRAFT" &&
-              day.approvalStatus !== "APPROVED");
+          const editable = canEditMenuDay(
+            day.approvalStatus,
+            day.WeeklyMenu.status,
+          );
 
           if (
             !editable ||
@@ -259,6 +328,7 @@ function createIngredientOperations(
           }
 
           await assertPortionGroupSafety(tx, meal, schoolId);
+          await repository.resetForEditing(tx, day.weeklyMenuId);
 
           return {
             ...meal,
@@ -446,11 +516,10 @@ function createIngredientOperations(
         async (tx, _actor, schoolId) => {
           const day = await mealDay(tx, meal, schoolId);
 
-          const editable =
-            day.approvalStatus === "DRAFT" ||
-            day.approvalStatus === "REVISION_REQUIRED" ||
-            (day.WeeklyMenu.status === "DRAFT" &&
-              day.approvalStatus !== "APPROVED");
+          const editable = canEditMenuDay(
+            day.approvalStatus,
+            day.WeeklyMenu.status,
+          );
 
           if (
             !editable ||
@@ -492,6 +561,7 @@ function createIngredientOperations(
           await assertPortionGroupSafety(tx, meal, schoolId);
 
           const updated = await repository.touchMenuDay(tx, meal.menuDayId);
+          await repository.resetForEditing(tx, day.weeklyMenuId);
 
           return {
             ...meal,
@@ -995,15 +1065,29 @@ export function expandMenuHolidays(
     .map(([date, reason]) => ({ date, reason }));
 }
 
+export function canEditMenuDay(dayStatus: string, weekStatus: string) {
+  return (
+    weekStatus !== "APPROVED" &&
+    ["DRAFT", "PENDING_APPROVAL", "REVISION_REQUIRED"].includes(dayStatus)
+  );
+}
+
 function menuCategoryDto(menu: MenuDetailRow) {
   return {
     ...menu,
 
     menuDays: menu.menuDays.map((day) => ({
       ...day,
+      canEdit: canEditMenuDay(day.approvalStatus, menu.status),
 
       menuDayDishes: day.menuDayDishes.map((dish) => ({
         ...dish,
+
+        Dish: {
+          ...dish.Dish,
+          category: dish.Dish.categoryId,
+          categoryLabel: dish.Dish.schoolCategory?.name ?? null,
+        },
 
         ingredients: dish.ingredients.map((row) => {
           const { ingredientCategory, ...ingredient } = row.ingredient;
@@ -1056,21 +1140,14 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
     const parent = await repository.menuEditHeader(tx, id);
 
     const editable = (day: { approvalStatus: string }) =>
-      ["DRAFT", "REVISION_REQUIRED"].includes(day.approvalStatus) ||
-      (parent.status === "DRAFT" &&
-        !parent.submittedAt &&
-        day.approvalStatus !== "APPROVED");
+      canEditMenuDay(day.approvalStatus, parent.status);
 
     const current = await repository.menuDayHeaders(tx, id);
 
     for (const old of current.filter(
       (d) => !input.days.some((v) => +v.menuDate === +d.menuDate),
     )) {
-      if (
-        !editable(old) ||
-        parent.submittedAt ||
-        (await repository.dayReviewCount(tx, old.id))
-      )
+      if (!editable(old) || (await repository.dayReviewCount(tx, old.id)))
         throw new HttpError(
           409,
 
@@ -1086,13 +1163,48 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
       const old = current.find((d) => +d.menuDate === +day.menuDate);
 
       if (old && !editable(old)) {
-        // Full updates must not rewrite independently approved or pending days.
+        // Full updates may retain an approved day, but cannot change any of its fields.
 
         const stored = (await owned(tx, id, schoolId)).menuDays.find(
           (d) => d.id === old.id,
         )!;
 
         const canonical = (value: unknown) => JSON.stringify(value);
+
+        for (const meal of day.meals) {
+          if (meal.useDishRecipes)
+            throw new HttpError(
+              409,
+              "Không tính lại công thức của ngày đã duyệt",
+            );
+          if (meal.portionGroups !== undefined) {
+            const suppliedGroups = meal.portionGroups
+              .map((group) => ({
+                id: group.id,
+                name: group.name,
+                isDefault: group.isDefault,
+                dishIds: [...group.dishIds].sort(),
+                avoidedIngredientEntryIds: [
+                  ...group.avoidedIngredientEntryIds,
+                ].sort(),
+              }))
+              .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+            const storedGroups = stored.portionGroups
+              .filter((group) => group.mealType === meal.mealType)
+              .map((group) => ({
+                id: group.id,
+                name: group.name,
+                isDefault: group.isDefault,
+                dishIds: group.dishes.map((dish) => dish.dishId).sort(),
+                avoidedIngredientEntryIds: group.avoidances
+                  .map((line) => line.ingredientEntryId)
+                  .sort(),
+              }))
+              .sort((a, b) => a.id.localeCompare(b.id));
+            if (canonical(suppliedGroups) !== canonical(storedGroups))
+              throw new HttpError(409, "Không sửa nhóm suất của ngày đã duyệt");
+          }
+        }
 
         const supplied = {
           note: day.note,
@@ -1486,6 +1598,79 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
     }
   }
 
+  async function saveRevision(
+    tx: Tx,
+    id: string,
+    input: MenuWrite,
+    schoolId: string,
+  ) {
+    const menu = await owned(tx, id, schoolId);
+    if (
+      !["DRAFT", "REVISION_REQUIRED", "PENDING_APPROVAL"].includes(menu.status)
+    )
+      throw new HttpError(
+        409,
+        "Thực đơn đã duyệt chỉ được xem, không được chỉnh sửa",
+      );
+    if (+input.weekStartDate !== +menu.weekStartDate)
+      throw new HttpError(409, "Không đổi tuần của thực đơn đã tạo");
+    if (
+      menu.menuDays.some((day) => day.approvalStatus === "APPROVED") &&
+      input.title !== menu.title
+    )
+      throw new HttpError(409, "Không đổi tên tuần có ngày thực đơn đã duyệt");
+    await writeDays(tx, id, input, schoolId);
+    if (input.title !== menu.title)
+      await repository.updateMenuTitle(tx, id, input.title);
+    await repository.resetForEditing(tx, id);
+    return {
+      saved: await owned(tx, id, schoolId),
+      previousSubmittedAt: menu.submittedAt,
+    };
+  }
+
+  async function submitReady(
+    tx: Tx,
+    menu: Awaited<ReturnType<typeof owned>>,
+    schoolId: string,
+    previousSubmittedAt: Date | null = null,
+  ) {
+    await ready(tx, menu, schoolId);
+    const week = getSchoolWeekSchedule(menu.weekStartDate);
+    const existingDates = new Set(
+      menu.menuDays.map((day) => day.menuDate.toISOString().slice(0, 10)),
+    );
+    const years = await repository.academicYears(tx, schoolId);
+    const holidays = new Set(
+      years.flatMap((year) =>
+        expandMenuHolidays(
+          year.holidays,
+          year.startDate.toISOString().slice(0, 10) > week.weekStartDate
+            ? year.startDate.toISOString().slice(0, 10)
+            : week.weekStartDate,
+          year.endDate.toISOString().slice(0, 10) < week.weekEndDate
+            ? year.endDate.toISOString().slice(0, 10)
+            : week.weekEndDate,
+        ).map((day) => day.date),
+      ),
+    );
+    const missing = week.schoolDays.filter(
+      (day) => !existingDates.has(day.date) && !holidays.has(day.date),
+    );
+    if (missing.length)
+      throw new HttpError(
+        422,
+        `Thực đơn từ ${week.weekStartDate} đến ${week.weekEndDate} chưa đầy đủ các ngày phục vụ ăn. Còn thiếu: ${missing.map((day) => `${day.dayLabel} (${day.date.slice(8, 10)}/${day.date.slice(5, 7)})`).join(", ")}. Vui lòng bổ sung các ngày học không nghỉ trước khi gửi duyệt.`,
+      );
+    await repository.submitDraftDays(tx, menu.id);
+    await repository.submitWeeklyMenu(
+      tx,
+      menu.id,
+      new Date(Math.max(Date.now(), (previousSubmittedAt?.getTime() ?? 0) + 1)),
+    );
+    return owned(tx, menu.id, schoolId);
+  }
+
   return {
     async list(query: MenuFilters, principal: AuthPrincipal) {
       const scope = listScopes.menu(principal),
@@ -1528,6 +1713,7 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
         "menu.create",
 
         async (tx, actor, schoolId) => {
+          assertPermission(actor, "class_allergy.view");
           const existingWeekly = await repository.menuForWeek(
             tx,
             schoolId,
@@ -1535,8 +1721,22 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
           );
 
           if (existingWeekly) {
+            assertPermission(actor, "menu.update");
             if (
-              !["DRAFT", "REVISION_REQUIRED"].includes(existingWeekly.status)
+              existingWeekly.menuDays.some(
+                (day) => day.approvalStatus === "APPROVED",
+              ) &&
+              input.title &&
+              input.title !== existingWeekly.title
+            )
+              throw new HttpError(
+                409,
+                "Không đổi tên tuần có ngày thực đơn đã duyệt",
+              );
+            if (
+              !["DRAFT", "REVISION_REQUIRED", "PENDING_APPROVAL"].includes(
+                existingWeekly.status,
+              )
             ) {
               throw new HttpError(
                 409,
@@ -1678,7 +1878,12 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
               );
             }
 
-            return owned(tx, existingWeekly.id, schoolId);
+            await repository.resetForEditing(tx, existingWeekly.id);
+            const saved = await owned(tx, existingWeekly.id, schoolId);
+            return {
+              ...saved,
+              ...(await reviewMenuAllergies(tx, saved.menuDays, schoolId)),
+            };
           }
 
           const menu = await repository.createWeeklyMenu(
@@ -1691,7 +1896,11 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
 
           await writeDays(tx, menu.id, input, schoolId);
 
-          return owned(tx, menu.id, schoolId);
+          const saved = await owned(tx, menu.id, schoolId);
+          return {
+            ...saved,
+            ...(await reviewMenuAllergies(tx, saved.menuDays, schoolId)),
+          };
         },
       );
     },
@@ -1704,20 +1913,44 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
 
         "menu.update",
 
-        async (tx, _actor, schoolId) => {
-          const menu = await owned(tx, id, schoolId);
+        async (tx, actor, schoolId) => {
+          assertPermission(actor, "class_allergy.view");
+          const { saved } = await saveRevision(tx, id, input, schoolId);
+          return {
+            ...saved,
+            ...(await reviewMenuAllergies(tx, saved.menuDays, schoolId)),
+          };
+        },
+      );
+    },
 
-          if (!["DRAFT", "REVISION_REQUIRED"].includes(menu.status))
-            throw new HttpError(409, "Thực đơn không còn được chỉnh sửa");
-
-          if (+input.weekStartDate !== +menu.weekStartDate)
-            throw new HttpError(409, "Không đổi tuần của thực đơn đã tạo");
-
-          await writeDays(tx, id, input, schoolId);
-
-          await repository.updateMenuTitle(tx, id, input.title);
-
-          return owned(tx, id, schoolId);
+    async reviseAndSubmit(
+      id: string,
+      input: MenuWrite,
+      principal: AuthPrincipal,
+    ) {
+      return schoolTransaction(
+        await connect(),
+        principal,
+        "menu.update",
+        async (tx, actor, schoolId) => {
+          assertPermission(actor, "class_allergy.view");
+          const { saved, previousSubmittedAt } = await saveRevision(
+            tx,
+            id,
+            input,
+            schoolId,
+          );
+          const submitted = await submitReady(
+            tx,
+            saved,
+            schoolId,
+            previousSubmittedAt,
+          );
+          return {
+            ...submitted,
+            ...(await reviewMenuAllergies(tx, submitted.menuDays, schoolId)),
+          };
         },
       );
     },
@@ -1769,60 +2002,7 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
               "Thực đơn không thể gửi duyệt ở trạng thái này",
             );
 
-          await ready(tx, menu, schoolId);
-
-          // Kiểm tra xem tuần này đã có đủ 5 ngày T2 - T6 chưa
-
-          const weekSchedule = getSchoolWeekSchedule(menu.weekStartDate);
-
-          const existingDateStrs = new Set(
-            menu.menuDays.map((d) => d.menuDate.toISOString().slice(0, 10)),
-          );
-
-          const academicYears = await repository.academicYears(tx, schoolId);
-          const holidayDates = new Set(
-            academicYears.flatMap((year) =>
-              expandMenuHolidays(
-                year.holidays,
-                year.startDate.toISOString().slice(0, 10) >
-                  weekSchedule.weekStartDate
-                  ? year.startDate.toISOString().slice(0, 10)
-                  : weekSchedule.weekStartDate,
-                year.endDate.toISOString().slice(0, 10) <
-                  weekSchedule.weekEndDate
-                  ? year.endDate.toISOString().slice(0, 10)
-                  : weekSchedule.weekEndDate,
-              ).map((day) => day.date),
-            ),
-          );
-
-          const missingSchoolDays = weekSchedule.schoolDays.filter(
-            (sd) =>
-              !existingDateStrs.has(sd.date) && !holidayDates.has(sd.date),
-          );
-
-          if (missingSchoolDays.length > 0) {
-            const missingNames = missingSchoolDays
-
-              .map(
-                (d) =>
-                  `${d.dayLabel} (${d.date.slice(8, 10)}/${d.date.slice(5, 7)})`,
-              )
-
-              .join(", ");
-
-            throw new HttpError(
-              422,
-
-              `Thực đơn từ ${weekSchedule.weekStartDate} đến ${weekSchedule.weekEndDate} chưa đầy đủ các ngày phục vụ ăn. Còn thiếu: ${missingNames}. Vui lòng bổ sung các ngày học không nghỉ trước khi gửi duyệt.`,
-            );
-          }
-
-          await repository.submitDraftDays(tx, id);
-
-          await repository.submitWeeklyMenu(tx, id, new Date());
-
-          return owned(tx, id, schoolId);
+          return submitReady(tx, menu, schoolId);
         },
       );
     },

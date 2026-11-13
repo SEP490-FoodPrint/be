@@ -65,7 +65,15 @@ const menuDetail = {
 
         include: {
           Dish: {
-            select: { id: true, name: true, description: true, status: true },
+            select: {
+              id: true,
+              name: true,
+              category: true,
+              categoryId: true,
+              schoolCategory: { select: { name: true } },
+              description: true,
+              status: true,
+            },
           },
 
           ingredients: {
@@ -129,7 +137,15 @@ const menuListInclude = {
 
         include: {
           Dish: {
-            select: { id: true, name: true, description: true, status: true },
+            select: {
+              id: true,
+              name: true,
+              category: true,
+              categoryId: true,
+              schoolCategory: { select: { name: true } },
+              description: true,
+              status: true,
+            },
           },
 
           ingredients: {
@@ -279,6 +295,7 @@ export const menuRepository = {
 
       select: {
         menuDate: true,
+        weeklyMenuId: true,
 
         approvalStatus: true,
 
@@ -718,7 +735,7 @@ export const menuRepository = {
     return client.menuDay.update({
       where: { id: id },
 
-      data: { note: note },
+      data: { note: note, approvalStatus: "DRAFT" },
     });
   },
   createDay(
@@ -882,6 +899,19 @@ export const menuRepository = {
       where: { id: id },
 
       data: { title: title },
+    });
+  },
+  async resetForEditing(client: Tx, id: string) {
+    await client.menuDay.updateMany({
+      where: {
+        weeklyMenuId: id,
+        approvalStatus: { in: ["PENDING_APPROVAL", "REVISION_REQUIRED"] },
+      },
+      data: { approvalStatus: "DRAFT" },
+    });
+    return client.weeklyMenu.update({
+      where: { id },
+      data: { status: "DRAFT", submittedAt: null, approvedAt: null },
     });
   },
   createWeeklyMenu(

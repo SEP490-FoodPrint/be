@@ -1,4 +1,4 @@
-import { Router } from "express";
+﻿import { Router } from "express";
 import type { RequestHandler } from "express";
 import { authenticate } from "../../middlewares/auth.middleware";
 import {
@@ -16,7 +16,7 @@ import {
 export function createKitchenRouter(
   service: KitchenService = kitchenService,
   authHandler: RequestHandler = authenticate,
-  versioned = false,
+  _versioned = false,
   samples: RetainedSampleService = retainedSampleService,
 ) {
   const router = Router();
@@ -42,12 +42,7 @@ export function createKitchenRouter(
     requirePermission("cooking_batch.update"),
     controller.remove,
   );
-  router.get(
-    "/",
-    authHandler,
-    requireResource("kitchen"),
-    versioned ? controller.list : controller.getAll,
-  );
+  router.get("/", authHandler, requireResource("kitchen"), controller.list);
   router.get(
     "/stats",
     authHandler,
