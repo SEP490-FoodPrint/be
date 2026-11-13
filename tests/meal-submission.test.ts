@@ -204,3 +204,22 @@ void test("finalized portions are immutable and finalization is idempotent", asy
   assert.equal(result.status, "FINALIZED");
   assert.equal(finalized.writes.length, 0);
 });
+
+void test("GVCN can declare portions exceeding registeredMealPortions for ad-hoc boarding students", async () => {
+  const { db } = database();
+  const service = createMealAttendanceService(undefined, () =>
+    Promise.resolve(db),
+  );
+  // registeredMealPortions is 30 in assignedClass fixture, totalPortions is 36
+  const result = await service.saveDraft(
+    {
+      date: DATE,
+      mealType: "LUNCH",
+      totalPortions: 36,
+      allergyNotes: "Phát sinh thêm 6 học sinh ăn bán trú",
+      allergies: [],
+    },
+    teacher,
+  );
+  assert.equal(result.id, DEMAND_ID);
+});
