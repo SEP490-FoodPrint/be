@@ -1892,6 +1892,85 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
     });
 
   await context.test(
+    "school grades are isolated and can be detached from historical classes",
+    async () => {
+      const route = "/api/school-grades";
+      const board = await user("SCHOOL_MANAGEMENT_BOARD", {
+        schoolId: schoolA.id,
+      });
+      const otherBoard = await user("SCHOOL_MANAGEMENT_BOARD", {
+        schoolId: schoolB.id,
+      });
+      for (const account of [board, otherBoard]) {
+        const session = await authSessions.issue(account.id);
+        issued.set(account.id, session);
+        refreshTokens.push(session.refreshToken);
+      }
+      assert.equal((await request(route, system.id)).status, 403);
+      assert.equal((await request(route, adminA.id)).status, 403);
+      const data = { code: "  g5 ", name: "Khối 5" };
+      const response = await request(route, board.id, "POST", data);
+      assert.equal(response.status, 201);
+      const grade = record(record(response.body).data);
+      assert(typeof grade.id === "string");
+      assert.equal(grade.code, "G5");
+      assert.equal((await request(route, board.id, "POST", data)).status, 409);
+      assert.equal(
+        (await request(route, otherBoard.id, "POST", data)).status,
+        201,
+      );
+      const url = `${route}/${grade.id}`;
+      assert.equal(
+        (await request(url, otherBoard.id, "PATCH", { name: "Khối khác" }))
+          .status,
+        404,
+      );
+      assert.equal(
+        (await request(url, board.id, "PATCH", { name: "Khối năm" })).status,
+        200,
+      );
+      const classroom = await db.class.create({
+        data: {
+          schoolId: schoolA.id,
+          name: "Lớp cũ",
+          academicYear: "2000-2001",
+          gradeId: grade.id,
+        },
+      });
+      assert.equal((await request(url, board.id, "DELETE")).status, 409);
+      assert.equal(
+        (
+          await request(
+            `/api/classes/${classroom.id}`,
+            otherBoard.id,
+            "PATCH",
+            { gradeId: null },
+          )
+        ).status,
+        404,
+      );
+      const filtered = await request(
+        `/api/classes?gradeId=${grade.id}`,
+        board.id,
+      );
+      assert.equal(filtered.status, 200);
+      assert.deepEqual(
+        rows(filtered.body).map((item) => item.id),
+        [classroom.id],
+      );
+      assert.equal(
+        (
+          await request(`/api/classes/${classroom.id}`, board.id, "PATCH", {
+            gradeId: null,
+          })
+        ).status,
+        200,
+      );
+      assert.equal((await request(url, board.id, "DELETE")).status, 200);
+    },
+  );
+
+  await context.test(
     "supplier ingredient management scopes create/edit/hide and preserves history",
     async () => {
       const base = "/api/ingredients/management";

@@ -26,6 +26,7 @@ import {
 } from "../src/modules/permission/permission.validation";
 import { testAdmin, testStaff } from "./helpers/authorization";
 import { startHttp } from "./helpers/http";
+import { createSchoolGradeService } from "../src/modules/school-grade/school-grade.service";
 
 type Identity = NonNullable<Parameters<typeof principalFromIdentity>[0]>;
 function identity(overrides: Partial<Identity> = {}): Identity {
@@ -94,6 +95,15 @@ void test("all list resources deny absent grants, including System Admin", () =>
     );
   }
 });
+void test("school grade service requires BGH even when SYSTEM has class.manage", async () => {
+  const service = createSchoolGradeService(() =>
+    Promise.reject(new Error("Unexpected database access")),
+  );
+  const actor = { ...testAdmin, permissions: ["class.manage"] };
+  assert.deepEqual(listScopes["school-grade"](actor), {});
+  await assert.rejects(service.list(actor), status(403));
+});
+
 void test("bootstrap System Admin grants allow directory children and preserve permission checks", () => {
   const principal = {
     ...testAdmin,
