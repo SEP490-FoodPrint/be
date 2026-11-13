@@ -60,6 +60,8 @@ import {
   validateMenuPortionGroups,
 } from "../src/modules/menu/menu.validation";
 import { createKitchenService } from "../src/modules/kitchen/kitchen.service";
+import { createDeliveryInspectionService } from "../src/modules/delivery/delivery.service";
+import { validateDeliveryInspectionDecision } from "../src/modules/delivery/delivery.validation";
 import { validateKitchenFilters } from "../src/modules/kitchen/kitchen.validation";
 import { createRetainedSampleService } from "../src/modules/retained-sample/retained-sample.service";
 import { createMealAttendanceService } from "../src/modules/meal-attendance/meal-attendance.service";
@@ -131,6 +133,14 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   );
   const db = await getPrisma();
   context.after(() => db.$disconnect());
+  const [database] = await db.$queryRaw<
+    { name: string }[]
+  >`SELECT current_database() AS name`;
+  assert.equal(
+    database.name,
+    name,
+    "Authorization fixtures must use the newly created disposable database, not the migration-test database",
+  );
   await bootstrapAuthorization(db);
   const role = async (code: string) =>
     db.role.findUniqueOrThrow({ where: { code } });
@@ -389,6 +399,241 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   });
   context.mock.method(console, "error", () => undefined);
   await context.test(
+    "four-role delivery inspections isolate two rounds, receive once under concurrency and cancel the remainder after the third rejection",
+    async () => {
+      const school = await db.school.create({
+        data: { name: "Delivery inspection test school" },
+      });
+      const accounts = await Promise.all(
+        [
+          "SCHOOL_NUTRITION_OFFICER",
+          "SCHOOL_KITCHEN_STAFF",
+          "INGREDIENT_MANAGEMENT_DEPARTMENT",
+          "PARENTS_COMMITTEE",
+        ].map((code) => user(code, { schoolId: school.id })),
+      );
+      const actors = await Promise.all(
+        accounts.map((account) => loadPrincipal(account.id, db)),
+      );
+      for (const actor of actors)
+        assert(actor.permissions.includes("delivery.inspect"));
+      const request = await db.supplyRequest.create({
+        data: {
+          schoolId: school.id,
+          supplierId: supplierA.id,
+          requestNo: randomUUID(),
+          createdByUserId: actors[0].id,
+          status: "IN_PROGRESS",
+          acceptedByUserId: supplierAdmin.id,
+          acceptedAt: new Date(),
+          sentAt: new Date(),
+        },
+      });
+      const ingredient = await db.ingredient.create({
+        data: {
+          supplierId: supplierA.id,
+          name: "Inspection rice " + randomUUID(),
+          defaultUnit: "kg",
+        },
+      });
+      const entry = await db.ingredientEntry.create({
+        data: {
+          schoolId: school.id,
+          ingredientId: ingredient.id,
+          handlingType: "DRY_STOCK",
+        },
+      });
+      const line = await db.supplyRequestItem.create({
+        data: {
+          supplyRequestId: request.id,
+          ingredientEntryId: entry.id,
+          requestedQuantity: "12.250",
+          unit: "kg",
+        },
+      });
+      const deliveries: {
+        id: string;
+        item: { id: string };
+        lot: { id: string };
+      }[] = [];
+      for (let index = 0; index < 5; index++) {
+        const delivery = await db.delivery.create({
+          data: {
+            supplyRequestId: request.id,
+            supplierId: supplierA.id,
+            deliveryNo: randomUUID(),
+            status: "ARRIVED",
+            arrivedAt: new Date(),
+            createdByUserId: supplierAdmin.id,
+          },
+        });
+        const item = await db.deliveryItem.create({
+          data: {
+            deliveryId: delivery.id,
+            supplyRequestItemId: line.id,
+            actualQuantity: "6.125",
+            unit: "kg",
+          },
+        });
+        const lot = await db.ingredientLot.create({
+          data: {
+            deliveryItemId: item.id,
+            lotCode: randomUUID(),
+            receivedQuantity: "6.125",
+            availableQuantity: "0",
+            unit: "kg",
+            status: "BLOCKED",
+          },
+        });
+        deliveries.push({ ...delivery, item, lot });
+      }
+      const service = createDeliveryInspectionService(() =>
+        Promise.resolve(db),
+      );
+      const approve = validateDeliveryInspectionDecision({
+        decision: "APPROVE",
+      });
+      const reject = validateDeliveryInspectionDecision({
+        decision: "REJECT",
+        reason: "Packaging rejected by inspection",
+      });
+      for (const actor of actors.slice(0, 3))
+        assert.equal(
+          (await service.decide(deliveries[0].id, approve, actor)).status,
+          "PENDING_APPROVAL",
+        );
+      assert.equal(
+        await db.inventoryTransaction.count({
+          where: { ingredientLotId: deliveries[0].lot.id },
+        }),
+        0,
+      );
+      await db.deliveryItem.update({
+        where: { id: deliveries[0].item.id },
+        data: { actualQuantity: "7" },
+      });
+      await assert.rejects(
+        () => service.decide(deliveries[0].id, approve, actors[3]),
+        { statusCode: 409 },
+      );
+      assert.equal(
+        await db.deliveryApproval.count({
+          where: { deliveryId: deliveries[0].id },
+        }),
+        3,
+      );
+      assert.equal(
+        (
+          await db.ingredientLot.findUniqueOrThrow({
+            where: { id: deliveries[0].lot.id },
+          })
+        ).availableQuantity.toString(),
+        "0",
+      );
+      await db.deliveryItem.update({
+        where: { id: deliveries[0].item.id },
+        data: { actualQuantity: "6.125" },
+      });
+      const results = await Promise.all([
+        service.decide(deliveries[0].id, approve, actors[3]),
+        service.decide(deliveries[0].id, approve, actors[3]),
+      ]);
+      assert.equal(results.filter((result) => result.created).length, 1);
+      assert.equal(
+        await db.inventoryTransaction.count({
+          where: {
+            ingredientLotId: deliveries[0].lot.id,
+            movementType: "RECEIPT",
+          },
+        }),
+        1,
+      );
+      assert.equal(
+        (
+          await db.delivery.findUniqueOrThrow({
+            where: { id: deliveries[1].id },
+          })
+        ).status,
+        "ARRIVED",
+      );
+      assert.equal(
+        await db.deliveryApproval.count({
+          where: { deliveryId: deliveries[1].id },
+        }),
+        0,
+      );
+      const outsider = await loadPrincipal(staffB.id, db);
+      await assert.rejects(() => service.detail(deliveries[0].id, outsider), {
+        statusCode: 404,
+      });
+      await assert.rejects(
+        () => service.decide(deliveries[0].id, reject, actors[3]),
+        { statusCode: 409 },
+      );
+      for (const delivery of deliveries.slice(1, 3)) {
+        await service.decide(delivery.id, reject, actors[0]);
+        await service.decide(delivery.id, reject, actors[0]);
+        assert.equal(
+          (
+            await db.supplyRequest.findUniqueOrThrow({
+              where: { id: request.id },
+            })
+          ).status,
+          "IN_PROGRESS",
+        );
+      }
+      const cancelled = await service.decide(
+        deliveries[3].id,
+        reject,
+        actors[2],
+      );
+      assert.equal(cancelled.redeliveryRequiredCount, 3);
+      assert(cancelled.cancellationNotice);
+      assert.equal(
+        (
+          await db.supplyRequest.findUniqueOrThrow({
+            where: { id: request.id },
+          })
+        ).status,
+        "CANCELLED",
+      );
+      assert.equal(
+        (
+          await db.delivery.findUniqueOrThrow({
+            where: { id: deliveries[4].id },
+          })
+        ).status,
+        "CANCELLED",
+      );
+      assert.equal(
+        (
+          await db.delivery.findUniqueOrThrow({
+            where: { id: deliveries[0].id },
+          })
+        ).status,
+        "RECEIVED",
+      );
+      assert.equal(
+        (
+          await db.ingredientLot.findUniqueOrThrow({
+            where: { id: deliveries[0].lot.id },
+          })
+        ).availableQuantity.toString(),
+        "6.125",
+      );
+      assert.equal(
+        await db.inventoryTransaction.count({
+          where: { ingredientLotId: deliveries[0].lot.id },
+        }),
+        1,
+      );
+      await assert.rejects(
+        () => service.decide(deliveries[4].id, approve, actors[1]),
+        { statusCode: 409 },
+      );
+    },
+  );
+  await context.test(
     "menu cooking API reserves stock, completes once under concurrency and retains samples",
     async () => {
       const school = await db.school.create({
@@ -588,10 +833,77 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           (entry) => entry.approvalStatus === "PENDING_APPROVAL",
         ),
       );
+      const revisionPayload = () =>
+        validateMenuWrite({
+          weekStartDate: firstDay.menuDate,
+          days: completeWeek.menuDays.map((entry) => ({
+            menuDate: entry.menuDate.toISOString().slice(0, 10),
+            note: entry.id === day.id ? "Updated before approval" : entry.note,
+            meals: [
+              ...new Set(entry.menuDayDishes.map((dish) => dish.mealType)),
+            ].map((mealType) => ({
+              mealType,
+              dishes: entry.menuDayDishes
+                .filter((dish) => dish.mealType === mealType)
+                .map((dish) => ({
+                  dishId: dish.dishId,
+                  ingredients: dish.ingredients.map((line) => ({
+                    ingredientId: line.ingredientId,
+                    quantityPerPortion: line.quantityPerPortion.toString(),
+                    unit: line.unit,
+                  })),
+                })),
+              seasonings: entry.mealSeasonings
+                .filter((line) => line.mealType === mealType)
+                .map((line) => ({
+                  ingredientEntryId: line.ingredientEntryId,
+                  quantityPerPortion: line.quantityPerPortion.toString(),
+                  unit: line.unit,
+                })),
+            })),
+          })),
+        });
+      const revisedWeek = await menus.reviseAndSubmit(
+        menu.id,
+        revisionPayload(),
+        health,
+      );
+      assert.equal(revisedWeek.id, menu.id);
+      assert.equal(revisedWeek.status, "PENDING_APPROVAL");
+      assert.ok(revisedWeek.submittedAt! > submittedWeek.submittedAt!);
+      assert.equal(revisedWeek.menuDays[0].note, "Updated before approval");
+      const invalidRevision = revisionPayload();
+      invalidRevision.days[0].meals = [];
+      await assert.rejects(
+        () => menus.reviseAndSubmit(menu.id, invalidRevision, health),
+        { statusCode: 422 },
+      );
+      const afterRejectedRevision = await menus.getOne(menu.id, health);
+      assert.equal(afterRejectedRevision.status, "PENDING_APPROVAL");
+      assert.equal(
+        afterRejectedRevision.submittedAt?.toISOString(),
+        revisedWeek.submittedAt?.toISOString(),
+      );
+      assert.equal(
+        afterRejectedRevision.menuDays[0].note,
+        "Updated before approval",
+      );
+      assert.equal(
+        afterRejectedRevision.menuDays[0].menuDayDishes.length,
+        revisedWeek.menuDays[0].menuDayDishes.length,
+      );
       await menus.review(
         menu.id,
         validateMenuReview({ decision: "APPROVED" }),
         reviewer,
+      );
+      await assert.rejects(
+        () => menus.update(menu.id, revisionPayload(), health),
+        { statusCode: 409 },
+      );
+      await assert.rejects(
+        () => menus.reviseAndSubmit(menu.id, revisionPayload(), health),
+        { statusCode: 409 },
       );
       const mainDish = day.menuDayDishes.find(
         (d) => d.Dish.name === "API main",
@@ -3998,6 +4310,42 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   await context.test(
     "supplier reads and denials remain isolated to their supplier",
     async () => {
+      // The earlier CRUD scenario deliberately retains ingredient history.
+      // These fixtures are independent so the exact row assertions stay meaningful.
+      const supplierA = await db.supplier.create({
+        data: { name: "Read isolation A" },
+      });
+      const supplierB = await db.supplier.create({
+        data: { name: "Read isolation B" },
+      });
+      const supplierAdmin = await user("INGREDIENT_SUPPLIER_ADMIN", {
+        supplierId: supplierA.id,
+      });
+      const supplierStaffA = await user("INGREDIENT_SUPPLIER_STAFF", {
+        supplierId: supplierA.id,
+      });
+      const supplierStaffB = await user("INGREDIENT_SUPPLIER_STAFF", {
+        supplierId: supplierB.id,
+      });
+      const ingredientA = await db.ingredient.create({
+        data: {
+          supplierId: supplierA.id,
+          name: "Scoped ingredient A",
+          defaultUnit: "kg",
+        },
+      });
+      const ingredientB = await db.ingredient.create({
+        data: {
+          supplierId: supplierB.id,
+          name: "Scoped ingredient B",
+          defaultUnit: "kg",
+        },
+      });
+      for (const account of [supplierAdmin, supplierStaffA, supplierStaffB]) {
+        const session = await authSessions.issue(account.id);
+        issued.set(account.id, session);
+        refreshTokens.push(session.refreshToken);
+      }
       const ingredientView = await permission("ingredient.view");
       const grants = await grantIds(supplierStaffA.roleId);
       assert.equal(
@@ -4016,6 +4364,15 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       assert.deepEqual(
         rows(response.body).map((row) => row.id),
         [ingredientA.id],
+      );
+      const otherSupplier = await request(
+        "/api/ingredients",
+        supplierStaffB.id,
+      );
+      assert.equal(otherSupplier.status, 200);
+      assert.deepEqual(
+        rows(otherSupplier.body).map((row) => row.id),
+        [ingredientB.id],
       );
       const url =
         "/api/users/" +

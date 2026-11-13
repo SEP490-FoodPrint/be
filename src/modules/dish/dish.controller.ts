@@ -3,11 +3,61 @@ import { asyncHandler } from "../../utils/async-handler";
 import { sendSuccess } from "../../utils/response";
 import { dishService, type DishService } from "./dish.service";
 import { validateDishListQuery } from "./dish.validation";
-import { validateDishRecipe, validateRecipeSelection } from "./dish.validation";
+import {
+  validateDishRecipe,
+  validateRecipeSelection,
+  validateDishCategory,
+} from "./dish.validation";
 import { dishRecipeService } from "./dish.service";
 import { uuid } from "../../utils/auth-validation";
 
 export const dishRecipeController = {
+  listCategories: asyncHandler(async (req, res) => {
+    sendSuccess(res, {
+      items: await dishRecipeService.listCategories(requirePrincipal(req)),
+    });
+  }),
+  createCategory: asyncHandler(async (req, res) => {
+    sendSuccess(
+      res,
+      await dishRecipeService.writeCategory(
+        undefined,
+        validateDishCategory(req.body).name,
+        requirePrincipal(req),
+      ),
+      "Đã tạo nhóm món",
+      201,
+    );
+  }),
+  updateCategory: asyncHandler(async (req, res) => {
+    sendSuccess(
+      res,
+      await dishRecipeService.writeCategory(
+        uuid(req.params.id),
+        validateDishCategory(req.body).name,
+        requirePrincipal(req),
+      ),
+    );
+  }),
+  removeCategory: asyncHandler(async (req, res) => {
+    sendSuccess(
+      res,
+      await dishRecipeService.removeCategory(
+        uuid(req.params.id),
+        requirePrincipal(req),
+      ),
+    );
+  }),
+  remove: asyncHandler(async (req, res) => {
+    sendSuccess(
+      res,
+      await dishRecipeService.remove(
+        uuid(req.params.id),
+        requirePrincipal(req),
+      ),
+      "Đã xóa món chưa sử dụng",
+    );
+  }),
   catalog: asyncHandler(async (req, res) => {
     sendSuccess(
       res,

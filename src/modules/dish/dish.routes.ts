@@ -16,6 +16,36 @@ export function createDishRouter(
   const router = Router();
   const controller = createDishController(service);
   router.get(
+    "/categories",
+    authHandler,
+    requirePermission("menu.view"),
+    dishRecipeController.listCategories,
+  );
+  router.post(
+    "/categories",
+    authHandler,
+    requirePermission("menu.create"),
+    dishRecipeController.createCategory,
+  );
+  router.put(
+    "/categories/:id",
+    authHandler,
+    requirePermission("menu.update"),
+    dishRecipeController.updateCategory,
+  );
+  router.delete(
+    "/categories/:id",
+    authHandler,
+    requirePermission("menu.update"),
+    dishRecipeController.removeCategory,
+  );
+  router.delete(
+    "/:id",
+    authHandler,
+    requirePermission("menu.update"),
+    dishRecipeController.remove,
+  );
+  router.get(
     "/catalog",
     authHandler,
     requirePermission("menu.view"),

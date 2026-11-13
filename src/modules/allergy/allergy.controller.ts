@@ -3,6 +3,17 @@ import { asyncHandler } from "../../utils/async-handler";
 import { sendSuccess } from "../../utils/response";
 import { allergyService, type AllergyService } from "./allergy.service";
 import { validateAllergyListQuery } from "./allergy.validation";
+import { validateAllergyCatalogQuery } from "./allergy.validation";
+import { allergyCatalogService } from "./allergy.service";
+export const allergyCatalogController = asyncHandler(async (req, res) => {
+  sendSuccess(
+    res,
+    await allergyCatalogService.getAll(
+      validateAllergyCatalogQuery(req.query),
+      requirePrincipal(req),
+    ),
+  );
+});
 
 export function createAllergyController(
   service: AllergyService = allergyService,

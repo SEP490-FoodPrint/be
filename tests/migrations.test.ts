@@ -213,7 +213,30 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
           [otherSupplier],
         )
       ).rows[0].id;
+      const categoryFixture = "00000056-0000-4000-8000-000000000004";
+      const renamedCategoryFixture = "00000056-0000-4000-8000-000000000008";
+      await db.query(
+        "INSERT INTO foodprint.dishes(id,school_id,name) VALUES ($1,$3,'Cơm gạo ST25'),($2,$3,'Renamed legacy dish')",
+        [categoryFixture, renamedCategoryFixture, schoolId],
+      );
       await runPrisma(url, ["migrate", "deploy"]);
+      const classified = await db.query<{
+        id: string;
+        category: string | null;
+      }>(
+        "SELECT id,category FROM foodprint.dishes WHERE id=ANY($1::uuid[]) ORDER BY id",
+        [[categoryFixture, renamedCategoryFixture]],
+      );
+      assert.deepEqual(classified.rows, [
+        { id: categoryFixture, category: "RICE_STARCH" },
+        { id: renamedCategoryFixture, category: null },
+      ]);
+      await assert.rejects(
+        db.query("UPDATE foodprint.dishes SET category='INVALID' WHERE id=$1", [
+          categoryFixture,
+        ]),
+        (error) => sqlState(error, "22P02"),
+      );
       const converted = await db.query<{
         id: string;
         supplier_id: string;
