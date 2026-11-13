@@ -1,5 +1,9 @@
 # Server allergy review on menu creation and live menu data
 
+## Authorization integration isolation
+
+Importing the app and its sample-storage repository must not instantiate Prisma before the runtime/test database target is selected. Use the existing lazy shared `getPrisma` access for sample-storage queries; preserve the singleton, SQL scope and authorization behavior. The authorization integration suite must verify `current_database()` equals its newly provisioned disposable database before writing fixtures. Keep zero-denial and cross-tenant rejection assertions intact. Give supplier read/denial checks independent supplier/account/ingredient fixtures so earlier ingredient CRUD cases do not change the expected rows. Add an import-time regression without contacting any database; do not modify auth rules, migration history or Azure.
+
 ## Retained sample index alignment
 
 CI migration replay reports drift because the sample-storage migration creates `idx_retained_food_samples_storage_unit_id` on `retained_food_samples(storage_unit_id)`, but the Prisma model omits that index. Declare the existing mapped index on `RetainedFoodSample.storageUnitId`. Preserve existing migrations, foreign keys and records; no new migration or Azure operation is needed. Keep the existing migration replay/diff checks intact.

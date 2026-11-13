@@ -133,6 +133,14 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   );
   const db = await getPrisma();
   context.after(() => db.$disconnect());
+  const [database] = await db.$queryRaw<
+    { name: string }[]
+  >`SELECT current_database() AS name`;
+  assert.equal(
+    database.name,
+    name,
+    "Authorization fixtures must use the newly created disposable database, not the migration-test database",
+  );
   await bootstrapAuthorization(db);
   const role = async (code: string) =>
     db.role.findUniqueOrThrow({ where: { code } });
@@ -4302,6 +4310,42 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   await context.test(
     "supplier reads and denials remain isolated to their supplier",
     async () => {
+      // The earlier CRUD scenario deliberately retains ingredient history.
+      // These fixtures are independent so the exact row assertions stay meaningful.
+      const supplierA = await db.supplier.create({
+        data: { name: "Read isolation A" },
+      });
+      const supplierB = await db.supplier.create({
+        data: { name: "Read isolation B" },
+      });
+      const supplierAdmin = await user("INGREDIENT_SUPPLIER_ADMIN", {
+        supplierId: supplierA.id,
+      });
+      const supplierStaffA = await user("INGREDIENT_SUPPLIER_STAFF", {
+        supplierId: supplierA.id,
+      });
+      const supplierStaffB = await user("INGREDIENT_SUPPLIER_STAFF", {
+        supplierId: supplierB.id,
+      });
+      const ingredientA = await db.ingredient.create({
+        data: {
+          supplierId: supplierA.id,
+          name: "Scoped ingredient A",
+          defaultUnit: "kg",
+        },
+      });
+      const ingredientB = await db.ingredient.create({
+        data: {
+          supplierId: supplierB.id,
+          name: "Scoped ingredient B",
+          defaultUnit: "kg",
+        },
+      });
+      for (const account of [supplierAdmin, supplierStaffA, supplierStaffB]) {
+        const session = await authSessions.issue(account.id);
+        issued.set(account.id, session);
+        refreshTokens.push(session.refreshToken);
+      }
       const ingredientView = await permission("ingredient.view");
       const grants = await grantIds(supplierStaffA.roleId);
       assert.equal(
@@ -4320,6 +4364,15 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       assert.deepEqual(
         rows(response.body).map((row) => row.id),
         [ingredientA.id],
+      );
+      const otherSupplier = await request(
+        "/api/ingredients",
+        supplierStaffB.id,
+      );
+      assert.equal(otherSupplier.status, 200);
+      assert.deepEqual(
+        rows(otherSupplier.body).map((row) => row.id),
+        [ingredientB.id],
       );
       const url =
         "/api/users/" +

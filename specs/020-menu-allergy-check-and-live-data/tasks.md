@@ -1,5 +1,7 @@
 # Tasks
 
+- [x] Prevent app imports from binding Prisma before DB selection; add import/database identity guards and isolated supplier read fixtures. All 343 database-free tests, build, typecheck and focused lint passed. Real PostgreSQL authorization verification remains pending CI because no local test URL is configured; zero-denial and cross-tenant rejection assertions remain intact.
+
 - [x] Align the retained-sample storage-unit index in Prisma with existing migration SQL; Prisma validate, build and typecheck passed. Local migration replay remains unavailable because MIGRATION_TEST_DATABASE_URL is not configured; CI must rerun both existing migration/diff paths.
 
 - [x] Back up and clear only the explicitly confirmed current-week test menu/dependencies; verify inventory and attendance remain unchanged.

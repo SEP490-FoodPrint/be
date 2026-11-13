@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { execFile } from "node:child_process";
+import path from "node:path";
+import { promisify } from "node:util";
 import express, { type RequestHandler } from "express";
 import { Prisma, type SampleStorageUnit } from "../src/generated/prisma/client";
 import { SampleStorageService } from "../src/modules/sample-storage/sample-storage.service";
@@ -9,6 +12,29 @@ import { testStaff } from "./helpers/authorization";
 import { startHttp } from "./helpers/http";
 import type { SampleStorageRepository } from "../src/modules/sample-storage/sample-storage.repository";
 import type { SampleStorageWriteInput } from "../src/modules/sample-storage/sample-storage.validation";
+
+void test("importing application routes defers Prisma initialization until database selection", async () => {
+  const { stdout } = await promisify(execFile)(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      "-e",
+      'require("./src/app.ts"); if (require.cache[require.resolve("./src/config/prisma.ts")]) throw new Error("Prisma initialized while importing routes"); process.stdout.write("database-client-deferred");',
+    ],
+    {
+      cwd: path.resolve(__dirname, ".."),
+      env: {
+        ...process.env,
+        DATABASE_URL: "invalid-unselected-test-target",
+        NODE_ENV: "test",
+        JWT_SECRET: "foodprint-import-test-only-secret",
+      },
+      timeout: 30_000,
+    },
+  );
+  assert.match(stdout, /database-client-deferred$/);
+});
 
 function storedUnit(
   overrides: Partial<SampleStorageUnit> = {},

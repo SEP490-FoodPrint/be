@@ -1,4 +1,4 @@
-import { prisma } from "../../config/prisma";
+import { getPrisma } from "../../utils/database";
 import type { Prisma } from "../../generated/prisma/client";
 import type { SampleStorageWriteInput } from "./sample-storage.validation";
 
@@ -21,7 +21,7 @@ export class SampleStorageRepository {
       ];
     }
 
-    return prisma.sampleStorageUnit.findMany({
+    return (await getPrisma()).sampleStorageUnit.findMany({
       where,
       include: {
         _count: {
@@ -37,7 +37,7 @@ export class SampleStorageRepository {
   }
 
   async findById(id: string, schoolId?: string) {
-    return prisma.sampleStorageUnit.findFirst({
+    return (await getPrisma()).sampleStorageUnit.findFirst({
       where: {
         id,
         ...(schoolId ? { schoolId } : {}),
@@ -66,7 +66,7 @@ export class SampleStorageRepository {
   }
 
   async findByCode(schoolId: string, code: string) {
-    return prisma.sampleStorageUnit.findUnique({
+    return (await getPrisma()).sampleStorageUnit.findUnique({
       where: {
         schoolId_code: {
           schoolId,
@@ -80,7 +80,7 @@ export class SampleStorageRepository {
     schoolId: string,
     data: SampleStorageWriteInput & { code: string },
   ) {
-    return prisma.sampleStorageUnit.create({
+    return (await getPrisma()).sampleStorageUnit.create({
       data: {
         schoolId,
         code: data.code,
@@ -97,7 +97,7 @@ export class SampleStorageRepository {
   }
 
   async update(id: string, data: SampleStorageWriteInput & { code?: string }) {
-    return prisma.sampleStorageUnit.update({
+    return (await getPrisma()).sampleStorageUnit.update({
       where: { id },
       data: {
         ...(data.code ? { code: data.code } : {}),
@@ -114,13 +114,13 @@ export class SampleStorageRepository {
   }
 
   async delete(id: string) {
-    return prisma.sampleStorageUnit.delete({
+    return (await getPrisma()).sampleStorageUnit.delete({
       where: { id },
     });
   }
 
   async countActiveStoredSamples(storageUnitId: string) {
-    return prisma.retainedFoodSample.count({
+    return (await getPrisma()).retainedFoodSample.count({
       where: {
         storageUnitId,
         status: "STORED",
