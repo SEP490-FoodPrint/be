@@ -75,7 +75,8 @@ Là Quản trị viên trường học, tôi muốn cập nhật họ tên, số
 - **FR-003**: API `PUT /api/schools/:schoolId/accounts/:userId` cập nhật thông tin nhân viên trường (`fullName`, `phone`, `roleId`/`role`).
 - **FR-004**: API `PATCH /api/schools/:schoolId/accounts/:userId/status` cập nhật trạng thái `status` (`ACTIVE` hoặc `INACTIVE`).
 - **FR-005**: Mọi thao tác đều được bảo vệ bởi middleware xác thực và quyền hạn `school_user.manage` với phạm vi tổ chức trường học (`schoolId`).
-- **FR-006**: Hỗ trợ 6 vai trò nhân viên trường học: `SCHOOL_MANAGEMENT_BOARD`, `SCHOOL_NUTRITION_OFFICER`, `SCHOOL_KITCHEN_STAFF`, `HOMEROOM_TEACHER`, `PARENTS_COMMITTEE`, `INGREDIENT_MANAGEMENT_DEPARTMENT` (cho phép alias `INGREDIENT_MANAGEMENT`).
+- **FR-006**: Hỗ trợ 6 vai trò nhân viên trường học: `SCHOOL_MANAGEMENT_BOARD`, `SCHOOL_NUTRITION_OFFICER`, `SCHOOL_KITCHEN_STAFF`, `HOMEROOM_TEACHER`, `PARENTS_COMMITTEE`, `INGREDIENT_MANAGEMENT_DEPARTMENT` (cho phép alias `INGREDIENT_MANAGEMENT` và `SCHOOL_HEALTH_OFFICER`).
+- **FR-007**: API `GET /api/schools/:schoolId/accounts/:userId` trả về chi tiết thông tin một tài khoản nhân sự trường học.
 
 ### Non-Functional Requirements
 
