@@ -50,6 +50,14 @@ Mỗi trường có tối đa một SCHOOL_ADMINISTRATION, mỗi supplier có t�
 
 Admin tổ chức chỉ bật/tắt quyền role đã có cho tài khoản ACTIVE cùng tổ chức. Tắt tạo denial, bật lại xóa denial; không có bảng lịch sử. Nếu role mất một permission, admin tổ chức không thể cấp lại ngoài role. Denial riêng không bị xóa khi System Admin sửa bộ quyền role.
 
+## Khóa tài khoản và tạm dừng tiếp nhận — feature 013
+
+Các route quản trị `/api/users/:userId/lifecycle`, `/api/users/:userId/deactivate` và `/api/users/:userId/intake-state` yêu cầu SYSTEM_ADMIN thuộc SYSTEM và `user.manage` hiệu lực. Admin trường/NCC bị khóa cùng thành viên nếu không có đơn IN_PROGRESS; cán bộ chỉ bị khóa khi các yêu cầu hướng tới người đó đã CLOSED. Tạm dừng riêng với khóa tài khoản, không ngăn login hay xử lý công việc đã nhận. Các kiểm thử transaction/race trên PostgreSQL và tình trạng triển khai migration cần được xác nhận trước khi phát hành.
+
+`POST /api/supply-requests/:id/accept` yêu cầu SUPPLIER và `supply_request.accept`; `POST /api/food-safety-reports/:id/receive` yêu cầu đúng cán bộ AUTHORITY và `food_safety_report.receive`. Cả hai kiểm tra phạm vi và tạm dừng trong transaction, không dùng quyền xem để ghi. Đọc sự cố/báo cáo của cán bộ lọc theo tài khoản nhận và xã; dữ liệu cũ chưa gắn tài khoản dùng fallback theo xã.
+
+Bootstrap tạo permission `food_safety_report.receive` và chỉ gán mặc định khi role cán bộ được tạo mới. Với role cán bộ đã tồn tại, bootstrap giữ nguyên grants: sau khi operator chạy bootstrap theo đúng chính sách, System Admin cần chủ động cấp quyền mới cho role qua API quản trị đã duyệt. Không tự chạy bootstrap ở startup/CD và không tự bật permission đang inactive.
+
 ## HTTP API
 
 ### Cấu hình niên khóa của trường
@@ -310,3 +318,5 @@ Migration `20261114000200_delivery_inspection_permissions` cấp `delivery.inspe
 # School dish categories
 
 `GET /api/dishes/categories` uses `menu.view`; `POST /api/dishes/categories` uses `menu.create`; `PUT` and `DELETE /api/dishes/categories/:id` use `menu.update`. Every operation resolves the school from the authenticated principal and rechecks permission in the school transaction. A category referenced by any dish cannot be deleted. Dish catalog and menu detail return the school's category ID and current name.
+
+Các mutation của account lifecycle và intake guard khóa Role actor bằng FOR SHARE sau các khóa School/Supplier/User và trước resource. Thay denial cập nhật version User khi có thay đổi; thay grants cập nhật version MVCC Role bằng no-op SQL không đổi dữ liệu role. Cơ chế này buộc Serializable transaction có snapshot quyền cũ retry khi thay quyền đã commit trước bước khóa, rồi kiểm tra quyền mới trong cùng transaction. Không đổi JWT hoặc cache quyền.

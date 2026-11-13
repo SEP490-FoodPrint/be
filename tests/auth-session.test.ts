@@ -1,4 +1,8 @@
-import { toSessionUserResponseDTO } from "../src/modules/auth/session.service";
+import {
+  createSessionService,
+  toSessionUserResponseDTO,
+} from "../src/modules/auth/session.service";
+import type { PrismaClient } from "../src/generated/prisma/client";
 import { testAdmin } from "./helpers/authorization";
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
@@ -692,6 +696,122 @@ void test("onboarding cookie reaches self endpoints but business access starts o
   assert.equal((await http.request("/business", { headers })).status, 204);
   const self = await http.request("/self", { headers });
   assert.equal(self.status, 200);
+});
+
+void test("existing sessions recheck account status for school, supplier and commune officer", async (context) => {
+  const { store } = memorySessions();
+  const sessions = createAuthSessions(store);
+  const identity = unverifiedIdentity();
+  identity.status = "ACTIVE";
+  const check = (payload: Parameters<typeof sessions.assertAccess>[0]) =>
+    sessions.assertAccess(payload);
+  const app = express();
+  app.get(
+    "/self",
+    createSessionAuthenticate(
+      () => Promise.resolve(sessionUserFromIdentity(identity)),
+      check,
+    ),
+    (_req, res) => res.sendStatus(204),
+  );
+  app.get(
+    "/business",
+    createAuthenticate(
+      () => Promise.resolve(principalFromIdentity(identity)),
+      check,
+    ),
+    (_req, res) => res.sendStatus(204),
+  );
+  app.use(globalErrorHandler);
+  context.mock.method(console, "error", () => undefined);
+  const http = await startHttp(app);
+  context.after(() => http.close());
+  for (const kind of ["SCHOOL", "SUPPLIER", "AUTHORITY"] as const) {
+    identity.status = "ACTIVE";
+    identity.schoolId = kind === "SCHOOL" ? testAdmin.roleId : null;
+    identity.supplierId = kind === "SUPPLIER" ? testAdmin.roleId : null;
+    identity.communeFoodSafetyUnitId =
+      kind === "AUTHORITY" ? testAdmin.roleId : null;
+    identity.Role.type = kind;
+    identity.Role.code =
+      kind === "SCHOOL"
+        ? "SCHOOL_ADMINISTRATION"
+        : kind === "SUPPLIER"
+          ? "INGREDIENT_SUPPLIER_ADMIN"
+          : "COMMUNE_FOOD_SAFETY_OFFICER";
+    const tokens = await sessions.issue(identity.id);
+    const headers = { Cookie: `${ACCESS_COOKIE}=${tokens.accessToken}` };
+    assert.equal((await http.request("/self", { headers })).status, 204);
+    assert.equal((await http.request("/business", { headers })).status, 204);
+    identity.status = "DEACTIVATED";
+    assert.equal((await http.request("/self", { headers })).status, 403);
+    assert.equal((await http.request("/business", { headers })).status, 403);
+    await assert.rejects(
+      () =>
+        sessions.refresh(tokens.refreshToken, () =>
+          Promise.resolve(sessionUserFromIdentity(identity)),
+        ),
+      errorStatus(403),
+    );
+  }
+});
+
+void test("login, refresh and current user recheck live account status", async () => {
+  const identity = unverifiedIdentity();
+  identity.status = "ACTIVE";
+  identity.schoolId = testAdmin.roleId;
+  const passwordHash = await bcrypt.hash("correct-password", 4);
+  const client = {
+    user: {
+      findMany: () => Promise.resolve([{ id: identity.id, passwordHash }]),
+      findUnique: (query: { select: Record<string, unknown> }) =>
+        Promise.resolve(
+          query.select.passwordHash ? { passwordHash } : identity,
+        ),
+    },
+    $queryRaw: () => Promise.resolve([]),
+    $transaction: (operation: (tx: unknown) => unknown) => operation(client),
+  } as unknown as PrismaClient;
+  const { store } = memorySessions();
+  const service = createSessionService(
+    () => Promise.resolve(client),
+    createAuthSessions(store),
+  );
+  const login = await service.login({
+    identifier: identity.username,
+    password: "correct-password",
+  });
+  assert.equal(login.user.status, "ACTIVE");
+  Object.assign(identity, {
+    School: { intakeState: "PAUSED" },
+  });
+  const pausedLogin = await service.login({
+    identifier: identity.username,
+    password: "correct-password",
+  });
+  assert.equal(pausedLogin.user.status, "ACTIVE");
+  assert.equal(
+    (await service.refresh(pausedLogin.refreshToken)).user.status,
+    "ACTIVE",
+  );
+  assert.equal((await service.currentUser(identity.id)).status, "ACTIVE");
+  identity.status = "DEACTIVATED";
+  await assert.rejects(
+    () =>
+      service.login({
+        identifier: identity.username,
+        password: "correct-password",
+      }),
+    errorStatus(403),
+  );
+  await assert.rejects(
+    () => service.refresh(login.refreshToken),
+    errorStatus(403),
+  );
+  await assert.rejects(
+    () => service.currentUser(identity.id),
+    errorStatus(403),
+  );
 });
 
 void test("session responses expose the same registration code without bigint across login, refresh and profile edits", async (context) => {

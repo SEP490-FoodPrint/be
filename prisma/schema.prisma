@@ -499,6 +499,8 @@ model FoodSafetyReportForwarding {
   id                               String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   incidentId                       String                 @map("incident_id") @db.Uuid
   recipientCommuneFoodSafetyUnitId String?                @map("recipient_commune_food_safety_unit_id") @db.Uuid
+  recipientUserId String? @map("recipient_user_id") @db.Uuid
+  receivedAt DateTime? @map("received_at") @db.Timestamptz(6)
   recipientOrganization            String                 @map("recipient_organization") @db.VarChar(255)
   recipientName                    String?                @map("recipient_name") @db.VarChar(255)
   recipientEmail                   String?                @map("recipient_email") @db.Citext
@@ -515,6 +517,9 @@ model FoodSafetyReportForwarding {
   recipientCommuneFoodSafetyUnit   CommuneFoodSafetyUnit? @relation("food_safety_report_forwardings_recipient_commune_food_safety_unit_id__commune_food_safety_units", fields: [recipientCommuneFoodSafetyUnitId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "food_safety_report_forwarding_recipient_commune_food_safet_fkey")
   User                             User?                  @relation("food_safety_report_forwardings_forwarded_by_user_id__users", fields: [forwardedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
+  recipientUser User? @relation("food_safety_forwarding_recipient_user", fields: [recipientUserId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "food_safety_forwarding_recipient_user_fkey")
+
+  @@index([recipientUserId, incidentId], map: "idx_food_safety_forwardings_recipient_user")
   @@index([incidentId, createdAt(sort: Desc)], map: "idx_food_safety_forwardings_incident")
   @@index([recipientCommuneFoodSafetyUnitId, createdAt(sort: Desc)], map: "idx_food_safety_forwardings_recipient_unit", where: raw("recipient_commune_food_safety_unit_id IS NOT NULL"))
   @@map("food_safety_report_forwardings")
@@ -999,6 +1004,7 @@ model School {
   /// School local time for afternoon meal; setup before afternoon batch creation.
   afternoonMealTime           DateTime?                    @map("afternoon_meal_time") @db.Time(6)
   status                      EntityStatus                 @default(ACTIVE)
+  intakeState IntakeState @default(ACTIVE) @map("intake_state")
   createdAt                   DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                   DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   users                       User[]                       @relation("users_school_id__schools")
@@ -1126,6 +1132,7 @@ model Supplier {
   serviceAreas                SupplierServiceArea[]
   contracts                   SupplierContract[]
   status                      EntityStatus                 @default(ACTIVE)
+  intakeState IntakeState @default(ACTIVE) @map("intake_state")
   createdAt                   DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                   DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   supplierCertifications      SupplierCertification[]      @relation("supplier_certifications_supplier_id__suppliers")
@@ -1245,6 +1252,7 @@ model User {
   fullName                                     String                       @map("full_name") @db.VarChar(255)
   phone                                        String?                      @db.VarChar(30)
   status                                       AccountStatus                @default(UNVERIFIED)
+  intakeState IntakeState @default(ACTIVE) @map("intake_state")
   emailVerifiedAt                              DateTime?                    @map("email_verified_at") @db.Timestamptz(6)
   lastLoginAt                                  DateTime?                    @map("last_login_at") @db.Timestamptz(6)
   createdAt                                    DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -1298,10 +1306,13 @@ model User {
   homeroomAssignmentsAssigned                  ClassHomeroomAssignment[]    @relation("class_homeroom_assignments_assigned_by")
   homeroomAssignmentsEnded                     ClassHomeroomAssignment[]    @relation("class_homeroom_assignments_ended_by")
 
+  receivedFoodSafetyReports FoodSafetyReportForwarding[] @relation("food_safety_forwarding_recipient_user")
+
   @@unique([username])
   @@unique([email])
   @@unique([schoolId], map: "uq_users_school_admin", where: raw("((role_code)::text = 'SCHOOL_ADMINISTRATION'::text)"))
   @@unique([supplierId], map: "uq_users_supplier_admin", where: raw("((role_code)::text = 'INGREDIENT_SUPPLIER_ADMIN'::text)"))
+  @@unique([communeFoodSafetyUnitId], map: "uq_users_commune_officer", where: raw("((role_code)::text = 'COMMUNE_FOOD_SAFETY_OFFICER'::text)"))
   @@index([schoolId], map: "idx_users_school_id")
   @@index([supplierId], map: "idx_users_supplier_id", where: raw("supplier_id IS NOT NULL"))
   @@index([communeFoodSafetyUnitId], map: "idx_users_commune_food_safety_unit_id", where: raw("commune_food_safety_unit_id IS NOT NULL"))
@@ -1576,6 +1587,15 @@ enum DishCategory {
   DESSERT
 
   @@map("dish_category")
+  @@schema("foodprint")
+}
+
+enum IntakeState {
+  ACTIVE
+  PAUSED
+  PAUSED_FOR_FOOD_SAFETY_INSPECTION
+
+  @@map("intake_state")
   @@schema("foodprint")
 }
 

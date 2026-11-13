@@ -9,6 +9,8 @@ import {
   contractPayload,
   listQuery,
   orderPayload,
+  validateOrderSendParams,
+  validateOrderSendBody,
   reasonPayload,
 } from "./supplier-onboarding.validation";
 
@@ -150,14 +152,11 @@ export const onboardingController = {
     );
   }),
   sendOrder: asyncHandler(async (req, res) => {
-    const body = objectBody(req.body as unknown, ["contractId"]);
+    const params = validateOrderSendParams(req.params);
+    const body = validateOrderSendBody(req.body as unknown);
     sendSuccess(
       res,
-      await service.sendOrder(
-        requirePrincipal(req),
-        uuid(req.params.id),
-        uuid(body.contractId),
-      ),
+      await service.sendOrder(requirePrincipal(req), params, body),
     );
   }),
   orderEvidence: asyncHandler(async (req, res) => {

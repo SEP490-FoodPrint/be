@@ -11,6 +11,7 @@ export function createReportingRouter(
 ) {
   const router = Router();
   const controller = createReportingController(service);
+  router.post("/:id/receive", authHandler, controller.receive);
   router.get("/", authHandler, requireResource("reporting"), controller.getAll);
   return router;
 }

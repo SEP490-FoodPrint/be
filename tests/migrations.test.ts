@@ -724,6 +724,85 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
       const empty = new Client({ connectionString: fresh.toString() });
       await empty.connect();
       try {
+        const school = (
+          await empty.query<{ id: string; intake_state: string }>(
+            "INSERT INTO foodprint.schools(name) VALUES ('Intake school') RETURNING id,intake_state",
+          )
+        ).rows[0];
+        const supplier = (
+          await empty.query<{ id: string; intake_state: string }>(
+            "INSERT INTO foodprint.suppliers(name) VALUES ('Intake supplier') RETURNING id,intake_state",
+          )
+        ).rows[0];
+        assert.equal(school.intake_state, "ACTIVE");
+        assert.equal(supplier.intake_state, "ACTIVE");
+        await assert.rejects(
+          empty.query(
+            "UPDATE foodprint.schools SET intake_state='PAUSED_FOR_FOOD_SAFETY_INSPECTION' WHERE id=$1",
+            [school.id],
+          ),
+          (error) => sqlState(error, "23514"),
+        );
+        await assert.rejects(
+          empty.query(
+            "UPDATE foodprint.suppliers SET intake_state='PAUSED' WHERE id=$1",
+            [supplier.id],
+          ),
+          (error) => sqlState(error, "23514"),
+        );
+        const unit = (
+          await empty.query<{ id: string }>(
+            "INSERT INTO foodprint.commune_food_safety_units(code,name) VALUES ('T-ATTP','Test unit') RETURNING id",
+          )
+        ).rows[0].id;
+        const role = (
+          await empty.query<{ id: string }>(
+            "INSERT INTO foodprint.roles(code,name,type) VALUES ('COMMUNE_FOOD_SAFETY_OFFICER','Officer','AUTHORITY') RETURNING id",
+          )
+        ).rows[0].id;
+        await assert.rejects(
+          empty.query(
+            "INSERT INTO foodprint.users(role_id,role_code,username,email,password_hash,full_name,status) VALUES ($1,'COMMUNE_FOOD_SAFETY_OFFICER','unscoped-officer','unscoped@example.test','fixture','Officer','ACTIVE')",
+            [role],
+          ),
+          (error) =>
+            sqlState(error, "23514", "chk_commune_officer_organization"),
+        );
+        const officer = (
+          await empty.query<{ id: string; intake_state: string }>(
+            "INSERT INTO foodprint.users(role_id,role_code,commune_food_safety_unit_id,username,email,password_hash,full_name,status) VALUES ($1,'COMMUNE_FOOD_SAFETY_OFFICER',$2,'officer-one','officer-one@example.test','fixture','Officer','INACTIVE') RETURNING id,intake_state",
+            [role, unit],
+          )
+        ).rows[0];
+        assert.equal(officer.intake_state, "ACTIVE");
+        await assert.rejects(
+          empty.query(
+            "INSERT INTO foodprint.users(role_id,role_code,commune_food_safety_unit_id,username,email,password_hash,full_name,status) VALUES ($1,'COMMUNE_FOOD_SAFETY_OFFICER',$2,'officer-two','officer-two@example.test','fixture','Officer','DEACTIVATED')",
+            [role, unit],
+          ),
+          (error) => sqlState(error, "23505", "uq_users_commune_officer"),
+        );
+        const incident = (
+          await empty.query<{ id: string }>(
+            "INSERT INTO foodprint.food_safety_incidents(school_id,title,description) VALUES ($1,'Incident','Test') RETURNING id",
+            [school.id],
+          )
+        ).rows[0].id;
+        await assert.rejects(
+          empty.query(
+            "INSERT INTO foodprint.food_safety_report_forwardings(incident_id,recipient_organization,received_at) VALUES ($1,'Unit',now())",
+            [incident],
+          ),
+          (error) =>
+            sqlState(error, "23514", "chk_forwarding_receipt_recipient"),
+        );
+        await assert.rejects(
+          empty.query(
+            "INSERT INTO foodprint.food_safety_report_forwardings(incident_id,recipient_organization,recipient_commune_food_safety_unit_id,recipient_user_id) VALUES ($1,'Unit',$2,$3)",
+            [incident, unit, randomUUID()],
+          ),
+          (error) => sqlState(error, "23503"),
+        );
         const initial = (
           await empty.query<{ last_value: string; is_called: boolean }>(
             "SELECT last_value,is_called FROM foodprint.registration_requests_registration_number_seq",
@@ -1149,6 +1228,132 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
         assert.deepEqual(grants.rows, [
           { role: "PARENTS_COMMITTEE", permission: "meal_complaint.view" },
         ]);
+      } finally {
+        await legacy.end();
+      }
+    },
+  );
+  await context.test(
+    "account lifecycle upgrade rejects ambiguous legacy data and preserves reports",
+    async () => {
+      const name = `foodprint_migration_test_intake_${randomUUID().replaceAll("-", "")}`;
+      await db.query(`CREATE DATABASE "${name}"`);
+      const fresh = new URL(url);
+      fresh.pathname = `/${name}`;
+      const legacy = new Client({ connectionString: fresh.toString() });
+      await legacy.connect();
+      try {
+        const migration = "20261112000100_account_lifecycle_intake";
+        for (const previous of migrationNames.filter(
+          (value) => value < migration,
+        )) {
+          await legacy.query(
+            await readFile(
+              path.join(root, "prisma/migrations", previous, "migration.sql"),
+              "utf8",
+            ),
+          );
+        }
+        const sql = await readFile(
+          path.join(root, "prisma/migrations", migration, "migration.sql"),
+          "utf8",
+        );
+        const role = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.roles(code,name,type) VALUES ('COMMUNE_FOOD_SAFETY_OFFICER','Officer','AUTHORITY') RETURNING id",
+          )
+        ).rows[0].id;
+        const unit = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.commune_food_safety_units(code,name) VALUES ('LEGACY-A','Unit A') RETURNING id",
+          )
+        ).rows[0].id;
+        const unitB = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.commune_food_safety_units(code,name) VALUES ('LEGACY-B','Unit B') RETURNING id",
+          )
+        ).rows[0].id;
+        const insertOfficer = async (unitId: string, username: string) =>
+          (
+            await legacy.query<{ id: string }>(
+              "INSERT INTO foodprint.users(role_id,role_code,commune_food_safety_unit_id,username,email,password_hash,full_name,status) VALUES ($1,'COMMUNE_FOOD_SAFETY_OFFICER',$2,$3,$4,'fixture','Officer','INACTIVE') RETURNING id",
+              [role, unitId, username, `${username}@example.test`],
+            )
+          ).rows[0].id;
+        const officer = await insertOfficer(unit, "legacy-officer-one");
+        const duplicate = await insertOfficer(unit, "legacy-officer-two");
+        await assert.rejects(legacy.query(sql), (error) =>
+          sqlState(error, "P0001"),
+        );
+        await legacy.query("ROLLBACK");
+        assert.equal(
+          (
+            await legacy.query<{ count: number }>(
+              "SELECT count(*)::int AS count FROM foodprint.users",
+            )
+          ).rows[0].count,
+          2,
+        );
+        await legacy.query("DELETE FROM foodprint.users WHERE id=$1", [
+          duplicate,
+        ]);
+        const school = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.schools(name) VALUES ('Legacy school') RETURNING id",
+          )
+        ).rows[0].id;
+        const incident = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.food_safety_incidents(school_id,title,description) VALUES ($1,'Incident','Legacy') RETURNING id",
+            [school],
+          )
+        ).rows[0].id;
+        const report = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.food_safety_report_forwardings(incident_id,recipient_commune_food_safety_unit_id,recipient_organization,status,forwarded_at) VALUES ($1,$2,'Unit B','SENT',now()) RETURNING id",
+            [incident, unitB],
+          )
+        ).rows[0].id;
+        await assert.rejects(legacy.query(sql), (error) =>
+          sqlState(error, "P0001"),
+        );
+        await legacy.query("ROLLBACK");
+        const officerB = await insertOfficer(unitB, "legacy-officer-three");
+        const external = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.food_safety_report_forwardings(incident_id,recipient_organization) VALUES ($1,'External') RETURNING id",
+            [incident],
+          )
+        ).rows[0].id;
+        await legacy.query(sql);
+        const rows = (
+          await legacy.query<{
+            id: string;
+            recipient_user_id: string | null;
+            received_at: Date | null;
+          }>(
+            "SELECT id,recipient_user_id,received_at FROM foodprint.food_safety_report_forwardings WHERE id=ANY($1::uuid[])",
+            [[report, external]],
+          )
+        ).rows;
+        assert.equal(
+          rows.find((row) => row.id === report)?.recipient_user_id,
+          officerB,
+        );
+        assert.equal(rows.find((row) => row.id === report)?.received_at, null);
+        assert.equal(
+          rows.find((row) => row.id === external)?.recipient_user_id,
+          null,
+        );
+        assert.equal(
+          (
+            await legacy.query<{ count: number }>(
+              "SELECT count(*)::int AS count FROM foodprint.users WHERE id=ANY($1::uuid[])",
+              [[officer, officerB]],
+            )
+          ).rows[0].count,
+          2,
+        );
       } finally {
         await legacy.end();
       }

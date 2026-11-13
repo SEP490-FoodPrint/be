@@ -6,6 +6,12 @@ Các API v1 của menu/kitchen/retained-sample lọc và phân trang tại DB v�
 
 Ba module không cung cấp endpoint xuất báo cáo/in. PUT chỉnh sửa mẻ và code xử lý tương ứng đã bỏ; delete/confirm/complete/lưu mẫu vẫn giữ. Xem [query contract](../../specs/010-api-architecture-completion/contracts/api-audit.md#query-đã-kiểm-chứng--09112026).
 
+## Khóa tài khoản và tạm dừng tiếp nhận
+
+Module `account-lifecycle` quản lý ba route dưới `/api/users/:userId`, chỉ cho System Admin có `user.manage`. Trạng thái tạm dừng của trường/NCC/cán bộ tách khỏi account status; luồng tạo/gửi đơn dùng guard tại transaction hiện có. `supply-order` bổ sung nhận đơn, `reporting` bổ sung cán bộ nhận báo cáo. Xem `docs/AUTHORIZATION.md` và `specs/016-account-deactivation/contracts/account-lifecycle-api.md` về quyền và hợp đồng.
+
+Migration `20261112000100_account_lifecycle_intake` cùng các kiểm thử PostgreSQL chưa được xác nhận triển khai. Quyền `food_safety_report.receive` cho role cán bộ đã tồn tại cần được System Admin chủ động gán sau bootstrap catalog được phép; bootstrap không thay quyền role non-System đã cấu hình.
+
 ## Cấu trúc và phạm vi
 
 31 module bao phủ 41 models trong Prisma: 31 models chính có API GET danh sách; 10 bảng chi tiết/liên kết thuộc module cha, chưa mở endpoint riêng. Tên và field lấy từ `prisma/schema.prisma`, nguồn thiết kế được ghi tại [SCHEMA_BASELINE.md](../../database/SCHEMA_BASELINE.md).
@@ -136,3 +142,5 @@ Module ingredient đã tách đầy đủ routes/controller/validation/service/r
 Ngoài GET đọc nghiệp vụ `/api/ingredients`, module có nhóm `/api/ingredients/management` dành riêng cho Supplier Admin với permission ingredient.manage: GET danh sách, GET categories, GET :ingredientId, POST tạo, PATCH :ingredientId và POST :ingredientId/hide. Chi tiết tại [AUTHORIZATION.md](../../docs/AUTHORIZATION.md#quản-trị-nguyên-liệu-nhà-cung-cấp).
 
 IngredientCategory là danh mục dùng chung chỉ đọc trong module ingredient, không có chức năng quản trị danh mục. categoryId thay cột category; coverImage một ảnh và imageDescription nhiều ảnh là các tham chiếu có sẵn. Ẩn chuyển INACTIVE, giữ dữ liệu/lịch sử và không cung cấp bật lại hoặc xóa.
+
+`permission.repository.ts` cung cấp version writes cho User/Role khi thay denial/grants trong transaction quản trị quyền hiện có. Intake/lifecycle dùng shared Role lock và recheck để không nhận công việc mới theo snapshot quyền đã bị thu hồi; không thêm API quản trị mới.
