@@ -132,11 +132,6 @@ export function createMealAttendanceService(
         "daily_meal_portion.update",
         async (tx, actor) => {
           const assigned = await assignedClass(tx, actor, input.date);
-          if (input.totalPortions > assigned.registeredMealPortions)
-            throw new HttpError(
-              422,
-              "Tổng số suất vượt số suất đã đăng ký của lớp",
-            );
           for (const allergy of input.allergies) {
             const master = assigned.classAllergies.find(
               (item) => item.ingredientEntryId === allergy.ingredientEntryId,
@@ -446,7 +441,11 @@ export function createMealAttendanceService(
             ...listWindow(query),
             where,
             select,
-            orderBy: [{ id: "asc" }],
+            orderBy: [
+              { mealDate: "desc" },
+              { mealType: "asc" },
+              { id: "desc" },
+            ],
           }),
         query,
       );
