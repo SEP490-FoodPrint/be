@@ -893,6 +893,7 @@ model RetainedFoodSample {
   CookingBatchDish CookingBatchDish @relation(fields: [cookingBatchId, dishId], references: [cookingBatchId, dishId], onDelete: Restrict, onUpdate: NoAction)
 
   @@unique([cookingBatchId, dishId])
+  @@index([storageUnitId], map: "idx_retained_food_samples_storage_unit_id")
   @@map("retained_food_samples")
   @@schema("foodprint")
 }

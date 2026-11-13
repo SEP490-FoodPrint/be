@@ -1,5 +1,9 @@
 # Server allergy review on menu creation and live menu data
 
+## Retained sample index alignment
+
+CI migration replay reports drift because the sample-storage migration creates `idx_retained_food_samples_storage_unit_id` on `retained_food_samples(storage_unit_id)`, but the Prisma model omits that index. Declare the existing mapped index on `RetainedFoodSample.storageUnitId`. Preserve existing migrations, foreign keys and records; no new migration or Azure operation is needed. Keep the existing migration replay/diff checks intact.
+
 POST menus must inspect all relevant class allergy records from the authenticated school against persisted main ingredients and shared seasonings, inside the create transaction. This applies to both a new week and adding/replacing a day in an existing draft week. Never trust client allergy results or infer replacement dishes. Preserve the normal dishes and manually selected separate-group alternatives.
 
 Return per-date/per-meal checks, per-ingredient/per-class counts and whether a safe non-default group covers the conflict. Avoid summing counts as unique pupils. Keep draft saves possible for unresolved conflicts; submission remains blocked until explicit safe group coverage. Existing group safety checks reject unsafe substitute dishes or shared seasonings. Require the live class_allergy.view permission before exposing health information; failure rolls the create transaction back.

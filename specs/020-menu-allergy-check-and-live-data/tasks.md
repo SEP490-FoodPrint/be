@@ -1,5 +1,7 @@
 # Tasks
 
+- [x] Align the retained-sample storage-unit index in Prisma with existing migration SQL; Prisma validate, build and typecheck passed. Local migration replay remains unavailable because MIGRATION_TEST_DATABASE_URL is not configured; CI must rerun both existing migration/diff paths.
+
 - [x] Back up and clear only the explicitly confirmed current-week test menu/dependencies; verify inventory and attendance remain unchanged.
 - [x] Enforce approved immutability across all menu writes and expose editability metadata.
 - [x] Support pending edits with one atomic save-and-resubmit action and stale-submission review checks.
