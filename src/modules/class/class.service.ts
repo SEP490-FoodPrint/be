@@ -9,6 +9,7 @@ import { getPrisma } from "../../utils/database";
 import { HttpError } from "../../utils/http-error";
 import { withReadTransaction } from "../../utils/read-transaction";
 import { listScopes } from "../../utils/resource-access";
+import { schoolGradeRepository } from "../school-grade/school-grade.repository";
 import { readListPage } from "../../utils/list-query";
 import { currentAcademicYear, isAssignableAcademicYear } from "./academic-year";
 import {
@@ -58,6 +59,7 @@ function classDto(row: ClassListRow, now: Date): ClassListItemResponseDTO {
     schoolId: row.schoolId,
     name: row.name,
     academicYear: row.academicYear,
+    grade: row.grade ?? null,
     registeredMealPortions: row.registeredMealPortions,
     status: row.status,
     createdAt: row.createdAt.toISOString(),
@@ -541,6 +543,11 @@ export function createClassService(
             academicYear,
             body.name,
           );
+          if (
+            body.gradeId &&
+            !(await schoolGradeRepository.find(tx, schoolId, body.gradeId))
+          )
+            throw new HttpError(404, "Không tìm thấy khối học");
           const teacher = body.homeroomTeacherUserId
             ? await requireAvailableTeacher(
                 repository,
@@ -557,6 +564,7 @@ export function createClassService(
               academicYear,
               name: body.name,
               registeredMealPortions: body.registeredMealPortions,
+              ...(body.gradeId !== undefined ? { gradeId: body.gradeId } : {}),
             }),
           );
           const dto = classDto(created, now);
@@ -597,26 +605,37 @@ export function createClassService(
             params.classId,
             schoolId,
           );
-          const academicYear = await requireWritableYear(
-            repository,
-            tx,
-            schoolId,
-            target.academicYear,
-            now,
-          );
-          if (body.name !== undefined) {
-            await assertNameAvailable(
+          // Grade reassignment also applies to classes in past academic years.
+          if (
+            body.gradeId &&
+            !(await schoolGradeRepository.find(tx, schoolId, body.gradeId))
+          )
+            throw new HttpError(404, "Không tìm thấy khối học");
+          if (
+            body.name !== undefined ||
+            body.registeredMealPortions !== undefined
+          ) {
+            const academicYear = await requireWritableYear(
               repository,
               tx,
               schoolId,
-              academicYear,
-              body.name,
-              target.id,
+              target.academicYear,
+              now,
             );
+            if (body.name !== undefined)
+              await assertNameAvailable(
+                repository,
+                tx,
+                schoolId,
+                academicYear,
+                body.name,
+                target.id,
+              );
           }
           const updated = await uniqueWrite(
             repository.updateClass(tx, target.id, schoolId, {
               ...(body.name !== undefined ? { name: body.name } : {}),
+              ...(body.gradeId !== undefined ? { gradeId: body.gradeId } : {}),
               ...(body.registeredMealPortions !== undefined
                 ? { registeredMealPortions: body.registeredMealPortions }
                 : {}),
@@ -725,6 +744,9 @@ export function createClassService(
                 academicYear: toAcademicYear,
                 name: item.name,
                 registeredMealPortions: item.registeredMealPortions,
+                ...(item.gradeId !== undefined
+                  ? { gradeId: item.gradeId }
+                  : {}),
               }),
             );
             created.push(classDto(row, now));

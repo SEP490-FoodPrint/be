@@ -18,6 +18,7 @@ const classListSelect = {
   schoolId: true,
   name: true,
   academicYear: true,
+  grade: { select: { id: true, code: true, name: true } },
   registeredMealPortions: true,
   status: true,
   createdAt: true,
@@ -156,6 +157,7 @@ export interface ClassRepository {
 export interface ClassWriteInput {
   name: string;
   registeredMealPortions: number;
+  gradeId?: string | null;
 }
 
 export function createClassRepository(
@@ -170,6 +172,14 @@ export function createClassRepository(
           AND: [
             listScopes.class(principal),
             query.academicYear ? { academicYear: query.academicYear } : {},
+            ...(query.gradeId === undefined
+              ? []
+              : [
+                  {
+                    gradeId:
+                      query.gradeId === "unassigned" ? null : query.gradeId,
+                  },
+                ]),
           ],
         },
         select: classListSelect,
@@ -321,7 +331,7 @@ export function createClassRepository(
     listActiveClassesForCopy(tx, schoolId, academicYear) {
       return tx.class.findMany({
         where: { schoolId, academicYear, status: "ACTIVE" },
-        select: { name: true, registeredMealPortions: true },
+        select: { name: true, registeredMealPortions: true, gradeId: true },
         orderBy: [{ name: "asc" }, { id: "asc" }],
       });
     },
