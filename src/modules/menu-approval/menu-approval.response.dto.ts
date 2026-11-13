@@ -19,6 +19,7 @@ export interface MenuApprovalDetailResponseDTO {
   status: "DRAFT" | "PENDING_APPROVAL" | "REVISION_REQUIRED" | "APPROVED";
   canDecide: boolean;
   submittedAt: string | null;
+  submissionVersion: string | null;
   summary: {
     audience: string;
     audienceDetail: string;

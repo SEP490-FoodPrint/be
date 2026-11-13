@@ -144,6 +144,36 @@ void test("decision validation rejects menuDayId and requires revision feedback"
   });
 });
 
+void test("review refuses a stale submission version before recording a decision", async () => {
+  const week = {
+    ...decisionWeek(),
+    submittedAt: new Date("2026-11-13T10:00:00Z"),
+  };
+  const { service, writes } = decisionHarness({ week });
+  await assert.rejects(
+    () =>
+      service.decide(
+        menuId,
+        validateMenuApprovalDecision({
+          decision: "APPROVED",
+          submissionVersion: "2026-11-13T09:00:00.000Z",
+        }),
+        board,
+      ),
+    { statusCode: 409 },
+  );
+  assert.deepEqual(writes, { reviews: [], days: [], weeks: [] });
+  await service.decide(
+    menuId,
+    validateMenuApprovalDecision({
+      decision: "APPROVED",
+      submissionVersion: week.submittedAt.toISOString(),
+    }),
+    board,
+  );
+  assert.equal(writes.reviews.length, 1);
+});
+
 void test("revision request records one week decision and updates every day", async () => {
   const { service, writes } = decisionHarness();
   const result = await service.decide(

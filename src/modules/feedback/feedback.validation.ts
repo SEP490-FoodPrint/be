@@ -28,8 +28,12 @@ const listSchema = z.strictObject({
   search: z.string().trim().min(1).max(120).optional(),
 });
 
+const mealOptionsQuerySchema = z.strictObject({});
+export const validateMealOptionsQuery = (query: unknown) =>
+  parse(mealOptionsQuerySchema, query);
+
 export const createComplaintSchema = z.strictObject({
-  mealAllocationId: uuid,
+  dailyMealPortionId: uuid,
   complaintType: z.enum(complaintTypes),
   description: z
     .string()

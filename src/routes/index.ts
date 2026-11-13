@@ -41,6 +41,7 @@ import { createMenuReviewRouter } from "../modules/menu-review/menu-review.route
 import { createSchoolOverviewRouter } from "../modules/school-overview/school-overview.routes";
 import { createSupplierOnboardingRouter } from "../modules/supplier-onboarding/supplier-onboarding.routes";
 import { createSchoolAcademicYearRouter } from "../modules/school-academic-year/school-academic-year.routes";
+import { createSampleStorageRouter } from "../modules/sample-storage/sample-storage.routes";
 
 export function createApiRouter(
   authHandler: RequestHandler = authenticate,
@@ -178,6 +179,18 @@ export function createApiRouter(
   router.use(
     "/v1/retained-samples",
     createRetainedSampleRouter(undefined, authHandler),
+  );
+  router.use(
+    "/v1/kitchen/sample-storage-units",
+    createSampleStorageRouter(undefined, authHandler),
+  );
+  router.use(
+    "/v1/sample-storage-units",
+    createSampleStorageRouter(undefined, authHandler),
+  );
+  router.use(
+    "/sample-storage-units",
+    createSampleStorageRouter(undefined, authHandler),
   );
 
   return router;

@@ -42,6 +42,8 @@ export interface MenuWeekScheduleDTO {
     dayOfWeek: number;
     dayLabel: string;
     isSchoolDay: boolean;
+    isHoliday?: boolean;
+    holidayReason?: string | null;
     hasMenu: boolean;
     menuDayId: string | null;
     status: string;
@@ -72,4 +74,21 @@ export interface MenuSummaryPageResponseDTO {
     limit: number;
     hasNext: boolean;
   };
+}
+export interface MenuCreationAllergyReportDTO {
+  hasUnresolvedAllergies: boolean;
+  allergyChecks: {
+    menuDayId: string;
+    menuDate: string;
+    mealType: "LUNCH" | "AFTERNOON";
+    hasConflict: boolean;
+    hasUnresolvedConflicts: boolean;
+    conflicts: {
+      ingredientId: string;
+      ingredientEntryId: string;
+      ingredientName: string;
+      coveredBySeparateGroup: boolean;
+      affectedClasses: { classId: string; className: string; count: number }[];
+    }[];
+  }[];
 }

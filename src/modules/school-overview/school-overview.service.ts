@@ -2,6 +2,8 @@ import type { AuthPrincipal } from "../../types/auth";
 import { getPrisma } from "../../utils/database";
 import { assertPermission } from "../../utils/authorization";
 import { HttpError } from "../../utils/http-error";
+import { ROLES } from "../../constants/roles";
+import { isComplaintSubmitter } from "../../utils/resource-access";
 
 export async function getSchoolOverview(
   principal: AuthPrincipal,
@@ -15,6 +17,10 @@ export async function getSchoolOverview(
   const schoolId = principal.schoolId;
   const allowed = (...codes: string[]) =>
     codes.some((code) => principal.permissions.includes(code));
+  const canReadComplaints =
+    allowed("meal_complaint.view") &&
+    (principal.role === ROLES.SCHOOL_MANAGEMENT_BOARD ||
+      isComplaintSubmitter(principal.role));
   // Dashboard access does not grant access to another business module.
   const [school, menus, complaints, suppliers, incidents] =
     await db.$transaction([
@@ -33,8 +39,11 @@ export async function getSchoolOverview(
       db.mealComplaint.groupBy({
         by: ["status", "complaintType"],
         where: {
-          MealAllocation: { DailyMealPortion: { Class: { schoolId } } },
-          ...(!allowed("meal_complaint.view") ? { id: { in: [] } } : {}),
+          DailyMealPortion: { Class: { schoolId } },
+          ...(isComplaintSubmitter(principal.role)
+            ? { submittedByUserId: principal.id }
+            : {}),
+          ...(!canReadComplaints ? { id: { in: [] } } : {}),
         },
         _count: { _all: true },
       }),
@@ -69,7 +78,7 @@ export async function getSchoolOverview(
   return {
     school,
     menus: allowed("menu.view") ? menus : null,
-    complaints: allowed("meal_complaint.view")
+    complaints: canReadComplaints
       ? complaints.map(({ status, complaintType, _count }) => ({
           status,
           type: complaintType,

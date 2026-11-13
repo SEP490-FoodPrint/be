@@ -213,7 +213,30 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
           [otherSupplier],
         )
       ).rows[0].id;
+      const categoryFixture = "00000056-0000-4000-8000-000000000004";
+      const renamedCategoryFixture = "00000056-0000-4000-8000-000000000008";
+      await db.query(
+        "INSERT INTO foodprint.dishes(id,school_id,name) VALUES ($1,$3,'Cơm gạo ST25'),($2,$3,'Renamed legacy dish')",
+        [categoryFixture, renamedCategoryFixture, schoolId],
+      );
       await runPrisma(url, ["migrate", "deploy"]);
+      const classified = await db.query<{
+        id: string;
+        category: string | null;
+      }>(
+        "SELECT id,category FROM foodprint.dishes WHERE id=ANY($1::uuid[]) ORDER BY id",
+        [[categoryFixture, renamedCategoryFixture]],
+      );
+      assert.deepEqual(classified.rows, [
+        { id: categoryFixture, category: "RICE_STARCH" },
+        { id: renamedCategoryFixture, category: null },
+      ]);
+      await assert.rejects(
+        db.query("UPDATE foodprint.dishes SET category='INVALID' WHERE id=$1", [
+          categoryFixture,
+        ]),
+        (error) => sqlState(error, "22P02"),
+      );
       const converted = await db.query<{
         id: string;
         supplier_id: string;
@@ -1041,6 +1064,94 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
         await legacy.end();
       }
       // Keep the disposable database for inspection, following the suite's existing policy.
+    },
+  );
+  await context.test(
+    "complaint migration preserves existing meal and response",
+    async () => {
+      const migration =
+        "20261113000100_link_meal_complaints_to_daily_meal_portions";
+      const name = `foodprint_migration_test_complaints_${randomUUID().replaceAll("-", "")}`;
+      await db.query(`CREATE DATABASE "${name}"`);
+      const fresh = new URL(url);
+      fresh.pathname = `/${name}`;
+      const legacy = new Client({ connectionString: fresh.toString() });
+      await legacy.connect();
+      try {
+        for (const version of migrationNames.filter(
+          (value) => value < migration,
+        ))
+          await legacy.query(
+            await readFile(
+              path.join(root, "prisma/migrations", version, "migration.sql"),
+              "utf8",
+            ),
+          );
+        const before = await legacy.query(`
+        WITH school AS (
+          INSERT INTO foodprint.schools(name) VALUES ('Complaint migration school') RETURNING id
+        ), role AS (
+          INSERT INTO foodprint.roles(code,name,type) VALUES ('HOMEROOM_TEACHER','Teacher','SCHOOL') RETURNING id
+        ), actor AS (
+          INSERT INTO foodprint.users(role_id,role_code,school_id,username,email,password_hash,full_name)
+          SELECT role.id,'HOMEROOM_TEACHER',school.id,'complaint_test','complaint@example.test','test-only','Teacher'
+          FROM role, school RETURNING id
+        ), classroom AS (
+          INSERT INTO foodprint.classes(school_id,name) SELECT id,'5A' FROM school RETURNING id
+        ), portion AS (
+          INSERT INTO foodprint.daily_meal_portions(class_id,confirmed_by_user_id,meal_date,meal_type,total_portions)
+          SELECT classroom.id,actor.id,'2026-11-12','LUNCH',30 FROM classroom,actor RETURNING id
+        ), allocation AS (
+          INSERT INTO foodprint.meal_allocations(daily_meal_portion_id,created_by_user_id)
+          SELECT portion.id,actor.id FROM portion,actor RETURNING id,daily_meal_portion_id
+        ), complaint AS (
+          INSERT INTO foodprint.meal_complaints
+            (meal_allocation_id,submitted_by_user_id,complaint_type,description,status,handled_by_user_id,resolution,resolved_at)
+          SELECT allocation.id,actor.id,'OTHER','Original description','RESOLVED',actor.id,'Original resolution',now()
+          FROM allocation,actor
+          RETURNING *
+        )
+        SELECT (to_jsonb(complaint) - 'meal_allocation_id') ||
+          jsonb_build_object('daily_meal_portion_id', allocation.daily_meal_portion_id) AS row
+        FROM complaint, allocation
+      `);
+        await legacy.query(
+          await readFile(
+            path.join(root, "prisma/migrations", migration, "migration.sql"),
+            "utf8",
+          ),
+        );
+        const after = await legacy.query(
+          "SELECT to_jsonb(c) AS row FROM foodprint.meal_complaints c",
+        );
+        assert.deepEqual(after.rows, before.rows);
+        await legacy.query(`
+          INSERT INTO foodprint.roles (code, name, type)
+          VALUES ('PARENTS_COMMITTEE', 'Parent committee', 'SCHOOL');
+          INSERT INTO foodprint.permissions (code, name, module, action)
+          VALUES ('meal_complaint.view', 'Read complaints', 'meal_complaint', 'view');
+        `);
+        const grant = await readFile(
+          path.join(
+            root,
+            "prisma/migrations/20261113000200_grant_parent_meal_complaint_view/migration.sql",
+          ),
+          "utf8",
+        );
+        await legacy.query(grant);
+        await legacy.query(grant);
+        const grants = await legacy.query(`
+          SELECT role.code AS role, permission.code AS permission
+          FROM foodprint.role_permissions AS grant_row
+          JOIN foodprint.roles AS role ON role.id = grant_row.role_id
+          JOIN foodprint.permissions AS permission ON permission.id = grant_row.permission_id
+        `);
+        assert.deepEqual(grants.rows, [
+          { role: "PARENTS_COMMITTEE", permission: "meal_complaint.view" },
+        ]);
+      } finally {
+        await legacy.end();
+      }
     },
   );
 });
