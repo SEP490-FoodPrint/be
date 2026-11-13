@@ -1,6 +1,6 @@
 # Implementation Plan: Bỏ giới hạn trần suất ăn bán trú và sắp xếp lịch sử theo ngày
 
-**Branch**: `feat/019-uncap-daily-meal-portions` | **Spec**: [spec.md](spec.md)
+**Branch**: `feat/021-uncap-daily-meal-portions` | **Spec**: [spec.md](spec.md)
 
 ## Design
 
@@ -17,7 +17,7 @@
 | III. Database safety    | PASS   | Không DDL, không migration, không sửa schema.                             |
 | IV. Atomicity           | PASS   | Giữ nguyên transaction `withSchoolTransaction`.                           |
 | V. HTTP contract        | PASS   | Giữ nguyên response DTO và payload.                                       |
-| VI. Spec-driven         | PASS   | Spec, plan, tasks đi kèm với branch `feat/019-uncap-daily-meal-portions`. |
+| VI. Spec-driven         | PASS   | Spec, plan, tasks đi kèm với branch `feat/021-uncap-daily-meal-portions`. |
 
 ## Validation strategy
 

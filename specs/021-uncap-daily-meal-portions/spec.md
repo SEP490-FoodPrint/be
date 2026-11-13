@@ -1,6 +1,6 @@
 # Feature Specification: Bỏ giới hạn trần suất ăn bán trú và sắp xếp lịch sử theo ngày
 
-**Feature Branch**: `feat/019-uncap-daily-meal-portions`  
+**Feature Branch**: `feat/021-uncap-daily-meal-portions`  
 **Status**: Implemented  
 **Liên quan**: spec 015, spec 016, meal-attendance module
 
