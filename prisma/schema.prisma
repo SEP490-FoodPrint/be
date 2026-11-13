@@ -57,6 +57,8 @@ model ClassAllergy {
 model Class {
   id                     String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   schoolId               String                    @map("school_id") @db.Uuid
+  gradeId                String?                   @map("grade_id") @db.Uuid
+  grade                  SchoolGrade?              @relation(fields: [schoolId, gradeId], references: [schoolId, id], onDelete: Restrict, onUpdate: NoAction)
   name                   String                    @db.VarChar(120)
   academicYear           String?                   @map("academic_year") @db.VarChar(30)
   registeredMealPortions Int                       @default(0) @map("registered_meal_portions") @db.Integer
@@ -70,7 +72,24 @@ model Class {
 
   @@unique([schoolId, name, academicYear])
   @@index([schoolId], map: "idx_classes_school_id")
+  @@index([schoolId, gradeId], map: "idx_classes_school_grade")
   @@map("classes")
+  @@schema("foodprint")
+}
+
+model SchoolGrade {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  schoolId  String   @map("school_id") @db.Uuid
+  code      String   @db.VarChar(30)
+  name      String   @db.VarChar(120)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  school    School   @relation(fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  classes   Class[]
+
+  @@unique([schoolId, code])
+  @@unique([schoolId, id])
+  @@map("school_grades")
   @@schema("foodprint")
 }
 
@@ -1011,6 +1030,7 @@ model School {
   schoolSupplierRelationships SchoolSupplierRelationship[] @relation("school_supplier_relationships_school_id__schools")
   supplierContracts           SupplierContract[]
   classes                     Class[]                      @relation("classes_school_id__schools")
+  grades                      SchoolGrade[]
   academicYears               SchoolAcademicYear[]         @relation("school_academic_years_school_id__schools")
   ingredientEntries           IngredientEntry[]            @relation("ingredient_entries_school_id__schools")
   supplyRequests              SupplyRequest[]              @relation("supply_requests_school_id__schools")

@@ -1454,4 +1454,44 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
       }
     },
   );
+  await context.test(
+    "grade FK preserves unassigned classes and enforces same-school membership",
+    async () => {
+      const rows = await db.query<{ id: string }>(
+        "INSERT INTO foodprint.schools(name) VALUES ('Grade school A'), ('Grade school B') RETURNING id",
+      );
+      const [a, b] = rows.rows.map((row) => row.id);
+      const {
+        rows: [grade],
+      } = await db.query<{ id: string }>(
+        "INSERT INTO foodprint.school_grades(school_id,code,name) VALUES ($1,'G5','Khối 5') RETURNING id",
+        [a],
+      );
+      await db.query(
+        "INSERT INTO foodprint.school_grades(school_id,code,name) VALUES ($1,'G5','Khối 5')",
+        [b],
+      );
+      await assert.rejects(
+        db.query(
+          "INSERT INTO foodprint.school_grades(school_id,code,name) VALUES ($1,'G5','Khối trùng')",
+          [a],
+        ),
+        (error) => sqlState(error, "23505"),
+      );
+      const {
+        rows: [classroom],
+      } = await db.query<{ id: string; grade_id: string | null }>(
+        "INSERT INTO foodprint.classes(school_id,name) VALUES ($1,'Grade test class') RETURNING id,grade_id",
+        [b],
+      );
+      assert.equal(classroom.grade_id, null);
+      await assert.rejects(
+        db.query("UPDATE foodprint.classes SET grade_id=$1 WHERE id=$2", [
+          grade.id,
+          classroom.id,
+        ]),
+        (error) => sqlState(error, "23503"),
+      );
+    },
+  );
 });

@@ -24,6 +24,7 @@ const mealPortionsSchema = z
   .max(2147483647, "Số suất đăng ký quá lớn");
 export const classListQuerySchema = paginationSchema.safeExtend({
   academicYear: optionalAcademicYearSchema,
+  gradeId: z.union([requestUuidSchema, z.literal("unassigned")]).optional(),
 });
 export const eligibleTeachersQuerySchema = z.strictObject({
   academicYear: optionalAcademicYearSchema,
@@ -39,6 +40,7 @@ export const classSchoolParamsSchema = z.strictObject({
 });
 export const createClassSchema = z.strictObject({
   name: classNameSchema,
+  gradeId: requestUuidSchema.nullable().optional(),
   academicYear: academicYearSchema,
   registeredMealPortions: mealPortionsSchema.default(0),
   homeroomTeacherUserId: requestUuidSchema.optional(),
@@ -46,11 +48,14 @@ export const createClassSchema = z.strictObject({
 export const updateClassSchema = z
   .strictObject({
     name: classNameSchema.optional(),
+    gradeId: requestUuidSchema.nullable().optional(),
     registeredMealPortions: mealPortionsSchema.optional(),
   })
   .refine(
     (value) =>
-      value.name !== undefined || value.registeredMealPortions !== undefined,
+      value.name !== undefined ||
+      value.registeredMealPortions !== undefined ||
+      value.gradeId !== undefined,
     "Cần ít nhất một thông tin cần sửa",
   );
 export const classStatusSchema = z.strictObject({
