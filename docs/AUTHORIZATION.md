@@ -109,7 +109,7 @@ Mọi dòng đều yêu cầu một trong các permission liệt kê. SYSTEM có
 | `warehouse`                   | `inventory.view`                                                                   | SCHOOL, SUPPLIER             |
 | `kitchen`                     | `cooking_batch.view`                                                               | SCHOOL                       |
 | `meal-attendance`             | `daily_meal_portion.view`                                                          | SCHOOL                       |
-| `feedback`                    | `meal_complaint.view`                                                              | SCHOOL                       |
+| `feedback`                    | `meal_complaint.view`                                                              | SYSTEM, SCHOOL               |
 | `inspection`                  | `food_safety_incident.view`                                                        | SCHOOL, AUTHORITY            |
 | `supplier`                    | `supplier.view`, `supplier.manage`                                                 | SUPPLIER, SCHOOL             |
 | `authority`                   | `authority.view`, `food_safety_report.view`                                        | AUTHORITY                    |
@@ -133,6 +133,9 @@ Mọi dòng đều yêu cầu một trong các permission liệt kê. SYSTEM có
 | `traceability`                | `traceability.view`                                                                | SCHOOL, SUPPLIER, AUTHORITY  |
 
 School xem supplier qua quan hệ ACTIVE/SUSPENDED; ingredient qua IngredientEntry của trường. Supplier xem tài nguyên supplier-owned hoặc delivery của supplier khi có permission phù hợp. ATTP xã chỉ thấy incident/report chuyển tới đơn vị mình; traceability chỉ mở phần liên quan trực tiếp. Với ingredient_quality_feedback.view_own, thêm điều kiện submittedByUserId; view_details vẫn giới hạn tổ chức. Các API cũ giữ phân trang, safe select và serialization Date/Decimal/BigInt.
+
+- `GET /api/meal-complaints/meal-options` và `POST /api/meal-complaints` yêu cầu `meal_complaint.submit` và vai trò `HOMEROOM_TEACHER` hoặc `PARENTS_COMMITTEE`. Trường, ngày ăn và phạm vi lớp do server xác định.
+- `meal_complaint.view` cho phép người gửi đọc đơn của chính mình trong trường và cho phép Ban Giám hiệu đọc đơn của trường. `meal_complaint.respond` dành cho Ban Giám hiệu. Migration spec 019 bổ sung quyền đọc đang hoạt động cho role `PARENTS_COMMITTEE` đã tồn tại và giữ các thiết lập thu hồi quyền theo tài khoản.
 
 ## API phân bổ suất ăn hôm nay
 

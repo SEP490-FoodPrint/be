@@ -1,10 +1,14 @@
 import { ORG_TYPES, ROLES } from "../../constants/roles";
 import type { PrismaClient } from "../../generated/prisma/client";
 import type { AuthPrincipal } from "../../types/auth";
-import { withSchoolTransaction } from "../../utils/authorization";
+import {
+  assertPermission,
+  withSchoolTransaction,
+} from "../../utils/authorization";
+import { currentAcademicYear } from "../class/academic-year";
 import { getPrisma } from "../../utils/database";
 import { HttpError } from "../../utils/http-error";
-import { listScopes } from "../../utils/resource-access";
+import { isComplaintSubmitter, listScopes } from "../../utils/resource-access";
 import {
   createFeedbackRepository,
   type ComplaintRow,
@@ -17,6 +21,7 @@ import type {
 } from "./feedback.request.dto";
 import type {
   ComplaintListResponseDTO,
+  ComplaintMealOptionsDTO,
   ComplaintResponseDTO,
 } from "./feedback.response.dto";
 
@@ -37,7 +42,7 @@ function toResponse(
   row: ComplaintRow,
   principal: AuthPrincipal,
 ): ComplaintResponseDTO {
-  const portion = row.MealAllocation.DailyMealPortion;
+  const portion = row.DailyMealPortion;
   return {
     id: row.id,
     complaintType: row.complaintType,
@@ -50,8 +55,9 @@ function toResponse(
     submitter: row.submittedByUser,
     handler: row.handledByUser,
     meal: {
-      allocationId: row.MealAllocation.id,
-      allocationStatus: row.MealAllocation.status,
+      dailyMealPortionId: portion.id,
+      allocationId: portion.MealAllocation?.id ?? null,
+      allocationStatus: portion.MealAllocation?.status ?? null,
       classId: portion.Class.id,
       className: portion.Class.name,
       academicYear: portion.Class.academicYear,
@@ -65,7 +71,11 @@ function toResponse(
 export function createFeedbackService(
   repository: FeedbackRepository = createFeedbackRepository(),
   connect: () => Promise<PrismaClient> = getPrisma,
+  now = () => new Date(),
 ) {
+  const formatDate = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: "Asia/Ho_Chi_Minh",
+  });
   const requireRole = (principal: AuthPrincipal, role: string) => {
     if (principal.orgType !== ORG_TYPES.SCHOOL || principal.role !== role)
       throw new HttpError(
@@ -73,7 +83,68 @@ export function createFeedbackService(
         "Vai trò không được phép thực hiện thao tác này",
       );
   };
+  async function readMealOptions(
+    db: Parameters<FeedbackRepository["findMealOptions"]>[0],
+    principal: AuthPrincipal,
+  ): Promise<ComplaintMealOptionsDTO> {
+    assertPermission(principal, "meal_complaint.submit");
+    if (
+      principal.orgType !== ORG_TYPES.SCHOOL ||
+      !principal.schoolId ||
+      !isComplaintSubmitter(principal.role)
+    )
+      throw new HttpError(403, "Vai trò không được phép gửi khiếu nại");
+    const timestamp = now();
+    const mealDate = formatDate.format(timestamp);
+    const teacher =
+      principal.role === ROLES.HOMEROOM_TEACHER
+        ? {
+            id: principal.id,
+            academicYear: currentAcademicYear(timestamp),
+            now: timestamp,
+          }
+        : undefined;
+    const classes = await repository.findMealOptions(
+      db,
+      principal.schoolId,
+      new Date(mealDate),
+      teacher,
+    );
+    if (teacher && classes.length !== 1)
+      throw new HttpError(
+        classes.length ? 409 : 404,
+        classes.length
+          ? "Phân công chủ nhiệm đang có mâu thuẫn"
+          : "Chưa có phân công chủ nhiệm trong niên khóa hiện tại",
+      );
+    return {
+      mealDate,
+      classes: classes.map((item) => {
+        const option = (mealType: "LUNCH" | "AFTERNOON") => {
+          const portion = item.dailyMealPortions.find(
+            (row) => row.mealType === mealType,
+          );
+          const status = portion?.MealAllocation?.status;
+          return portion
+            ? {
+                dailyMealPortionId: portion.id,
+                canComplain: status === "DISTRIBUTED" || status === "FINALIZED",
+              }
+            : null;
+        };
+        return {
+          classId: item.id,
+          className: item.name,
+          lunch: option("LUNCH"),
+          afternoon: option("AFTERNOON"),
+        };
+      }),
+    };
+  }
   return {
+    async mealOptions(principal: AuthPrincipal) {
+      return readMealOptions(await connect(), principal);
+    },
     async getAll(
       query: ComplaintListQueryDTO,
       principal: AuthPrincipal,
@@ -104,40 +175,27 @@ export function createFeedbackService(
       return toResponse(row, principal);
     },
     async create(input: CreateComplaintRequestDTO, principal: AuthPrincipal) {
-      requireRole(principal, ROLES.HOMEROOM_TEACHER);
+      if (!isComplaintSubmitter(principal.role))
+        throw new HttpError(403, "Vai trò không được phép gửi khiếu nại");
       return withSchoolTransaction(
         await connect(),
         principal,
         "meal_complaint.submit",
-        async (tx, actor, schoolId) => {
-          requireRole(actor, ROLES.HOMEROOM_TEACHER);
-          const allocation = await repository.findAllocation(
-            tx,
-            input.mealAllocationId,
-            schoolId,
-            actor.id,
-          );
-          if (!allocation)
+        async (tx, actor) => {
+          const options = await readMealOptions(tx, actor);
+          const meal = options.classes
+            .flatMap(({ lunch, afternoon }) => [lunch, afternoon])
+            .find(
+              (option) =>
+                option?.dailyMealPortionId === input.dailyMealPortionId,
+            );
+          if (!meal)
             throw new HttpError(
               404,
-              "Không tìm thấy suất ăn hợp lệ để khiếu nại",
+              "Suất ăn không thuộc phạm vi được gửi hôm nay",
             );
-          const mealDate = allocation.DailyMealPortion.mealDate;
-          const dayStart = new Date(mealDate);
-          dayStart.setUTCHours(0, 0, 0, 0);
-          const dayEnd = new Date(mealDate);
-          dayEnd.setUTCHours(23, 59, 59, 999);
-          const assigned =
-            allocation.DailyMealPortion.Class.homeroomAssignments.some(
-              (item) =>
-                item.assignedAt <= dayEnd &&
-                (!item.endedAt || item.endedAt >= dayStart),
-            );
-          if (!assigned)
-            throw new HttpError(
-              403,
-              "Suất ăn không thuộc thời gian phân công chủ nhiệm của bạn",
-            );
+          if (!meal.canComplain)
+            throw new HttpError(409, "Bữa ăn chưa được xác nhận giao");
           return toResponse(
             await repository.create(tx, {
               ...input,

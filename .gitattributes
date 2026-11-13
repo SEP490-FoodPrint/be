@@ -1,2 +1,4 @@
 .husky/* text eol=lf
 prisma/migrations/**/migration.sql text eol=lf
+# Preserve the exact checksum recorded when this migration was applied.
+prisma/migrations/20261113000100_link_meal_complaints_to_daily_meal_portions/migration.sql -text !eol whitespace=cr-at-eol

@@ -65,6 +65,7 @@ import { createRetainedSampleService } from "../src/modules/retained-sample/reta
 import { createMealAttendanceService } from "../src/modules/meal-attendance/meal-attendance.service";
 import { validateDailyPortionGroups } from "../src/modules/meal-attendance/meal-attendance.validation";
 import { createMealAllocationService } from "../src/modules/meal-allocation/meal-allocation.service";
+import { createFeedbackService } from "../src/modules/feedback/feedback.service";
 import {
   allocationFixtureClock,
   loadAllocationFixture,
@@ -1238,6 +1239,93 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       await assert.rejects(
         () => nextDay.confirmDistribution(confirmation, chef),
         { statusCode: 409 },
+      );
+
+      const feedback = createFeedbackService(
+        undefined,
+        () => Promise.resolve(db),
+        allocationFixtureClock,
+      );
+      const parentAccount = await user("PARENTS_COMMITTEE", {
+        schoolId: school.id,
+      });
+      const parent = await loadPrincipal(parentAccount.id, db);
+      const parentOptions = await feedback.mealOptions(parent);
+      assert.equal(parentOptions.mealDate, "2026-11-12");
+      assert.ok(
+        parentOptions.classes.some(
+          (entry) =>
+            entry.lunch?.dailyMealPortionId === classB &&
+            entry.lunch.canComplain,
+        ),
+      );
+      await assert.rejects(() => feedback.mealOptions(teacherPrincipal), {
+        statusCode: 404,
+      });
+      const portion = await db.dailyMealPortion.findUniqueOrThrow({
+        where: { id: classA },
+        select: { classId: true },
+      });
+      await db.classHomeroomAssignment.create({
+        data: {
+          classId: portion.classId,
+          teacherUserId: teacher.id,
+          assignedByUserId: chef.id,
+          assignedAt: new Date("2026-11-01T00:00:00Z"),
+        },
+      });
+      assert.equal(
+        (await feedback.mealOptions(teacherPrincipal)).classes.length,
+        1,
+      );
+      const input = {
+        dailyMealPortionId: classB,
+        complaintType: "OTHER" as const,
+        description: "Bữa ăn cần được kiểm tra.",
+      };
+      await assert.rejects(() => feedback.create(input, teacherPrincipal), {
+        statusCode: 404,
+      });
+      await assert.rejects(() => feedback.create(input, chef), {
+        statusCode: 403,
+      });
+      const sent = await feedback.create(input, parent);
+      assert.equal(sent.status, "SUBMITTED");
+      assert.equal(sent.meal.dailyMealPortionId, classB);
+      const teacherSent = await feedback.create(
+        { ...input, dailyMealPortionId: classA },
+        teacherPrincipal,
+      );
+      assert.deepEqual(
+        (await feedback.getAll({ page: 1, limit: 10 }, parent)).items.map(
+          (item) => item.id,
+        ),
+        [sent.id],
+      );
+      await assert.rejects(() => feedback.getOne(teacherSent.id, parent), {
+        statusCode: 404,
+      });
+      const boardAccount = await user("SCHOOL_MANAGEMENT_BOARD", {
+        schoolId: school.id,
+      });
+      const board = await loadPrincipal(boardAccount.id, db);
+      await feedback.respond(
+        sent.id,
+        { action: "RESOLVE", resolution: "Nhà trường đã kiểm tra suất ăn." },
+        board,
+      );
+      assert.equal((await feedback.getOne(sent.id, parent)).status, "RESOLVED");
+      const afterMidnight = createFeedbackService(
+        undefined,
+        () => Promise.resolve(db),
+        () => new Date("2026-11-12T17:00:00Z"),
+      );
+      await assert.rejects(() => afterMidnight.create(input, parent), {
+        statusCode: 404,
+      });
+      assert.equal(
+        (await afterMidnight.getOne(sent.id, parent)).status,
+        "RESOLVED",
       );
     },
   );
