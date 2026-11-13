@@ -33,6 +33,7 @@ export const RESOURCE_PERMISSIONS = {
   supplier: ["supplier.view", "supplier.manage"],
   authority: ["authority.view", "food_safety_report.view"],
   class: ["class.view"],
+  "school-grade": ["class.manage"],
   "source-facility": ["source_facility.manage"],
   "supplier-certification": ["supplier_certification.view"],
   registration: ["registration.view"],
@@ -218,6 +219,13 @@ export const listScopes = {
       403,
       "Loại tổ chức không có phạm vi truy cập tài nguyên này",
     );
+  },
+  "school-grade": (p: AuthPrincipal): Prisma.SchoolGradeWhereInput => {
+    assertPermission(p, ...RESOURCE_PERMISSIONS["school-grade"]);
+    if (p.orgType === "SYSTEM") return {};
+    if (p.orgType === "SCHOOL" && p.role === ROLES.SCHOOL_MANAGEMENT_BOARD)
+      return { schoolId: school(p) };
+    throw new HttpError(403, "Chỉ Ban Giám hiệu được xem khối học");
   },
   class: (p: AuthPrincipal): Prisma.ClassWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["class"]);

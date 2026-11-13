@@ -21,6 +21,7 @@ import { createInspectionRouter } from "../modules/inspection/inspection.routes"
 import { createSupplierRouter } from "../modules/supplier/supplier.routes";
 import { createAuthorityRouter } from "../modules/authority/authority.routes";
 import { createClassRouter } from "../modules/class/class.routes";
+import { createSchoolGradeRouter } from "../modules/school-grade/school-grade.routes";
 import { createSourceFacilityRouter } from "../modules/source-facility/source-facility.routes";
 import { createSupplierCertificationRouter } from "../modules/supplier-certification/supplier-certification.routes";
 import { createRegistrationRouter } from "../modules/registration/registration.routes";
@@ -109,6 +110,7 @@ export function createApiRouter(
     createAuthorityRouter(undefined, authHandler),
   );
   router.use("/classes", createClassRouter(undefined, authHandler));
+  router.use("/school-grades", createSchoolGradeRouter(undefined, authHandler));
   router.use(
     "/source-facilities",
     createSourceFacilityRouter(undefined, authHandler),
