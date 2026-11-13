@@ -26,7 +26,6 @@ function requireBoard(actor: AuthPrincipal) {
 function toResponse(row: SchoolGradeRow): SchoolGradeResponse {
   return {
     id: row.id,
-    code: row.code,
     name: row.name,
     classCount: row._count.classes,
   };
@@ -60,8 +59,8 @@ export function createSchoolGradeService(
     },
     create(actor: AuthPrincipal, input: CreateSchoolGradeRequest) {
       return write(actor, async (tx, _, schoolId) => {
-        if (await repository.findByCode(tx, schoolId, input.code))
-          throw new HttpError(409, "Mã khối đã tồn tại");
+        if (await repository.findByName(tx, schoolId, input.name))
+          throw new HttpError(409, "Tên khối đã tồn tại");
         return toResponse(await repository.create(tx, schoolId, input));
       });
     },
@@ -70,11 +69,10 @@ export function createSchoolGradeService(
         const grade = await repository.find(tx, schoolId, id);
         if (!grade) throw new HttpError(404, "Không tìm thấy khối học");
         if (
-          input.code !== undefined &&
-          input.code !== grade.code &&
-          (await repository.findByCode(tx, schoolId, input.code))
+          input.name !== grade.name &&
+          (await repository.findByName(tx, schoolId, input.name))
         )
-          throw new HttpError(409, "Mã khối đã tồn tại");
+          throw new HttpError(409, "Tên khối đã tồn tại");
         return toResponse(await repository.update(tx, schoolId, id, input));
       });
     },
