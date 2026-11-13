@@ -333,7 +333,7 @@ npm run db:migrate:status
 npm exec --no -- prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
 ```
 
-Preflight chỉ đọc: kiểm tra đúng host, database, schema, SSL và checksum/thứ tự lịch sử. CD dừng khi SQL đã applied bị sửa/xóa hoặc có migration chưa hoàn tất. Chỉ có một deployment chạy tại một thời điểm; push mới không tự hủy run `dev` đang chạy migration. Prisma advisory lock vẫn được giữ.
+Preflight chỉ đọc: kiểm tra đúng host, database, schema, SSL và checksum từng migration đã áp dụng theo tên. Migration được merge muộn vẫn là pending dù timestamp nhỏ hơn migration đã áp dụng. CD dừng khi SQL đã applied bị sửa/xóa, tên active bị trùng, chưa nhận baseline hoặc có migration chưa hoàn tất. Chỉ có một deployment chạy tại một thời điểm; push mới không tự hủy run `dev` đang chạy migration. Prisma advisory lock vẫn được giữ.
 
 Nếu thiếu secret, sai host hoặc không kết nối được, sửa cấu hình rồi vào **Actions → Backend CI → run của commit `dev` hiện tại → Re-run failed jobs**. Khi migration lỗi, cần kiểm tra và xử lý thủ công; workflow không tự resolve, reset, seed, rollback hay dùng `db push`. Mọi thay đổi cấu trúc tiếp theo cần SQL migration mới được review.
 

@@ -1,5 +1,15 @@
 # Baseline database và lịch sử migration
 
+## Sửa kiểm tra CD khi migration được merge muộn — 14/11/2026
+
+Đối chiếu Azure chỉ đọc với `origin/dev` tại `e8c7402`: Git có 26 migration, Azure có 24 bản ghi đã hoàn tất, không thiếu file đã áp dụng và không có migration lỗi. Hai migration pending là `20261112000100_account_lifecycle_intake` và `20261115000100_school_dish_categories`. Kiểm tra applied-prefix cũ dừng ở migration account lifecycle vì migration dish_recipe_roles và các migration mới hơn đã hoàn tất trước khi account lifecycle được merge.
+
+Preflight được sửa để so khớp từng tên đã áp dụng với catalog Git, giữ kiểm tra baseline, trạng thái, duplicate và checksum rồi liệt kê các tên còn pending theo thứ tự. Không đổi `_prisma_migrations`, không resolve hoặc tự nhận baseline.
+
+File `20261113000400_drop_sample_storage_units_brand/migration.sql` trong Git có thêm một LF cuối file. Đã khôi phục đúng 157 byte, SHA-256 `5814ee69f36d4e669c99ca17775fb4ba78d37e0e9d819774907721b3b5c5177f` khớp checksum đọc từ Azure; không đổi câu SQL hoặc dữ liệu đã triển khai. Regression đóng băng checksum để ngăn thay đổi byte về sau.
+
+Bản sửa đã qua 420 unit tests, 14 migration tests trên PostgreSQL 18 disposable và lint/format/typecheck/build. Kịch bản merge muộn triển khai 24 migration trước, thêm lại hai migration pending, deploy thành công, giữ nguyên mọi bản ghi history cũ và Prisma schema diff bằng 0. Đối chiếu Azure chỉ đọc sau sửa nhận đúng hai pending; **chưa deploy bản sửa hay migration pending lên Azure**. Xem [spec 023](../specs/023-migration-cd-history/spec.md).
+
 ## Khôi phục lịch sử phân công GVCN đã có trên Azure
 
 CD tại commit `194ac5c` bị chặn ở `db:deploy:check`: Azure đã hoàn tất `20261107000100_class_homeroom_assignments` lúc `2026-11-06T17:49:59Z`, nhưng nhánh dev thiếu file này. Đây là lỗi thiếu lịch sử trong Git, không phải lỗi SQL tạo bảng năm học.
