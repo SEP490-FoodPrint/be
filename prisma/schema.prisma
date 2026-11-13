@@ -237,6 +237,7 @@ model DailyMealPortion {
   User                 User                    @relation("daily_meal_portions_confirmed_by_user_id__users", fields: [confirmedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   dailyAllergyPortions DailyAllergyPortion[]   @relation("daily_allergy_portions_daily_meal_portion_id__daily_meal_portions")
   MealAllocation       MealAllocation?         @relation("meal_allocations_daily_meal_portion_id__daily_meal_portions")
+  mealComplaints       MealComplaint[]
   portionGroups        DailyMealPortionGroup[]
 
   @@unique([classId, mealDate, mealType])
@@ -726,7 +727,6 @@ model MealAllocation {
   createdByUser                 User                           @relation("meal_allocations_created_by_user_id__users", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   distributedByUser             User?                          @relation("meal_allocations_distributed_by_user_id__users", fields: [distributedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   mealAllocationBatches         MealAllocationBatch[]          @relation("meal_allocation_batches_meal_allocation_id__meal_allocations")
-  mealComplaints                MealComplaint[]                @relation("meal_complaints_meal_allocation_id__meal_allocations")
   foodSafetyIncidentAllocations FoodSafetyIncidentAllocation[] @relation("food_safety_incident_allocations_meal_allocation_id__meal_allocations")
   traceabilityAnchors           TraceabilityAnchor[]           @relation("traceability_anchors_meal_allocation_id__meal_allocations")
 
@@ -738,7 +738,7 @@ model MealAllocation {
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
 model MealComplaint {
   id                String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  mealAllocationId  String            @map("meal_allocation_id") @db.Uuid
+  dailyMealPortionId String            @map("daily_meal_portion_id") @db.Uuid
   submittedByUserId String            @map("submitted_by_user_id") @db.Uuid
   complaintType     MealComplaintType @map("complaint_type")
   description       String            @db.Text
@@ -748,11 +748,11 @@ model MealComplaint {
   submittedAt       DateTime          @default(now()) @map("submitted_at") @db.Timestamptz(6)
   resolvedAt        DateTime?         @map("resolved_at") @db.Timestamptz(6)
   updatedAt         DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  MealAllocation    MealAllocation    @relation("meal_complaints_meal_allocation_id__meal_allocations", fields: [mealAllocationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  DailyMealPortion   DailyMealPortion  @relation(fields: [dailyMealPortionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   submittedByUser   User              @relation("meal_complaints_submitted_by_user_id__users", fields: [submittedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   handledByUser     User?             @relation("meal_complaints_handled_by_user_id__users", fields: [handledByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
-  @@index([mealAllocationId], map: "idx_meal_complaints_allocation")
+  @@index([dailyMealPortionId], map: "idx_meal_complaints_daily_meal_portion")
   @@map("meal_complaints")
   @@schema("foodprint")
 }

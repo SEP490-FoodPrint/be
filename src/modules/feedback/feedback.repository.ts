@@ -4,24 +4,13 @@ type Db = PrismaClient | Prisma.TransactionClient;
 export const complaintInclude = {
   submittedByUser: { select: { id: true, fullName: true } },
   handledByUser: { select: { id: true, fullName: true } },
-  MealAllocation: {
+  DailyMealPortion: {
     select: {
       id: true,
-      status: true,
-      DailyMealPortion: {
-        select: {
-          mealDate: true,
-          mealType: true,
-          Class: {
-            select: {
-              id: true,
-              name: true,
-              academicYear: true,
-              schoolId: true,
-            },
-          },
-        },
-      },
+      mealDate: true,
+      mealType: true,
+      Class: { select: { id: true, name: true, academicYear: true } },
+      MealAllocation: { select: { id: true, status: true } },
     },
   },
 } as const satisfies Prisma.MealComplaintInclude;
@@ -61,11 +50,9 @@ export function createFeedbackRepository() {
                     },
                   },
                   {
-                    MealAllocation: {
-                      DailyMealPortion: {
-                        Class: {
-                          name: { contains: query.search, mode: "insensitive" },
-                        },
+                    DailyMealPortion: {
+                      Class: {
+                        name: { contains: query.search, mode: "insensitive" },
                       },
                     },
                   },
@@ -90,31 +77,38 @@ export function createFeedbackRepository() {
         include: complaintInclude,
       });
     },
-    findAllocation(
+    findMealOptions(
       db: Db,
-      id: string,
       schoolId: string,
-      teacherUserId: string,
+      mealDate: Date,
+      teacher?: { id: string; academicYear: string; now: Date },
     ) {
-      return db.mealAllocation.findFirst({
+      return db.class.findMany({
         where: {
-          id,
-          status: { in: ["DISTRIBUTED", "FINALIZED"] },
-          DailyMealPortion: { Class: { schoolId } },
+          schoolId,
+          status: "ACTIVE",
+          ...(teacher && {
+            academicYear: teacher.academicYear,
+            homeroomAssignments: {
+              some: {
+                teacherUserId: teacher.id,
+                assignedAt: { lte: teacher.now },
+                OR: [{ endedAt: null }, { endedAt: { gt: teacher.now } }],
+              },
+            },
+          }),
         },
+        orderBy: [{ name: "asc" }, { id: "asc" }],
+        take: teacher ? 2 : undefined,
         select: {
           id: true,
-          DailyMealPortion: {
+          name: true,
+          dailyMealPortions: {
+            where: { mealDate, mealType: { in: ["LUNCH", "AFTERNOON"] } },
             select: {
-              mealDate: true,
-              Class: {
-                select: {
-                  homeroomAssignments: {
-                    where: { teacherUserId },
-                    select: { assignedAt: true, endedAt: true },
-                  },
-                },
-              },
+              id: true,
+              mealType: true,
+              MealAllocation: { select: { status: true } },
             },
           },
         },
@@ -123,7 +117,7 @@ export function createFeedbackRepository() {
     create(
       db: Db,
       data: {
-        mealAllocationId: string;
+        dailyMealPortionId: string;
         submittedByUserId: string;
         complaintType: CreateDataType;
         description: string;
