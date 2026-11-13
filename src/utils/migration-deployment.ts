@@ -81,7 +81,7 @@ export async function readMigrationFiles(): Promise<MigrationFile[]> {
   );
 }
 
-/** Applied migrations must be an unchanged, completed prefix of Git history. */
+/** Applied SQL must stay present and unchanged; late-merged SQL remains pending. */
 export function pendingDeploymentMigrations(
   files: readonly MigrationFile[],
   history: readonly MigrationHistoryRow[],
@@ -105,19 +105,35 @@ export function pendingDeploymentMigrations(
       "Database chưa nhận baseline 0_init; CD không tự nhận baseline hoặc tạo database mới",
     );
   }
-  for (let index = 0; index < applied.length; index++) {
-    const file = files[index];
-    const row = applied[index];
-    if (!file || file.name !== row.migration_name) {
+  const catalog = new Map<string, MigrationFile>();
+  for (const file of files) {
+    if (catalog.has(file.name)) {
+      throw new MigrationDeploymentError("Tên migration trong Git bị trùng");
+    }
+    catalog.set(file.name, file);
+  }
+  const completedNames = new Set<string>();
+  for (const row of applied) {
+    if (completedNames.has(row.migration_name)) {
       throw new MigrationDeploymentError(
-        "Lịch sử database khác thứ tự migration trong Git; có file bị xóa, thiếu hoặc database đã đi trước commit này",
+        "Lịch sử có nhiều lần áp dụng active cho cùng migration",
+      );
+    }
+    const file = catalog.get(row.migration_name);
+    if (!file) {
+      throw new MigrationDeploymentError(
+        `Migration đã áp dụng không có trong Git: ${row.migration_name}; cần khôi phục file gốc hoặc kiểm tra đúng commit triển khai`,
       );
     }
     if (file.checksum !== row.checksum) {
       throw new MigrationDeploymentError(
-        "SQL của migration đã applied bị thay đổi; giữ migration cũ bất biến và tạo migration mới",
+        `SQL của migration đã applied bị thay đổi: ${row.migration_name}; cần khôi phục đúng file gốc`,
       );
     }
+    completedNames.add(row.migration_name);
   }
-  return files.slice(applied.length).map((file) => file.name);
+  return files
+    .filter((file) => !completedNames.has(file.name))
+    .map((file) => file.name)
+    .sort();
 }

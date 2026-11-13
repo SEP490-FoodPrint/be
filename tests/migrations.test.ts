@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFile, readdir } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
@@ -1356,6 +1365,92 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
         );
       } finally {
         await legacy.end();
+      }
+    },
+  );
+  await context.test(
+    "late-merged migrations deploy after newer history without changing completed rows",
+    async () => {
+      const name = `foodprint_migration_test_late_${randomUUID().replaceAll("-", "")}`;
+      await db.query(`CREATE DATABASE "${name}"`);
+      const isolated = new URL(url);
+      isolated.pathname = `/${name}`;
+      const temporary = await mkdtemp(
+        path.join(tmpdir(), "foodprint-023-migrations-"),
+      );
+      const directory = path.join(temporary, "migrations");
+      const config = path.join(temporary, "prisma.config.ts");
+      const late = new Set([
+        "20261112000100_account_lifecycle_intake",
+        "20261115000100_school_dish_categories",
+      ]);
+      const client = new Client({ connectionString: isolated.toString() });
+      try {
+        await mkdir(directory);
+        await copyFile(
+          path.join(root, "prisma/migrations/migration_lock.toml"),
+          path.join(directory, "migration_lock.toml"),
+        );
+        const copyMigration = async (migration: string) => {
+          await mkdir(path.join(directory, migration));
+          await copyFile(
+            path.join(root, "prisma/migrations", migration, "migration.sql"),
+            path.join(directory, migration, "migration.sql"),
+          );
+        };
+        for (const migration of migrationNames)
+          if (!late.has(migration)) await copyMigration(migration);
+        await writeFile(
+          config,
+          `import { defineConfig } from ${JSON.stringify(path.join(root, "node_modules/prisma/config.js"))};\nexport default defineConfig({ schema: ${JSON.stringify(path.join(root, "prisma/schema.prisma"))}, migrations: { path: ${JSON.stringify(directory)} }, datasource: { url: process.env.DATABASE_URL } });\n`,
+        );
+        await runPrisma(isolated.toString(), [
+          "migrate",
+          "deploy",
+          "--config",
+          config,
+        ]);
+        await client.connect();
+        const readHistory = async () =>
+          (
+            await client.query<MigrationHistoryRow>(
+              "SELECT migration_name,checksum,finished_at,rolled_back_at FROM foodprint._prisma_migrations ORDER BY migration_name",
+            )
+          ).rows;
+        const before = await readHistory();
+        assert.equal(before.length, migrationNames.length - late.size);
+        const files = await readMigrationFiles();
+        assert.deepEqual(
+          pendingDeploymentMigrations(files, before),
+          [...late].sort(),
+        );
+        for (const migration of late) await copyMigration(migration);
+        await runPrisma(isolated.toString(), [
+          "migrate",
+          "deploy",
+          "--config",
+          config,
+        ]);
+        const after = await readHistory();
+        assert.deepEqual(pendingDeploymentMigrations(files, after), []);
+        assert.deepEqual(
+          after.filter((row) => !late.has(row.migration_name)),
+          before,
+        );
+        await runPrisma(isolated.toString(), [
+          "migrate",
+          "diff",
+          "--from-config-datasource",
+          "--to-schema",
+          path.join(root, "prisma/schema.prisma"),
+          "--exit-code",
+          "--config",
+          config,
+        ]);
+      } finally {
+        await client.end();
+        await db.query(`DROP DATABASE "${name}"`);
+        await rm(temporary, { recursive: true, force: true });
       }
     },
   );

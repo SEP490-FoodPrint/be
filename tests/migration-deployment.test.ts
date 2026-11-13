@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
@@ -113,7 +115,7 @@ void test("restoring the applied homeroom migration leaves only the academic yea
   );
 });
 
-void test("deployment rejects modified, missing, duplicate or out-of-order applied SQL", () => {
+void test("deployment rejects modified, missing or duplicate applied SQL", () => {
   assert.throws(() =>
     pendingDeploymentMigrations(files, [
       { ...applied(0), checksum: "changed" },
@@ -125,12 +127,58 @@ void test("deployment rejects modified, missing, duplicate or out-of-order appli
   assert.throws(() =>
     pendingDeploymentMigrations(files, [applied(0), applied(0)]),
   );
-  const inserted = { name: "20261028000100_earlier", checksum: "c".repeat(64) };
+});
+
+void test("a late-merged migration is pending even when newer migrations have already finished", () => {
+  const late = { name: "20261028000100_late_merge", checksum: "c".repeat(64) };
+  const newer = { name: "20261115000100_next", checksum: "d".repeat(64) };
+  const catalog = [files[0], late, files[1], newer];
+  assert.deepEqual(
+    pendingDeploymentMigrations(catalog, [applied(1), applied(0)]),
+    [late.name, newer.name],
+  );
+  assert.throws(() =>
+    pendingDeploymentMigrations(catalog, [
+      applied(0),
+      { ...applied(1), checksum: "changed" },
+    ]),
+  );
+  assert.throws(() =>
+    pendingDeploymentMigrations(catalog, [
+      applied(0),
+      { ...applied(1), finished_at: null },
+    ]),
+  );
   assert.throws(() =>
     pendingDeploymentMigrations(
-      [files[0], inserted, files[1]],
+      [files[0], late, newer],
       [applied(0), applied(1)],
     ),
+  );
+  assert.throws(() =>
+    pendingDeploymentMigrations(catalog, [applied(0), applied(1), applied(1)]),
+  );
+});
+
+void test("duplicate migration file names cannot overwrite a checksum in the catalog", () => {
+  assert.throws(() =>
+    pendingDeploymentMigrations(
+      [files[0], { ...files[0], checksum: "different" }, files[1]],
+      [applied(0)],
+    ),
+  );
+});
+
+void test("drop sample-storage brand SQL retains the exact checksum already applied on Azure", async () => {
+  const sql = await readFile(
+    path.resolve(
+      __dirname,
+      "../prisma/migrations/20261113000400_drop_sample_storage_units_brand/migration.sql",
+    ),
+  );
+  assert.equal(
+    createHash("sha256").update(sql).digest("hex"),
+    "5814ee69f36d4e669c99ca17775fb4ba78d37e0e9d819774907721b3b5c5177f",
   );
 });
 
