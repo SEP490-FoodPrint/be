@@ -92,6 +92,7 @@ Dùng envelope hiện có. Thiếu/sai token: 401; không ACTIVE khi gọi API n
 | PUT /api/users/:userId/permission-denials/:permissionId    | Tắt; school admin có school_user.manage hoặc supplier admin có supplier_staff.manage                                                        |
 | DELETE /api/users/:userId/permission-denials/:permissionId | Bật lại quyền kế thừa; cùng điều kiện và phạm vi như PUT                                                                                    |
 | GET /api/schools/:schoolId/accounts                        | SCHOOL (school_user.manage / user.manage), xem danh sách tài khoản nhân viên trường (phân trang page/limit)                                 |
+| GET /api/schools/:schoolId/accounts/:userId                | SCHOOL (school_user.manage), xem thông tin chi tiết một tài khoản nhân viên trường                                                          |
 | POST /api/schools/:schoolId/accounts                       | SCHOOL (school_user.manage), tạo tài khoản nhân sự mới cho trường (Bếp, Y tế, GVCN...)                                                      |
 | PUT /api/schools/:schoolId/accounts/:userId                | SCHOOL (school_user.manage), cập nhật họ tên, SĐT, vai trò nhân sự                                                                          |
 | PATCH /api/schools/:schoolId/accounts/:userId/status       | SCHOOL (school_user.manage), khóa (LOCKED) hoặc mở khóa (ACTIVE) tài khoản nhân sự                                                          |

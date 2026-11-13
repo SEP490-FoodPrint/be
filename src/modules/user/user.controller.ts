@@ -26,6 +26,14 @@ export function createUserController(service: UserService = userService) {
       const result = await service.getAll(query, requirePrincipal(req));
       sendSuccess(res, result, "Lấy danh sách người dùng thành công");
     }),
+    getSchoolAccount: asyncHandler(async (req, res) => {
+      const params = validateUserSchoolUserParams(req.params);
+      const result = await service.getSchoolAccount(
+        params,
+        requirePrincipal(req),
+      );
+      sendSuccess(res, result, "Lấy thông tin tài khoản thành công");
+    }),
     createSchoolAccount: asyncHandler(async (req, res) => {
       const params = validateUserSchoolParams(req.params);
       const body = validateCreateSchoolAccountBody(req.body);

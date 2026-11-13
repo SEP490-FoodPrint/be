@@ -27,6 +27,12 @@ export function createUserSchoolRouter(
   const router = Router({ mergeParams: true });
   const controller = createUserController(service);
   router.get("/", authHandler, requireResource("user"), controller.getBySchool);
+  router.get(
+    "/:userId",
+    authHandler,
+    requirePermission("school_user.manage"),
+    controller.getSchoolAccount,
+  );
   router.post(
     "/",
     authHandler,

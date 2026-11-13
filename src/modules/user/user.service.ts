@@ -113,6 +113,54 @@ export function createUserService(
         };
       });
     },
+    async getSchoolAccount(
+      params: { schoolId: string; userId: string },
+      principal: AuthPrincipal,
+    ): Promise<UserAccountDetailDTO> {
+      const db = await connect();
+      return withSchoolTransaction(
+        db,
+        principal,
+        SCHOOL_STAFF_MANAGE_PERMISSION,
+        async (tx, _actor, schoolId) => {
+          if (params.schoolId !== schoolId) {
+            throw new HttpError(
+              403,
+              "Không có quyền quản lý tài khoản của trường này",
+            );
+          }
+          const targetUser = await data.findSchoolUser(
+            tx,
+            schoolId,
+            params.userId,
+          );
+          if (!targetUser) {
+            throw new HttpError(
+              404,
+              "Không tìm thấy người dùng trong trường học này",
+            );
+          }
+          if (targetUser.Role.code === "SCHOOL_ADMINISTRATION") {
+            throw new HttpError(
+              403,
+              "Không thể truy cập tài khoản Quản trị trường",
+            );
+          }
+          return {
+            id: targetUser.id,
+            schoolId: targetUser.schoolId,
+            fullName: targetUser.fullName,
+            email: targetUser.email,
+            phone: targetUser.phone,
+            roleCode: targetUser.Role.code,
+            roleName: targetUser.Role.name,
+            status: targetUser.status,
+            createdAt: targetUser.createdAt.toISOString(),
+            updatedAt: targetUser.updatedAt.toISOString(),
+          };
+        },
+      );
+    },
     async createSchoolAccount(
       input: CreateSchoolAccountDTO,
       principal: AuthPrincipal,
@@ -129,10 +177,12 @@ export function createUserService(
               "Không có quyền quản lý tài khoản của trường này",
             );
           }
-          const targetRoleCode =
-            input.body.roleCode === "INGREDIENT_MANAGEMENT"
-              ? "INGREDIENT_MANAGEMENT_DEPARTMENT"
-              : input.body.roleCode;
+          let targetRoleCode = input.body.roleCode;
+          if (targetRoleCode === "INGREDIENT_MANAGEMENT") {
+            targetRoleCode = "INGREDIENT_MANAGEMENT_DEPARTMENT";
+          } else if (targetRoleCode === "SCHOOL_HEALTH_OFFICER") {
+            targetRoleCode = "SCHOOL_NUTRITION_OFFICER";
+          }
           const role = await data.findRoleByCode(tx, targetRoleCode);
           if (
             !role ||
@@ -224,10 +274,12 @@ export function createUserService(
             input.body.roleCode &&
             input.body.roleCode !== targetUser.Role.code
           ) {
-            const targetRoleCode =
-              input.body.roleCode === "INGREDIENT_MANAGEMENT"
-                ? "INGREDIENT_MANAGEMENT_DEPARTMENT"
-                : input.body.roleCode;
+            let targetRoleCode = input.body.roleCode;
+            if (targetRoleCode === "INGREDIENT_MANAGEMENT") {
+              targetRoleCode = "INGREDIENT_MANAGEMENT_DEPARTMENT";
+            } else if (targetRoleCode === "SCHOOL_HEALTH_OFFICER") {
+              targetRoleCode = "SCHOOL_NUTRITION_OFFICER";
+            }
             const role = await data.findRoleByCode(tx, targetRoleCode);
             if (
               !role ||
