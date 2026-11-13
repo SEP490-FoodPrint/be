@@ -109,7 +109,7 @@ Mọi dòng đều yêu cầu một trong các permission liệt kê. SYSTEM có
 | `warehouse`                   | `inventory.view`                                                                   | SCHOOL, SUPPLIER             |
 | `kitchen`                     | `cooking_batch.view`                                                               | SCHOOL                       |
 | `meal-attendance`             | `daily_meal_portion.view`                                                          | SCHOOL                       |
-| `feedback`                    | `meal_complaint.view`                                                              | SCHOOL                       |
+| `feedback`                    | `meal_complaint.view`                                                              | SYSTEM, SCHOOL               |
 | `inspection`                  | `food_safety_incident.view`                                                        | SCHOOL, AUTHORITY            |
 | `supplier`                    | `supplier.view`, `supplier.manage`                                                 | SUPPLIER, SCHOOL             |
 | `authority`                   | `authority.view`, `food_safety_report.view`                                        | AUTHORITY                    |
@@ -133,6 +133,9 @@ Mọi dòng đều yêu cầu một trong các permission liệt kê. SYSTEM có
 | `traceability`                | `traceability.view`                                                                | SCHOOL, SUPPLIER, AUTHORITY  |
 
 School xem supplier qua quan hệ ACTIVE/SUSPENDED; ingredient qua IngredientEntry của trường. Supplier xem tài nguyên supplier-owned hoặc delivery của supplier khi có permission phù hợp. ATTP xã chỉ thấy incident/report chuyển tới đơn vị mình; traceability chỉ mở phần liên quan trực tiếp. Với ingredient_quality_feedback.view_own, thêm điều kiện submittedByUserId; view_details vẫn giới hạn tổ chức. Các API cũ giữ phân trang, safe select và serialization Date/Decimal/BigInt.
+
+- `GET /api/meal-complaints/meal-options` và `POST /api/meal-complaints` yêu cầu `meal_complaint.submit` và vai trò `HOMEROOM_TEACHER` hoặc `PARENTS_COMMITTEE`. Trường, ngày ăn và phạm vi lớp do server xác định.
+- `meal_complaint.view` cho phép người gửi đọc đơn của chính mình trong trường và cho phép Ban Giám hiệu đọc đơn của trường. `meal_complaint.respond` dành cho Ban Giám hiệu. Migration spec 019 bổ sung quyền đọc đang hoạt động cho role `PARENTS_COMMITTEE` đã tồn tại và giữ các thiết lập thu hồi quyền theo tài khoản.
 
 ## API phân bổ suất ăn hôm nay
 
@@ -283,3 +286,27 @@ Danh sách chỉ nhận page/limit, mặc định 1/20, limit tối đa 100, env
 Input chỉ gồm name/defaultUnit/description/categoryId/coverImage/imageDescription; tạo cần name và defaultUnit. PATCH bỏ qua giữ nguyên, null xóa trường nullable, [] xóa danh sách ảnh. coverImage tối đa một tham chiếu; imageDescription nhiều tham chiếu theo thứ tự. Chấp nhận URL HTTP/HTTPS không credentials hoặc đường dẫn bắt đầu /, tối đa 2048 ký tự; không upload hoặc fetch ảnh. categoryId nullable tham chiếu danh mục có sẵn; chưa có API quản trị danh mục. Chi tiết input/output tại [contract](../specs/008-supplier-ingredient-management/contracts/ingredient-management.md).
 
 Ẩn không xóa dữ liệu hoặc thay đổi hồ sơ đã có. Lựa chọn nguyên liệu mới và supplier discovery chỉ dùng nguyên liệu ACTIVE; menu/hợp đồng/lịch sử kho vẫn đọc được liên kết cũ. Các phản hồi legacy giữ category dạng tên/null suy ra từ quan hệ, không giữ thêm cột category trong DB.
+
+## Kiểm tra từng đợt giao nguyên liệu
+
+Màn dùng chung cho `SCHOOL_NUTRITION_OFFICER`, `SCHOOL_KITCHEN_STAFF`, `INGREDIENT_MANAGEMENT_DEPARTMENT`, `PARENTS_COMMITTEE`. Ngoài role hợp lệ, cần quyền hiệu lực trong trường hiện tại; không dùng role/school/user do client gửi.
+
+| Method | Endpoint                         | Quyền                                 |
+| ------ | -------------------------------- | ------------------------------------- |
+| GET    | `/api/deliveries/inspections`    | `delivery.view`                       |
+| GET    | `/api/deliveries/:id/inspection` | `delivery.view`                       |
+| POST   | `/api/deliveries/:id/inspection` | `delivery.inspect` và `delivery.view` |
+
+Danh sách nhận `page`, `limit`, `search`, `status`, `period` (`ALL`, `today`, `week`); tìm/lọc/phân trang và thống kê cùng phạm vi tại BE. Ngày/tuần dùng múi giờ Việt Nam. GET `/api/deliveries` cũ giữ nguyên.
+
+POST chỉ nhận `decision` (`APPROVE`/`REJECT`) và `reason`; từ chối bắt buộc có lý do. Một quyết định bất biến cho mỗi role trên mỗi Delivery. Cùng actor gửi lại đúng nội dung không tạo thêm bản ghi; đổi nội dung hoặc người khác ký cho role đã ghi trả 409. Mỗi lần giao mới cần kiểm tra mới, không dùng lại chữ ký đợt trước.
+
+Chỉ kiểm tra khi `ARRIVED`/`PENDING_APPROVAL`. Đủ bốn bên đồng ý mới chuyển `RECEIVED`, mở các lot hợp lệ và ghi đúng một `RECEIPT` mỗi lot trong cùng transaction. Không nhận vượt lượng yêu cầu, sai trường/Supplier/đơn, sai tổng lot/đơn vị/ngày hoặc lot đã có lịch sử kho.
+
+Giới hạn giao lại tính chung theo SupplyRequest: số Delivery có ít nhất một quyết định REJECT. Lần từ chối thứ ba hủy SupplyRequest và các đợt còn chờ, chặn nhận tiếp; giữ nguyên đợt RECEIVED và kho/lịch sử đã ghi. GET/POST trả `redeliveryRequiredCount`, `redeliveryLimit`, `cancellationNotice`, `currentRole`, `requiredRoles`, `canInspect`; thông báo hủy hiển thị bền vững trên màn chung. Việc lập lịch/tạo chuyến giao lại phía Supplier nằm ngoài màn kiểm tra này.
+
+Migration `20261114000200_delivery_inspection_permissions` cấp `delivery.inspect` cho bốn role và bổ sung `delivery.view` cho Ban phụ huynh; giữ nguyên permission đang bị tắt và user denials. `delivery.evaluate_quality` vẫn là quyền đánh giá chất lượng riêng.
+
+# School dish categories
+
+`GET /api/dishes/categories` uses `menu.view`; `POST /api/dishes/categories` uses `menu.create`; `PUT` and `DELETE /api/dishes/categories/:id` use `menu.update`. Every operation resolves the school from the authenticated principal and rechecks permission in the school transaction. A category referenced by any dish cannot be deleted. Dish catalog and menu detail return the school's category ID and current name.

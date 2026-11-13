@@ -16,6 +16,12 @@ export function createFeedbackRouter(
   const controller = createFeedbackController(service);
   router.get("/", authHandler, requireResource("feedback"), controller.getAll);
   router.get(
+    "/meal-options",
+    authHandler,
+    requirePermission("meal_complaint.submit"),
+    controller.mealOptions,
+  );
+  router.get(
     "/:id",
     authHandler,
     requireResource("feedback"),

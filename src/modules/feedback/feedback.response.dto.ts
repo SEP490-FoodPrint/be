@@ -10,8 +10,9 @@ export interface ComplaintResponseDTO {
   submitter: { id: string; fullName: string };
   handler: { id: string; fullName: string } | null;
   meal: {
-    allocationId: string;
-    allocationStatus: string;
+    dailyMealPortionId: string;
+    allocationId: string | null;
+    allocationStatus: string | null;
     classId: string;
     className: string;
     academicYear: string | null;
@@ -23,4 +24,19 @@ export interface ComplaintResponseDTO {
 export interface ComplaintListResponseDTO {
   items: ComplaintResponseDTO[];
   pagination: { page: number; limit: number; hasNext: boolean };
+}
+
+export interface ComplaintMealOptionDTO {
+  dailyMealPortionId: string;
+  canComplain: boolean;
+}
+
+export interface ComplaintMealOptionsDTO {
+  mealDate: string;
+  classes: {
+    classId: string;
+    className: string;
+    lunch: ComplaintMealOptionDTO | null;
+    afternoon: ComplaintMealOptionDTO | null;
+  }[];
 }

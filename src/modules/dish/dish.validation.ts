@@ -2,6 +2,7 @@
 export { parseListQuery as validateDishListQuery } from "../../utils/list-query";
 
 import { z } from "zod";
+import { DishCategory } from "../../generated/prisma/enums";
 import {
   parseRequest,
   requestUuidSchema,
@@ -22,6 +23,10 @@ const recipeLineSchema = z.strictObject({
 });
 export const dishRecipeWriteSchema = z.strictObject({
   name: requiredText(255),
+  category: z
+    .union([requestUuidSchema, z.enum(DishCategory)])
+    .nullable()
+    .optional(),
   description: requiredText(4000).nullable().optional(),
   lines: z
     .array(recipeLineSchema)
@@ -40,6 +45,11 @@ export const dishRecipeWriteSchema = z.strictObject({
         });
     }),
 });
+export const dishCategoryWriteSchema = z.strictObject({
+  name: requiredText(255),
+});
+export const validateDishCategory = (value: unknown) =>
+  parseRequest(dishCategoryWriteSchema, value);
 export const recipeSelectionSchema = z.strictObject({
   dishIds: z
     .array(requestUuidSchema)

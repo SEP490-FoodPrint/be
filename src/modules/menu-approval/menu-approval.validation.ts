@@ -9,6 +9,7 @@ export const menuApprovalParamsSchema = z.strictObject({
 
 export const menuApprovalDecisionSchema = z
   .strictObject({
+    submissionVersion: z.iso.datetime().optional(),
     decision: z.enum(["APPROVED", "REVISION_REQUESTED"], {
       error: "Quyết định duyệt không hợp lệ",
     }),

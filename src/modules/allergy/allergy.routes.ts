@@ -4,6 +4,7 @@ import { authenticate } from "../../middlewares/auth.middleware";
 import { requireResource } from "../../middlewares/permission.middleware";
 import { createAllergyController } from "./allergy.controller";
 import { allergyService, type AllergyService } from "./allergy.service";
+import { allergyCatalogController } from "./allergy.controller";
 
 export function createAllergyRouter(
   service: AllergyService = allergyService,
@@ -11,6 +12,12 @@ export function createAllergyRouter(
 ) {
   const router = Router();
   const controller = createAllergyController(service);
+  router.get(
+    "/catalog",
+    authHandler,
+    requireResource("allergy"),
+    allergyCatalogController,
+  );
   router.get("/", authHandler, requireResource("allergy"), controller.getAll);
   return router;
 }

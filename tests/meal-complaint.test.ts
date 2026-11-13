@@ -25,10 +25,18 @@ const principal = (overrides: Partial<AuthPrincipal> = {}): AuthPrincipal => ({
 void test("GVCN list scope is own complaints in own school", () => {
   const actor = principal();
   assert.deepEqual(listScopes.feedback(actor), {
-    MealAllocation: {
-      DailyMealPortion: { Class: { schoolId: actor.schoolId } },
-    },
+    DailyMealPortion: { Class: { schoolId: actor.schoolId } },
     submittedByUserId: actor.id,
+  });
+});
+void test("đại diện phụ huynh chỉ đọc đơn của mình", () => {
+  const actor = principal({ role: "PARENTS_COMMITTEE" });
+  assert.deepEqual(listScopes.feedback(actor), {
+    DailyMealPortion: { Class: { schoolId: actor.schoolId } },
+    submittedByUserId: actor.id,
+  });
+  assert.throws(() => listScopes.feedback({ ...actor, permissions: [] }), {
+    statusCode: 403,
   });
 });
 void test("BGH list scope is school-wide", () => {
@@ -37,14 +45,12 @@ void test("BGH list scope is school-wide", () => {
     permissions: ["meal_complaint.view", "meal_complaint.respond"],
   });
   assert.deepEqual(listScopes.feedback(actor), {
-    MealAllocation: {
-      DailyMealPortion: { Class: { schoolId: actor.schoolId } },
-    },
+    DailyMealPortion: { Class: { schoolId: actor.schoolId } },
   });
 });
 void test("create rejects server-owned fields", () => {
   const valid = {
-    mealAllocationId: "10000000-0000-4000-8000-000000000020",
+    dailyMealPortionId: "10000000-0000-4000-8000-000000000020",
     complaintType: "MEAL_QUALITY",
     description: "Suất ăn có mùi bất thường.",
   };
