@@ -3,7 +3,7 @@ export type ClassItemDTO = {
   id: string;
   schoolId: string;
   name: string;
-  grade: { id: string; code: string; name: string } | null;
+  grade: { id: string; name: string } | null;
   academicYear: string | null;
   registeredMealPortions: number;
   status: EntityStatus;

@@ -1464,16 +1464,16 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
       const {
         rows: [grade],
       } = await db.query<{ id: string }>(
-        "INSERT INTO foodprint.school_grades(school_id,code,name) VALUES ($1,'G5','Khối 5') RETURNING id",
+        "INSERT INTO foodprint.school_grades(school_id,name) VALUES ($1,'Khối 5') RETURNING id",
         [a],
       );
       await db.query(
-        "INSERT INTO foodprint.school_grades(school_id,code,name) VALUES ($1,'G5','Khối 5')",
+        "INSERT INTO foodprint.school_grades(school_id,name) VALUES ($1,'Khối 5')",
         [b],
       );
       await assert.rejects(
         db.query(
-          "INSERT INTO foodprint.school_grades(school_id,code,name) VALUES ($1,'G5','Khối trùng')",
+          "INSERT INTO foodprint.school_grades(school_id,name) VALUES ($1,'Khối 5')",
           [a],
         ),
         (error) => sqlState(error, "23505"),

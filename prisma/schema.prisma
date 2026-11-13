@@ -80,14 +80,13 @@ model Class {
 model SchoolGrade {
   id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   schoolId  String   @map("school_id") @db.Uuid
-  code      String   @db.VarChar(30)
   name      String   @db.VarChar(120)
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   school    School   @relation(fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   classes   Class[]
 
-  @@unique([schoolId, code])
+  @@unique([schoolId, name])
   @@unique([schoolId, id])
   @@map("school_grades")
   @@schema("foodprint")

@@ -2,20 +2,19 @@ import type { Prisma, PrismaClient } from "../../generated/prisma/client";
 
 const projection = {
   id: true,
-  code: true,
   name: true,
   _count: { select: { classes: true } },
 } as const satisfies Prisma.SchoolGradeSelect;
 export type SchoolGradeRow = Prisma.SchoolGradeGetPayload<{
   select: typeof projection;
 }>;
-type GradeFields = { code: string; name: string };
+type GradeFields = { name: string };
 
 export const schoolGradeRepository = {
   list(db: PrismaClient, scope: Prisma.SchoolGradeWhereInput) {
     return db.schoolGrade.findMany({
       where: scope,
-      orderBy: [{ code: "asc" }, { id: "asc" }],
+      orderBy: [{ name: "asc" }, { id: "asc" }],
       select: projection,
     });
   },
@@ -25,9 +24,9 @@ export const schoolGradeRepository = {
       select: projection,
     });
   },
-  findByCode(tx: Prisma.TransactionClient, schoolId: string, code: string) {
+  findByName(tx: Prisma.TransactionClient, schoolId: string, name: string) {
     return tx.schoolGrade.findUnique({
-      where: { schoolId_code: { schoolId, code } },
+      where: { schoolId_name: { schoolId, name } },
       select: { id: true },
     });
   },
@@ -41,7 +40,7 @@ export const schoolGradeRepository = {
     tx: Prisma.TransactionClient,
     schoolId: string,
     id: string,
-    input: Partial<GradeFields>,
+    input: GradeFields,
   ) {
     return tx.schoolGrade.update({
       where: { schoolId_id: { schoolId, id } },

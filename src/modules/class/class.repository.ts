@@ -18,7 +18,7 @@ const classListSelect = {
   schoolId: true,
   name: true,
   academicYear: true,
-  grade: { select: { id: true, code: true, name: true } },
+  grade: { select: { id: true, name: true } },
   registeredMealPortions: true,
   status: true,
   createdAt: true,

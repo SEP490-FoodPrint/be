@@ -1908,12 +1908,13 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       }
       assert.equal((await request(route, system.id)).status, 403);
       assert.equal((await request(route, adminA.id)).status, 403);
-      const data = { code: "  g5 ", name: "Khối 5" };
+      const data = { name: "  Khối 5  " };
       const response = await request(route, board.id, "POST", data);
       assert.equal(response.status, 201);
       const grade = record(record(response.body).data);
       assert(typeof grade.id === "string");
-      assert.equal(grade.code, "G5");
+      assert.equal(grade.name, "Khối 5");
+      assert.equal("code" in grade, false);
       assert.equal((await request(route, board.id, "POST", data)).status, 409);
       assert.equal(
         (await request(route, otherBoard.id, "POST", data)).status,
