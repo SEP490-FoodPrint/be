@@ -4,6 +4,7 @@
 2. Thêm CRUD và tích hợp gán khối vào API lớp.
 3. Dựng màn khối và tích hợp sidebar, form, bảng và bộ lọc lớp.
 4. Kiểm thử migration, quyền và build FE/BE.
+5. Thêm migration bỏ mã khối và đặt tên khối duy nhất theo trường. Kiểm tra tên trùng trước khi triển khai và phát hành cùng phiên bản API và giao diện dùng tên.
 
 ## Constitution Check
 
