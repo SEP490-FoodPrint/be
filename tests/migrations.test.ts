@@ -1543,4 +1543,127 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
       );
     },
   );
+  await context.test(
+    "new batches require exactly one dish while legacy multi-dish history survives",
+    async () => {
+      const name = `foodprint_migration_test_single_${randomUUID().replaceAll("-", "")}`;
+      await db.query(`CREATE DATABASE "${name}"`);
+      const target = new URL(url);
+      target.pathname = `/${name}`;
+      const local = new Client({ connectionString: target.toString() });
+      await local.connect();
+      try {
+        const migration = "20261117000100_single_dish_new_batches";
+        for (const folder of migrationNames.filter(
+          (value) => value < migration,
+        )) {
+          await local.query(
+            await readFile(
+              path.join(root, "prisma/migrations", folder, "migration.sql"),
+              "utf8",
+            ),
+          );
+        }
+        const school = (
+          await local.query<{ id: string }>(
+            "INSERT INTO foodprint.schools(name) VALUES ('Single dish school') RETURNING id",
+          )
+        ).rows[0].id;
+        const role = (
+          await local.query<{ id: string }>(
+            "INSERT INTO foodprint.roles(code,name,type) VALUES('SCHOOL_KITCHEN_STAFF','Chef','SCHOOL') RETURNING id",
+          )
+        ).rows[0].id;
+        const user = (
+          await local.query<{ id: string }>(
+            "INSERT INTO foodprint.users(role_id,role_code,school_id,username,email,password_hash,full_name) VALUES($1,'SCHOOL_KITCHEN_STAFF',$2,'single_chef','single-chef@example.test','fixture-only','Chef') RETURNING id",
+            [role, school],
+          )
+        ).rows[0].id;
+        const week = (
+          await local.query<{ id: string }>(
+            "INSERT INTO foodprint.weekly_menus(school_id,created_by_user_id,week_start_date) VALUES($1,$2,'2030-01-07') RETURNING id",
+            [school, user],
+          )
+        ).rows[0].id;
+        const day = (
+          await local.query<{ id: string }>(
+            "INSERT INTO foodprint.menu_days(weekly_menu_id,menu_date) VALUES($1,'2030-01-07') RETURNING id",
+            [week],
+          )
+        ).rows[0].id;
+        const dishes = (
+          await local.query<{ id: string }>(
+            "INSERT INTO foodprint.dishes(school_id,name) VALUES($1,'A'),($1,'B') RETURNING id",
+            [school],
+          )
+        ).rows.map((row) => row.id);
+        await local.query(
+          "INSERT INTO foodprint.menu_day_dishes(menu_day_id,dish_id,meal_type) VALUES($1,$2,'LUNCH'),($1,$3,'LUNCH')",
+          [day, ...dishes],
+        );
+        const group = (
+          await local.query<{ id: string }>(
+            "INSERT INTO foodprint.cooking_batch_groups(batch_code,menu_day_id,meal_type,created_by_user_id) VALUES('GROUP',$1,'LUNCH',$2) RETURNING id",
+            [day, user],
+          )
+        ).rows[0].id;
+        const insertBatch = async (code: string) =>
+          (
+            await local.query<{ id: string }>(
+              "INSERT INTO foodprint.cooking_batches(batch_code,batch_group_id,menu_day_id,meal_type,cooking_mode_applied,created_by_user_id) VALUES($1,$2,$3,'LUNCH','COMBINE_LOTS',$4) RETURNING id",
+              [code, group, day, user],
+            )
+          ).rows[0].id;
+        const insertDish = async (batch: string, dish: string) =>
+          local.query(
+            "INSERT INTO foodprint.cooking_batch_dishes(cooking_batch_id,dish_id,menu_day_id,meal_type) VALUES($1,$2,$3,'LUNCH')",
+            [batch, dish, day],
+          );
+        const legacy = await insertBatch("LEGACY");
+        await insertDish(legacy, dishes[0]);
+        await insertDish(legacy, dishes[1]);
+        await local.query(
+          await readFile(
+            path.join(root, "prisma/migrations", migration, "migration.sql"),
+            "utf8",
+          ),
+        );
+        assert.equal(
+          Number(
+            (
+              await local.query<{ n: string }>(
+                "SELECT count(*) n FROM foodprint.cooking_batch_dishes WHERE cooking_batch_id=$1",
+                [legacy],
+              )
+            ).rows[0].n,
+          ),
+          2,
+        );
+        await assert.rejects(insertBatch("EMPTY"), (error) =>
+          sqlState(error, "23514", "cooking_batch_requires_dish"),
+        );
+        await local.query("BEGIN");
+        const single = await insertBatch("SINGLE");
+        await insertDish(single, dishes[0]);
+        await local.query("COMMIT");
+        await assert.rejects(insertDish(single, dishes[1]), (error) =>
+          sqlState(error, "23514", "cooking_batch_single_dish"),
+        );
+        await assert.rejects(
+          local.query(
+            "DELETE FROM foodprint.cooking_batch_dishes WHERE cooking_batch_id=$1",
+            [single],
+          ),
+          (error) => sqlState(error, "23514", "cooking_batch_requires_dish"),
+        );
+        await local.query("DELETE FROM foodprint.cooking_batches WHERE id=$1", [
+          single,
+        ]);
+      } finally {
+        await local.end();
+        await db.query(`DROP DATABASE "${name}"`);
+      }
+    },
+  );
 });
