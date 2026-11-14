@@ -1,6 +1,6 @@
 import type { AccountStatus, Prisma } from "../../generated/prisma/client";
 import type { AuthPrincipal } from "../../types/auth";
-import { ROLES } from "../../constants/roles";
+import { ORG_TYPES, ROLES } from "../../constants/roles";
 import {
   assertOrganizationManager,
   assertPermission,
@@ -34,6 +34,19 @@ type PrincipalLoader = (
   tx: Prisma.TransactionClient,
 ) => Promise<AuthPrincipal>;
 type MembershipScope = { kind: "SCHOOL" | "SUPPLIER"; id: string };
+
+function assertSupplierAcceptor(actor: AuthPrincipal) {
+  if (
+    actor.orgType !== ORG_TYPES.SUPPLIER ||
+    !actor.supplierId ||
+    (actor.role !== ROLES.INGREDIENT_SUPPLIER_ADMIN &&
+      actor.role !== ROLES.INGREDIENT_SUPPLIER_STAFF)
+  )
+    throw new HttpError(
+      403,
+      "Chỉ quản trị viên hoặc nhân viên nhà cung cấp được tiếp nhận đơn",
+    );
+}
 
 function assertMembershipActor(actor: AuthPrincipal, scope: MembershipScope) {
   if (actor.orgType === "SYSTEM") {
@@ -334,8 +347,7 @@ export function createIntakeAccessService(
           );
         requiredPermission = command.requiredPermission;
       } else if (isSupplier) {
-        if (actor.orgType !== "SUPPLIER" || !actor.supplierId)
-          throw new HttpError(403, "Thao tác yêu cầu nhà cung cấp");
+        assertSupplierAcceptor(actor);
         requiredPermission = "supply_request.accept";
       } else {
         if (actor.orgType !== "SCHOOL" || !actor.schoolId)
@@ -350,6 +362,8 @@ export function createIntakeAccessService(
       if (
         command.operation !== "SCHOOL_CREATE_ORDER" &&
         (!before ||
+          (command.operation === "SUPPLIER_ACCEPT_ORDER" &&
+            before.status === "DRAFT") ||
           (isSupplier
             ? before.supplierId !== actor.supplierId
             : before.schoolId !== actor.schoolId))
@@ -372,11 +386,15 @@ export function createIntakeAccessService(
       if (before) await repo.lockOrder(tx, before.id);
       const current = await loadActor(actor.id, tx);
       checkSameIdentity(current, actor);
+      if (command.operation === "SUPPLIER_ACCEPT_ORDER")
+        assertSupplierAcceptor(current);
       assertPermission(current, requiredPermission);
       if (before) {
         const order = await repo.readOrder(tx, before.id);
         if (
           !order ||
+          (command.operation === "SUPPLIER_ACCEPT_ORDER" &&
+            order.status === "DRAFT") ||
           order.schoolId !== schoolId ||
           order.supplierId !== supplierId
         )

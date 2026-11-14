@@ -51,6 +51,9 @@ import { createKitchenRouter } from "../src/modules/kitchen/kitchen.routes";
 import { createKitchenService } from "../src/modules/kitchen/kitchen.service";
 import { createMenuRouter } from "../src/modules/menu/menu.routes";
 import { createMenuService } from "../src/modules/menu/menu.service";
+import { createSupplyOrderService } from "../src/modules/supply-order/supply-order.service";
+import { createSupplyOrderRepository } from "../src/modules/supply-order/supply-order.repository";
+import { createSupplyOrderRouter } from "../src/modules/supply-order/supply-order.routes";
 import { calendarDate, isoTimestamp } from "../src/utils/auth-validation";
 import { validateDailyPortionGroups } from "../src/modules/meal-attendance/meal-attendance.validation";
 
@@ -1651,4 +1654,93 @@ void test("menu standards reject invalid precision, duplicates and kitchen-enter
     }).dishes[0].ingredients[0].quantityPerPortion,
     "99999999999.999",
   );
+});
+
+void test("supply request legacy school/system list keeps scope, draft visibility and projection", async (context) => {
+  for (const principal of [
+    { ...testStaff, permissions: ["supply_request.view"] },
+    { ...testAdmin, permissions: ["supply_request.view"] },
+  ]) {
+    let calls = 0;
+    const draft = {
+      id: testAdmin.id,
+      requestNo: "LEGACY-DRAFT",
+      schoolId: testStaff.schoolId,
+      supplierId: testAdmin.id,
+      status: "DRAFT",
+      acceptedAt: null,
+      createdAt: new Date("2026-11-14T00:00:00Z"),
+      updatedAt: new Date("2026-11-14T00:00:00Z"),
+      note: "private record field",
+      contractSnapshot: { internal: "do not expose" },
+    };
+    const db = {
+      supplyRequest: {
+        findMany(args: Prisma.SupplyRequestFindManyArgs) {
+          calls++;
+          assert.deepEqual(
+            args.where,
+            principal.orgType === "SCHOOL"
+              ? { schoolId: principal.schoolId }
+              : {},
+          );
+          assert.deepEqual(args.select, {
+            id: true,
+            requestNo: true,
+            schoolId: true,
+            supplierId: true,
+            status: true,
+            acceptedAt: true,
+            createdAt: true,
+            updatedAt: true,
+          });
+          assert.equal(args.take, 21);
+          assert.deepEqual(args.orderBy, [{ id: "asc" }]);
+          return Promise.resolve([draft]);
+        },
+      },
+    } as unknown as import("../src/generated/prisma/client").PrismaClient;
+    const service = createSupplyOrderService(
+      createSupplyOrderRepository(() => Promise.resolve(db)),
+    );
+    const app = express();
+    app.use(express.json());
+    app.use(
+      "/api/supply-requests",
+      createSupplyOrderRouter(service, (req, _res, next) => {
+        req.auth = principal;
+        next();
+      }),
+    );
+    app.use(globalErrorHandler);
+    const http = await startHttp(app);
+    context.after(() => http.close());
+    const result = await http.request("/api/supply-requests");
+    assert.equal(result.status, 200);
+    const body = result.body as {
+      data: { items: Record<string, unknown>[]; pagination: unknown };
+    };
+    assert.deepEqual(body.data.items, [
+      {
+        id: draft.id,
+        requestNo: draft.requestNo,
+        schoolId: draft.schoolId,
+        supplierId: draft.supplierId,
+        status: "DRAFT",
+        acceptedAt: null,
+        createdAt: "2026-11-14T00:00:00.000Z",
+        updatedAt: "2026-11-14T00:00:00.000Z",
+      },
+    ]);
+    assert.deepEqual(body.data.pagination, {
+      page: 1,
+      limit: 20,
+      hasNext: false,
+    });
+    assert.equal(
+      (await http.request("/api/supply-requests?status=SENT")).status,
+      400,
+    );
+    assert.equal(calls, 1, "legacy status must fail before reading repository");
+  }
 });

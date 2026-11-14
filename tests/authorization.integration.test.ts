@@ -1,3 +1,8 @@
+import { createSupplyOrderService } from "../src/modules/supply-order/supply-order.service";
+import { createSupplyOrderRepository } from "../src/modules/supply-order/supply-order.repository";
+import { createIntakeAccessService } from "../src/modules/account-lifecycle/intake-access.service";
+import { createIntakeAccessRepository } from "../src/modules/account-lifecycle/intake-access.repository";
+import { authorizationTransaction } from "../src/utils/authorization";
 import {
   createIngredientService,
   ingredientService,
@@ -1939,6 +1944,475 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       headers: headers(id),
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
+
+  await context.test(
+    "supplier intake: scoped list/detail, independent permissions and immutable receipt",
+    async () => {
+      const organization = await db.supplier.create({
+        data: { name: "Intake supplier " + randomUUID() },
+      });
+      const school = await db.school.create({
+        data: { name: "Intake school " + randomUUID() },
+      });
+      const schoolAdmin = await user("SCHOOL_ADMINISTRATION", {
+        schoolId: school.id,
+      });
+      const manager = await user("INGREDIENT_SUPPLIER_ADMIN", {
+        supplierId: organization.id,
+      });
+      const member = await user("INGREDIENT_SUPPLIER_STAFF", {
+        supplierId: organization.id,
+      });
+      for (const account of [manager, member]) {
+        const session = await authSessions.issue(account.id);
+        issued.set(account.id, session);
+        refreshTokens.push(session.refreshToken);
+      }
+      const ingredient = await db.ingredient.create({
+        data: {
+          supplierId: organization.id,
+          name: "Intake historical rice",
+          defaultUnit: "bag",
+          status: "INACTIVE",
+        },
+      });
+      const entry = await db.ingredientEntry.create({
+        data: {
+          schoolId: school.id,
+          ingredientId: ingredient.id,
+          handlingType: "DRY_STOCK",
+          status: "INACTIVE",
+        },
+      });
+      const otherIngredient = await db.ingredient.create({
+        data: {
+          supplierId: organization.id,
+          name: "Intake second ingredient",
+          defaultUnit: "kg",
+        },
+      });
+      const otherEntry = await db.ingredientEntry.create({
+        data: {
+          schoolId: school.id,
+          ingredientId: otherIngredient.id,
+          handlingType: "DRY_STOCK",
+        },
+      });
+      const makeOrder = (
+        status:
+          | "DRAFT"
+          | "SENT"
+          | "ACCEPTED"
+          | "IN_PROGRESS"
+          | "COMPLETED"
+          | "CANCELLED",
+      ) =>
+        db.supplyRequest.create({
+          data: {
+            requestNo: randomUUID(),
+            schoolId: school.id,
+            supplierId: organization.id,
+            createdByUserId: schoolAdmin.id,
+            status,
+            requestedDeliveryDate: new Date("2026-11-21"),
+            sentAt:
+              status === "DRAFT" ? null : new Date("2026-11-14T00:00:00Z"),
+            note: "school note",
+            contractSnapshot: { privateQuote: "do not expose" },
+            supplyRequestItems: {
+              create: [
+                {
+                  ingredientEntryId: entry.id,
+                  requestedQuantity: "12345678901.123",
+                  unit: "kg",
+                  note: "line note",
+                },
+                {
+                  ingredientEntryId: otherEntry.id,
+                  requestedQuantity: "2.125",
+                  unit: "g",
+                },
+              ],
+            },
+          },
+        });
+      const draft = await makeOrder("DRAFT"),
+        sent = await makeOrder("SENT");
+      const history = await makeOrder("ACCEPTED");
+      await db.supplyRequest.update({
+        where: { id: history.id },
+        data: { sentAt: null },
+      });
+      for (const status of ["IN_PROGRESS", "COMPLETED", "CANCELLED"] as const)
+        await makeOrder(status);
+      for (const account of [manager, member]) {
+        const list = await request("/api/supply-requests", account.id);
+        assert.equal(list.status, 200);
+        const items = rows(list.body);
+        assert.equal(items.length, 5);
+        assert(
+          items.every(
+            (x) => x.supplierId === organization.id && x.status !== "DRAFT",
+          ),
+        );
+        assert(items.some((x) => x.id === history.id && x.sentAt === null));
+        assert(
+          items.every(
+            (x) =>
+              x.schoolName === school.name &&
+              x.requestedDeliveryDate === "2026-11-21",
+          ),
+        );
+        const filtered = await request(
+          "/api/supply-requests?status=SENT&limit=1",
+          account.id,
+        );
+        assert.deepEqual(
+          rows(filtered.body).map((x) => x.id),
+          [sent.id],
+        );
+        assert.deepEqual(record(record(filtered.body).data).pagination, {
+          page: 1,
+          limit: 1,
+          hasNext: false,
+        });
+        assert.equal(
+          (await request("/api/supply-requests?status=DRAFT", account.id))
+            .status,
+          400,
+        );
+        const detail = await request(
+          `/api/supply-requests/${sent.id}`,
+          account.id,
+        );
+        assert.equal(detail.status, 200);
+        const data = record(record(detail.body).data);
+        assert.equal(data.schoolName, school.name);
+        const lines = data.items as Record<string, unknown>[];
+        assert.equal(lines.length, 2);
+        const line = lines.find((x) => x.ingredientEntryId === entry.id)!;
+        assert.equal(line.ingredientName, ingredient.name);
+        assert.equal(line.requestedQuantity, "12345678901.123");
+        assert.equal(
+          line.unit,
+          "kg",
+          "must not substitute current defaultUnit",
+        );
+        assert.equal(data.acceptedByUserId, null);
+        assert.equal(data.acceptedAt, null);
+        for (const key of [
+          "contractSnapshot",
+          "email",
+          "phone",
+          "passwordHash",
+        ])
+          assert(!JSON.stringify(detail.body).includes(key));
+        for (const id of [draft.id, randomUUID()]) {
+          assert.equal(
+            (await request(`/api/supply-requests/${id}`, account.id)).status,
+            404,
+          );
+          assert.equal(
+            (
+              await request(
+                `/api/supply-requests/${id}/accept`,
+                account.id,
+                "POST",
+                {},
+              )
+            ).status,
+            404,
+          );
+        }
+      }
+      for (const method of ["GET", "POST"])
+        assert.equal(
+          (
+            await request(
+              `/api/supply-requests/${sent.id}${method === "POST" ? "/accept" : ""}`,
+              supplierStaffB.id,
+              method,
+              method === "POST" ? {} : undefined,
+            )
+          ).status,
+          404,
+        );
+      const view = await permission("supply_request.view"),
+        accept = await permission("supply_request.accept");
+      await db.userPermissionDenial.create({
+        data: {
+          userId: member.id,
+          permissionId: view.id,
+          supplierId: organization.id,
+          disabledByUserId: manager.id,
+        },
+      });
+      try {
+        assert.equal(
+          (await request("/api/supply-requests", member.id)).status,
+          403,
+        );
+        assert.equal(
+          (await request(`/api/supply-requests/${sent.id}`, member.id)).status,
+          403,
+        );
+        const result = await request(
+          `/api/supply-requests/${sent.id}/accept`,
+          member.id,
+          "POST",
+          {},
+        );
+        assert.equal(result.status, 200, "accept does not require view");
+        const receipt = record(record(result.body).data);
+        assert.equal(receipt.acceptedByUserId, member.id);
+        assert.deepEqual(Object.keys(receipt).sort(), [
+          "acceptedAt",
+          "acceptedByUserId",
+          "id",
+          "status",
+        ]);
+        const accepted = await db.supplyRequest.findUniqueOrThrow({
+          where: { id: sent.id },
+        });
+        await db.supplier.update({
+          where: { id: organization.id },
+          data: { intakeState: "PAUSED_FOR_FOOD_SAFETY_INSPECTION" },
+        });
+        assert.deepEqual(
+          record(
+            record(
+              (
+                await request(
+                  `/api/supply-requests/${sent.id}/accept`,
+                  manager.id,
+                  "POST",
+                  {},
+                )
+              ).body,
+            ).data,
+          ),
+          receipt,
+        );
+        const retry = await db.supplyRequest.findUniqueOrThrow({
+          where: { id: sent.id },
+        });
+        assert.deepEqual(retry.updatedAt, accepted.updatedAt);
+        assert.equal(retry.acceptedByUserId, member.id);
+      } finally {
+        await db.userPermissionDenial.deleteMany({
+          where: { userId: member.id, permissionId: view.id },
+        });
+        await db.supplier.update({
+          where: { id: organization.id },
+          data: { intakeState: "ACTIVE" },
+        });
+      }
+      await db.userPermissionDenial.create({
+        data: {
+          userId: member.id,
+          permissionId: accept.id,
+          supplierId: organization.id,
+          disabledByUserId: manager.id,
+        },
+      });
+      try {
+        assert.equal(
+          (await request(`/api/supply-requests/${sent.id}`, member.id)).status,
+          200,
+        );
+        assert.equal(
+          (
+            await request(
+              `/api/supply-requests/${sent.id}/accept`,
+              member.id,
+              "POST",
+              {},
+            )
+          ).status,
+          403,
+        );
+      } finally {
+        await db.userPermissionDenial.deleteMany({
+          where: { userId: member.id, permissionId: accept.id },
+        });
+      }
+      const managerOrder = await makeOrder("SENT");
+      assert.equal(
+        (
+          await request(
+            `/api/supply-requests/${managerOrder.id}/accept`,
+            manager.id,
+            "POST",
+            {},
+          )
+        ).status,
+        200,
+      );
+      const detailAfter = record(
+        record(
+          (await request(`/api/supply-requests/${managerOrder.id}`, member.id))
+            .body,
+        ).data,
+      );
+      assert.equal(detailAfter.status, "ACCEPTED");
+      assert.equal(detailAfter.acceptedByUserId, manager.id);
+    },
+  );
+
+  await context.test(
+    "supplier intake: concurrent receivers keep one receipt and failed writes roll back",
+    async () => {
+      const makeOrder = () =>
+        db.supplyRequest.create({
+          data: {
+            requestNo: randomUUID(),
+            schoolId: schoolA.id,
+            supplierId: supplierA.id,
+            createdByUserId: adminA.id,
+            status: "SENT",
+          },
+        });
+      const order = await makeOrder();
+      const actors = await Promise.all(
+        [supplierAdmin, supplierStaffA].map((x) => loadPrincipal(x.id, db)),
+      );
+      const rendezvous = createBarrier(2);
+      const seen = new Set<string>();
+      const locks = createIntakeAccessRepository();
+      const guard = createIntakeAccessService({
+        ...locks,
+        async lockParents(tx, scope) {
+          const actorId = scope.userIds![0];
+          if (!seen.has(actorId)) {
+            seen.add(actorId);
+            await rendezvous.wait();
+          }
+          await locks.lockParents(tx, scope);
+        },
+      });
+      const service = createSupplyOrderService(undefined, {
+        transaction: (fn) => authorizationTransaction(db, fn),
+        guard,
+      });
+      const results = await Promise.all(
+        actors.map((actor) => service.accept({ id: order.id }, actor)),
+      );
+      assert.deepEqual(results[0], results[1]);
+      assert(actors.some((actor) => actor.id === results[0].acceptedByUserId));
+      const stored = await db.supplyRequest.findUniqueOrThrow({
+        where: { id: order.id },
+      });
+      assert.equal(stored.status, "ACCEPTED");
+      assert.equal(stored.acceptedByUserId, results[0].acceptedByUserId);
+      assert.equal(stored.acceptedAt!.toISOString(), results[0].acceptedAt);
+      await createSupplyOrderService().accept({ id: order.id }, actors[1]);
+      assert.deepEqual(
+        (await db.supplyRequest.findUniqueOrThrow({ where: { id: order.id } }))
+          .updatedAt,
+        stored.updatedAt,
+      );
+      const rollback = await makeOrder();
+      const repository = createSupplyOrderRepository();
+      const failing = createSupplyOrderService({
+        ...repository,
+        async accept(...args) {
+          await repository.accept(...args);
+          throw new HttpError(409, "Injected transaction failure");
+        },
+      });
+      await assert.rejects(
+        () => failing.accept({ id: rollback.id }, actors[0]),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 409,
+      );
+      const unchanged = await db.supplyRequest.findUniqueOrThrow({
+        where: { id: rollback.id },
+      });
+      assert.equal(unchanged.status, "SENT");
+      assert.equal(unchanged.acceptedByUserId, null);
+      assert.equal(unchanged.acceptedAt, null);
+      assert.deepEqual(unchanged.updatedAt, rollback.updatedAt);
+    },
+  );
+
+  await context.test(
+    "supplier intake: cancellation winning the lock order prevents a partial acceptance",
+    async () => {
+      const actor = await loadPrincipal(supplierStaffA.id, db);
+      const order = await db.supplyRequest.create({
+        data: {
+          requestNo: randomUUID(),
+          schoolId: schoolA.id,
+          supplierId: supplierA.id,
+          createdByUserId: adminA.id,
+          status: "SENT",
+        },
+      });
+      const locks = createIntakeAccessRepository();
+      let held!: () => void, release!: () => void, attempted!: () => void;
+      const holding = new Promise<void>((resolve) => {
+        held = resolve;
+      });
+      const proceed = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const entering = new Promise<void>((resolve) => {
+        attempted = resolve;
+      });
+      const cancelling = authorizationTransaction(db, async (tx) => {
+        await locks.lockParents(tx, {
+          schoolId: schoolA.id,
+          supplierId: supplierA.id,
+        });
+        await locks.lockOrder(tx, order.id);
+        await tx.supplyRequest.update({
+          where: { id: order.id },
+          data: { status: "CANCELLED" },
+        });
+        held();
+        await proceed;
+      });
+      await Promise.race([
+        holding,
+        cancelling.then(() => {
+          throw new Error("Cancellation ended before barrier");
+        }),
+      ]);
+      const service = createSupplyOrderService(undefined, {
+        transaction: (fn) => authorizationTransaction(db, fn),
+        guard: createIntakeAccessService({
+          ...locks,
+          async lockParents(tx, scope) {
+            attempted();
+            await locks.lockParents(tx, scope);
+          },
+        }),
+      });
+      const pending = service.accept({ id: order.id }, actor);
+      const rejected = assert.rejects(
+        () => pending,
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 409,
+      );
+      try {
+        await Promise.race([
+          entering,
+          pending.then(() => {
+            throw new Error("Accept ended before barrier");
+          }),
+        ]);
+      } finally {
+        release();
+      }
+      await Promise.all([cancelling, rejected]);
+      const unchanged = await db.supplyRequest.findUniqueOrThrow({
+        where: { id: order.id },
+      });
+      assert.equal(unchanged.status, "CANCELLED");
+      assert.equal(unchanged.acceptedAt, null);
+      assert.equal(unchanged.acceptedByUserId, null);
+    },
+  );
 
   await context.test(
     "school grades are isolated and can be detached from historical classes",
