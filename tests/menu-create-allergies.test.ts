@@ -105,7 +105,12 @@ void test("category create and rename use the trusted school and reject duplicat
     /đã tồn tại/,
   );
 });
-function fixture(t: TestContext, existing = false, healthPermission = true) {
+function fixture(
+  t: TestContext,
+  existing = false,
+  healthPermission = true,
+  calendar = true,
+) {
   const permissions = [
     "menu.create",
     "menu.update",
@@ -252,8 +257,20 @@ function fixture(t: TestContext, existing = false, healthPermission = true) {
   } as unknown as PrismaClient;
   const stub = (name: keyof typeof repository, value: unknown) =>
     t.mock.method(repository, name, () => Promise.resolve(value));
+  stub(
+    "academicYears",
+    calendar
+      ? [
+          {
+            startDate: new Date("2026-09-07"),
+            endDate: new Date("2027-06-01"),
+            holidays: [],
+          },
+        ]
+      : [],
+  );
   stub("menuForWeek", existing ? menu : null);
-  stub("createWeeklyMenu", { id: id(4) });
+  const createWeeklyMenuStub = stub("createWeeklyMenu", { id: id(4) });
   stub("ownedMenu", menu);
   stub("menuEditHeader", { status: "DRAFT", submittedAt: null });
   stub("menuDayHeaders", []);
@@ -305,6 +322,7 @@ function fixture(t: TestContext, existing = false, healthPermission = true) {
     tx,
     service: createMenuService(undefined, () => Promise.resolve(db)),
     principal,
+    createWeeklyMenuStub,
     input,
     menu,
     allergyRows,
@@ -314,6 +332,54 @@ function fixture(t: TestContext, existing = false, healthPermission = true) {
     },
   };
 }
+
+void test("new menu title comes from the school academic week, not the request", async (t) => {
+  const f = fixture(t);
+  await f.service.create(f.input, f.principal);
+  assert.equal(
+    f.createWeeklyMenuStub.mock.calls[0].arguments[4],
+    "Th\u1ef1c \u0111\u01a1n tu\u1ea7n 10",
+  );
+});
+
+void test("creating outside a configured academic year does not write", async (t) => {
+  const f = fixture(t, false, true, false);
+  await assert.rejects(f.service.create(f.input, f.principal), {
+    statusCode: 422,
+  });
+  assert.equal(f.createWeeklyMenuStub.mock.callCount(), 0);
+});
+
+void test("menu week must start on Monday", () => {
+  const body = {
+    weekStartDate: "2026-11-09",
+    days: [
+      {
+        menuDate: "2026-11-10",
+        meals: [
+          {
+            mealType: "LUNCH",
+            dishes: [{ dishId: id(6), ingredients: [] }],
+            seasonings: [],
+          },
+        ],
+      },
+    ],
+  };
+  assert.doesNotThrow(() => validateMenuWrite(body));
+  assert.throws(() =>
+    validateMenuWrite({ ...body, weekStartDate: "2026-11-10" }),
+  );
+});
+
+void test("updating a menu cannot change its title", async (t) => {
+  const f = fixture(t, true);
+  await assert.rejects(
+    f.service.update(f.menu.id, { ...f.input, title: "Changed" }, f.principal),
+    { statusCode: 409 },
+  );
+  assert.equal(f.counts().committedWrites, 0);
+});
 
 void test("menu creation rejects grades outside the school and overlapping scope before writing", async (t) => {
   const f = fixture(t, true);
@@ -644,7 +710,7 @@ function pendingRevision(t: TestContext) {
     f.menu.menuDays[0].approvalStatus = "DRAFT";
     return Promise.resolve(f.menu);
   });
-  t.mock.method(repository, "academicYears", () => Promise.resolve([]));
+
   t.mock.method(repository, "submitDraftDays", () => {
     f.menu.menuDays.forEach((day) => {
       day.approvalStatus = "PENDING_APPROVAL";

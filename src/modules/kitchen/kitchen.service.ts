@@ -236,70 +236,44 @@ export interface DishPlans {
   dishId: string;
   plans: BatchPlan[];
 }
-/** Align portion boundaries across recipes; never duplicate another dish's stock. */
+/** Each child is one dish and one of that dish's lot allocation plans. */
 export function groupDishPlans(input: DishPlans[], mode: CookingMode) {
   if (
     !input.length ||
-    new Set(input.map((d) => d.dishId)).size !== input.length
+    new Set(input.map((dish) => dish.dishId)).size !== input.length
   )
-    throw new HttpError(409, "Danh sách món lập mẻ trống hoặc bị trùng");
-  const timelines = input.map((d) => {
-    let offset = 0;
-    if (!d.plans.length)
-      throw new HttpError(409, "Món chưa có phương án nguyên liệu");
-    return {
-      dishId: d.dishId,
-      plans: d.plans.map((plan) => {
-        if (
-          !Number.isSafeInteger(plan.plannedPortions) ||
-          plan.plannedPortions <= 0
-        )
-          throw new HttpError(409, "Số suất mẻ không hợp lệ");
-        const start = offset;
-        offset += plan.plannedPortions;
-        return { start, end: offset, plan };
-      }),
-    };
-  });
-  if (mode === "COMBINE_LOTS") {
-    if (input.some((d) => d.plans.length !== 1))
-      throw new HttpError(409, "Phương án gộp lô không hợp lệ");
-    return [
-      {
-        plannedPortions: Math.max(
-          ...input.map((d) => d.plans[0].plannedPortions),
-        ),
-        dishes: input.map((d) => ({ dishId: d.dishId, ...d.plans[0] })),
-      },
-    ];
-  }
-  if (mode !== "SEPARATE_BY_LOT")
-    throw new HttpError(409, "Chế độ chế biến không hợp lệ");
-  const boundaries = [
-    ...new Set([0, ...timelines.flatMap((d) => d.plans.map((p) => p.end))]),
-  ].sort((a, b) => a - b);
-  return boundaries.slice(1).map((end, index) => {
-    const start = boundaries[index];
-    const count = end - start;
-    const dishes = timelines.flatMap((d) => {
-      const segment = d.plans.find((p) => p.start <= start && p.end >= end);
-      if (!segment) return [];
-      return [
-        {
-          dishId: d.dishId,
-          plannedPortions: count,
-          lots: segment.plan.lots.map((l) => ({
-            ...l,
-            quantityUsed: storedQuantity(
-              new Decimal(l.quantityUsed)
-                .mul(count)
-                .div(segment.plan.plannedPortions),
-            ),
-          })),
-        },
-      ];
+    throw new HttpError(
+      409,
+      "Danh s\u00e1ch m\u00f3n l\u1eadp m\u1ebb tr\u1ed1ng ho\u1eb7c b\u1ecb tr\u00f9ng",
+    );
+  if (mode !== "COMBINE_LOTS" && mode !== "SEPARATE_BY_LOT")
+    throw new HttpError(
+      409,
+      "Ch\u1ebf \u0111\u1ed9 ch\u1ebf bi\u1ebfn kh\u00f4ng h\u1ee3p l\u1ec7",
+    );
+  return input.flatMap((dish) => {
+    if (
+      !dish.plans.length ||
+      (mode === "COMBINE_LOTS" && dish.plans.length !== 1)
+    )
+      throw new HttpError(
+        409,
+        "Ph\u01b0\u01a1ng \u00e1n m\u00f3n kh\u00f4ng h\u1ee3p l\u1ec7",
+      );
+    return dish.plans.map((plan) => {
+      if (
+        !Number.isSafeInteger(plan.plannedPortions) ||
+        plan.plannedPortions <= 0
+      )
+        throw new HttpError(
+          409,
+          "S\u1ed1 su\u1ea5t m\u1ebb kh\u00f4ng h\u1ee3p l\u1ec7",
+        );
+      return {
+        plannedPortions: plan.plannedPortions,
+        dishes: [{ dishId: dish.dishId, ...plan }],
+      };
     });
-    return { plannedPortions: count, dishes };
   });
 }
 
@@ -1203,6 +1177,17 @@ export function createKitchenLifecycle(
           throw new HttpError(
             409,
             "Chỉ lập mẻ cho thực đơn đã duyệt và món đang hoạt động",
+          );
+        const missingClasses = await repository.unfinalizedClasses(
+          tx,
+          meal,
+          schoolId,
+          menu.menuDate,
+        );
+        if (missingClasses.length)
+          throw new HttpError(
+            409,
+            `Chưa chốt suất ăn cho các lớp: ${missingClasses.map((row) => row.name).join(", ")}`,
           );
         const demand = await readMealPortionDemand(
           tx,

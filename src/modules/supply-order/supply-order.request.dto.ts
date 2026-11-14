@@ -2,6 +2,7 @@ import type { z } from "zod";
 import type {
   supplyOrderListQuerySchema,
   supplyOrderAcceptParamsSchema,
+  supplyOrderDetailParamsSchema,
   supplyOrderEmptySchema,
 } from "./supply-order.validation";
 export type SupplyOrderListRequestDTO = z.infer<
@@ -12,4 +13,7 @@ export type SupplyOrderAcceptParamsRequestDTO = z.infer<
 >;
 export type SupplyOrderAcceptBodyRequestDTO = z.infer<
   typeof supplyOrderEmptySchema
+>;
+export type SupplyOrderDetailParamsRequestDTO = z.infer<
+  typeof supplyOrderDetailParamsSchema
 >;

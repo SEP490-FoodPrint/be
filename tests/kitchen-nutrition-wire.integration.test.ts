@@ -412,6 +412,17 @@ void test("kitchen and nutrition wire contracts use real scoped PostgreSQL data"
   const monday = new Date(Date.now() - 14 * day);
   monday.setUTCHours(0, 0, 0, 0);
   monday.setUTCDate(monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
+  if (monday < new Date("2026-09-07") || monday > new Date("2027-05-24")) {
+    await db.schoolAcademicYear.create({
+      data: {
+        schoolId: schoolA.id,
+        academicYear: `wire-${monday.toISOString().slice(0, 10)}`,
+        startDate: monday,
+        endDate: new Date(+monday + 4 * day),
+        holidays: [],
+      },
+    });
+  }
   const menuInput = {
     weekStartDate: monday.toISOString().slice(0, 10),
     title: "Wire full week",
@@ -450,6 +461,10 @@ void test("kitchen and nutrition wire contracts use real scoped PostgreSQL data"
     body: menuInput,
   });
   assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.match(
+    text(payload(created.body).title),
+    /^Th\u1ef1c \u0111\u01a1n tu\u1ea7n \d+$/,
+  );
   const menuId = text(payload(created.body).id);
   const foreignWeek = await db.weeklyMenu.create({
     data: {

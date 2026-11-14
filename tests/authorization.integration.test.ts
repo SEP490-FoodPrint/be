@@ -1,4 +1,12 @@
-import { ingredientService } from "../src/modules/ingredient/ingredient.service";
+import { createSupplyOrderService } from "../src/modules/supply-order/supply-order.service";
+import { createSupplyOrderRepository } from "../src/modules/supply-order/supply-order.repository";
+import { createIntakeAccessService } from "../src/modules/account-lifecycle/intake-access.service";
+import { createIntakeAccessRepository } from "../src/modules/account-lifecycle/intake-access.repository";
+import { authorizationTransaction } from "../src/utils/authorization";
+import {
+  createIngredientService,
+  ingredientService,
+} from "../src/modules/ingredient/ingredient.service";
 import {
   createSourceFacilityService,
   sourceFacilityService,
@@ -651,6 +659,24 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           afternoonMealTime: new Date("1970-01-01T15:00:00Z"),
         },
       });
+      await db.schoolAcademicYear.createMany({
+        data: [
+          {
+            schoolId: school.id,
+            academicYear: "2029-2030",
+            startDate: new Date("2029-09-03"),
+            endDate: new Date("2030-05-31"),
+            holidays: [],
+          },
+          {
+            schoolId: school.id,
+            academicYear: "2031-2032",
+            startDate: new Date("2031-09-01"),
+            endDate: new Date("2032-05-31"),
+            holidays: [],
+          },
+        ],
+      });
       const healthAccount = await user("SCHOOL_NUTRITION_OFFICER", {
         schoolId: school.id,
       });
@@ -817,6 +843,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         data: {
           schoolId: school.id,
           name: "API class",
+          academicYear: "2029-2030",
           registeredMealPortions: 120,
         },
       });
@@ -929,27 +956,36 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         batches.plan(key, chef),
       ]);
       assert.equal(plans.filter((p) => p.created).length, 1);
+      const lunchBatches = plans[0].batches;
+      assert.equal(lunchBatches.length, 2);
       assert.equal(
         await db.cookingBatch.count({
           where: { menuDayId: key.menuDayId, mealType: key.mealType },
         }),
-        1,
+        2,
       );
-      const batch = plans[0].batches[0];
+      assert(lunchBatches.every((child) => child.dishes.length === 1));
+      const batch = lunchBatches.find((child) =>
+        child.dishes.some((d) => d.dishId === mainDish.dishId),
+      )!;
+      const sideBatch = lunchBatches.find((child) =>
+        child.dishes.some((d) => d.dishId === sideDish.dishId),
+      )!;
       assert.equal(batch.status, "CONFIRMED");
       assert(batch.confirmedAt);
       assert.equal(batch.plannedPortions, 120);
-      assert.equal(batch.dishes.length, 2);
       assert.equal(
-        batch.dishes
-          .find((d) => d.dishId === mainDish.dishId)!
-          .cookingBatchLots.reduce((n, l) => n + Number(l.quantityUsed), 0),
+        batch.dishes[0].cookingBatchLots.reduce(
+          (n, l) => n + Number(l.quantityUsed),
+          0,
+        ),
         9.6,
       );
       assert.equal(
-        batch.dishes
-          .find((d) => d.dishId === sideDish.dishId)!
-          .cookingBatchLots.reduce((n, l) => n + Number(l.quantityUsed), 0),
+        sideBatch.dishes[0].cookingBatchLots.reduce(
+          (n, l) => n + Number(l.quantityUsed),
+          0,
+        ),
         1.2,
       );
       await assert.rejects(
@@ -958,7 +994,10 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       );
       const side = (
         await batches.plan({ ...key, dishId: sideDish.dishId }, chef)
-      ).batches[0];
+      ).batches.find((child) =>
+        child.dishes.some((d) => d.dishId === sideDish.dishId),
+      )!;
+      assert.equal(side.id, sideBatch.id);
       assert.equal(
         await db.menuMealSeasoningLot.count({
           where: { menuDayId: day.id, mealType: "LUNCH" },
@@ -979,27 +1018,44 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         batches.complete(batch.id, chef),
         batches.complete(batch.id, chef),
       ]);
-      assert(
-        completed.every((c) => c.inventoryDeducted && c.mealSeasoningsConsumed),
-      );
+      assert(completed.every((c) => c.inventoryDeducted));
+      assert(completed.every((c) => !c.mealSeasoningsConsumed));
       assert.equal(
         await db.inventoryTransaction.count({
           where: { referenceType: "COOKING_BATCH", referenceId: batch.id },
         }),
-        3,
+        new Set(
+          batch.dishes[0].cookingBatchLots.map((lot) => lot.ingredientLotId),
+        ).size,
       );
-      assert.equal(
-        (
-          await db.ingredientLot.findUniqueOrThrow({
-            where: { id: rice.lots[0].id },
-          })
-        ).availableQuantity.toString(),
-        "0",
-      );
+      // The side dish can reserve part of the first lot; only the main batch
+      // has consumed stock so far, regardless of which dish was planned first.
+      for (const lot of rice.lots) {
+        const remaining = batch.dishes[0].cookingBatchLots
+          .filter((usage) => usage.ingredientLotId === lot.id)
+          .reduce(
+            (quantity, usage) => quantity.minus(usage.quantityUsed),
+            lot.availableQuantity,
+          );
+        assert.equal(
+          (
+            await db.ingredientLot.findUniqueOrThrow({ where: { id: lot.id } })
+          ).availableQuantity.toString(),
+          remaining.toString(),
+        );
+      }
       assert.equal(
         (await batches.complete(side.id, chef)).mealSeasoningsConsumed,
         true,
       );
+      for (const lot of rice.lots) {
+        assert.equal(
+          (
+            await db.ingredientLot.findUniqueOrThrow({ where: { id: lot.id } })
+          ).availableQuantity.toString(),
+          "0",
+        );
+      }
       const shared = await db.menuMealSeasoningLot.findMany({
         where: { menuDayId: day.id, mealType: "LUNCH" },
       });
@@ -1024,6 +1080,11 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         (await samples.create(batch.id, sampleInput, chef)).created,
         false,
       );
+      assert.deepEqual(
+        (await samples.forBatch(batch.id, chef)).map((sample) => sample.dishId),
+        [mainDish.dishId],
+      );
+      assert.deepEqual(await samples.forBatch(side.id, chef), []);
       assert.equal(
         Date.parse(saved.expiresAt) - Date.parse(saved.sampledAt),
         86400000,
@@ -1177,6 +1238,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         data: {
           schoolId: school.id,
           name: "Group class",
+          academicYear: "2031-2032",
           registeredMealPortions: 120,
         },
       });
@@ -1292,13 +1354,22 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       const grPlan = await batches.plan({ ...grKey, dishId: grCommon }, chef);
       assert.deepEqual(
         grPlan.batches.map((b) => b.plannedPortions).sort((a, b) => a! - b!),
-        [13, 13, 32, 62],
+        [13, 45, 75, 107],
       );
-      const grDeleted = grPlan.batches.find((b) => b.plannedPortions === 62)!;
+      assert(grPlan.batches.every((batch) => batch.dishes.length === 1));
+      const grPlannedFor = (dishId: string) =>
+        grPlan.batches
+          .flatMap((batch) => batch.dishes)
+          .filter((dish) => dish.dishId === dishId)
+          .reduce((n, dish) => n + dish.plannedPortions!, 0);
+      assert.equal(grPlannedFor(grCommon), 120);
+      assert.equal(grPlannedFor(grRegular), 107);
+      assert.equal(grPlannedFor(grAlt), 13);
+      const grFirst = grPlan.batches[0];
       assert.equal("update" in batches, false);
       assert(grPlan.batches.every((batch) => batch.status === "CONFIRMED"));
       await assert.rejects(
-        () => batches.remove(grDeleted.id, chef),
+        () => batches.remove(grFirst.id, chef),
         (error: unknown) =>
           error instanceof HttpError && error.statusCode === 409,
       );
@@ -1313,7 +1384,8 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       );
       assert.equal(
         grPlan.batches.reduce((n, b) => n + b.plannedPortions!, 0),
-        120,
+        // Portions are counted per dish: 120 common + 107 regular + 13 alternative.
+        240,
       );
       await batches.confirm(grPlan.batches[0].id, chef);
       await assert.rejects(
@@ -1452,7 +1524,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         await db.mealAllocationBatch.count({
           where: { cookingBatchId: { in: [a, b] } },
         }),
-        8,
+        4,
       );
       const revisedBatches = structuredClone(payload.batches);
       revisedBatches[0].entries[1].allocatedPortions = 10;
@@ -1469,7 +1541,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       });
       assert.deepEqual(
         revisedRows.map((row) => row.allocatedPortions),
-        [10, 10],
+        [10],
       );
       assert.equal(
         revised.batches
@@ -1908,6 +1980,475 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       headers: headers(id),
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
+
+  await context.test(
+    "supplier intake: scoped list/detail, independent permissions and immutable receipt",
+    async () => {
+      const organization = await db.supplier.create({
+        data: { name: "Intake supplier " + randomUUID() },
+      });
+      const school = await db.school.create({
+        data: { name: "Intake school " + randomUUID() },
+      });
+      const schoolAdmin = await user("SCHOOL_ADMINISTRATION", {
+        schoolId: school.id,
+      });
+      const manager = await user("INGREDIENT_SUPPLIER_ADMIN", {
+        supplierId: organization.id,
+      });
+      const member = await user("INGREDIENT_SUPPLIER_STAFF", {
+        supplierId: organization.id,
+      });
+      for (const account of [manager, member]) {
+        const session = await authSessions.issue(account.id);
+        issued.set(account.id, session);
+        refreshTokens.push(session.refreshToken);
+      }
+      const ingredient = await db.ingredient.create({
+        data: {
+          supplierId: organization.id,
+          name: "Intake historical rice",
+          defaultUnit: "bag",
+          status: "INACTIVE",
+        },
+      });
+      const entry = await db.ingredientEntry.create({
+        data: {
+          schoolId: school.id,
+          ingredientId: ingredient.id,
+          handlingType: "DRY_STOCK",
+          status: "INACTIVE",
+        },
+      });
+      const otherIngredient = await db.ingredient.create({
+        data: {
+          supplierId: organization.id,
+          name: "Intake second ingredient",
+          defaultUnit: "kg",
+        },
+      });
+      const otherEntry = await db.ingredientEntry.create({
+        data: {
+          schoolId: school.id,
+          ingredientId: otherIngredient.id,
+          handlingType: "DRY_STOCK",
+        },
+      });
+      const makeOrder = (
+        status:
+          | "DRAFT"
+          | "SENT"
+          | "ACCEPTED"
+          | "IN_PROGRESS"
+          | "COMPLETED"
+          | "CANCELLED",
+      ) =>
+        db.supplyRequest.create({
+          data: {
+            requestNo: randomUUID(),
+            schoolId: school.id,
+            supplierId: organization.id,
+            createdByUserId: schoolAdmin.id,
+            status,
+            requestedDeliveryDate: new Date("2026-11-21"),
+            sentAt:
+              status === "DRAFT" ? null : new Date("2026-11-14T00:00:00Z"),
+            note: "school note",
+            contractSnapshot: { privateQuote: "do not expose" },
+            supplyRequestItems: {
+              create: [
+                {
+                  ingredientEntryId: entry.id,
+                  requestedQuantity: "12345678901.123",
+                  unit: "kg",
+                  note: "line note",
+                },
+                {
+                  ingredientEntryId: otherEntry.id,
+                  requestedQuantity: "2.125",
+                  unit: "g",
+                },
+              ],
+            },
+          },
+        });
+      const draft = await makeOrder("DRAFT"),
+        sent = await makeOrder("SENT");
+      const history = await makeOrder("ACCEPTED");
+      await db.supplyRequest.update({
+        where: { id: history.id },
+        data: { sentAt: null },
+      });
+      for (const status of ["IN_PROGRESS", "COMPLETED", "CANCELLED"] as const)
+        await makeOrder(status);
+      for (const account of [manager, member]) {
+        const list = await request("/api/supply-requests", account.id);
+        assert.equal(list.status, 200);
+        const items = rows(list.body);
+        assert.equal(items.length, 5);
+        assert(
+          items.every(
+            (x) => x.supplierId === organization.id && x.status !== "DRAFT",
+          ),
+        );
+        assert(items.some((x) => x.id === history.id && x.sentAt === null));
+        assert(
+          items.every(
+            (x) =>
+              x.schoolName === school.name &&
+              x.requestedDeliveryDate === "2026-11-21",
+          ),
+        );
+        const filtered = await request(
+          "/api/supply-requests?status=SENT&limit=1",
+          account.id,
+        );
+        assert.deepEqual(
+          rows(filtered.body).map((x) => x.id),
+          [sent.id],
+        );
+        assert.deepEqual(record(record(filtered.body).data).pagination, {
+          page: 1,
+          limit: 1,
+          hasNext: false,
+        });
+        assert.equal(
+          (await request("/api/supply-requests?status=DRAFT", account.id))
+            .status,
+          400,
+        );
+        const detail = await request(
+          `/api/supply-requests/${sent.id}`,
+          account.id,
+        );
+        assert.equal(detail.status, 200);
+        const data = record(record(detail.body).data);
+        assert.equal(data.schoolName, school.name);
+        const lines = data.items as Record<string, unknown>[];
+        assert.equal(lines.length, 2);
+        const line = lines.find((x) => x.ingredientEntryId === entry.id)!;
+        assert.equal(line.ingredientName, ingredient.name);
+        assert.equal(line.requestedQuantity, "12345678901.123");
+        assert.equal(
+          line.unit,
+          "kg",
+          "must not substitute current defaultUnit",
+        );
+        assert.equal(data.acceptedByUserId, null);
+        assert.equal(data.acceptedAt, null);
+        for (const key of [
+          "contractSnapshot",
+          "email",
+          "phone",
+          "passwordHash",
+        ])
+          assert(!JSON.stringify(detail.body).includes(key));
+        for (const id of [draft.id, randomUUID()]) {
+          assert.equal(
+            (await request(`/api/supply-requests/${id}`, account.id)).status,
+            404,
+          );
+          assert.equal(
+            (
+              await request(
+                `/api/supply-requests/${id}/accept`,
+                account.id,
+                "POST",
+                {},
+              )
+            ).status,
+            404,
+          );
+        }
+      }
+      for (const method of ["GET", "POST"])
+        assert.equal(
+          (
+            await request(
+              `/api/supply-requests/${sent.id}${method === "POST" ? "/accept" : ""}`,
+              supplierStaffB.id,
+              method,
+              method === "POST" ? {} : undefined,
+            )
+          ).status,
+          404,
+        );
+      const view = await permission("supply_request.view"),
+        accept = await permission("supply_request.accept");
+      await db.userPermissionDenial.create({
+        data: {
+          userId: member.id,
+          permissionId: view.id,
+          supplierId: organization.id,
+          disabledByUserId: manager.id,
+        },
+      });
+      try {
+        assert.equal(
+          (await request("/api/supply-requests", member.id)).status,
+          403,
+        );
+        assert.equal(
+          (await request(`/api/supply-requests/${sent.id}`, member.id)).status,
+          403,
+        );
+        const result = await request(
+          `/api/supply-requests/${sent.id}/accept`,
+          member.id,
+          "POST",
+          {},
+        );
+        assert.equal(result.status, 200, "accept does not require view");
+        const receipt = record(record(result.body).data);
+        assert.equal(receipt.acceptedByUserId, member.id);
+        assert.deepEqual(Object.keys(receipt).sort(), [
+          "acceptedAt",
+          "acceptedByUserId",
+          "id",
+          "status",
+        ]);
+        const accepted = await db.supplyRequest.findUniqueOrThrow({
+          where: { id: sent.id },
+        });
+        await db.supplier.update({
+          where: { id: organization.id },
+          data: { intakeState: "PAUSED_FOR_FOOD_SAFETY_INSPECTION" },
+        });
+        assert.deepEqual(
+          record(
+            record(
+              (
+                await request(
+                  `/api/supply-requests/${sent.id}/accept`,
+                  manager.id,
+                  "POST",
+                  {},
+                )
+              ).body,
+            ).data,
+          ),
+          receipt,
+        );
+        const retry = await db.supplyRequest.findUniqueOrThrow({
+          where: { id: sent.id },
+        });
+        assert.deepEqual(retry.updatedAt, accepted.updatedAt);
+        assert.equal(retry.acceptedByUserId, member.id);
+      } finally {
+        await db.userPermissionDenial.deleteMany({
+          where: { userId: member.id, permissionId: view.id },
+        });
+        await db.supplier.update({
+          where: { id: organization.id },
+          data: { intakeState: "ACTIVE" },
+        });
+      }
+      await db.userPermissionDenial.create({
+        data: {
+          userId: member.id,
+          permissionId: accept.id,
+          supplierId: organization.id,
+          disabledByUserId: manager.id,
+        },
+      });
+      try {
+        assert.equal(
+          (await request(`/api/supply-requests/${sent.id}`, member.id)).status,
+          200,
+        );
+        assert.equal(
+          (
+            await request(
+              `/api/supply-requests/${sent.id}/accept`,
+              member.id,
+              "POST",
+              {},
+            )
+          ).status,
+          403,
+        );
+      } finally {
+        await db.userPermissionDenial.deleteMany({
+          where: { userId: member.id, permissionId: accept.id },
+        });
+      }
+      const managerOrder = await makeOrder("SENT");
+      assert.equal(
+        (
+          await request(
+            `/api/supply-requests/${managerOrder.id}/accept`,
+            manager.id,
+            "POST",
+            {},
+          )
+        ).status,
+        200,
+      );
+      const detailAfter = record(
+        record(
+          (await request(`/api/supply-requests/${managerOrder.id}`, member.id))
+            .body,
+        ).data,
+      );
+      assert.equal(detailAfter.status, "ACCEPTED");
+      assert.equal(detailAfter.acceptedByUserId, manager.id);
+    },
+  );
+
+  await context.test(
+    "supplier intake: concurrent receivers keep one receipt and failed writes roll back",
+    async () => {
+      const makeOrder = () =>
+        db.supplyRequest.create({
+          data: {
+            requestNo: randomUUID(),
+            schoolId: schoolA.id,
+            supplierId: supplierA.id,
+            createdByUserId: adminA.id,
+            status: "SENT",
+          },
+        });
+      const order = await makeOrder();
+      const actors = await Promise.all(
+        [supplierAdmin, supplierStaffA].map((x) => loadPrincipal(x.id, db)),
+      );
+      const rendezvous = createBarrier(2);
+      const seen = new Set<string>();
+      const locks = createIntakeAccessRepository();
+      const guard = createIntakeAccessService({
+        ...locks,
+        async lockParents(tx, scope) {
+          const actorId = scope.userIds![0];
+          if (!seen.has(actorId)) {
+            seen.add(actorId);
+            await rendezvous.wait();
+          }
+          await locks.lockParents(tx, scope);
+        },
+      });
+      const service = createSupplyOrderService(undefined, {
+        transaction: (fn) => authorizationTransaction(db, fn),
+        guard,
+      });
+      const results = await Promise.all(
+        actors.map((actor) => service.accept({ id: order.id }, actor)),
+      );
+      assert.deepEqual(results[0], results[1]);
+      assert(actors.some((actor) => actor.id === results[0].acceptedByUserId));
+      const stored = await db.supplyRequest.findUniqueOrThrow({
+        where: { id: order.id },
+      });
+      assert.equal(stored.status, "ACCEPTED");
+      assert.equal(stored.acceptedByUserId, results[0].acceptedByUserId);
+      assert.equal(stored.acceptedAt!.toISOString(), results[0].acceptedAt);
+      await createSupplyOrderService().accept({ id: order.id }, actors[1]);
+      assert.deepEqual(
+        (await db.supplyRequest.findUniqueOrThrow({ where: { id: order.id } }))
+          .updatedAt,
+        stored.updatedAt,
+      );
+      const rollback = await makeOrder();
+      const repository = createSupplyOrderRepository();
+      const failing = createSupplyOrderService({
+        ...repository,
+        async accept(...args) {
+          await repository.accept(...args);
+          throw new HttpError(409, "Injected transaction failure");
+        },
+      });
+      await assert.rejects(
+        () => failing.accept({ id: rollback.id }, actors[0]),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 409,
+      );
+      const unchanged = await db.supplyRequest.findUniqueOrThrow({
+        where: { id: rollback.id },
+      });
+      assert.equal(unchanged.status, "SENT");
+      assert.equal(unchanged.acceptedByUserId, null);
+      assert.equal(unchanged.acceptedAt, null);
+      assert.deepEqual(unchanged.updatedAt, rollback.updatedAt);
+    },
+  );
+
+  await context.test(
+    "supplier intake: cancellation winning the lock order prevents a partial acceptance",
+    async () => {
+      const actor = await loadPrincipal(supplierStaffA.id, db);
+      const order = await db.supplyRequest.create({
+        data: {
+          requestNo: randomUUID(),
+          schoolId: schoolA.id,
+          supplierId: supplierA.id,
+          createdByUserId: adminA.id,
+          status: "SENT",
+        },
+      });
+      const locks = createIntakeAccessRepository();
+      let held!: () => void, release!: () => void, attempted!: () => void;
+      const holding = new Promise<void>((resolve) => {
+        held = resolve;
+      });
+      const proceed = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const entering = new Promise<void>((resolve) => {
+        attempted = resolve;
+      });
+      const cancelling = authorizationTransaction(db, async (tx) => {
+        await locks.lockParents(tx, {
+          schoolId: schoolA.id,
+          supplierId: supplierA.id,
+        });
+        await locks.lockOrder(tx, order.id);
+        await tx.supplyRequest.update({
+          where: { id: order.id },
+          data: { status: "CANCELLED" },
+        });
+        held();
+        await proceed;
+      });
+      await Promise.race([
+        holding,
+        cancelling.then(() => {
+          throw new Error("Cancellation ended before barrier");
+        }),
+      ]);
+      const service = createSupplyOrderService(undefined, {
+        transaction: (fn) => authorizationTransaction(db, fn),
+        guard: createIntakeAccessService({
+          ...locks,
+          async lockParents(tx, scope) {
+            attempted();
+            await locks.lockParents(tx, scope);
+          },
+        }),
+      });
+      const pending = service.accept({ id: order.id }, actor);
+      const rejected = assert.rejects(
+        () => pending,
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 409,
+      );
+      try {
+        await Promise.race([
+          entering,
+          pending.then(() => {
+            throw new Error("Accept ended before barrier");
+          }),
+        ]);
+      } finally {
+        release();
+      }
+      await Promise.all([cancelling, rejected]);
+      const unchanged = await db.supplyRequest.findUniqueOrThrow({
+        where: { id: order.id },
+      });
+      assert.equal(unchanged.status, "CANCELLED");
+      assert.equal(unchanged.acceptedAt, null);
+      assert.equal(unchanged.acceptedByUserId, null);
+    },
+  );
 
   await context.test(
     "school grades are isolated and can be detached from historical classes",
@@ -3012,6 +3553,42 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       );
       // Middleware reloads current grants/denials on each authenticated request.
       const staleActor = await loadPrincipal(supplierAdmin.id, db);
+      const uploadCalls: string[] = [];
+      const uploadInput = {
+        file: {
+          buffer: Buffer.from("test"),
+          size: 4,
+          mimeType: "image/jpeg",
+          originalName: "test.jpg",
+        },
+      };
+      const asset = {
+        publicId: "test-image",
+        url: "https://res.cloudinary.com/demo/image/upload/test.jpg",
+        format: "jpg" as const,
+        bytes: 4,
+        width: 1,
+        height: 1,
+      };
+      const uploadService = createIngredientService(undefined, undefined, {
+        uploadImage: (_file, scope) => {
+          uploadCalls.push(scope.ownerId);
+          return Promise.resolve(asset);
+        },
+        uploadImages: (_files, scope) => {
+          uploadCalls.push(scope.ownerId);
+          return Promise.resolve([
+            { index: 0, status: "success" as const, asset },
+          ]);
+        },
+      });
+      const beforeUpload = await db.ingredient.count();
+      assert.equal(
+        (await uploadService.uploadImage(uploadInput, staleActor)).url,
+        asset.url,
+      );
+      assert.deepEqual(uploadCalls, [supplierA.id]);
+      assert.equal(await db.ingredient.count(), beforeUpload);
       const denial = await db.userPermissionDenial.create({
         data: {
           userId: supplierAdmin.id,
@@ -3039,6 +3616,12 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         (error: unknown) =>
           error instanceof HttpError && error.statusCode === 403,
       );
+      await assert.rejects(
+        () => uploadService.uploadImage(uploadInput, staleActor),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 403,
+      );
+      assert.deepEqual(uploadCalls, [supplierA.id]);
       await db.userPermissionDenial.delete({ where: { id: denial.id } });
       await db.user.update({
         where: { id: supplierAdmin.id },
@@ -3051,6 +3634,11 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             { name: "Locked account" },
             staleActor,
           ),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 403,
+      );
+      await assert.rejects(
+        () => uploadService.uploadImage(uploadInput, staleActor),
         (error: unknown) =>
           error instanceof HttpError && error.statusCode === 403,
       );
@@ -3068,6 +3656,11 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         (error: unknown) =>
           error instanceof HttpError && error.statusCode === 403,
       );
+      await assert.rejects(
+        () => uploadService.uploadImage(uploadInput, staleActor),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 403,
+      );
       await db.user.update({
         where: { id: supplierAdmin.id },
         data: { supplierId: supplierA.id },
@@ -3078,6 +3671,12 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         data: { status: "INACTIVE" },
       });
       assert.equal((await request(base, supplierAdmin.id)).status, 403);
+      await assert.rejects(
+        () => uploadService.uploadImage(uploadInput, staleActor),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 403,
+      );
+      assert.deepEqual(uploadCalls, [supplierA.id]);
       assert.equal(
         (
           await request(base, supplierAdmin.id, "POST", {

@@ -4,6 +4,7 @@ import {
   requestUuidSchema,
   requiredText,
 } from "../../utils/request-validation";
+import { academicYearEnd } from "../class/academic-year";
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -77,9 +78,14 @@ function validateRangeAndHolidays(
   });
 }
 
+const academicYearLabelSchema = requiredText(30).refine(
+  (value) => academicYearEnd(value) !== null,
+  "Niên khóa phải có dạng N-N+1, ví dụ 2026-2027",
+);
+
 export const createAcademicYearBodySchema = z
   .strictObject({
-    academicYear: requiredText(30),
+    academicYear: academicYearLabelSchema,
     startDate: dateOnlySchema,
     endDate: dateOnlySchema,
     holidays: holidaysSchema.default([]),

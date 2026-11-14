@@ -4,7 +4,12 @@ import {
 } from "./helpers/account-lifecycle-database";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { Prisma } from "../src/generated/prisma/client";
+import type {
+  Prisma,
+  SupplyRequestStatus,
+} from "../src/generated/prisma/client";
+import { ROLES } from "../src/constants/roles";
+import { HttpError } from "../src/utils/http-error";
 import {
   createIntakeAccessService,
   type IntakeOperation,
@@ -227,7 +232,7 @@ function fixture(actor: AuthPrincipal = schoolActor) {
     service,
     calls,
     repo,
-    setOrderStatus(status: "SENT" | "ACCEPTED" | "IN_PROGRESS") {
+    setOrderStatus(status: SupplyRequestStatus) {
       order = { ...order, status };
     },
     deactivateSchoolAdmin() {
@@ -761,5 +766,240 @@ void test("officer blockers include legacy requests and every unclosed incident 
   assert.equal(
     await repository.hasOpenReports(client, "officer", "unit"),
     true,
+  );
+});
+
+void test("supplier acceptance allows both supplier roles independently from view permission", async () => {
+  for (const role of [
+    ROLES.INGREDIENT_SUPPLIER_ADMIN,
+    ROLES.INGREDIENT_SUPPLIER_STAFF,
+  ]) {
+    const actor = { ...supplierActor, role };
+    const f = fixture(actor);
+    f.pauseSchool();
+    assert.equal(
+      await f.service.assertAccess(tx, actor, {
+        operation: "SUPPLIER_ACCEPT_ORDER",
+        orderId,
+      }),
+      actor,
+    );
+    assert.deepEqual(f.calls, ["identity", "parents", "order", "identity"]);
+  }
+});
+
+void test("supplier acceptance rejects unsupported roles even with an accept grant before locking", async () => {
+  for (const role of [
+    ROLES.SYSTEM_ADMIN,
+    ROLES.SCHOOL_ADMINISTRATION,
+    "FUTURE_SUPPLIER_ROLE",
+  ]) {
+    const actor = { ...supplierActor, role };
+    const f = fixture(actor);
+    await assert.rejects(
+      () =>
+        f.service.assertAccess(tx, actor, {
+          operation: "SUPPLIER_ACCEPT_ORDER",
+          orderId,
+        }),
+      (error: unknown) =>
+        error instanceof HttpError && error.statusCode === 403,
+    );
+    assert.deepEqual(f.calls, ["identity"]);
+  }
+});
+
+void test("supplier acceptance conceals drafts before locking and after the locked re-read", async () => {
+  for (const draftOnSecondRead of [false, true]) {
+    const f = fixture(supplierActor);
+    let reads = 0;
+    const service = createIntakeAccessService(
+      {
+        ...f.repo,
+        readOrder: (actual) => {
+          assert.equal(actual, tx);
+          return Promise.resolve({
+            id: orderId,
+            schoolId,
+            supplierId,
+            status: ++reads === 1 && draftOnSecondRead ? "SENT" : "DRAFT",
+          });
+        },
+      },
+      () => Promise.resolve(supplierActor),
+    );
+    await assert.rejects(
+      () =>
+        service.assertAccess(tx, supplierActor, {
+          operation: "SUPPLIER_ACCEPT_ORDER",
+          orderId,
+        }),
+      (error: unknown) =>
+        error instanceof HttpError && error.statusCode === 404,
+    );
+    assert.equal(reads, draftOnSecondRead ? 2 : 1);
+    assert.deepEqual(f.calls, draftOnSecondRead ? ["parents", "order"] : []);
+  }
+});
+
+void test("supplier acceptance rechecks role membership org and permission before returning an existing receipt", async () => {
+  const changedActors: AuthPrincipal[] = [
+    { ...supplierActor, role: ROLES.INGREDIENT_SUPPLIER_ADMIN },
+    { ...supplierActor, role: "FUTURE_SUPPLIER_ROLE" },
+    { ...supplierActor, supplierId: "different-supplier" },
+    { ...supplierActor, supplierId: null },
+    { ...supplierActor, orgType: "SCHOOL", supplierId: null, schoolId },
+    { ...supplierActor, permissions: [] },
+  ];
+  for (const changedActor of changedActors) {
+    const f = fixture(supplierActor);
+    f.setOrderStatus("ACCEPTED");
+    let identities = 0;
+    const service = createIntakeAccessService(f.repo, (_id, actual) => {
+      assert.equal(actual, tx);
+      return Promise.resolve(++identities === 1 ? supplierActor : changedActor);
+    });
+    await assert.rejects(
+      () =>
+        service.assertAccess(tx, supplierActor, {
+          operation: "SUPPLIER_ACCEPT_ORDER",
+          orderId,
+        }),
+      (error: unknown) =>
+        error instanceof HttpError && error.statusCode === 403,
+    );
+    assert.equal(identities, 2);
+  }
+});
+
+void test("supplier receipt retries bypass new-intake blockers only after current authorization", async () => {
+  for (const status of ["ACCEPTED", "IN_PROGRESS"] as const) {
+    const f = fixture(supplierActor);
+    f.setOrderStatus(status);
+    let newIntakeReads = 0;
+    const service = createIntakeAccessService(
+      {
+        ...f.repo,
+        readSupplier: () => {
+          newIntakeReads++;
+          return Promise.resolve({ status: "ACTIVE", intakeState: "PAUSED" });
+        },
+        readSchoolAdmin: () => {
+          newIntakeReads++;
+          return Promise.resolve({ status: "DEACTIVATED" });
+        },
+        readSupplierAdmin: () => {
+          newIntakeReads++;
+          return Promise.resolve({ status: "DEACTIVATED" });
+        },
+      },
+      () => Promise.resolve(supplierActor),
+    );
+    assert.equal(
+      await service.assertAccess(tx, supplierActor, {
+        operation: "SUPPLIER_ACCEPT_ORDER",
+        orderId,
+      }),
+      supplierActor,
+    );
+    assert.equal(newIntakeReads, 0);
+    assert.deepEqual(f.calls, ["parents", "order"]);
+  }
+});
+
+void test("supplier new acceptance respects both intake pauses and deactivated admins", async () => {
+  for (const blocker of [
+    "PAUSED",
+    "PAUSED_FOR_FOOD_SAFETY_INSPECTION",
+    "SCHOOL_ADMIN",
+    "SUPPLIER_ADMIN",
+  ] as const) {
+    const f = fixture(supplierActor);
+    const service = createIntakeAccessService(
+      {
+        ...f.repo,
+        readSupplier: () =>
+          Promise.resolve({
+            status: "ACTIVE",
+            intakeState:
+              blocker === "PAUSED" ||
+              blocker === "PAUSED_FOR_FOOD_SAFETY_INSPECTION"
+                ? blocker
+                : "ACTIVE",
+          }),
+        readSchoolAdmin: () =>
+          Promise.resolve({
+            status: blocker === "SCHOOL_ADMIN" ? "DEACTIVATED" : "ACTIVE",
+          }),
+        readSupplierAdmin: () =>
+          Promise.resolve({
+            status: blocker === "SUPPLIER_ADMIN" ? "DEACTIVATED" : "ACTIVE",
+          }),
+      },
+      () => Promise.resolve(supplierActor),
+    );
+    await assert.rejects(
+      () =>
+        service.assertAccess(tx, supplierActor, {
+          operation: "SUPPLIER_ACCEPT_ORDER",
+          orderId,
+        }),
+      (error: unknown) =>
+        error instanceof HttpError && error.statusCode === 409,
+    );
+  }
+});
+
+void test("supplier acceptance protects scope in both reads and keeps terminal states as conflicts", async () => {
+  for (const outsideOnSecondRead of [false, true]) {
+    const f = fixture(supplierActor);
+    let reads = 0;
+    const service = createIntakeAccessService(
+      {
+        ...f.repo,
+        readOrder: () =>
+          Promise.resolve({
+            id: orderId,
+            schoolId,
+            supplierId:
+              ++reads === 1 && outsideOnSecondRead
+                ? supplierId
+                : "other-supplier",
+            status: "SENT",
+          }),
+      },
+      () => Promise.resolve(supplierActor),
+    );
+    await assert.rejects(
+      () =>
+        service.assertAccess(tx, supplierActor, {
+          operation: "SUPPLIER_ACCEPT_ORDER",
+          orderId,
+        }),
+      (error: unknown) =>
+        error instanceof HttpError && error.statusCode === 404,
+    );
+  }
+  for (const status of ["COMPLETED", "CANCELLED"] as const) {
+    const f = fixture(supplierActor);
+    f.setOrderStatus(status);
+    await assert.rejects(
+      () =>
+        f.service.assertAccess(tx, supplierActor, {
+          operation: "SUPPLIER_ACCEPT_ORDER",
+          orderId,
+        }),
+      (error: unknown) =>
+        error instanceof HttpError && error.statusCode === 409,
+    );
+  }
+  const f = fixture();
+  f.setOrderStatus("DRAFT");
+  assert.equal(
+    await f.service.assertAccess(tx, schoolActor, {
+      operation: "SCHOOL_SEND_ORDER",
+      orderId,
+    }),
+    schoolActor,
   );
 });
