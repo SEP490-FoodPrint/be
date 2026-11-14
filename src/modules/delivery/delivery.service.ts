@@ -14,7 +14,10 @@ import type {
   DeliveryInspectionQueryDTO,
   DeliveryInspectionDecisionDTO,
 } from "./delivery.request.dto";
-import type { DeliveryInspectionDTO } from "./delivery.response.dto";
+import type {
+  DeliveryInspectionDTO,
+  DeliveryListResponseDTO,
+} from "./delivery.response.dto";
 import type { PrismaClient } from "../../generated/prisma/client";
 import { listScopes } from "../../utils/resource-access";
 import { Prisma } from "../../generated/prisma/client";
@@ -33,9 +36,67 @@ const select = {
   supplyRequestId: true,
   supplierId: true,
   status: true,
+  expectedArrivalAt: true,
+  arrivedAt: true,
   receivedAt: true,
+  vehiclePlate: true,
+  note: true,
   createdAt: true,
   updatedAt: true,
+  Supplier: {
+    select: {
+      id: true,
+      name: true,
+      phone: true,
+    },
+  },
+  SupplyRequest: {
+    select: {
+      id: true,
+      requestNo: true,
+      requestedDeliveryDate: true,
+      note: true,
+      status: true,
+    },
+  },
+  deliveryApprovals: {
+    orderBy: [{ decidedAt: "asc" }, { id: "asc" }],
+    select: {
+      id: true,
+      roleId: true,
+      userId: true,
+      decision: true,
+      reason: true,
+      decidedAt: true,
+      Role: { select: { code: true, name: true } },
+      User: { select: { fullName: true } },
+    },
+  },
+  deliveryItems: {
+    orderBy: { id: "asc" },
+    select: {
+      id: true,
+      actualQuantity: true,
+      unit: true,
+      note: true,
+      SupplyRequestItem: {
+        select: {
+          requestedQuantity: true,
+          unit: true,
+          IngredientEntry: {
+            select: {
+              handlingType: true,
+              Ingredient: {
+                select: {
+                  name: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
 } as const satisfies Prisma.DeliverySelect;
 
 type ListRow = Prisma.DeliveryGetPayload<{ select: typeof select }>;
@@ -54,18 +115,69 @@ const readFromDatabase: ListReader = async (args) => {
 
 export function createDeliveryService(read: ListReader = readFromDatabase) {
   return {
-    getAll(query: ListQuery, principal: AuthPrincipal) {
+    async getAll(
+      query: ListQuery,
+      principal: AuthPrincipal,
+    ): Promise<DeliveryListResponseDTO> {
       const where = listScopes["delivery"](principal);
-      return readListPage(
+      const page = await readListPage(
         () =>
           read({
             ...listWindow(query),
             where,
             select,
-            orderBy: [{ id: "asc" }],
+            orderBy: [{ createdAt: "desc" }],
           }),
         query,
       );
+      return {
+        items: page.items.map((row) => ({
+          id: row.id,
+          deliveryNo: row.deliveryNo,
+          supplyRequestId: row.supplyRequestId,
+          orderNo: row.SupplyRequest?.requestNo ?? null,
+          requestNo: row.SupplyRequest?.requestNo ?? null,
+          supplierId: row.supplierId,
+          supplierName: row.Supplier?.name ?? null,
+          supplierPhone: row.Supplier?.phone ?? null,
+          status: row.status,
+          vehiclePlate: row.vehiclePlate ?? null,
+          expectedArrivalAt: row.expectedArrivalAt?.toISOString() ?? null,
+          arrivedAt: row.arrivedAt?.toISOString() ?? null,
+          receivedAt: row.receivedAt?.toISOString() ?? null,
+          requestedDeliveryDate:
+            row.SupplyRequest?.requestedDeliveryDate?.toISOString() ?? null,
+          note: row.note ?? row.SupplyRequest?.note ?? null,
+          deliveryApprovals:
+            row.deliveryApprovals?.map((a) => ({
+              id: a.id,
+              roleId: a.roleId,
+              roleCode: a.Role?.code ?? "",
+              roleName: a.Role?.name ?? "",
+              userId: a.userId,
+              userName: a.User?.fullName ?? "",
+              decision: a.decision,
+              reason: a.reason ?? null,
+              decidedAt: a.decidedAt.toISOString(),
+            })) ?? [],
+          deliveryItems:
+            row.deliveryItems?.map((di) => ({
+              id: di.id,
+              actualQuantity: di.actualQuantity.toString(),
+              unit: di.unit,
+              note: di.note ?? null,
+              requestedQuantity:
+                di.SupplyRequestItem?.requestedQuantity?.toString() ?? null,
+              ingredientName:
+                di.SupplyRequestItem?.IngredientEntry?.Ingredient?.name ?? null,
+              handlingType:
+                di.SupplyRequestItem?.IngredientEntry?.handlingType ?? null,
+            })) ?? [],
+          createdAt: row.createdAt.toISOString(),
+          updatedAt: row.updatedAt.toISOString(),
+        })),
+        pagination: page.pagination,
+      };
     },
   };
 }

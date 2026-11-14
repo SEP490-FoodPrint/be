@@ -139,7 +139,7 @@ Hai list đơn vị nhận search/status và trả contact/total; nhóm con phâ
 
 Module ingredient đã tách đầy đủ routes/controller/validation/service/repository và hai file Request/Response DTO theo AGENTS.md; phần mô tả bốn file ở trên áp dụng cho các module danh sách legacy chưa chuyển đổi. Controller validate qua Zod; service xác lập scope, transaction và map DTO; repository thực hiện mọi truy vấn/khóa với shared client.
 
-Ngoài GET đọc nghiệp vụ `/api/ingredients`, module có nhóm `/api/ingredients/management` dành riêng cho Supplier Admin với permission ingredient.manage: GET danh sách, GET categories, GET :ingredientId, POST tạo, PATCH :ingredientId và POST :ingredientId/hide. Chi tiết tại [AUTHORIZATION.md](../../docs/AUTHORIZATION.md#quản-trị-nguyên-liệu-nhà-cung-cấp).
+Ngoài GET đọc nghiệp vụ `/api/ingredients`, module có nhóm `/api/ingredients/management` dành riêng cho Supplier Admin với permission ingredient.manage: GET danh sách, GET categories, GET :ingredientId, POST tạo, PATCH :ingredientId, POST :ingredientId/hide và hai API upload ảnh. Chi tiết tại [AUTHORIZATION.md](../../docs/AUTHORIZATION.md#quản-trị-nguyên-liệu-nhà-cung-cấp).
 
 IngredientCategory là danh mục dùng chung chỉ đọc trong module ingredient, không có chức năng quản trị danh mục. categoryId thay cột category; coverImage một ảnh và imageDescription nhiều ảnh là các tham chiếu có sẵn. Ẩn chuyển INACTIVE, giữ dữ liệu/lịch sử và không cung cấp bật lại hoặc xóa.
 

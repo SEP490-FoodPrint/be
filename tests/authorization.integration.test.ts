@@ -1,4 +1,7 @@
-import { ingredientService } from "../src/modules/ingredient/ingredient.service";
+import {
+  createIngredientService,
+  ingredientService,
+} from "../src/modules/ingredient/ingredient.service";
 import {
   createSourceFacilityService,
   sourceFacilityService,
@@ -3012,6 +3015,42 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       );
       // Middleware reloads current grants/denials on each authenticated request.
       const staleActor = await loadPrincipal(supplierAdmin.id, db);
+      const uploadCalls: string[] = [];
+      const uploadInput = {
+        file: {
+          buffer: Buffer.from("test"),
+          size: 4,
+          mimeType: "image/jpeg",
+          originalName: "test.jpg",
+        },
+      };
+      const asset = {
+        publicId: "test-image",
+        url: "https://res.cloudinary.com/demo/image/upload/test.jpg",
+        format: "jpg" as const,
+        bytes: 4,
+        width: 1,
+        height: 1,
+      };
+      const uploadService = createIngredientService(undefined, undefined, {
+        uploadImage: (_file, scope) => {
+          uploadCalls.push(scope.ownerId);
+          return Promise.resolve(asset);
+        },
+        uploadImages: (_files, scope) => {
+          uploadCalls.push(scope.ownerId);
+          return Promise.resolve([
+            { index: 0, status: "success" as const, asset },
+          ]);
+        },
+      });
+      const beforeUpload = await db.ingredient.count();
+      assert.equal(
+        (await uploadService.uploadImage(uploadInput, staleActor)).url,
+        asset.url,
+      );
+      assert.deepEqual(uploadCalls, [supplierA.id]);
+      assert.equal(await db.ingredient.count(), beforeUpload);
       const denial = await db.userPermissionDenial.create({
         data: {
           userId: supplierAdmin.id,
@@ -3039,6 +3078,12 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         (error: unknown) =>
           error instanceof HttpError && error.statusCode === 403,
       );
+      await assert.rejects(
+        () => uploadService.uploadImage(uploadInput, staleActor),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 403,
+      );
+      assert.deepEqual(uploadCalls, [supplierA.id]);
       await db.userPermissionDenial.delete({ where: { id: denial.id } });
       await db.user.update({
         where: { id: supplierAdmin.id },
@@ -3051,6 +3096,11 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             { name: "Locked account" },
             staleActor,
           ),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 403,
+      );
+      await assert.rejects(
+        () => uploadService.uploadImage(uploadInput, staleActor),
         (error: unknown) =>
           error instanceof HttpError && error.statusCode === 403,
       );
@@ -3068,6 +3118,11 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         (error: unknown) =>
           error instanceof HttpError && error.statusCode === 403,
       );
+      await assert.rejects(
+        () => uploadService.uploadImage(uploadInput, staleActor),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 403,
+      );
       await db.user.update({
         where: { id: supplierAdmin.id },
         data: { supplierId: supplierA.id },
@@ -3078,6 +3133,12 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         data: { status: "INACTIVE" },
       });
       assert.equal((await request(base, supplierAdmin.id)).status, 403);
+      await assert.rejects(
+        () => uploadService.uploadImage(uploadInput, staleActor),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 403,
+      );
+      assert.deepEqual(uploadCalls, [supplierA.id]);
       assert.equal(
         (
           await request(base, supplierAdmin.id, "POST", {
