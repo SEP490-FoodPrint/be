@@ -3,7 +3,8 @@
 1. Bổ sung quan hệ `Supplier` và trường `description` trong `ingredientLegacySelect` tại `src/modules/ingredient/ingredient.repository.ts`.
 2. Mở rộng Response DTO `IngredientResponse` và `LegacyIngredientResponse` trong `src/modules/ingredient/ingredient.response.dto.ts`.
 3. Cập nhật mapper trong `src/modules/ingredient/ingredient.service.ts` để gán `supplierName`, `supplier` và `description`.
-4. Kiểm thử kết nối dữ liệu danh mục nguyên liệu với frontend.
+4. Mở rộng truy vấn `select` và response DTO cho danh sách đợt giao nhận `GET /api/deliveries` phục vụ màn hình Phiếu nhập hàng.
+5. Kiểm thử kết nối dữ liệu danh mục nguyên liệu và phiếu giao nhận với frontend.
 
 ## Constitution Check
 
