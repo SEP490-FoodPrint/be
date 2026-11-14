@@ -114,7 +114,7 @@ export const dishRecipeRepository = {
     return tx.dish.findMany({
       where: { schoolId, status: "ACTIVE" },
       include: recipeInclude,
-      orderBy: [{ name: "asc" }, { id: "asc" }],
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       skip,
       take,
     });
