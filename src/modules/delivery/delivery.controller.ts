@@ -1,4 +1,5 @@
 import { requirePrincipal } from "../../utils/authorization";
+import { uploadRecordPhoto, removeRecordPhoto } from "../../utils/record-photo";
 import { asyncHandler } from "../../utils/async-handler";
 import { sendSuccess } from "../../utils/response";
 import { deliveryService, type DeliveryService } from "./delivery.service";
@@ -15,15 +16,19 @@ export function createDeliveryInspectionController(
 ) {
   return {
     decide: asyncHandler(async (req, res) => {
-      sendSuccess(
-        res,
-        await service.decide(
-          validateDeliveryId(req.params).id,
-          validateDeliveryInspectionDecision(req.body),
-          requirePrincipal(req),
-        ),
-        "Đã ghi nhận kiểm tra đợt giao",
-      );
+      const id = validateDeliveryId(req.params).id;
+      const input = validateDeliveryInspectionDecision(req.body);
+      const principal = requirePrincipal(req);
+      const upload = await uploadRecordPhoto(principal.id, req.file);
+      let result;
+      try {
+        result = await service.decide(id, input, principal, upload?.photo);
+      } catch (error) {
+        if (upload) await removeRecordPhoto(upload.document);
+        throw error;
+      }
+      if (upload && !result.created) await removeRecordPhoto(upload.document);
+      sendSuccess(res, result, "Đã ghi nhận kiểm tra đợt giao");
     }),
     list: asyncHandler(async (req, res) => {
       sendSuccess(

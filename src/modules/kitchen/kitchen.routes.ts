@@ -1,6 +1,7 @@
 ﻿import { Router } from "express";
 import type { RequestHandler } from "express";
 import { authenticate } from "../../middlewares/auth.middleware";
+import { receivePhoto } from "../../utils/record-photo";
 import {
   requirePermission,
   requireResource,
@@ -59,6 +60,7 @@ export function createKitchenRouter(
     "/:id/food-samples",
     authHandler,
     requirePermission("retained_sample.create"),
+    receivePhoto,
     sampleController.create,
   );
   router.get(

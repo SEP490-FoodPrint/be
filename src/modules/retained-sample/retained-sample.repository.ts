@@ -11,6 +11,8 @@ export const retainedSampleSelect = {
   quantity: true,
   unit: true,
   storageLocation: true,
+  photoPublicId: true,
+  photoHash: true,
   status: true,
   disposedAt: true,
   disposalNote: true,
@@ -134,6 +136,8 @@ export function createRetainedSampleRepository(read?: ListReader) {
         unit: string;
         storageLocation: string;
         sampledAt: Date;
+        photoPublicId?: string;
+        photoHash?: string;
       },
     ) {
       return tx.retainedFoodSample.create({
