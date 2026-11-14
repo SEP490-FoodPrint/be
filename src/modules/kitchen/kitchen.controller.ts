@@ -15,6 +15,15 @@ export function createKitchenController(
   service: KitchenService = kitchenService,
 ) {
   return {
+    preview: asyncHandler(async (req, res) => {
+      sendSuccess(
+        res,
+        await service.preview(
+          validateKitchenPlan(req.query),
+          requirePrincipal(req),
+        ),
+      );
+    }),
     getGroup: asyncHandler(async (req, res) => {
       sendSuccess(
         res,

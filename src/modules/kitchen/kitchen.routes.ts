@@ -62,6 +62,12 @@ export function createKitchenRouter(
     sampleController.create,
   );
   router.get(
+    "/plan",
+    authHandler,
+    requirePermission("cooking_batch.create"),
+    controller.preview,
+  );
+  router.get(
     "/:id",
     authHandler,
     requireResource("kitchen"),

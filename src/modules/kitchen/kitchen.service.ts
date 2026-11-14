@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   Prisma,
   type PrismaClient,
@@ -27,6 +27,7 @@ import type {
   CookingBatchDetailDTO,
   CookingBatchGroupResponseDTO,
   CookingBatchPlanResponseDTO,
+  CookingBatchPreviewDTO,
   CookingBatchListResponseDTO,
   CookingBatchStatsResponseDTO,
   SchoolContextResponseDTO,
@@ -47,6 +48,8 @@ export interface RecipeLine {
   unit: string;
 }
 export interface PlanningLot {
+  lotCode?: string;
+  ingredientName?: string;
   id: string;
   ingredientEntryId: string;
   availableQuantity: string;
@@ -369,8 +372,18 @@ export async function readPlanningStock(
       id: true,
       unit: true,
       availableQuantity: true,
+      lotCode: true,
       DeliveryItem: {
-        select: { SupplyRequestItem: { select: { ingredientEntryId: true } } },
+        select: {
+          SupplyRequestItem: {
+            select: {
+              ingredientEntryId: true,
+              IngredientEntry: {
+                select: { Ingredient: { select: { name: true } } },
+              },
+            },
+          },
+        },
       },
     },
     orderBy: [
@@ -382,6 +395,9 @@ export async function readPlanningStock(
   const reserved = await reservedQuantities(tx, lots);
   return lots.map((lot) => ({
     id: lot.id,
+    lotCode: lot.lotCode,
+    ingredientName:
+      lot.DeliveryItem.SupplyRequestItem.IngredientEntry.Ingredient.name,
     unit: lot.unit,
     ingredientEntryId: lot.DeliveryItem.SupplyRequestItem.ingredientEntryId,
     availableQuantity: lot.availableQuantity.toString(),
@@ -600,6 +616,8 @@ export async function reserveMealSeasonings(
   menuDate: Date,
   portions: number,
   mode: CookingMode,
+  preview = false,
+  additional: readonly PlanningLot[] = [],
 ) {
   const standards = await tx.menuMealSeasoning.findMany({
     where: mealKey(meal),
@@ -677,7 +695,20 @@ export async function reserveMealSeasonings(
     await checkMealSeasoningStock(tx, meal, schoolId);
     return;
   }
-  let stock = await readPlanningStock(tx, schoolId, menuDate, entryIds, true);
+  let stock = await readPlanningStock(
+    tx,
+    schoolId,
+    menuDate,
+    entryIds,
+    !preview,
+  );
+  if (preview)
+    stock = stock.map((lot) => {
+      const simulated = additional.find((row) => row.id === lot.id);
+      return simulated
+        ? { ...lot, reservedQuantity: simulated.reservedQuantity }
+        : lot;
+    });
   // A shared meal pool cannot assign split spice lots to individual dishes.
   // Preserve SEPARATE_BY_LOT by choosing one sufficient lot per seasoning.
   if (mode === "SEPARATE_BY_LOT") {
@@ -712,6 +743,17 @@ export async function reserveMealSeasonings(
     })),
     stock,
   );
+  if (preview)
+    return plans.flatMap((plan) =>
+      plan.lots.map((lot) => ({
+        ...lot,
+        lotCode:
+          stock.find((row) => row.id === lot.ingredientLotId)?.lotCode ?? null,
+        ingredientName:
+          stock.find((row) => row.id === lot.ingredientLotId)?.ingredientName ??
+          null,
+      })),
+    );
   const byLot = new Map(stock.map((lot) => [lot.id, lot]));
   for (const plan of plans)
     for (const lot of plan.lots)
@@ -1094,6 +1136,284 @@ export function createKitchenLifecycle(
     return new Map(lots.map((lot) => [lot.id, lot]));
   }
 
+  async function executePlan(
+    input: PlanInput,
+    principal: AuthPrincipal,
+    preview: boolean,
+  ): Promise<CookingBatchPlanResponseDTO | CookingBatchPreviewDTO> {
+    return write(
+      principal,
+      "cooking_batch.create",
+      async (tx, actor, schoolId) => {
+        if (!preview)
+          await tx.$queryRaw`SELECT id FROM foodprint.menu_days WHERE id = ${input.menuDayId}::uuid FOR UPDATE`;
+        const school = await repository.findSchoolContext(tx, schoolId);
+        if (
+          !school?.cookingMode ||
+          !(input.mealType === "LUNCH"
+            ? school.lunchTime
+            : school.afternoonMealTime)
+        )
+          throw new HttpError(
+            409,
+            "BGH cần cấu hình chế độ nấu và giờ phục vụ trước",
+          );
+        const meal = mealKey(input);
+        const menu = await repository.findPlanMeal(
+          tx,
+          input.menuDayId,
+          input.mealType,
+          schoolId,
+        );
+        if (!menu || !menu.menuDayDishes.length)
+          throw new HttpError(
+            404,
+            "Không tìm thấy bữa ăn trong thực đơn của trường",
+          );
+        if (
+          input.dishId &&
+          !menu.menuDayDishes.some((d) => d.dishId === input.dishId)
+        )
+          throw new HttpError(404, "Món không thuộc bữa ăn trong thực đơn");
+        if (
+          menu.approvalStatus !== "APPROVED" ||
+          menu.menuDayDishes.some(
+            (d) => d.Dish.status !== "ACTIVE" || d.Dish.schoolId !== schoolId,
+          )
+        )
+          throw new HttpError(
+            409,
+            "Chỉ lập mẻ cho thực đơn đã duyệt và món đang hoạt động",
+          );
+        const demand = await readMealPortionDemand(
+          tx,
+          meal,
+          schoolId,
+          menu.menuDate,
+        );
+        if (demand.totalPortions <= 0)
+          throw new HttpError(
+            409,
+            "Chưa có nhu cầu suất ăn đã chốt cho bữa này",
+          );
+        const existing = await repository.listMealBatches(tx, meal);
+        const planned = new Map<string, number>();
+        for (const child of existing)
+          for (const dish of child.dishes) {
+            if (!dish.plannedPortions || dish.plannedPortions <= 0)
+              throw new HttpError(
+                409,
+                "Mẻ cũ thiếu số suất kế hoạch; cần đối chiếu trước",
+              );
+            planned.set(
+              dish.dishId,
+              (planned.get(dish.dishId) ?? 0) + dish.plannedPortions,
+            );
+          }
+        for (const [dishId, portions] of planned)
+          if (portions > (demand.dishPortions.get(dishId) ?? 0))
+            throw new HttpError(
+              409,
+              "Kế hoạch cũ vượt nhu cầu; không tự thay đổi lịch sử",
+            );
+        // A changed school policy applies to a new meal; never mix modes in an already planned meal.
+        const mode = existing[0]?.cookingModeApplied ?? school.cookingMode;
+        if (existing.some((child) => child.cookingModeApplied !== mode))
+          throw new HttpError(
+            409,
+            "Bữa đã có các chế độ chế biến khác nhau; cần đối chiếu",
+          );
+        const recipes = menu.menuDayDishes.flatMap((dish) => {
+          const portions =
+            (demand.dishPortions.get(dish.dishId) ?? 0) -
+            (planned.get(dish.dishId) ?? 0);
+          if (!portions) return [];
+          const recipe = dish.ingredients.map((row) => {
+            const entries = row.ingredient.ingredientEntries;
+            if (entries.length !== 1)
+              throw new HttpError(
+                409,
+                "Nguyên liệu thực đơn chưa xác định được danh mục kho trường",
+              );
+            return {
+              ingredientEntryId: entries[0].id,
+              quantityPerPortion: row.quantityPerPortion.toString(),
+              unit: row.unit,
+            };
+          });
+          if (!recipe.length)
+            throw new HttpError(
+              409,
+              "Thiếu định mức chính thức của món trong thực đơn",
+            );
+          return [{ dishId: dish.dishId, portions, recipe }];
+        });
+        if (!recipes.length && preview)
+          return {
+            batches: [],
+            seasonings: [],
+            planVersion: "",
+            cookingModeApplied: mode,
+          };
+        if (!recipes.length)
+          return {
+            created: false,
+            groups: groupDtos(existing),
+            batches: existing.map(dto),
+          };
+        const entryIds = [
+          ...new Set(
+            recipes.flatMap((r) => r.recipe.map((i) => i.ingredientEntryId)),
+          ),
+        ];
+        if (
+          !demand.groups.length &&
+          (await repository.hasRecipeAllergy(
+            tx,
+            menu.menuDate,
+            meal.mealType,
+            schoolId,
+            entryIds,
+          ))
+        )
+          throw new HttpError(
+            409,
+            "Nhu cầu có dị ứng liên quan recipe; cần phương án món phù hợp trước khi lập mẻ",
+          );
+        const stock = await readPlanningStock(
+          tx,
+          schoolId,
+          menu.menuDate,
+          entryIds,
+          !preview,
+        );
+        const dishPlans: DishPlans[] = [];
+        for (const dish of recipes) {
+          const plans = planCookingBatches(
+            dish.portions,
+            mode,
+            dish.recipe,
+            stock,
+          );
+          dishPlans.push({ dishId: dish.dishId, plans });
+          // Recipes can share a stock lot. Later dishes see reservations made by earlier dishes.
+          for (const plan of plans)
+            for (const allocation of plan.lots) {
+              const lot = stock.find(
+                (l) => l.id === allocation.ingredientLotId,
+              )!;
+              lot.reservedQuantity = new Decimal(lot.reservedQuantity)
+                .add(
+                  convertQuantity(
+                    new Decimal(allocation.quantityUsed),
+                    allocation.unit,
+                    lot.unit,
+                  ),
+                )
+                .toString();
+            }
+        }
+        const children = groupDishPlans(dishPlans, mode);
+        const seasonings =
+          (await reserveMealSeasonings(
+            tx,
+            meal,
+            schoolId,
+            menu.menuDate,
+            demand.totalPortions,
+            mode,
+            true,
+            stock,
+          )) ?? [];
+        const planVersion = createHash("sha256")
+          .update(JSON.stringify({ mode, children, seasonings }))
+          .digest("hex");
+        if (preview)
+          return {
+            cookingModeApplied: mode,
+            planVersion,
+            seasonings,
+            batches: children.map((child) => ({
+              plannedPortions: child.plannedPortions,
+              dishes: child.dishes.map((dish) => ({
+                dishId: dish.dishId,
+                name: menu.menuDayDishes.find(
+                  (row) => row.dishId === dish.dishId,
+                )!.Dish.name,
+                plannedPortions: dish.plannedPortions,
+                lots: dish.lots.map((lot) => ({
+                  ...lot,
+                  lotCode:
+                    stock.find((row) => row.id === lot.ingredientLotId)
+                      ?.lotCode ?? null,
+                  ingredientName:
+                    stock.find((row) => row.id === lot.ingredientLotId)
+                      ?.ingredientName ?? null,
+                })),
+              })),
+            })),
+          };
+        if (input.planVersion && input.planVersion !== planVersion)
+          throw new HttpError(
+            409,
+            "Phương án đã thay đổi; vui lòng xem lại trước khi tạo lô",
+          );
+        const group = await repository.createPlanGroup(tx, {
+          ...meal,
+          createdByUserId: actor.id,
+          batchCode: `B-${randomUUID()}`,
+        });
+        const created: Detail[] = [];
+        for (const child of children)
+          created.push(
+            await repository.createPlannedChild(
+              tx,
+              {
+                ...meal,
+                batchGroupId: group.id,
+                batchCode: `CB-${randomUUID()}`,
+                dishId:
+                  child.dishes.length === 1 ? child.dishes[0].dishId : null,
+                cookingModeApplied: mode,
+                createdByUserId: actor.id,
+                status: "CONFIRMED",
+                confirmedByUserId: actor.id,
+                confirmedAt: new Date(),
+                plannedPortions: child.plannedPortions,
+                dishes: {
+                  create: child.dishes.map((d) => ({
+                    dishId: d.dishId,
+                    plannedPortions: d.plannedPortions,
+                  })),
+                },
+              },
+              child.dishes.flatMap((d) =>
+                d.lots.map((l) => ({ ...l, dishId: d.dishId })),
+              ),
+            ),
+          );
+        await reserveMealSeasonings(
+          tx,
+          meal,
+          schoolId,
+          menu.menuDate,
+          demand.totalPortions,
+          mode,
+        );
+        await tx.menuDay.update({
+          where: { id: input.menuDayId },
+          data: { updatedAt: new Date() },
+        });
+        const batches = [...existing, ...created];
+        return {
+          created: true,
+          groups: groupDtos(batches),
+          batches: batches.map(dto),
+        };
+      },
+    );
+  }
+
   return {
     async getGroup(
       id: string,
@@ -1208,226 +1528,19 @@ export function createKitchenLifecycle(
         },
       );
     },
-    plan(
-      input: PlanInput,
-      principal: AuthPrincipal,
-    ): Promise<CookingBatchPlanResponseDTO> {
-      return write(
+    preview(input: PlanInput, principal: AuthPrincipal) {
+      return executePlan(
+        input,
         principal,
-        "cooking_batch.create",
-        async (tx, actor, schoolId) => {
-          await tx.$queryRaw`SELECT id FROM foodprint.menu_days WHERE id = ${input.menuDayId}::uuid FOR UPDATE`;
-          const school = await repository.findSchoolContext(tx, schoolId);
-          if (
-            !school?.cookingMode ||
-            !(input.mealType === "LUNCH"
-              ? school.lunchTime
-              : school.afternoonMealTime)
-          )
-            throw new HttpError(
-              409,
-              "BGH cần cấu hình chế độ nấu và giờ phục vụ trước",
-            );
-          const meal = mealKey(input);
-          const menu = await repository.findPlanMeal(
-            tx,
-            input.menuDayId,
-            input.mealType,
-            schoolId,
-          );
-          if (!menu || !menu.menuDayDishes.length)
-            throw new HttpError(
-              404,
-              "Không tìm thấy bữa ăn trong thực đơn của trường",
-            );
-          if (
-            input.dishId &&
-            !menu.menuDayDishes.some((d) => d.dishId === input.dishId)
-          )
-            throw new HttpError(404, "Món không thuộc bữa ăn trong thực đơn");
-          if (
-            menu.approvalStatus !== "APPROVED" ||
-            menu.menuDayDishes.some(
-              (d) => d.Dish.status !== "ACTIVE" || d.Dish.schoolId !== schoolId,
-            )
-          )
-            throw new HttpError(
-              409,
-              "Chỉ lập mẻ cho thực đơn đã duyệt và món đang hoạt động",
-            );
-          const demand = await readMealPortionDemand(
-            tx,
-            meal,
-            schoolId,
-            menu.menuDate,
-          );
-          if (demand.totalPortions <= 0)
-            throw new HttpError(
-              409,
-              "Chưa có nhu cầu suất ăn đã chốt cho bữa này",
-            );
-          const existing = await repository.listMealBatches(tx, meal);
-          const planned = new Map<string, number>();
-          for (const child of existing)
-            for (const dish of child.dishes) {
-              if (!dish.plannedPortions || dish.plannedPortions <= 0)
-                throw new HttpError(
-                  409,
-                  "Mẻ cũ thiếu số suất kế hoạch; cần đối chiếu trước",
-                );
-              planned.set(
-                dish.dishId,
-                (planned.get(dish.dishId) ?? 0) + dish.plannedPortions,
-              );
-            }
-          for (const [dishId, portions] of planned)
-            if (portions > (demand.dishPortions.get(dishId) ?? 0))
-              throw new HttpError(
-                409,
-                "Kế hoạch cũ vượt nhu cầu; không tự thay đổi lịch sử",
-              );
-          // A changed school policy applies to a new meal; never mix modes in an already planned meal.
-          const mode = existing[0]?.cookingModeApplied ?? school.cookingMode;
-          if (existing.some((child) => child.cookingModeApplied !== mode))
-            throw new HttpError(
-              409,
-              "Bữa đã có các chế độ chế biến khác nhau; cần đối chiếu",
-            );
-          const recipes = menu.menuDayDishes.flatMap((dish) => {
-            const portions =
-              (demand.dishPortions.get(dish.dishId) ?? 0) -
-              (planned.get(dish.dishId) ?? 0);
-            if (!portions) return [];
-            const recipe = dish.ingredients.map((row) => {
-              const entries = row.ingredient.ingredientEntries;
-              if (entries.length !== 1)
-                throw new HttpError(
-                  409,
-                  "Nguyên liệu thực đơn chưa xác định được danh mục kho trường",
-                );
-              return {
-                ingredientEntryId: entries[0].id,
-                quantityPerPortion: row.quantityPerPortion.toString(),
-                unit: row.unit,
-              };
-            });
-            if (!recipe.length)
-              throw new HttpError(
-                409,
-                "Thiếu định mức chính thức của món trong thực đơn",
-              );
-            return [{ dishId: dish.dishId, portions, recipe }];
-          });
-          if (!recipes.length)
-            return {
-              created: false,
-              groups: groupDtos(existing),
-              batches: existing.map(dto),
-            };
-          const entryIds = [
-            ...new Set(
-              recipes.flatMap((r) => r.recipe.map((i) => i.ingredientEntryId)),
-            ),
-          ];
-          if (
-            !demand.groups.length &&
-            (await repository.hasRecipeAllergy(
-              tx,
-              menu.menuDate,
-              meal.mealType,
-              schoolId,
-              entryIds,
-            ))
-          )
-            throw new HttpError(
-              409,
-              "Nhu cầu có dị ứng liên quan recipe; cần phương án món phù hợp trước khi lập mẻ",
-            );
-          const stock = await readPlanningStock(
-            tx,
-            schoolId,
-            menu.menuDate,
-            entryIds,
-            true,
-          );
-          const dishPlans: DishPlans[] = [];
-          for (const dish of recipes) {
-            const plans = planCookingBatches(
-              dish.portions,
-              mode,
-              dish.recipe,
-              stock,
-            );
-            dishPlans.push({ dishId: dish.dishId, plans });
-            // Recipes can share a stock lot. Later dishes see reservations made by earlier dishes.
-            for (const plan of plans)
-              for (const allocation of plan.lots) {
-                const lot = stock.find(
-                  (l) => l.id === allocation.ingredientLotId,
-                )!;
-                lot.reservedQuantity = new Decimal(lot.reservedQuantity)
-                  .add(
-                    convertQuantity(
-                      new Decimal(allocation.quantityUsed),
-                      allocation.unit,
-                      lot.unit,
-                    ),
-                  )
-                  .toString();
-              }
-          }
-          const children = groupDishPlans(dishPlans, mode);
-          const group = await repository.createPlanGroup(tx, {
-            ...meal,
-            createdByUserId: actor.id,
-            batchCode: `B-${randomUUID()}`,
-          });
-          const created: Detail[] = [];
-          for (const child of children)
-            created.push(
-              await repository.createPlannedChild(
-                tx,
-                {
-                  ...meal,
-                  batchGroupId: group.id,
-                  batchCode: `CB-${randomUUID()}`,
-                  dishId:
-                    child.dishes.length === 1 ? child.dishes[0].dishId : null,
-                  cookingModeApplied: mode,
-                  createdByUserId: actor.id,
-                  plannedPortions: child.plannedPortions,
-                  dishes: {
-                    create: child.dishes.map((d) => ({
-                      dishId: d.dishId,
-                      plannedPortions: d.plannedPortions,
-                    })),
-                  },
-                },
-                child.dishes.flatMap((d) =>
-                  d.lots.map((l) => ({ ...l, dishId: d.dishId })),
-                ),
-              ),
-            );
-          await reserveMealSeasonings(
-            tx,
-            meal,
-            schoolId,
-            menu.menuDate,
-            demand.totalPortions,
-            mode,
-          );
-          await tx.menuDay.update({
-            where: { id: input.menuDayId },
-            data: { updatedAt: new Date() },
-          });
-          const batches = [...existing, ...created];
-          return {
-            created: true,
-            groups: groupDtos(batches),
-            batches: batches.map(dto),
-          };
-        },
-      );
+        true,
+      ) as Promise<CookingBatchPreviewDTO>;
+    },
+    plan(input: PlanInput, principal: AuthPrincipal) {
+      return executePlan(
+        input,
+        principal,
+        false,
+      ) as Promise<CookingBatchPlanResponseDTO>;
     },
 
     confirm(id: string, principal: AuthPrincipal) {
