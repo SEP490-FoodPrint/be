@@ -1554,6 +1554,7 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
       await local.connect();
       try {
         const migration = "20261117000100_single_dish_new_batches";
+        await local.query("SET search_path TO foodprint, public");
         for (const folder of migrationNames.filter(
           (value) => value < migration,
         )) {
