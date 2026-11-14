@@ -6,10 +6,28 @@ import {
   selectDishGradeRecipes,
 } from "../src/modules/dish/dish.service";
 import { validateDishRecipe } from "../src/modules/dish/dish.validation";
+import { dishRecipeRepository } from "../src/modules/dish/dish.repository";
 import { expandMenuHolidays } from "../src/modules/menu/menu.service";
 import { assertPortionGroupSafety } from "../src/modules/kitchen/kitchen.service";
 
 type Rows = Parameters<typeof aggregateDishRecipes>[0];
+
+void test("dish catalogue requests newest first with stable pagination within the school", async () => {
+  let captured: Record<string, unknown> | undefined;
+  const tx = {
+    dish: {
+      findMany: (args: Record<string, unknown>) => {
+        captured = args;
+        return Promise.resolve([]);
+      },
+    },
+  };
+  await dishRecipeRepository.catalog(tx as never, "school-a", 100, 100);
+  assert.deepEqual(captured?.where, { schoolId: "school-a", status: "ACTIVE" });
+  assert.deepEqual(captured?.orderBy, [{ createdAt: "desc" }, { id: "desc" }]);
+  assert.equal(captured?.skip, 100);
+  assert.equal(captured?.take, 100);
+});
 
 void test("grade recipe selection compares normalized quantities and never falls back to another grade", () => {
   const profile = (gradeId: string, quantity: string, unit: string) => ({
