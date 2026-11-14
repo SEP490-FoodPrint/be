@@ -1705,14 +1705,9 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
       );
     if (+input.weekStartDate !== +menu.weekStartDate)
       throw new HttpError(409, "Không đổi tuần của thực đơn đã tạo");
-    if (
-      menu.menuDays.some((day) => day.approvalStatus === "APPROVED") &&
-      input.title !== menu.title
-    )
-      throw new HttpError(409, "Không đổi tên tuần có ngày thực đơn đã duyệt");
+    if (input.title !== null && input.title !== menu.title)
+      throw new HttpError(409, "Không thể đổi tên thực đơn tuần");
     await writeDays(tx, id, input, schoolId);
-    if (input.title !== menu.title)
-      await repository.updateMenuTitle(tx, id, input.title);
     await repository.resetForEditing(tx, id);
     return {
       saved: await owned(tx, id, schoolId),
@@ -1977,20 +1972,12 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
             const mergedInput: MenuWrite = {
               weekStartDate: input.weekStartDate,
 
-              title: input.title || existingWeekly.title,
+              title: existingWeekly.title,
 
               days: [...retainedDays, ...mergedIncomingDays],
             };
 
             await writeDays(tx, existingWeekly.id, mergedInput, schoolId);
-
-            if (input.title) {
-              await repository.updateMenuTitle(
-                tx,
-                existingWeekly.id,
-                input.title,
-              );
-            }
 
             await repository.resetForEditing(tx, existingWeekly.id);
             const saved = await owned(tx, existingWeekly.id, schoolId);
@@ -2000,12 +1987,30 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
             };
           }
 
+          const years = await repository.academicYears(tx, schoolId);
+          const year = years.find(
+            (row) =>
+              getSchoolMonday(row.startDate) <= input.weekStartDate &&
+              input.weekStartDate.getTime() <
+                getSchoolMonday(row.endDate).getTime() + 7 * 86400000,
+          );
+          if (!year)
+            throw new HttpError(
+              422,
+              "Tuần đã chọn chưa thuộc năm học của trường",
+            );
+          const weekNumber =
+            Math.floor(
+              (input.weekStartDate.getTime() -
+                getSchoolMonday(year.startDate).getTime()) /
+                (7 * 86400000),
+            ) + 1;
           const menu = await repository.createWeeklyMenu(
             tx,
             schoolId,
             actor.id,
             input.weekStartDate,
-            input.title,
+            `Thực đơn tuần ${weekNumber}`,
             gradeIds,
           );
 
