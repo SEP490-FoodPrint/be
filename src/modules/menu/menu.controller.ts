@@ -33,10 +33,10 @@ export function createMenuController(service: MenuService = menuService) {
       );
     }),
     getWeekSchedule: asyncHandler(async (req, res) => {
-      const { date } = validateMenuWeekSchedule(req.query);
+      const { date, ...selection } = validateMenuWeekSchedule(req.query);
       sendSuccess(
         res,
-        await service.getWeekSchedule(date, requirePrincipal(req)),
+        await service.getWeekSchedule(date, requirePrincipal(req), selection),
       );
     }),
     getPortionGroups: asyncHandler(async (req, res) => {

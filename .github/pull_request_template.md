@@ -5,7 +5,7 @@
 - [ ] **Có spec**: PR thay đổi `src/**` hoặc `prisma/**`, hoặc chỉ sửa spec
 - [ ] **Miễn spec**: tài liệu, CI, test, tooling; nhánh `revert/*`; PR `dev` → `main`
 
-**Spec:** `specs/NNN-slug/` <!-- bỏ trống nếu miễn spec -->
+**Spec:** `specs/<feature-slug>/` <!-- bỏ trống nếu miễn spec -->
 
 ## Thay đổi
 
@@ -21,7 +21,7 @@
 
 ## Checklist
 
-- [ ] Nhánh đúng quy tắc (`<feat|fix|refactor|perf>/NNN-slug` nếu có spec) và base là `dev`
+- [ ] Nhánh đúng quy tắc (`<feat|fix|refactor|perf>/<feature-slug>` nếu có spec) và base là `dev`
 - [ ] `spec.md`, `plan.md`, `tasks.md` khớp với code; không còn `NEEDS CLARIFICATION`
 - [ ] Mục Constitution Check trong `plan.md` PASS hoặc ngoại lệ đã được ghi rõ lý do
 - [ ] Commit `docs(spec): ...` đứng trước commit code để reviewer đọc spec trước

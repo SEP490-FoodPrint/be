@@ -42,6 +42,8 @@ export interface AllocationDayResponse {
     }[];
   };
   batches: {
+    eligibleDemandIds?: string[];
+    scopeLabel?: string;
     id: string;
     mealType: MealType;
     plannedPortions: number | null;

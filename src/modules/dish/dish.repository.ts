@@ -1,6 +1,20 @@
 import type { Prisma } from "../../generated/prisma/client";
 type Tx = Prisma.TransactionClient;
 const recipeInclude = {
+  gradeRecipes: {
+    include: {
+      grade: { select: { id: true, name: true } },
+      lines: {
+        include: {
+          entry: {
+            include: {
+              Ingredient: { include: { Supplier: { select: { name: true } } } },
+            },
+          },
+        },
+      },
+    },
+  },
   schoolCategory: true,
   dishIngredientEntries: {
     include: {
@@ -13,6 +27,45 @@ const recipeInclude = {
   },
 } as const;
 export const dishRecipeRepository = {
+  grades(tx: Tx, schoolId: string, ids: string[]) {
+    return tx.schoolGrade.findMany({
+      where: { schoolId, id: { in: ids } },
+      select: { id: true, name: true },
+    });
+  },
+  async saveGradeRecipes(
+    tx: Tx,
+    schoolId: string,
+    dishId: string,
+    profiles: {
+      gradeId: string;
+      lines: {
+        ingredientEntryId: string;
+        ingredientRole: string;
+        requiredQuantity: string;
+        unit: string;
+      }[];
+    }[],
+  ) {
+    for (const profile of profiles) {
+      await tx.dishGradeRecipe.upsert({
+        where: { dishId_gradeId: { dishId, gradeId: profile.gradeId } },
+        create: { dishId, gradeId: profile.gradeId, schoolId },
+        update: { updatedAt: new Date() },
+      });
+      await tx.dishGradeRecipeLine.deleteMany({
+        where: { dishId, gradeId: profile.gradeId },
+      });
+      await tx.dishGradeRecipeLine.createMany({
+        data: profile.lines.map((line) => ({
+          ...line,
+          dishId,
+          gradeId: profile.gradeId,
+        })),
+      });
+    }
+  },
+
   categories(tx: Tx, schoolId: string) {
     return tx.schoolDishCategory.findMany({
       where: { schoolId },

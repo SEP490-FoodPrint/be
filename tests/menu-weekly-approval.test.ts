@@ -319,6 +319,45 @@ void test("approval detail stays in school scope and uses finalized class demand
   assert.equal(detail.approval.note, "");
 });
 
+void test("approval uses selected grades for demand and suppliers from the saved menu ingredients", async () => {
+  const menu = detailRow();
+  menu.grades = [{ gradeId: "grade-one", grade: { name: "Khối 1" } }] as never;
+  menu.menuDays[0].menuDayDishes = [
+    {
+      mealType: "LUNCH",
+      Dish: { name: "Thịt", description: null, dishIngredientEntries: [] },
+      ingredients: [
+        {
+          ingredient: {
+            Supplier: { id: "supplier-snapshot", name: "NCC đã chọn" },
+          },
+        },
+      ],
+    },
+  ] as never;
+  let selectedGrades: string[] | undefined;
+  const repository = {
+    findDetail: () => Promise.resolve(menu),
+    findFinalizedPortions: (
+      _dates: Date[],
+      requestedSchoolId: string,
+      gradeIds?: string[],
+    ) => {
+      assert.equal(requestedSchoolId, schoolId);
+      selectedGrades = gradeIds;
+      return Promise.resolve([]);
+    },
+  } as unknown as MenuApprovalRepository;
+  const detail = await createMenuApprovalService(repository).getDetail(
+    menuId,
+    board,
+  );
+  assert.deepEqual(selectedGrades, ["grade-one"]);
+  assert.equal(detail.summary.audience, "Khối 1");
+  assert.equal(detail.summary.supplier, "1 nhà cung cấp");
+  assert.equal(detail.days[0].lunch[0].supplier, "NCC đã chọn");
+});
+
 void test("approval detail is restricted to the school management board", async () => {
   let reads = 0;
   const repository = {

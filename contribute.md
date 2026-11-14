@@ -143,7 +143,7 @@ Luồng hiện tại là `dev` → `<type>/<description>` → PR vào `dev` → 
 
 Đây là quy ước team cần review thủ công: hooks hiện tại chưa kiểm tra tên nhánh. Commitlint chỉ kiểm tra commit message. `git check-ref-format --branch <ten-nhanh>` chỉ kiểm tra cú pháp Git, không xác minh đầy đủ quy ước phía trên.
 
-Riêng nhánh có thay đổi `src/**` hoặc `prisma/**` phải dùng dạng `<feat|fix|refactor|perf>/NNN-slug` gắn với spec `specs/NNN-slug/`; dạng này được job **Spec gate** trong CI kiểm tra tự động. Xem [mục 8](#8-quy-trình-spec-driven-với-spec-kit).
+Riêng nhánh có thay đổi `src/**` hoặc `prisma/**` dùng dạng `<feat|fix|refactor|perf>/<feature-slug>` gắn với spec `specs/<feature-slug>/`; số thứ tự không bắt buộc, tên cũ có số vẫn được hỗ trợ. Job **Spec gate** trong CI kiểm tra cấu trúc và quan hệ nhánh/spec. Xem [mục 8](#8-quy-trình-spec-driven-với-spec-kit).
 
 ## 5. Quy trình làm việc
 
@@ -194,7 +194,7 @@ Ghi rõ kiểm tra bị BLOCKED và nguyên nhân nếu thiếu hạ tầng. Cá
 PR cần có:
 
 - Tên nhánh đúng quy tắc và nhánh đích `dev` cho công việc thường ngày; PR phát hành từ `dev` vào `main`.
-- Đường dẫn spec `specs/NNN-slug/` nếu PR thay đổi `src/**` hoặc `prisma/**` (xem [mục 8](#8-quy-trình-spec-driven-với-spec-kit)).
+- Đường dẫn spec `specs/<feature-slug>/` nếu PR thay đổi `src/**` hoặc `prisma/**` (xem [mục 8](#8-quy-trình-spec-driven-với-spec-kit)).
 - Vấn đề cần giải quyết và hành vi/cấu hình sau thay đổi.
 - Issue liên quan nếu có, cùng phạm vi các thành phần bị ảnh hưởng.
 - Lệnh kiểm tra thực tế và kết quả PASS/FAIL/BLOCKED; nêu lỗi còn tồn tại.
@@ -235,67 +235,65 @@ Mở Codex tại root repo; các lệnh được gọi bằng `$speckit-<tên>`.
 
 ### 8.2. Đặt tên nhánh và thư mục spec
 
-- Nhánh: `<feat|fix|refactor|perf>/NNN-slug`, ví dụ `feat/007-menu-weekly-export`. `NNN` là số 3 chữ số của spec, `slug` theo quy tắc ở mục 4.
-- Thư mục spec: `specs/NNN-slug/` gồm tối thiểu `spec.md`, `plan.md`, `tasks.md`. Số `NNN` trên nhánh và thư mục phải trùng nhau; phần slug có thể khác.
-- Lấy số tiếp theo sau số lớn nhất trong `specs/` trên `dev` mới nhất. Nếu hai người lấy trùng số, CI chặn PR merge sau; đổi sang số chưa dùng.
-- Sửa spec đã merge: dùng lại số cũ với slug mô tả thay đổi, ví dụ `fix/007-menu-export-timezone`.
-- Nhánh `docs/NNN-slug` được dùng khi muốn mở PR chỉ chứa spec (tùy chọn).
+- Nhánh mới: `<feat|fix|refactor|perf>/<feature-slug>`, ví dụ `feat/menu-weekly-export`.
+- Spec mới: `specs/menu-weekly-export/`, có đủ `spec.md`, `plan.md`, `tasks.md`. Không cần lấy số tiếp theo hoặc đổi số khi người khác merge trước.
+- Sửa tính năng đã có: dùng lại thư mục spec; nhánh có thể thêm hậu tố mô tả, ví dụ `fix/menu-weekly-export-timezone`.
+- PR chỉ chứa spec có thể dùng `docs/menu-weekly-export`.
+- Các spec/nhánh cũ như `specs/027-source-facility-management/` và `feat/027-source-facility-management` vẫn hợp lệ; không đổi hàng loạt lịch sử hoặc liên kết. Hai thư mục cũ trùng số nhưng khác tên không bị chặn chỉ vì trùng số.
+
+Gate ưu tiên thư mục khớp nguyên phần tên sau dấu `/` của branch; sau đó đối chiếu tên tính năng khi bỏ tiền tố ba chữ số cũ; sau đó chọn tên tính năng khớp dài nhất trước hậu tố mô tả. Chỉ khi không khớp theo tên, nhánh cũ có số mới dùng lại tra cứu theo số để hỗ trợ các slug lịch sử khác nhau. Nếu vẫn khớp nhiều thư mục, dùng tên branch khớp nguyên thư mục spec để phân biệt; gate không chọn ngẫu nhiên.
 
 ### 8.3. Các bước cho tính năng mới
 
 ```bash
 git switch dev
 git pull --ff-only origin dev
-ls specs/                      # tìm số NNN tiếp theo
-git switch -c feat/007-menu-weekly-export
+git switch -c feat/menu-weekly-export
 codex
 ```
 
 Trong Codex:
 
-1. `$speckit-specify <mô tả yêu cầu đã được xác nhận>`: tạo `specs/007-.../spec.md` và ghi `.specify/feature.json` (file local, không commit).
-2. `$speckit-clarify`: trả lời các câu hỏi cho tới khi `spec.md` không còn `[NEEDS CLARIFICATION: ...]`.
-3. `$speckit-plan`: tạo `plan.md` (và `research.md`, `data-model.md`, `contracts/` nếu cần). Mục **Constitution Check** phải PASS hoặc ghi rõ lý do ngoại lệ.
-4. `$speckit-tasks`: tạo `tasks.md`. Có thể chạy `$speckit-analyze` để kiểm tra spec/plan/tasks nhất quán.
-5. Format và commit spec trước:
+1. `$speckit-specify <mô tả yêu cầu đã được xác nhận>` tạo `specs/menu-weekly-export/spec.md` và lưu `.specify/feature.json` local, không commit. Skill local chọn slug không số; không gọi script upstream để tự cấp số.
+2. `$speckit-clarify` giải quyết các điểm chưa rõ trong spec.
+3. `$speckit-plan` tạo kế hoạch và kiểm tra Constitution Check.
+4. `$speckit-tasks` tạo công việc theo dependency; có thể chạy `$speckit-analyze` để đối chiếu tài liệu.
+5. Format và commit bộ spec:
 
    ```bash
-   npm exec --no -- prettier --write specs/007-menu-weekly-export
-   git add specs/007-menu-weekly-export
+   npm exec --no -- prettier --write specs/menu-weekly-export
+   git add specs/menu-weekly-export
    git commit -m "docs(spec): specify weekly menu export"
    ```
 
-6. `$speckit-implement` (hoặc code tay) theo `tasks.md`, tick `[x]` các task đã xong, commit code theo Conventional Commits.
-7. Chạy kiểm tra ở mục 6 rồi mở PR vào `dev`, điền đường dẫn spec trong PR template.
+6. `$speckit-implement` triển khai theo tasks, đánh dấu task hoàn thành và commit code theo Conventional Commits.
+7. Chạy kiểm tra ở mục 6 rồi mở PR vào `dev`, ghi đường dẫn spec trong PR template.
 
-Không bắt buộc tick hết `tasks.md` trong một PR; một spec có thể được triển khai qua nhiều PR cùng số.
+Một spec có thể được triển khai qua nhiều PR. Không bắt buộc hoàn tất mọi task trong một PR.
 
 ### 8.4. Sửa spec
 
-- **PR đang mở:** sửa trực tiếp file trong `specs/NNN-slug/`, commit `docs(spec): ...` trong cùng PR.
-- **Spec đã merge:** tạo nhánh mới cùng số (mục 8.2), trỏ spec-kit vào thư mục cũ rồi cập nhật:
+- **PR đang mở:** cập nhật spec/plan/tasks của tính năng trong cùng PR.
+- **Spec đã merge:** tạo nhánh tương ứng tên tính năng, trỏ vào thư mục cũ rồi cập nhật; thư mục cũ có số vẫn được dùng nguyên trạng.
 
   ```bash
-  SPECIFY_FEATURE_DIRECTORY=specs/007-menu-weekly-export codex
+  SPECIFY_FEATURE_DIRECTORY=specs/menu-weekly-export codex
   # trong Codex: $speckit-clarify → $speckit-plan → $speckit-tasks
   ```
 
-  Không chạy `$speckit-specify` khi sửa, vì lệnh này luôn tạo thư mục spec mới.
-
-- **Thay đổi lớn hoặc là tính năng khác:** tạo spec mới với số mới và ghi tham chiếu tới spec cũ trong `spec.md`.
-
-Spec và code phải luôn khớp nhau: khi yêu cầu đổi trong lúc code, cập nhật spec/plan/tasks trong cùng PR.
+- Không gọi `$speckit-specify` để ghi đè spec đã có. Tên mới trùng thư mục hiện có phải được xử lý bằng cách cập nhật spec cũ hoặc chọn slug mô tả khác, không tự thêm số thứ tự.
+- Tính năng khác tạo spec mới và tham chiếu spec cũ khi cần; không đánh lại số lịch sử.
 
 ### 8.5. Spec gate trong CI
 
-Job **Spec gate** ([.github/scripts/spec-gate.mjs](.github/scripts/spec-gate.mjs)) chạy với mọi PR và là một phần của check bắt buộc **Backend quality**. Nếu PR thay đổi `src/**` hoặc `prisma/**`, job yêu cầu:
+Job **Spec gate** ([.github/scripts/spec-gate.mjs](.github/scripts/spec-gate.mjs)) chạy với mọi PR và là một phần của **Backend quality**. Với PR thay đổi `src/**` hoặc `prisma/**`, job yêu cầu:
 
-- Tên nhánh khớp `^(feat|fix|refactor|perf)/[0-9]{3}-[a-z0-9]+(-[a-z0-9]+)*$`.
-- Sau khi áp PR, có đúng một thư mục `specs/NNN-*` cùng số với nhánh, đủ `spec.md`, `plan.md`, `tasks.md`. Thư mục có thể tạo trong PR hoặc đã có trên `dev`.
+- Branch thuộc feat/fix/refactor/perf và tên tính năng là kebab-case; không bắt buộc số thứ tự.
+- Xác định được đúng một spec theo quy tắc mục 8.2, tên thư mục hợp lệ và đủ `spec.md`, `plan.md`, `tasks.md`; spec có thể đã có trên `dev`.
 - `spec.md` và `plan.md` không còn cụm `NEEDS CLARIFICATION`.
-- PR không sửa thư mục spec mang số khác.
+- PR không sửa thư mục spec ngoài tính năng đã chọn; không được dùng spec không liên quan để vượt gate.
 
-PR chỉ sửa `specs/**` được kiểm tra cùng các điều kiện trên (cho phép thêm nhánh `docs/NNN-slug`). Được miễn: PR không đụng `src/**`, `prisma/**`, `specs/**` (tài liệu, CI, test, tooling); nhánh `revert/*`; PR `dev` → `main`; sự kiện push. Không có label hay cơ chế bỏ qua khác.
+PR chỉ sửa `specs/**` áp dụng cùng kiểm tra, cho phép thêm prefix docs. PR không đụng `src/**`, `prisma/**`, `specs/**` (tài liệu/CI/test/tooling), nhánh revert và PR dev → main được miễn như trước. Sự kiện push không chạy Spec gate. Không bổ sung label hoặc bypass mới.
 
 Chạy thử gate trên máy trước khi push:
 
@@ -310,3 +308,5 @@ Gate chỉ kiểm tra cấu trúc. Reviewer phải đọc spec trước khi duy�
 ### 8.6. Nâng cấp spec-kit
 
 Các file trong `.specify/` (trừ `memory/`) và `.agents/skills/speckit-*` do Specify CLI sinh ra, được Prettier bỏ qua; không sửa tay. Nâng cấp qua một PR riêng (ví dụ nhánh `chore/upgrade-spec-kit`): cập nhật CLI, chạy lại `specify init --here --force --integration codex --integration-options="--skills" --script sh`, kiểm tra `git diff` và giữ nguyên `constitution.md`.
+
+Skill speckit-specify có điều chỉnh đặt tên riêng của repository: mặc định không số và ưu tiên slug của nhánh công việc để khớp gate. Sau khi nâng spec-kit, giữ/kiểm tra lại điều chỉnh này; không sửa trực tiếp scaffold upstream trong .specify/scripts/ hoặc cấu hình một giá trị feature_numbering không được upstream hỗ trợ.

@@ -1,4 +1,4 @@
-// Spec gate: PR thay đổi src/** hoặc prisma/** phải kèm specs/NNN-slug/ hợp lệ.
+// Spec gate: PR thay đổi src/** hoặc prisma/** phải kèm specs/<feature-slug>/ hợp lệ; tên cũ có số vẫn được hỗ trợ.
 // Quy tắc được mô tả trong contribute.md (mục Quy trình Spec-Driven) và
 // .specify/memory/constitution.md (nguyên tắc VI).
 import { execFileSync } from "node:child_process";
@@ -15,10 +15,38 @@ export const CLARIFICATION_MARKER = "NEEDS CLARIFICATION";
 export const CLARIFICATION_CHECKED_FILES = ["spec.md", "plan.md"];
 
 const SLUG = "[a-z0-9]+(?:-[a-z0-9]+)*";
-const SPEC_DIR_PATTERN = new RegExp(`^(\\d{3})-${SLUG}$`);
+const SPEC_DIR_PATTERN = new RegExp("^" + SLUG + "$");
+const LEGACY_PREFIX = /^\d{3}-/;
 
 function branchPattern(types) {
-  return new RegExp(`^(${types.join("|")})/(\\d{3})-${SLUG}$`);
+  return new RegExp("^(" + types.join("|") + ")/(" + SLUG + ")$");
+}
+
+function featureName(name) {
+  return name.replace(LEGACY_PREFIX, "");
+}
+
+/** Prefer feature names; retain numeric lookup only for legacy branch names. */
+function matchingSpecDirs(branchSlug, headSpecs) {
+  const dirs = Object.keys(headSpecs).sort();
+  if (dirs.includes(branchSlug)) return [branchSlug];
+
+  const name = featureName(branchSlug);
+  const exactNames = dirs.filter((dir) => featureName(dir) === name);
+  if (exactNames.length) return exactNames;
+
+  const descriptions = dirs.filter((dir) =>
+    name.startsWith(featureName(dir) + "-"),
+  );
+  if (descriptions.length) {
+    const longest = Math.max(
+      ...descriptions.map((dir) => featureName(dir).length),
+    );
+    return descriptions.filter((dir) => featureName(dir).length === longest);
+  }
+
+  const legacy = LEGACY_PREFIX.exec(branchSlug);
+  return legacy ? dirs.filter((dir) => dir.startsWith(legacy[0])) : [];
 }
 
 function specDirOf(filePath) {
@@ -74,34 +102,44 @@ export function evaluateSpecGate({
   const branchMatch = branchPattern(allowedTypes).exec(headRef);
 
   if (!branchMatch) {
-    const example = `${allowedTypes[0]}/001-ten-tinh-nang`;
+    const example = `${allowedTypes[0]}/ten-tinh-nang`;
     errors.push(
       touchesCode
-        ? `PR thay đổi src/** hoặc prisma/** nên branch phải có dạng <${allowedTypes.join("|")}>/NNN-slug (ví dụ ${example}); branch hiện tại: "${headRef}".`
-        : `PR thay đổi specs/** nên branch phải có dạng <${allowedTypes.join("|")}>/NNN-slug; branch hiện tại: "${headRef}".`,
+        ? `PR thay đổi src/** hoặc prisma/** nên branch phải có dạng <${allowedTypes.join("|")}>/<feature-slug> (ví dụ ${example}); branch hiện tại: "${headRef}".`
+        : `PR thay đổi specs/** nên branch phải có dạng <${allowedTypes.join("|")}>/<feature-slug>; branch hiện tại: "${headRef}".`,
     );
     return { status: "failed", reason: "Tên branch không hợp lệ.", errors };
   }
 
-  const featureNumber = branchMatch[2];
-  const matchingDirs = Object.keys(headSpecs)
-    .filter((dir) => dir.startsWith(`${featureNumber}-`))
-    .sort();
+  const branchSlug = branchMatch[2];
+  const matchingDirs = matchingSpecDirs(branchSlug, headSpecs);
 
   if (matchingDirs.length === 0) {
     errors.push(
-      `Không tìm thấy thư mục specs/${featureNumber}-*/. Tạo spec bằng $speckit-specify (cùng số ${featureNumber} với branch) và commit trong PR này.`,
+      "Không tìm thấy thư mục spec tương ứng với nhánh " +
+        headRef +
+        ". Dùng specs/" +
+        featureName(branchSlug) +
+        "/ hoặc tên spec cũ có số; commit đủ spec.md, plan.md, tasks.md.",
     );
   } else if (matchingDirs.length > 1) {
     errors.push(
-      `Số ${featureNumber} đang được dùng bởi nhiều thư mục: ${matchingDirs.map((dir) => `specs/${dir}/`).join(", ")}. Mỗi số chỉ thuộc một spec; hãy đổi sang số chưa dùng.`,
+      "Nhánh " +
+        headRef +
+        " khớp nhiều thư mục: " +
+        matchingDirs.map((dir) => "specs/" + dir + "/").join(", ") +
+        ". Dùng tên nhánh khớp nguyên tên thư mục spec để phân biệt.",
     );
   }
 
   for (const dir of touchedSpecDirs) {
-    if (!dir.startsWith(`${featureNumber}-`)) {
+    if (!matchingDirs.includes(dir)) {
       errors.push(
-        `PR chỉ được sửa spec cùng số với branch (${featureNumber}); đang sửa specs/${dir}/.`,
+        "PR chỉ được sửa spec của tính năng tương ứng với nhánh " +
+          headRef +
+          "; đang sửa specs/" +
+          dir +
+          "/.",
       );
     }
   }
@@ -112,7 +150,7 @@ export function evaluateSpecGate({
 
     if (!SPEC_DIR_PATTERN.test(dir)) {
       errors.push(
-        `Tên thư mục specs/${dir}/ phải có dạng NNN-slug (chữ thường a-z, số, dấu -).`,
+        `Tên thư mục specs/${dir}/ phải là kebab-case (chữ thường a-z, số, dấu -); không bắt buộc số thứ tự.`,
       );
     }
 
