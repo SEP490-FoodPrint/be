@@ -1311,6 +1311,7 @@ void test("warehouse Decimal quantities and dates remain JSON-compatible without
 });
 
 void test("every mounted business list rejects forged role claims when the database principal has no permission", async (context) => {
+  context.mock.method(console, "error", () => undefined);
   const store = new MemoryStore();
   const http = await startHttp(
     createApp(
@@ -1370,6 +1371,30 @@ void test("every mounted business list rejects forged role claims when the datab
     for (const headers of deniedHeaders) {
       assert.equal((await http.request(path, { headers })).status, 403, path);
     }
+  }
+  const facilityTarget =
+    "/api/source-facilities/11111111-1111-4111-8111-111111111111";
+  for (const [method, path] of [
+    ["GET", facilityTarget],
+    ["POST", "/api/source-facilities"],
+    ["PATCH", facilityTarget],
+    ["POST", facilityTarget + "/deactivate"],
+  ]) {
+    const csrfHeaders = { "X-CSRF-Protection": "1" };
+    assert.equal(
+      (await http.request(path, { method, headers: csrfHeaders })).status,
+      401,
+    );
+    for (const headers of deniedHeaders)
+      assert.equal(
+        (
+          await http.request(path, {
+            method,
+            headers: { ...headers, ...csrfHeaders },
+          })
+        ).status,
+        403,
+      );
   }
   assert.equal((await http.request("/api/health")).status, 200);
   assert.equal((await http.request("/api/unregistered")).status, 404);

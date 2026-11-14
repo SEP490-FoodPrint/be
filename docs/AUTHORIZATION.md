@@ -113,7 +113,7 @@ Xét duyệt yêu cầu SYSTEM_ADMIN cùng permission được gán: registratio
 
 Cooking Batch Phương án A bổ sung GET `/api/cooking-batches/:id` với `cooking_batch.view`, giữ scope đọc như danh sách; POST `/api/cooking-batches` dùng `cooking_batch.create`, POST `/:id/confirm` dùng `cooking_batch.confirm`, POST `/:id/complete` dùng `cooking_batch.complete`. Thao tác ghi yêu cầu SCHOOL có schoolId tin cậy, xác minh lại actor/quyền trong transaction; SYSTEM không có bypass. Không thêm role/grant/permission. Plan chỉ nhận menuDayId/dishId/mealType; confirm/complete không nhận số suất hoặc lượng nguyên liệu.
 
-Mọi dòng đều yêu cầu một trong các permission liệt kê. SYSTEM có phạm vi toàn hệ thống **khi được gán quyền**, còn tổ chức khác theo quan hệ sở hữu trong resource-access.ts. Phạm vi dưới đây là org-level, không tự suy diễn lớp được giao cho giáo viên.
+Mọi dòng đều yêu cầu một trong các permission liệt kê. SYSTEM có phạm vi toàn hệ thống **khi được gán quyền**, trừ các chức năng giới hạn vai trò được nêu riêng, bao gồm quản lý cơ sở cung cấp chỉ dành quản trị nhà cung cấp. Tổ chức khác theo quan hệ sở hữu trong resource-access.ts. Phạm vi dưới đây là org-level, không tự suy diễn lớp được giao cho giáo viên.
 
 | Module                        | Permission (OR)                                                                    | Tổ chức ngoài SYSTEM được mở |
 | ----------------------------- | ---------------------------------------------------------------------------------- | ---------------------------- |
@@ -131,7 +131,7 @@ Mọi dòng đều yêu cầu một trong các permission liệt kê. SYSTEM có
 | `supplier`                    | `supplier.view`, `supplier.manage`                                                 | SUPPLIER, SCHOOL             |
 | `authority`                   | `authority.view`, `food_safety_report.view`                                        | AUTHORITY                    |
 | `class`                       | `class.view`                                                                       | SCHOOL                       |
-| `source-facility`             | `source_facility.manage`                                                           | SUPPLIER                     |
+| `source-facility`             | `source_facility.manage`                                                           | SUPPLIER (chỉ admin)         |
 | `supplier-certification`      | `supplier_certification.view`                                                      | SUPPLIER                     |
 | `registration`                | `registration.view`                                                                | Không                        |
 | `school-supplier`             | `supplier_relationship.view`, `supplier_relationship.manage`                       | SCHOOL, SUPPLIER             |
@@ -329,3 +329,21 @@ Migration `20261114000200_delivery_inspection_permissions` cấp `delivery.inspe
 `GET /api/dishes/categories` uses `menu.view`; `POST /api/dishes/categories` uses `menu.create`; `PUT` and `DELETE /api/dishes/categories/:id` use `menu.update`. Every operation resolves the school from the authenticated principal and rechecks permission in the school transaction. A category referenced by any dish cannot be deleted. Dish catalog and menu detail return the school's category ID and current name.
 
 Các mutation của account lifecycle và intake guard khóa Role actor bằng FOR SHARE sau các khóa School/Supplier/User và trước resource. Thay denial cập nhật version User khi có thay đổi; thay grants cập nhật version MVCC Role bằng no-op SQL không đổi dữ liệu role. Cơ chế này buộc Serializable transaction có snapshot quyền cũ retry khi thay quyền đã commit trước bước khóa, rồi kiểm tra quyền mới trong cùng transaction. Không đổi JWT hoặc cache quyền.
+
+## Quản lý cơ sở cung cấp của nhà cung cấp
+
+Cả năm endpoint dưới đây yêu cầu tài khoản ACTIVE, vai trò INGREDIENT_SUPPLIER_ADMIN, membership SUPPLIER hợp lệ, nhà cung cấp ACTIVE và quyền hiệu lực source_facility.manage. Staff và SYSTEM bị chặn kể cả được gán quyền; không có scope toàn hệ thống cho chức năng này.
+
+| Method | Endpoint                                            | Hành vi                                                                      |
+| ------ | --------------------------------------------------- | ---------------------------------------------------------------------------- |
+| GET    | /api/source-facilities                              | Danh sách của supplier hiện tại, gồm ACTIVE/INACTIVE, phân trang page/limit. |
+| GET    | /api/source-facilities/:sourceFacilityId            | Chi tiết bằng UUID, có địa chỉ và thông tin liên hệ.                         |
+| POST   | /api/source-facilities                              | Thêm cơ sở, hệ thống tự cấp mã riêng trong supplier.                         |
+| PATCH  | /api/source-facilities/:sourceFacilityId            | Sửa tên/địa chỉ/liên hệ, giữ mã và chủ sở hữu.                               |
+| POST   | /api/source-facilities/:sourceFacilityId/deactivate | Dừng hoạt động; dừng lặp thành công.                                         |
+
+Scope chỉ lấy từ principal đã xác thực và áp vào WHERE của repository. Target ngoài supplier và target không tồn tại cùng trả 404. Mọi write nạp lại actor/quyền/membership, kiểm tra supplier và khóa target trong cùng Serializable transaction với mutation.
+
+facilityCode do hệ thống sinh theo dãy riêng mỗi supplier, bắt đầu FP-SF-00001; supplier khác được phép có cùng mã, nên mã không thay UUID trong đường dẫn. Người dùng không nhập/sửa mã, supplierId, trạng thái hoặc audit. Không xóa hoặc kích hoạt lại; dừng giữ isVisible, mã và liên kết lô nguyên liệu. Mã legacy null/không chuẩn được giữ nguyên.
+
+Hợp đồng chi tiết: [Source Facility API](../specs/026-source-facility-management/contracts/source-facility-api.md).

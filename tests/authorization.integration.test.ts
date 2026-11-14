@@ -1,4 +1,11 @@
 import { ingredientService } from "../src/modules/ingredient/ingredient.service";
+import {
+  createSourceFacilityService,
+  sourceFacilityService,
+} from "../src/modules/source-facility/source-facility.service";
+import { createSourceFacilityRepository } from "../src/modules/source-facility/source-facility.repository";
+import { validateSourceFacilityCreate } from "../src/modules/source-facility/source-facility.validation";
+import { createBarrier } from "./helpers/account-lifecycle-database";
 import { documentStorage } from "../src/utils/onboarding-documents";
 import { withReadTransaction } from "../src/utils/read-transaction";
 import assert from "node:assert/strict";
@@ -1979,6 +1986,805 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         200,
       );
       assert.equal((await request(url, board.id, "DELETE")).status, 200);
+    },
+  );
+
+  async function sourceFacilityOwner(label: string) {
+    const supplier = await db.supplier.create({ data: { name: label } });
+    const account = await user("INGREDIENT_SUPPLIER_ADMIN", {
+      supplierId: supplier.id,
+    });
+    const session = await authSessions.issue(account.id);
+    issued.set(account.id, session);
+    refreshTokens.push(session.refreshToken);
+    return {
+      supplier,
+      account,
+      principal: await loadPrincipal(account.id, db),
+    };
+  }
+  const sourceFacilityStatus = (status: number) => (error: unknown) =>
+    error instanceof HttpError && error.statusCode === status;
+
+  await context.test(
+    "source facility creation uses separate supplier codes and safe input",
+    async () => {
+      const base = "/api/source-facilities";
+      const first = await request(base, supplierAdmin.id, "POST", {
+        name: "SF first",
+      });
+      assert.equal(first.status, 201, JSON.stringify(first.body));
+      const item = record(record(first.body).data);
+      assert.equal(item.facilityCode, "FP-SF-00001");
+      assert.equal(item.supplierId, supplierA.id);
+      assert.equal(item.address, null);
+      assert.equal(item.contactEmail, null);
+      assert.equal(item.status, "ACTIVE");
+      assert.equal(item.isVisible, true);
+      assert.equal("createdByUserId" in item, false);
+      const saved = await db.sourceFacility.findUniqueOrThrow({
+        where: { id: String(item.id) },
+      });
+      assert.equal(saved.createdByUserId, supplierAdmin.id);
+      assert.equal(saved.updatedByUserId, supplierAdmin.id);
+      const second = await request(base, supplierAdmin.id, "POST", {
+        name: "SF second",
+      });
+      assert.equal(second.status, 201);
+      assert.equal(
+        record(record(second.body).data).facilityCode,
+        "FP-SF-00002",
+      );
+      const codeSupplierB = await db.supplier.create({
+        data: { name: "SF first code B" },
+      });
+      const administratorB = await user("INGREDIENT_SUPPLIER_ADMIN", {
+        supplierId: codeSupplierB.id,
+      });
+      const sessionB = await authSessions.issue(administratorB.id);
+      issued.set(administratorB.id, sessionB);
+      refreshTokens.push(sessionB.refreshToken);
+      const other = await request(base, administratorB.id, "POST", {
+        name: "SF first",
+      });
+      assert.equal(other.status, 201);
+      assert.equal(record(record(other.body).data).facilityCode, "FP-SF-00001");
+      assert.equal(
+        (await request(base, supplierAdmin.id, "POST", { name: "SF first" }))
+          .status,
+        409,
+      );
+      for (const value of [null, "", "FP-SF-00003"])
+        assert.equal(
+          (
+            await request(base, supplierAdmin.id, "POST", {
+              name: "Cannot set code",
+              facilityCode: value,
+            })
+          ).status,
+          400,
+        );
+    },
+  );
+
+  await context.test(
+    "source facility concurrent creates retry whole snapshots and rollback writes",
+    async () => {
+      const owner = await sourceFacilityOwner("SF concurrent supplier");
+      const repository = createSourceFacilityRepository(() =>
+        Promise.resolve(db),
+      );
+      const barrier = createBarrier(2);
+      const metrics = [{ attempts: 0 }, { attempts: 0 }];
+      const services = metrics.map((metric) =>
+        createSourceFacilityService(
+          {
+            ...repository,
+            async actor(id, tx) {
+              const actor = await repository.actor(id, tx);
+              metric.attempts += 1;
+              // The actor read establishes each Serializable snapshot before locking.
+              if (metric.attempts === 1) await barrier.wait();
+              return actor;
+            },
+          },
+          () => Promise.resolve(db),
+        ),
+      );
+      const created = await Promise.all(
+        services.map((service, index) =>
+          service.create(
+            validateSourceFacilityCreate({ name: "Concurrent " + index }),
+            owner.principal,
+          ),
+        ),
+      );
+      assert.deepEqual(created.map((row) => row.facilityCode).sort(), [
+        "FP-SF-00001",
+        "FP-SF-00002",
+      ]);
+      assert(
+        metrics[0].attempts + metrics[1].attempts >= 3,
+        "A stale snapshot must retry the entire transaction",
+      );
+      assert.equal(
+        await db.sourceFacility.count({
+          where: { supplierId: owner.supplier.id },
+        }),
+        2,
+      );
+
+      const sameName = await Promise.all([
+        request("/api/source-facilities", owner.account.id, "POST", {
+          name: "Concurrent duplicate",
+        }),
+        request("/api/source-facilities", owner.account.id, "POST", {
+          name: "Concurrent duplicate",
+        }),
+      ]);
+      assert.deepEqual(
+        sameName.map((response) => response.status).sort(),
+        [201, 409],
+      );
+
+      const countBeforeRollback = await db.sourceFacility.count({
+        where: { supplierId: owner.supplier.id },
+      });
+      const failed = createSourceFacilityService(
+        {
+          ...repository,
+          async create(...args) {
+            await repository.create(...args);
+            throw new HttpError(
+              503,
+              "Forced error after insert in disposable test",
+            );
+          },
+        },
+        () => Promise.resolve(db),
+      );
+      await assert.rejects(
+        () =>
+          failed.create(
+            validateSourceFacilityCreate({ name: "Rolled back source" }),
+            owner.principal,
+          ),
+        sourceFacilityStatus(503),
+      );
+      assert.equal(
+        await db.sourceFacility.count({
+          where: { supplierId: owner.supplier.id },
+        }),
+        countBeforeRollback,
+      );
+      const restarted = createSourceFacilityService(repository, () =>
+        Promise.resolve(db),
+      );
+      const afterRollback = await restarted.create(
+        validateSourceFacilityCreate({ name: "After rollback" }),
+        owner.principal,
+      );
+      assert.equal(afterRollback.facilityCode, "FP-SF-00004");
+
+      let allocationAttempts = 0;
+      const exhausted = createSourceFacilityService(
+        {
+          ...repository,
+          highestCodeNumber() {
+            allocationAttempts += 1;
+            return Promise.resolve(0n);
+          },
+        },
+        () => Promise.resolve(db),
+      );
+      await assert.rejects(
+        () =>
+          exhausted.create(
+            validateSourceFacilityCreate({ name: "Exhausted code conflict" }),
+            owner.principal,
+          ),
+        sourceFacilityStatus(503),
+      );
+      assert.equal(allocationAttempts, 3);
+      assert.equal(
+        await db.sourceFacility.count({
+          where: {
+            supplierId: owner.supplier.id,
+            name: "Exhausted code conflict",
+          },
+        }),
+        0,
+      );
+
+      const independent = await sourceFacilityOwner(
+        "SF independent supplier lock",
+      );
+      let release!: () => void;
+      let locked!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const ready = new Promise<void>((resolve) => {
+        locked = resolve;
+      });
+      const holding = db.$transaction(
+        async (tx) => {
+          await repository.lockSupplier({ supplierId: owner.supplier.id }, tx);
+          locked();
+          await held;
+        },
+        { timeout: 10000 },
+      );
+      await ready;
+      try {
+        const result = await restarted.create(
+          validateSourceFacilityCreate({ name: "Independent while A locked" }),
+          independent.principal,
+        );
+        assert.equal(result.facilityCode, "FP-SF-00001");
+      } finally {
+        release();
+        await holding;
+      }
+    },
+  );
+
+  await context.test(
+    "source facility numbering preserves legacy and exact large values",
+    async () => {
+      const owner = await sourceFacilityOwner("SF legacy supplier");
+      const legacy = await Promise.all(
+        [
+          null,
+          "legacy-code",
+          "fp-sf-88888",
+          "FP-SF-000001",
+          "FP-SF-00000",
+          "FP-SF-99999\n",
+        ].map((facilityCode, index) =>
+          db.sourceFacility.create({
+            data: {
+              supplierId: owner.supplier.id,
+              facilityCode,
+              name: "Legacy source " + index,
+            },
+          }),
+        ),
+      );
+      const create = (name: string) =>
+        sourceFacilityService.create(
+          validateSourceFacilityCreate({ name }),
+          owner.principal,
+        );
+      assert.equal(
+        (await create("First canonical source")).facilityCode,
+        "FP-SF-00001",
+      );
+      await db.sourceFacility.create({
+        data: {
+          supplierId: owner.supplier.id,
+          name: "Stopped highest",
+          facilityCode: "FP-SF-00009",
+          status: "INACTIVE",
+          isVisible: false,
+        },
+      });
+      assert.equal(
+        (await create("After stopped source")).facilityCode,
+        "FP-SF-00010",
+      );
+      await db.sourceFacility.create({
+        data: {
+          supplierId: owner.supplier.id,
+          name: "Last five digits",
+          facilityCode: "FP-SF-99999",
+        },
+      });
+      assert.equal(
+        (await create("First six digits")).facilityCode,
+        "FP-SF-100000",
+      );
+      const large = 18_446_744_073_709_551_616n;
+      await db.sourceFacility.create({
+        data: {
+          supplierId: owner.supplier.id,
+          name: "Beyond 64-bit",
+          facilityCode: "FP-SF-" + large.toString(),
+        },
+      });
+      assert.equal(
+        (await create("Exact beyond 64-bit")).facilityCode,
+        "FP-SF-" + (large + 1n).toString(),
+      );
+      await db.sourceFacility.create({
+        data: {
+          supplierId: owner.supplier.id,
+          name: "Storage maximum",
+          facilityCode: "FP-SF-" + "9".repeat(74),
+        },
+      });
+      const countBefore = await db.sourceFacility.count({
+        where: { supplierId: owner.supplier.id },
+      });
+      await assert.rejects(
+        () => create("Storage exhausted"),
+        sourceFacilityStatus(503),
+      );
+      assert.equal(
+        await db.sourceFacility.count({
+          where: { supplierId: owner.supplier.id },
+        }),
+        countBefore,
+      );
+      for (const before of legacy) {
+        assert.deepEqual(
+          await db.sourceFacility.findUniqueOrThrow({
+            where: { id: before.id },
+          }),
+          before,
+        );
+      }
+    },
+  );
+
+  await context.test(
+    "source facility management isolates reads, updates and historical deactivation",
+    async () => {
+      const base = "/api/source-facilities";
+      const owner = await sourceFacilityOwner("SF management supplier");
+      const other = await sourceFacilityOwner("SF management other supplier");
+      await db.sourceFacility.createMany({
+        data: Array.from({ length: 45 }, (_, index) => ({
+          supplierId: owner.supplier.id,
+          facilityCode: "FP-SF-" + String(index + 1).padStart(5, "0"),
+          name: "Paged facility " + index,
+          status: index % 2 === 0 ? ("INACTIVE" as const) : ("ACTIVE" as const),
+          isVisible: index % 3 !== 0,
+          createdByUserId: owner.account.id,
+          updatedByUserId: owner.account.id,
+        })),
+      });
+      const foreign = await db.sourceFacility.create({
+        data: {
+          supplierId: other.supplier.id,
+          facilityCode: "FP-SF-00001",
+          name: "Foreign source",
+        },
+      });
+      const all = await db.sourceFacility.findMany({
+        where: { supplierId: owner.supplier.id },
+        orderBy: { id: "asc" },
+      });
+      const active = all.find((row) => row.status === "ACTIVE");
+      const inactive = all.find((row) => row.status === "INACTIVE");
+      assert(active && inactive);
+      const listed: Record<string, unknown>[] = [];
+      for (const [page, expected] of [
+        [1, 20],
+        [2, 20],
+        [3, 5],
+      ]) {
+        const response = await request(
+          base + "?page=" + page,
+          owner.account.id,
+        );
+        assert.equal(response.status, 200, JSON.stringify(response.body));
+        const items = rows(response.body);
+        assert.equal(items.length, expected);
+        assert.equal(
+          record(record(record(response.body).data).pagination).hasNext,
+          page < 3,
+        );
+        assert(items.every((row) => row.supplierId === owner.supplier.id));
+        assert(
+          items.every(
+            (row) => !("address" in row) && !("createdByUserId" in row),
+          ),
+        );
+        listed.push(...items);
+      }
+      assert.deepEqual(
+        listed.map((row) => row.id),
+        all.map((row) => row.id),
+      );
+      assert(listed.some((row) => row.status === "INACTIVE"));
+      assert(listed.some((row) => row.isVisible === false));
+      const empty = await request(base + "?page=4", owner.account.id);
+      assert.deepEqual(rows(empty.body), []);
+      assert.equal(
+        record(record(record(empty.body).data).pagination).hasNext,
+        false,
+      );
+      const detail = await request(base + "/" + active.id, owner.account.id);
+      assert.equal(detail.status, 200);
+      const detailData = record(record(detail.body).data);
+      assert.equal(detailData.address, null);
+      assert.equal(detailData.createdAt, active.createdAt.toISOString());
+      assert.equal("createdByUserId" in detailData, false);
+      assert.equal("Supplier" in detailData, false);
+      assert.equal(
+        (await request(base + "/FP-SF-00001", owner.account.id)).status,
+        400,
+      );
+      assert.equal(
+        (
+          await request(
+            base + "?supplierId=" + other.supplier.id,
+            owner.account.id,
+          )
+        ).status,
+        400,
+      );
+      for (const [method, suffix, body] of [
+        ["GET", "", undefined],
+        ["PATCH", "", { name: "Out of scope" }],
+        ["POST", "/deactivate", {}],
+      ] as const) {
+        const outside = await request(
+          base + "/" + foreign.id + suffix,
+          owner.account.id,
+          method,
+          body,
+        );
+        const missing = await request(
+          base + "/" + randomUUID() + suffix,
+          owner.account.id,
+          method,
+          body,
+        );
+        assert.equal(outside.status, 404);
+        assert.equal(missing.status, 404);
+        assert.equal(
+          record(outside.body).message,
+          record(missing.body).message,
+        );
+      }
+
+      const manage = await permission("source_facility.manage");
+      const temporaryGrants: { roleId: string; permissionId: string }[] = [];
+      for (const account of [supplierStaffA, system]) {
+        const key = { roleId: account.roleId, permissionId: manage.id };
+        if (
+          !(await db.rolePermission.findUnique({
+            where: { roleId_permissionId: key },
+          }))
+        ) {
+          await db.rolePermission.create({ data: key });
+          temporaryGrants.push(key);
+        }
+      }
+      const operations = [
+        ["GET", "", undefined],
+        ["GET", "/" + active.id, undefined],
+        ["POST", "", { name: "Blocked source" }],
+        ["PATCH", "/" + active.id, { address: "Blocked" }],
+        ["POST", "/" + active.id + "/deactivate", {}],
+      ] as const;
+      try {
+        for (const account of [supplierStaffA, system, adminA]) {
+          for (const [method, suffix, body] of operations) {
+            assert.equal(
+              (await request(base + suffix, account.id, method, body)).status,
+              403,
+            );
+          }
+        }
+      } finally {
+        for (const key of temporaryGrants)
+          await db.rolePermission.delete({
+            where: { roleId_permissionId: key },
+          });
+      }
+
+      const stale = owner.principal;
+      const denial = await db.userPermissionDenial.create({
+        data: {
+          userId: owner.account.id,
+          permissionId: manage.id,
+          supplierId: owner.supplier.id,
+          disabledByUserId: system.id,
+        },
+      });
+      try {
+        for (const [method, suffix, body] of operations)
+          assert.equal(
+            (await request(base + suffix, owner.account.id, method, body))
+              .status,
+            403,
+          );
+        await assert.rejects(
+          () =>
+            sourceFacilityService.create(
+              validateSourceFacilityCreate({ name: "Denied stale source" }),
+              stale,
+            ),
+          sourceFacilityStatus(403),
+        );
+        await assert.rejects(
+          () =>
+            sourceFacilityService.update(
+              { sourceFacilityId: active.id },
+              { address: "Denied stale source" },
+              stale,
+            ),
+          sourceFacilityStatus(403),
+        );
+        await assert.rejects(
+          () =>
+            sourceFacilityService.deactivate(
+              { sourceFacilityId: active.id },
+              {},
+              stale,
+            ),
+          sourceFacilityStatus(403),
+        );
+      } finally {
+        await db.userPermissionDenial.delete({ where: { id: denial.id } });
+      }
+      await db.user.update({
+        where: { id: owner.account.id },
+        data: { status: "LOCKED" },
+      });
+      try {
+        await assert.rejects(
+          () =>
+            sourceFacilityService.create(
+              validateSourceFacilityCreate({ name: "Locked stale source" }),
+              stale,
+            ),
+          sourceFacilityStatus(403),
+        );
+      } finally {
+        await db.user.update({
+          where: { id: owner.account.id },
+          data: { status: "ACTIVE" },
+        });
+      }
+      const movedTo = await db.supplier.create({
+        data: { name: "SF actor move target" },
+      });
+      await db.user.update({
+        where: { id: owner.account.id },
+        data: { supplierId: movedTo.id },
+      });
+      try {
+        await assert.rejects(
+          () =>
+            sourceFacilityService.create(
+              validateSourceFacilityCreate({ name: "Moved stale source" }),
+              stale,
+            ),
+          sourceFacilityStatus(403),
+        );
+      } finally {
+        await db.user.update({
+          where: { id: owner.account.id },
+          data: { supplierId: owner.supplier.id },
+        });
+      }
+      await db.supplier.update({
+        where: { id: owner.supplier.id },
+        data: { status: "INACTIVE" },
+      });
+      try {
+        for (const [method, suffix, body] of operations)
+          assert.equal(
+            (await request(base + suffix, owner.account.id, method, body))
+              .status,
+            403,
+          );
+      } finally {
+        await db.supplier.update({
+          where: { id: owner.supplier.id },
+          data: { status: "ACTIVE" },
+        });
+      }
+
+      const patch = await request(
+        base + "/" + active.id,
+        owner.account.id,
+        "PATCH",
+        { address: "  Updated source address  ", contactEmail: "" },
+      );
+      assert.equal(patch.status, 200, JSON.stringify(patch.body));
+      const patched = await db.sourceFacility.findUniqueOrThrow({
+        where: { id: active.id },
+      });
+      assert.equal(patched.address, "Updated source address");
+      assert.equal(patched.contactEmail, null);
+      assert.equal(patched.name, active.name);
+      assert.equal(patched.facilityCode, active.facilityCode);
+      assert.equal(patched.createdByUserId, active.createdByUserId);
+      assert.equal(
+        patched.createdAt.toISOString(),
+        active.createdAt.toISOString(),
+      );
+      assert.equal(patched.updatedByUserId, owner.account.id);
+      for (const code of [null, "", active.facilityCode])
+        assert.equal(
+          (
+            await request(base + "/" + active.id, owner.account.id, "PATCH", {
+              facilityCode: code,
+            })
+          ).status,
+          400,
+        );
+      assert.equal(
+        (await request(base + "/" + active.id, owner.account.id, "PATCH", {}))
+          .status,
+        400,
+      );
+      assert.equal(
+        (
+          await request(base + "/" + active.id, owner.account.id, "PATCH", {
+            name: inactive.name,
+          })
+        ).status,
+        409,
+      );
+      assert.equal(
+        (
+          await request(base + "/" + inactive.id, owner.account.id, "PATCH", {
+            address: "Inactive can edit",
+          })
+        ).status,
+        200,
+      );
+      const stillInactive = await db.sourceFacility.findUniqueOrThrow({
+        where: { id: inactive.id },
+      });
+      assert.equal(stillInactive.status, "INACTIVE");
+      assert.equal(stillInactive.facilityCode, inactive.facilityCode);
+      const renameResults = await Promise.all([
+        request(base + "/" + active.id, owner.account.id, "PATCH", {
+          name: "Same renamed source",
+        }),
+        request(base + "/" + inactive.id, owner.account.id, "PATCH", {
+          name: "Same renamed source",
+        }),
+      ]);
+      assert.deepEqual(
+        renameResults.map((response) => response.status).sort(),
+        [200, 409],
+      );
+
+      const historySchool = await db.school.create({
+        data: { name: "SF history school" },
+      });
+      const historyAdmin = await user("SCHOOL_ADMINISTRATION", {
+        schoolId: historySchool.id,
+      });
+      const historyIngredient = await db.ingredient.create({
+        data: {
+          supplierId: owner.supplier.id,
+          name: "SF history ingredient",
+          defaultUnit: "kg",
+        },
+      });
+      const historyEntry = await db.ingredientEntry.create({
+        data: {
+          schoolId: historySchool.id,
+          ingredientId: historyIngredient.id,
+          handlingType: "DRY_STOCK",
+        },
+      });
+      const historyRequest = await db.supplyRequest.create({
+        data: {
+          schoolId: historySchool.id,
+          supplierId: owner.supplier.id,
+          requestNo: randomUUID(),
+          createdByUserId: historyAdmin.id,
+          status: "IN_PROGRESS",
+          sentAt: new Date(),
+          acceptedByUserId: owner.account.id,
+          acceptedAt: new Date(),
+        },
+      });
+      const historyLine = await db.supplyRequestItem.create({
+        data: {
+          supplyRequestId: historyRequest.id,
+          ingredientEntryId: historyEntry.id,
+          requestedQuantity: "1",
+          unit: "kg",
+        },
+      });
+      const historyDelivery = await db.delivery.create({
+        data: {
+          supplyRequestId: historyRequest.id,
+          supplierId: owner.supplier.id,
+          deliveryNo: randomUUID(),
+          status: "ARRIVED",
+          arrivedAt: new Date(),
+          createdByUserId: owner.account.id,
+        },
+      });
+      const historyItem = await db.deliveryItem.create({
+        data: {
+          deliveryId: historyDelivery.id,
+          supplyRequestItemId: historyLine.id,
+          actualQuantity: "1",
+          unit: "kg",
+        },
+      });
+      const lot = await db.ingredientLot.create({
+        data: {
+          deliveryItemId: historyItem.id,
+          sourceFacilityId: active.id,
+          lotCode: randomUUID(),
+          receivedQuantity: "1",
+          availableQuantity: "0",
+          unit: "kg",
+          status: "BLOCKED",
+        },
+      });
+      const stopped = await request(
+        base + "/" + active.id + "/deactivate",
+        owner.account.id,
+        "POST",
+        {},
+      );
+      assert.equal(stopped.status, 200, JSON.stringify(stopped.body));
+      assert.equal(record(record(stopped.body).data).status, "INACTIVE");
+      const stoppedRow = await db.sourceFacility.findUniqueOrThrow({
+        where: { id: active.id },
+      });
+      assert.equal(stoppedRow.facilityCode, active.facilityCode);
+      assert.equal(stoppedRow.isVisible, active.isVisible);
+      assert.equal(
+        stoppedRow.createdAt.toISOString(),
+        active.createdAt.toISOString(),
+      );
+      assert.equal(stoppedRow.createdByUserId, active.createdByUserId);
+      assert.equal(stoppedRow.updatedByUserId, owner.account.id);
+      assert.deepEqual(
+        await db.ingredientLot.findUniqueOrThrow({ where: { id: lot.id } }),
+        lot,
+      );
+      const again = await request(
+        base + "/" + active.id + "/deactivate",
+        owner.account.id,
+        "POST",
+      );
+      assert.equal(again.status, 200);
+      assert.deepEqual(
+        await db.sourceFacility.findUniqueOrThrow({ where: { id: active.id } }),
+        stoppedRow,
+      );
+      assert.equal(
+        (await request(base + "/" + active.id, owner.account.id)).status,
+        200,
+      );
+      assert.equal(
+        (
+          await request(base + "/" + active.id, owner.account.id, "PATCH", {
+            address: "Editable after stop",
+          })
+        ).status,
+        200,
+      );
+      assert.equal(
+        (
+          await db.sourceFacility.findUniqueOrThrow({
+            where: { id: active.id },
+          })
+        ).status,
+        "INACTIVE",
+      );
+      const next = await request(base, owner.account.id, "POST", {
+        name: "Next after stopped",
+      });
+      assert.equal(next.status, 201);
+      assert.equal(record(record(next.body).data).facilityCode, "FP-SF-00046");
+      assert.equal(
+        (await request(base + "/" + active.id, owner.account.id, "DELETE"))
+          .status,
+        404,
+      );
+      assert.equal(
+        (await db.ingredientLot.findUniqueOrThrow({ where: { id: lot.id } }))
+          .sourceFacilityId,
+        active.id,
+      );
     },
   );
 

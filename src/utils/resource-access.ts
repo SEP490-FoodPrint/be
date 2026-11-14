@@ -245,13 +245,7 @@ export const listScopes = {
     );
   },
   "source-facility": (p: AuthPrincipal): Prisma.SourceFacilityWhereInput => {
-    assertPermission(p, ...RESOURCE_PERMISSIONS["source-facility"]);
-    if (p.orgType === "SYSTEM") return {};
-    if (p.orgType === "SUPPLIER") return { supplierId: supplier(p) };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    return { supplierId: sourceFacilityManagementScope(p).supplierId };
   },
   "supplier-certification": (
     p: AuthPrincipal,
@@ -492,6 +486,28 @@ export const listScopes = {
   },
 };
 export type Resource = keyof typeof listScopes;
+
+export interface SourceFacilityManagementScope {
+  readonly supplierId: string;
+}
+
+export function sourceFacilityManagementScope(
+  principal: AuthPrincipal,
+): SourceFacilityManagementScope {
+  if (
+    principal.role !== ROLES.INGREDIENT_SUPPLIER_ADMIN ||
+    principal.orgType !== ORG_TYPES.SUPPLIER ||
+    !principal.supplierId ||
+    principal.schoolId ||
+    principal.communeFoodSafetyUnitId
+  )
+    throw new HttpError(
+      403,
+      "Chỉ quản trị nhà cung cấp được quản lý cơ sở cung cấp",
+    );
+  assertPermission(principal, "source_facility.manage");
+  return { supplierId: principal.supplierId };
+}
 
 export interface IngredientManagementScope {
   readonly supplierId: string;
