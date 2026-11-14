@@ -64,7 +64,11 @@ Bootstrap tạo permission `food_safety_report.receive` và chỉ gán mặc đ�
 
 `GET /api/schools/me/academic-years` và `GET /api/schools/me/academic-years/:id` yêu cầu `school_academic_year.view`. `POST` và `PATCH` trên cùng resource yêu cầu `school_academic_year.manage`. Ngoài permission hiệu lực, service bắt buộc role `SCHOOL_MANAGEMENT_BOARD`, tổ chức `SCHOOL` và `schoolId` từ principal; không nhận `schoolId` từ request. Record ngoài trường trả 404. Catalog chỉ khai báo grant mặc định cho Ban Giám hiệu; việc đồng bộ permission vào database đang chạy vẫn là thao tác bootstrap/operator được phê duyệt, không diễn ra khi khởi động API.
 
-### Quản lý lớp học của trường
+### Quản lý khối và lớp học của trường
+
+`GET /api/school-grades`, `POST /api/school-grades`, `PATCH /api/school-grades/:id` và `DELETE /api/school-grades/:id` yêu cầu vai trò Ban Giám hiệu và quyền hiệu lực `class.manage`. Phạm vi trường lấy từ phiên xác thực. Scope nội bộ của SYSTEM có quyền trả bộ lọc rỗng theo quy ước chung, còn service yêu cầu vai trò Ban Giám hiệu cho mọi thao tác.
+
+Tạo và sửa lớp nhận `gradeId` tùy chọn. Gửi `null` để bỏ gán khối. Khi chỉ sửa khối, có thể cập nhật lớp thuộc niên khóa cũ. Danh sách `GET /api/classes` nhận bộ lọc `gradeId` hoặc `gradeId=unassigned`.
 
 `POST /api/classes`, `POST /api/classes/copy`, `PATCH /api/classes/:classId` và `PATCH /api/classes/:classId/status` yêu cầu `class.manage`. Service bắt buộc role `SCHOOL_MANAGEMENT_BOARD`, tổ chức `SCHOOL` và lấy `schoolId` từ principal được nạp lại trong transaction khóa trường; không nhận `schoolId` từ request. Lớp ngoài trường trả 404. Niên khóa phải được cấu hình trong `school_academic_years` của trường và còn là năm hiện tại/sắp tới, nếu không trả 409; tên lớp trùng (không phân biệt hoa thường, tính cả lớp INACTIVE) trả 409. Không có xóa cứng: ngừng hoạt động lớp đóng phân công GVCN hiện tại trong cùng transaction. Catalog chỉ khai báo grant mặc định cho Ban Giám hiệu; đồng bộ vào database vẫn qua bootstrap đã được phê duyệt.
 
@@ -91,6 +95,11 @@ Dùng envelope hiện có. Thiếu/sai token: 401; không ACTIVE khi gọi API n
 | GET /api/users/:userId/permissions                         | System có user.manage hoặc admin cùng tổ chức có quyền quản lý tương ứng                                                                    |
 | PUT /api/users/:userId/permission-denials/:permissionId    | Tắt; school admin có school_user.manage hoặc supplier admin có supplier_staff.manage                                                        |
 | DELETE /api/users/:userId/permission-denials/:permissionId | Bật lại quyền kế thừa; cùng điều kiện và phạm vi như PUT                                                                                    |
+| GET /api/schools/:schoolId/accounts                        | SCHOOL (school_user.manage / user.manage), xem danh sách tài khoản nhân viên trường (phân trang page/limit)                                 |
+| GET /api/schools/:schoolId/accounts/:userId                | SCHOOL (school_user.manage), xem thông tin chi tiết một tài khoản nhân viên trường                                                          |
+| POST /api/schools/:schoolId/accounts                       | SCHOOL (school_user.manage), tạo tài khoản nhân sự mới cho trường (Bếp, Y tế, GVCN...)                                                      |
+| PUT /api/schools/:schoolId/accounts/:userId                | SCHOOL (school_user.manage), cập nhật họ tên, SĐT, vai trò nhân sự                                                                          |
+| PATCH /api/schools/:schoolId/accounts/:userId/status       | SCHOOL (school_user.manage), khóa (LOCKED) hoặc mở khóa (ACTIVE) tài khoản nhân sự                                                          |
 
 Các thao tác ghi xác minh lại actor và target trong transaction Serializable, có retry giới hạn cho serialization conflict. PUT/DELETE denial lặp lại an toàn; partial unique index và transaction ngăn tạo bản ghi trùng. Thêm permission vào catalog chưa tự tạo chức năng/API: endpoint phải kiểm tra mã quyền đó.
 
