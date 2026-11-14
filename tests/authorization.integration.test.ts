@@ -651,6 +651,24 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           afternoonMealTime: new Date("1970-01-01T15:00:00Z"),
         },
       });
+      await db.schoolAcademicYear.createMany({
+        data: [
+          {
+            schoolId: school.id,
+            academicYear: "2029-2030",
+            startDate: new Date("2029-09-03"),
+            endDate: new Date("2030-05-31"),
+            holidays: [],
+          },
+          {
+            schoolId: school.id,
+            academicYear: "2031-2032",
+            startDate: new Date("2031-09-01"),
+            endDate: new Date("2032-05-31"),
+            holidays: [],
+          },
+        ],
+      });
       const healthAccount = await user("SCHOOL_NUTRITION_OFFICER", {
         schoolId: school.id,
       });

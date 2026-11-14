@@ -300,6 +300,12 @@ export const menuWriteSchema = z
       .max(7, { error: "Tối đa bảy ngày trong thực đơn" }),
   })
   .superRefine((menu, context) => {
+    if (menu.weekStartDate.getUTCDay() !== 1)
+      context.addIssue({
+        code: "custom",
+        path: ["weekStartDate"],
+        message: "Ngày bắt đầu tuần phải là thứ Hai",
+      });
     uniqueIssues(
       menu.days.map((day) => day.menuDate.toISOString()),
       context,
