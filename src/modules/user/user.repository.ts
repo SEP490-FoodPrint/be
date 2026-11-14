@@ -28,9 +28,11 @@ const readFromDatabase: ListReader = async (args) => {
   return prisma.user.findMany(args);
 };
 
-const childSelect = {
+export const childSelect = {
   ...select,
-  ...{ email: true, Role: { select: { code: true, name: true } } },
+  email: true,
+  phone: true,
+  Role: { select: { code: true, name: true } },
 } as const satisfies Prisma.UserSelect;
 export function createUserRepository(read: ListReader = readFromDatabase) {
   return {
@@ -64,7 +66,13 @@ export function createUserRepository(read: ListReader = readFromDatabase) {
         select: { id: true },
       });
       if (!school) return null;
-      const where: Prisma.UserWhereInput = { AND: [scope, { schoolId }] };
+      const where: Prisma.UserWhereInput = {
+        AND: [
+          scope,
+          { schoolId },
+          { NOT: { roleCode: "SCHOOL_ADMINISTRATION" } },
+        ],
+      };
       const total = await tx.user.count({ where });
       const items = await tx.user.findMany({
         where,
@@ -74,6 +82,54 @@ export function createUserRepository(read: ListReader = readFromDatabase) {
         orderBy: [{ id: "asc" }],
       });
       return { items, total };
+    },
+    async findRoleByCode(tx: Prisma.TransactionClient, code: string) {
+      return tx.role.findUnique({
+        where: { code },
+        select: { id: true, code: true, name: true, type: true },
+      });
+    },
+    async findUserByEmailOrUsername(
+      tx: Prisma.TransactionClient,
+      email: string,
+      username: string,
+    ) {
+      return tx.user.findFirst({
+        where: {
+          OR: [{ email }, { username }],
+        },
+        select: { id: true, email: true, username: true },
+      });
+    },
+    async findSchoolUser(
+      tx: Prisma.TransactionClient,
+      schoolId: string,
+      userId: string,
+    ) {
+      return tx.user.findFirst({
+        where: { id: userId, schoolId },
+        select: childSelect,
+      });
+    },
+    async createSchoolUser(
+      tx: Prisma.TransactionClient,
+      data: Prisma.UserUncheckedCreateInput,
+    ) {
+      return tx.user.create({
+        data,
+        select: childSelect,
+      });
+    },
+    async updateSchoolUser(
+      tx: Prisma.TransactionClient,
+      userId: string,
+      data: Prisma.UserUncheckedUpdateInput,
+    ) {
+      return tx.user.update({
+        where: { id: userId },
+        data,
+        select: childSelect,
+      });
     },
   };
 }
