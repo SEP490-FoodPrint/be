@@ -88,3 +88,47 @@ export const validateIngredientParams = (value: unknown) =>
 export const validateIngredientHide = (value: unknown) =>
   parseRequest(ingredientHideSchema, value === undefined ? {} : value);
 export { parseListQuery as validateIngredientListQuery } from "../../utils/list-query";
+
+const uploadFileSchema = z.strictObject({
+  buffer: z.instanceof(Buffer, { error: "Tệp không hợp lệ" }),
+  size: z.number({ error: "Dung lượng không hợp lệ" }).int().nonnegative(),
+  mimeType: z.string({ error: "Định dạng tệp không hợp lệ" }),
+  originalName: z.string({ error: "Tên tệp không hợp lệ" }),
+});
+export const ingredientSingleUploadSchema = z.strictObject({
+  file: uploadFileSchema,
+});
+export const ingredientMultipleUploadSchema = z.strictObject({
+  files: z
+    .array(uploadFileSchema, { error: "Danh sách ảnh không hợp lệ" })
+    .min(1, { error: "Cần ít nhất một ảnh" })
+    .max(5, { error: "Tối đa năm ảnh" }),
+});
+const uploadEnvelopeSchema = z.strictObject({
+  body: z.strictObject({}),
+  query: z.strictObject({}),
+});
+function normalizedFile(file: Express.Multer.File) {
+  return {
+    buffer: file.buffer,
+    size: file.size,
+    mimeType: file.mimetype,
+    originalName: file.originalname,
+  };
+}
+export function validateIngredientUploadEnvelope(
+  body: unknown,
+  query: unknown,
+) {
+  return parseRequest(uploadEnvelopeSchema, { body, query });
+}
+export function validateIngredientSingleUpload(files: Express.Multer.File[]) {
+  return parseRequest(ingredientSingleUploadSchema, {
+    file: files.length === 1 ? normalizedFile(files[0]) : undefined,
+  });
+}
+export function validateIngredientMultipleUpload(files: Express.Multer.File[]) {
+  return parseRequest(ingredientMultipleUploadSchema, {
+    files: files.map(normalizedFile),
+  });
+}

@@ -54,7 +54,10 @@ void test("all action controllers retain shared errors and collect field issues 
   );
   app.use(
     "/api/supply-requests",
-    createSupplyOrderRouter({ getAll: reject, accept: reject }, auth),
+    createSupplyOrderRouter(
+      { getAll: reject, getDetail: reject, accept: reject },
+      auth,
+    ),
   );
   app.use(
     "/api/food-safety-reports",

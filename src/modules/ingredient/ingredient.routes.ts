@@ -1,5 +1,9 @@
 import { Router } from "express";
 import type { RequestHandler } from "express";
+import {
+  ingredientSingleUpload,
+  ingredientMultipleUpload,
+} from "../../middlewares/ingredient-upload.middleware";
 import { authenticate } from "../../middlewares/auth.middleware";
 import { requireResource } from "../../middlewares/permission.middleware";
 import { ingredientManagementScope } from "../../utils/resource-access";
@@ -25,6 +29,18 @@ export function createIngredientRouter(
       next(error);
     }
   });
+  management.post(
+    "/upload-image",
+    controller.authorizeUpload,
+    ingredientSingleUpload,
+    controller.uploadImage,
+  );
+  management.post(
+    "/upload-images",
+    controller.authorizeUpload,
+    ingredientMultipleUpload,
+    controller.uploadImages,
+  );
   management.get("/categories", controller.listCategories);
   management.get("/", controller.listManagement);
   management.post("/", controller.create);

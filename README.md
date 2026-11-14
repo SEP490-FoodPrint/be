@@ -368,3 +368,5 @@ npm run test:auth:redis
 # Cần PostgreSQL tạm riêng và Redis local, không dùng database thành viên hoặc Azure:
 MIGRATION_TEST_DATABASE_URL='<disposable-local-test-url>' npm run test:authorization
 ```
+
+Upload ảnh nguyên liệu dùng hai API trong [hợp đồng upload](specs/ingredient-image-upload/contracts/ingredient-upload-api.md), với cấu hình Cloudinary trong `.env` và header CSRF hiện hành. Thư viện Sharp yêu cầu cài dependency native phù hợp môi trường Node trong `.nvmrc`.
