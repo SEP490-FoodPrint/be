@@ -78,13 +78,15 @@ model Class {
 }
 
 model SchoolGrade {
-  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  schoolId  String   @map("school_id") @db.Uuid
-  name      String   @db.VarChar(120)
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  school    School   @relation(fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  classes   Class[]
+  weeklyMenus WeeklyMenuGrade[]
+  dishRecipes DishGradeRecipe[]
+  id          String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  schoolId    String            @map("school_id") @db.Uuid
+  name        String            @db.VarChar(120)
+  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  school      School            @relation(fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  classes     Class[]
 
   @@unique([schoolId, name])
   @@unique([schoolId, id])
@@ -409,6 +411,7 @@ model MenuMealSeasoningLot {
 }
 
 model Dish {
+  gradeRecipes          DishGradeRecipe[]
   id                    String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   schoolId              String                @map("school_id") @db.Uuid
   name                  String                @db.VarChar(255)
@@ -425,6 +428,7 @@ model Dish {
   cookingBatches        CookingBatch[]        @relation("cooking_batches_dish_id__dishes")
   cookingBatchDishes    CookingBatchDish[]
 
+  @@unique([id, schoolId])
   @@unique([schoolId, name])
   @@index([categoryId, schoolId], map: "dishes_category_id_school_id_idx")
   @@map("dishes")
@@ -432,10 +436,10 @@ model Dish {
 }
 
 model SchoolDishCategory {
-  id       String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  schoolId String   @map("school_id") @db.Uuid
-  name     String   @db.VarChar(255)
-  school   School   @relation(fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  id       String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  schoolId String @map("school_id") @db.Uuid
+  name     String @db.VarChar(255)
+  school   School @relation(fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   dishes   Dish[]
 
   @@unique([id, schoolId])
@@ -517,8 +521,8 @@ model FoodSafetyReportForwarding {
   id                               String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   incidentId                       String                 @map("incident_id") @db.Uuid
   recipientCommuneFoodSafetyUnitId String?                @map("recipient_commune_food_safety_unit_id") @db.Uuid
-  recipientUserId String? @map("recipient_user_id") @db.Uuid
-  receivedAt DateTime? @map("received_at") @db.Timestamptz(6)
+  recipientUserId                  String?                @map("recipient_user_id") @db.Uuid
+  receivedAt                       DateTime?              @map("received_at") @db.Timestamptz(6)
   recipientOrganization            String                 @map("recipient_organization") @db.VarChar(255)
   recipientName                    String?                @map("recipient_name") @db.VarChar(255)
   recipientEmail                   String?                @map("recipient_email") @db.Citext
@@ -567,6 +571,7 @@ model IncidentSchoolAlert {
 
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
 model IngredientEntry {
+  gradeRecipeLines       DishGradeRecipeLine[]
   id                     String                          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   schoolId               String                          @map("school_id") @db.Uuid
   ingredientId           String                          @map("ingredient_id") @db.Uuid
@@ -760,20 +765,20 @@ model MealAllocation {
 
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
 model MealComplaint {
-  id                String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  id                 String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   dailyMealPortionId String            @map("daily_meal_portion_id") @db.Uuid
-  submittedByUserId String            @map("submitted_by_user_id") @db.Uuid
-  complaintType     MealComplaintType @map("complaint_type")
-  description       String            @db.Text
-  status            ComplaintStatus   @default(SUBMITTED)
-  handledByUserId   String?           @map("handled_by_user_id") @db.Uuid
-  resolution        String?           @db.Text
-  submittedAt       DateTime          @default(now()) @map("submitted_at") @db.Timestamptz(6)
-  resolvedAt        DateTime?         @map("resolved_at") @db.Timestamptz(6)
-  updatedAt         DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  submittedByUserId  String            @map("submitted_by_user_id") @db.Uuid
+  complaintType      MealComplaintType @map("complaint_type")
+  description        String            @db.Text
+  status             ComplaintStatus   @default(SUBMITTED)
+  handledByUserId    String?           @map("handled_by_user_id") @db.Uuid
+  resolution         String?           @db.Text
+  submittedAt        DateTime          @default(now()) @map("submitted_at") @db.Timestamptz(6)
+  resolvedAt         DateTime?         @map("resolved_at") @db.Timestamptz(6)
+  updatedAt          DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   DailyMealPortion   DailyMealPortion  @relation(fields: [dailyMealPortionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  submittedByUser   User              @relation("meal_complaints_submitted_by_user_id__users", fields: [submittedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  handledByUser     User?             @relation("meal_complaints_handled_by_user_id__users", fields: [handledByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  submittedByUser    User              @relation("meal_complaints_submitted_by_user_id__users", fields: [submittedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  handledByUser      User?             @relation("meal_complaints_handled_by_user_id__users", fields: [handledByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@index([dailyMealPortionId], map: "idx_meal_complaints_daily_meal_portion")
   @@map("meal_complaints")
@@ -1022,7 +1027,7 @@ model School {
   /// School local time for afternoon meal; setup before afternoon batch creation.
   afternoonMealTime           DateTime?                    @map("afternoon_meal_time") @db.Time(6)
   status                      EntityStatus                 @default(ACTIVE)
-  intakeState IntakeState @default(ACTIVE) @map("intake_state")
+  intakeState                 IntakeState                  @default(ACTIVE) @map("intake_state")
   createdAt                   DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                   DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   users                       User[]                       @relation("users_school_id__schools")
@@ -1048,22 +1053,22 @@ model School {
 }
 
 model SampleStorageUnit {
-  id                  String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  schoolId            String               @map("school_id") @db.Uuid
-  code                String               @db.VarChar(50)
-  name                String               @db.VarChar(255)
-  location            String               @db.VarChar(255)
-  temperatureRange    String               @default("2°C - 8°C") @map("temperature_range") @db.VarChar(100)
+  id                 String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  schoolId           String               @map("school_id") @db.Uuid
+  code               String               @db.VarChar(50)
+  name               String               @db.VarChar(255)
+  location           String               @db.VarChar(255)
+  temperatureRange   String               @default("2°C - 8°C") @map("temperature_range") @db.VarChar(100)
   currentTemperature Decimal?             @map("current_temperature") @db.Decimal(4, 1)
-  capacity            Int                  @default(40)
-  currentUsage        Int                  @default(0) @map("current_usage")
-  compartmentCount    Int                  @default(3) @map("compartment_count")
-  status              String               @default("ACTIVE") @db.VarChar(50)
-  description         String?              @db.Text
-  createdAt           DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt           DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  School              School               @relation("sample_storage_units_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  retainedSamples     RetainedFoodSample[] @relation("retained_food_samples_storage_unit_id__sample_storage_units")
+  capacity           Int                  @default(40)
+  currentUsage       Int                  @default(0) @map("current_usage")
+  compartmentCount   Int                  @default(3) @map("compartment_count")
+  status             String               @default("ACTIVE") @db.VarChar(50)
+  description        String?              @db.Text
+  createdAt          DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  School             School               @relation("sample_storage_units_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  retainedSamples    RetainedFoodSample[] @relation("retained_food_samples_storage_unit_id__sample_storage_units")
 
   @@unique([schoolId, code], map: "uq_sample_storage_units_school_code")
   @@index([schoolId, status], map: "idx_sample_storage_units_school_status")
@@ -1151,7 +1156,7 @@ model Supplier {
   serviceAreas                SupplierServiceArea[]
   contracts                   SupplierContract[]
   status                      EntityStatus                 @default(ACTIVE)
-  intakeState IntakeState @default(ACTIVE) @map("intake_state")
+  intakeState                 IntakeState                  @default(ACTIVE) @map("intake_state")
   createdAt                   DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                   DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   supplierCertifications      SupplierCertification[]      @relation("supplier_certifications_supplier_id__suppliers")
@@ -1271,7 +1276,7 @@ model User {
   fullName                                     String                       @map("full_name") @db.VarChar(255)
   phone                                        String?                      @db.VarChar(30)
   status                                       AccountStatus                @default(UNVERIFIED)
-  intakeState IntakeState @default(ACTIVE) @map("intake_state")
+  intakeState                                  IntakeState                  @default(ACTIVE) @map("intake_state")
   emailVerifiedAt                              DateTime?                    @map("email_verified_at") @db.Timestamptz(6)
   lastLoginAt                                  DateTime?                    @map("last_login_at") @db.Timestamptz(6)
   createdAt                                    DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -1373,6 +1378,8 @@ model UserPermissionDenial {
 }
 
 model WeeklyMenu {
+  isSchoolWide      Boolean            @default(true) @map("is_school_wide")
+  grades            WeeklyMenuGrade[]
   id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   schoolId          String             @map("school_id") @db.Uuid
   createdByUserId   String             @map("created_by_user_id") @db.Uuid
@@ -1388,7 +1395,8 @@ model WeeklyMenu {
   menuDays          MenuDay[]          @relation("menu_days_weekly_menu_id__weekly_menus")
   menuReviewRecords MenuReviewRecord[] @relation("menu_review_records_weekly_menu_id__weekly_menus")
 
-  @@unique([schoolId, weekStartDate])
+  @@unique([id, schoolId, weekStartDate])
+  @@unique([schoolId, weekStartDate], map: "uq_weekly_menu_school_wide", where: raw("(is_school_wide = true)"))
   @@index([schoolId, weekStartDate], map: "idx_weekly_menus_school_week")
   @@map("weekly_menus")
   @@schema("foodprint")
@@ -1853,5 +1861,48 @@ model DailyMealPortionGroup {
   @@id([dailyMealPortionId, portionGroupId])
   @@index([portionGroupId], map: "idx_daily_meal_portion_group")
   @@map("daily_meal_portion_groups")
+  @@schema("foodprint")
+}
+
+model WeeklyMenuGrade {
+  weeklyMenuId  String      @map("weekly_menu_id") @db.Uuid
+  schoolId      String      @map("school_id") @db.Uuid
+  weekStartDate DateTime    @map("week_start_date") @db.Date
+  gradeId       String      @map("grade_id") @db.Uuid
+  weeklyMenu    WeeklyMenu  @relation(fields: [weeklyMenuId, schoolId, weekStartDate], references: [id, schoolId, weekStartDate], onDelete: Cascade, onUpdate: NoAction)
+  grade         SchoolGrade @relation(fields: [schoolId, gradeId], references: [schoolId, id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([weeklyMenuId, gradeId])
+  @@unique([schoolId, weekStartDate, gradeId])
+  @@map("weekly_menu_grades")
+  @@schema("foodprint")
+}
+
+model DishGradeRecipe {
+  dishId    String                @map("dish_id") @db.Uuid
+  gradeId   String                @map("grade_id") @db.Uuid
+  schoolId  String                @map("school_id") @db.Uuid
+  updatedAt DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  dish      Dish                  @relation(fields: [dishId, schoolId], references: [id, schoolId], onDelete: Cascade, onUpdate: NoAction)
+  grade     SchoolGrade           @relation(fields: [schoolId, gradeId], references: [schoolId, id], onDelete: Restrict, onUpdate: NoAction)
+  lines     DishGradeRecipeLine[]
+
+  @@id([dishId, gradeId])
+  @@map("dish_grade_recipes")
+  @@schema("foodprint")
+}
+
+model DishGradeRecipeLine {
+  dishId            String          @map("dish_id") @db.Uuid
+  gradeId           String          @map("grade_id") @db.Uuid
+  ingredientEntryId String          @map("ingredient_entry_id") @db.Uuid
+  ingredientRole    String          @map("ingredient_role") @db.VarChar(12)
+  requiredQuantity  Decimal         @map("required_quantity") @db.Decimal(14, 3)
+  unit              String          @db.VarChar(30)
+  recipe            DishGradeRecipe @relation(fields: [dishId, gradeId], references: [dishId, gradeId], onDelete: Cascade, onUpdate: NoAction)
+  entry             IngredientEntry @relation(fields: [ingredientEntryId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([dishId, gradeId, ingredientEntryId])
+  @@map("dish_grade_recipe_lines")
   @@schema("foodprint")
 }

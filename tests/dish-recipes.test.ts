@@ -1,12 +1,148 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Prisma } from "../src/generated/prisma/client";
-import { aggregateDishRecipes } from "../src/modules/dish/dish.service";
+import {
+  aggregateDishRecipes,
+  selectDishGradeRecipes,
+} from "../src/modules/dish/dish.service";
 import { validateDishRecipe } from "../src/modules/dish/dish.validation";
 import { expandMenuHolidays } from "../src/modules/menu/menu.service";
-import { assertPortionGroupSafety } from "../src/modules/kitchen/kitchen.service";
+import {
+  assertPortionGroupSafety,
+  convertQuantity,
+  planCookingBatches,
+} from "../src/modules/kitchen/kitchen.service";
 
 type Rows = Parameters<typeof aggregateDishRecipes>[0];
+
+void test("convert Vietnamese and standard unit spellings without guessing dimensions", () => {
+  const convert = (value: string, from: string, to: string) =>
+    convertQuantity(new Prisma.Decimal(value), from, to).toString();
+  assert.equal(convert("1.5", " LÍT ", "ml"), "1500");
+  assert.equal(convert("250", "ml", "li\u0301t"), "0.25");
+  assert.equal(convert("2", "lit", "l"), "2");
+  assert.equal(convert("0.15", "kilogam", "gam"), "150");
+  assert.equal(convert("2", "quả", "QUẢ"), "2");
+  for (const [from, to] of [
+    ["kg", "lít"],
+    ["quả", "hộp"],
+    ["", "g"],
+    ["constructor", "__proto__"],
+  ]) {
+    assert.throws(
+      () => convert("1", from, to),
+      (error: unknown) =>
+        error instanceof Error &&
+        "statusCode" in error &&
+        error.statusCode === 409 &&
+        error.message.includes(from.trim()) &&
+        error.message.includes(to.trim()),
+    );
+  }
+});
+
+void test("plan common and separate batches using ml recipes with lots measured in lít", () => {
+  const recipe = [
+    { ingredientEntryId: "oil", quantityPerPortion: "50", unit: "ml" },
+  ];
+  const stock = [
+    {
+      id: "lot-1",
+      ingredientEntryId: "oil",
+      availableQuantity: "1",
+      reservedQuantity: "0",
+      unit: "lít",
+    },
+    {
+      id: "lot-2",
+      ingredientEntryId: "oil",
+      availableQuantity: "1",
+      reservedQuantity: "0",
+      unit: "lít",
+    },
+  ];
+  const combined = planCookingBatches(30, "COMBINE_LOTS", recipe, stock);
+  assert.deepEqual(
+    combined[0].lots.map((lot) => lot.quantityUsed),
+    ["1.000", "0.500"],
+  );
+  const separate = planCookingBatches(30, "SEPARATE_BY_LOT", recipe, stock);
+  assert.deepEqual(
+    separate.map((batch) => batch.plannedPortions),
+    [20, 10],
+  );
+  assert.deepEqual(
+    separate.map((batch) => batch.lots[0].quantityUsed),
+    ["1.000", "0.500"],
+  );
+});
+
+void test("grade recipes with equivalent lít and ml quantities can share a menu", () => {
+  const line = (quantity: string, unit: string) => ({
+    ingredientEntryId: "oil",
+    ingredientRole: "MAIN",
+    requiredQuantity: new Prisma.Decimal(quantity),
+    unit,
+    entry: { ingredientId: "oil", Ingredient: { defaultUnit: "lít" } },
+  });
+  const rows = [
+    {
+      id: "dish",
+      name: "Dish",
+      dishIngredientEntries: [],
+      gradeRecipes: [
+        { gradeId: "small", lines: [line("250", "ml")] },
+        { gradeId: "large", lines: [line("0.25", "lit")] },
+      ],
+    },
+  ] as unknown as Rows;
+  assert.equal(selectDishGradeRecipes(rows, ["small", "large"]).length, 1);
+  rows[0].gradeRecipes[1].lines[0].requiredQuantity = new Prisma.Decimal("0.3");
+  assert.throws(() => selectDishGradeRecipes(rows, ["small", "large"]), {
+    statusCode: 422,
+  });
+});
+
+void test("grade recipe selection compares normalized quantities and never falls back to another grade", () => {
+  const profile = (gradeId: string, quantity: string, unit: string) => ({
+    gradeId,
+    lines: [
+      {
+        ingredientEntryId: "meat",
+        ingredientRole: "MAIN",
+        requiredQuantity: new Prisma.Decimal(quantity),
+        unit,
+        entry: { ingredientId: "meat", Ingredient: { defaultUnit: "g" } },
+      },
+    ],
+  });
+  const rows = [
+    {
+      id: "dish",
+      name: "Dish",
+      dishIngredientEntries: [],
+      gradeRecipes: [
+        profile("small", "80", "g"),
+        profile("large", "0.08", "kg"),
+      ],
+    },
+  ] as unknown as Rows;
+  const selected = selectDishGradeRecipes(rows, ["small", "large"]);
+  assert.equal(
+    selected[0].dishIngredientEntries[0].requiredQuantity.toString(),
+    "80",
+  );
+  assert.equal(rows[0].dishIngredientEntries.length, 0);
+  assert.throws(() => selectDishGradeRecipes(rows, ["missing"]), {
+    statusCode: 422,
+  });
+  rows[0].gradeRecipes[1].lines[0].requiredQuantity = new Prisma.Decimal(
+    "0.12",
+  );
+  assert.throws(() => selectDishGradeRecipes(rows, ["small", "large"]), {
+    statusCode: 422,
+  });
+});
 
 void test("school holidays include range endpoints, legacy dates, reasons and year boundaries", () => {
   const days = expandMenuHolidays(

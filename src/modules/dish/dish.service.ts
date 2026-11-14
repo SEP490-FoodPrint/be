@@ -77,6 +77,20 @@ function recipeDTO(row: RecipeRows[number]): DishRecipeDTO {
     category: row.categoryId,
     categoryLabel: row.schoolCategory?.name ?? null,
     description: row.description,
+    gradeRecipes: (row.gradeRecipes ?? []).map((profile) => ({
+      gradeId: profile.gradeId,
+      gradeName: profile.grade.name,
+      lines: profile.lines.map((line) => ({
+        ingredientEntryId: line.ingredientEntryId,
+        ingredientId: line.entry.ingredientId,
+        name: line.entry.Ingredient.name,
+        supplierId: line.entry.Ingredient.supplierId,
+        supplierName: line.entry.Ingredient.Supplier.name,
+        ingredientRole: line.ingredientRole,
+        requiredQuantity: line.requiredQuantity.toString(),
+        unit: line.unit,
+      })),
+    })),
     lines: row.dishIngredientEntries.map((r) => ({
       ingredientEntryId: r.ingredientEntryId,
       ingredientId: r.IngredientEntry.ingredientId,
@@ -183,17 +197,72 @@ export function aggregateDishRecipes(rows: RecipeRows) {
     ],
   };
 }
+export function selectDishGradeRecipes(
+  rows: RecipeRows,
+  gradeIds: readonly string[],
+): RecipeRows {
+  if (gradeIds.length) {
+    return rows.map((dish) => {
+      const profiles = gradeIds.map((gradeId) => {
+        const profile = dish.gradeRecipes.find(
+          (row) => row.gradeId === gradeId,
+        );
+        if (!profile)
+          throw new HttpError(
+            422,
+            `Món “${dish.name}” chưa có định lượng cho một trong các khối đã chọn`,
+          );
+        return profile;
+      });
+      const canonical = (profile: (typeof profiles)[number]) =>
+        JSON.stringify(
+          profile.lines
+            .map((line) => ({
+              id: line.ingredientEntryId,
+              role: line.ingredientRole,
+              quantity: convertQuantity(
+                line.requiredQuantity,
+                line.unit,
+                line.entry.Ingredient.defaultUnit,
+              ).toString(),
+              unit: line.entry.Ingredient.defaultUnit,
+            }))
+            .sort((a, b) => a.id.localeCompare(b.id)),
+        );
+      if (
+        profiles.some(
+          (profile) => canonical(profile) !== canonical(profiles[0]),
+        )
+      )
+        throw new HttpError(
+          422,
+          `Các khối có định lượng khác nhau cho món “${dish.name}”; hãy tách thực đơn`,
+        );
+      return {
+        ...dish,
+        dishIngredientEntries: profiles[0].lines.map((line) => ({
+          ...line,
+          IngredientEntry: line.entry,
+        })),
+      };
+    });
+  }
+  return rows;
+}
+
 export async function readDatabaseMealRecipe(
   tx: RecipePrisma.TransactionClient,
   schoolId: string,
   ids: string[],
+  gradeIds: readonly string[] = [],
 ) {
-  const rows = await recipes.recipes(tx, schoolId, ids);
+  let rows = await recipes.recipes(tx, schoolId, ids);
   if (rows.length !== ids.length || new Set(ids).size !== ids.length)
     throw new HttpError(
       422,
       "Món phải đang hoạt động, không trùng và thuộc trường",
     );
+  rows = selectDishGradeRecipes(rows, gradeIds);
   const entries = await recipes.entries(tx, schoolId, [
     ...new Set(
       rows.flatMap((d) =>
@@ -335,13 +404,18 @@ export function createDishRecipeService(
         },
       );
     },
-    async preview(ids: string[], principal: AuthPrincipal) {
+    async preview(
+      ids: string[],
+      principal: AuthPrincipal,
+      gradeIds: readonly string[] = [],
+    ) {
       const db = await connect();
       return withSchoolTransaction(
         db,
         principal,
         "menu.view",
-        (tx, _actor, schoolId) => readDatabaseMealRecipe(tx, schoolId, ids),
+        (tx, _actor, schoolId) =>
+          readDatabaseMealRecipe(tx, schoolId, ids, gradeIds),
       );
     },
     async save(
@@ -367,17 +441,32 @@ export function createDishRecipeService(
               throw new HttpError(422, "Nhóm món không thuộc trường");
             categoryId = category.id;
           }
-          const entries = await recipes.entries(
-            tx,
-            schoolId,
-            input.lines.map((r) => r.ingredientEntryId),
-          );
-          if (entries.length !== input.lines.length)
+          const allLines = [
+            ...input.lines,
+            ...(input.gradeRecipes ?? []).flatMap((profile) => profile.lines),
+          ];
+          if (input.gradeRecipes?.length) {
+            const grades = await recipes.grades(
+              tx,
+              schoolId,
+              input.gradeRecipes.map((profile) => profile.gradeId),
+            );
+            if (grades.length !== input.gradeRecipes.length)
+              throw new HttpError(
+                422,
+                "Khối không thuộc trường đang đăng nhập",
+              );
+          }
+          const entryIds = [
+            ...new Set(allLines.map((line) => line.ingredientEntryId)),
+          ];
+          const entries = await recipes.entries(tx, schoolId, entryIds);
+          if (entries.length !== entryIds.length)
             throw new HttpError(
               422,
               "Nguyên liệu phải thuộc kho trường và đang hoạt động",
             );
-          for (const line of input.lines) {
+          for (const line of allLines) {
             const entry = entries.find((e) => e.id === line.ingredientEntryId)!;
             assertRecipeEntry(entry, line.ingredientRole, schoolId);
             convertQuantity(
@@ -396,6 +485,17 @@ export function createDishRecipeService(
             input.lines,
           );
           if (!row) throw new HttpError(404, "Không tìm thấy món của trường");
+          if (input.gradeRecipes) {
+            await recipes.saveGradeRecipes(
+              tx,
+              schoolId,
+              row.id,
+              input.gradeRecipes,
+            );
+            return recipeDTO(
+              (await recipes.recipes(tx, schoolId, [row.id]))[0],
+            );
+          }
           return recipeDTO(row);
         },
       );

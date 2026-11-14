@@ -25,6 +25,16 @@ export interface MenuAcademicCalendarDTO {
 }
 
 export interface MenuWeekScheduleDTO {
+  availableMenus: {
+    id: string;
+    title: string | null;
+    status: WeeklyMenuStatus;
+    isSchoolWide: boolean;
+    gradeIds: string[];
+    gradeNames: string[];
+  }[];
+  gradeIds: string[];
+  targetScope: string;
   targetDate: string;
   targetDayOfWeek: number;
   targetDayLabel: string;
@@ -56,6 +66,9 @@ export interface MenuWeekScheduleDTO {
 }
 
 export interface MenuSummaryDTO {
+  gradeIds: string[];
+  gradeNames: string[];
+  isSchoolWide: boolean;
   id: string;
   schoolId: string;
   weekStartDate: string;

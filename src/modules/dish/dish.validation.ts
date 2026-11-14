@@ -21,7 +21,26 @@ const recipeLineSchema = z.strictObject({
     ),
   unit: requiredText(30).transform((v) => v.toLowerCase()),
 });
+const gradeRecipeSchema = z.strictObject({
+  gradeId: requestUuidSchema,
+  lines: z
+    .array(recipeLineSchema)
+    .min(1)
+    .max(100)
+    .refine(
+      (rows) =>
+        rows.some((row) => row.ingredientRole === "MAIN") &&
+        new Set(rows.map((row) => row.ingredientEntryId)).size === rows.length,
+    ),
+});
 export const dishRecipeWriteSchema = z.strictObject({
+  gradeRecipes: z
+    .array(gradeRecipeSchema)
+    .max(100)
+    .refine(
+      (rows) => new Set(rows.map((row) => row.gradeId)).size === rows.length,
+    )
+    .optional(),
   name: requiredText(255),
   category: z
     .union([requestUuidSchema, z.enum(DishCategory)])
@@ -51,6 +70,12 @@ export const dishCategoryWriteSchema = z.strictObject({
 export const validateDishCategory = (value: unknown) =>
   parseRequest(dishCategoryWriteSchema, value);
 export const recipeSelectionSchema = z.strictObject({
+  gradeIds: z
+    .array(requestUuidSchema)
+    .min(1)
+    .max(100)
+    .refine((ids) => new Set(ids).size === ids.length)
+    .optional(),
   dishIds: z
     .array(requestUuidSchema)
     .min(1)

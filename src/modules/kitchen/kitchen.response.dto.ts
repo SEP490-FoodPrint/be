@@ -90,6 +90,7 @@ export interface CookingBatchStatsResponseDTO {
 }
 
 export interface SchoolContextResponseDTO {
+  grades: { id: string; name: string }[];
   id: string;
   name: string;
   cookingMode: CookingMode | null;
@@ -134,4 +135,31 @@ export interface CookingBatchAllPageResponseDTO {
     limit: number;
     hasNext: boolean;
   };
+}
+
+export interface CookingBatchPreviewDTO {
+  cookingModeApplied: CookingMode;
+  planVersion: string;
+  batches: {
+    plannedPortions: number;
+    dishes: {
+      dishId: string;
+      name: string;
+      plannedPortions: number;
+      lots: {
+        ingredientLotId: string;
+        quantityUsed: string;
+        unit: string;
+        lotCode: string | null;
+        ingredientName: string | null;
+      }[];
+    }[];
+  }[];
+  seasonings: {
+    ingredientLotId: string;
+    quantityUsed: string;
+    unit: string;
+    lotCode: string | null;
+    ingredientName: string | null;
+  }[];
 }

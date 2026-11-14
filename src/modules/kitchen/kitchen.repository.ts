@@ -1,3 +1,4 @@
+import { classScopeForMenuDay } from "../menu/menu.repository";
 import { Prisma } from "../../generated/prisma/client";
 import { getPrisma } from "../../utils/database";
 
@@ -248,7 +249,7 @@ export const kitchenRepository = {
           orderBy: { dishId: "asc" },
           select: {
             dishId: true,
-            Dish: { select: { schoolId: true, status: true } },
+            Dish: { select: { schoolId: true, status: true, name: true } },
             ingredients: {
               orderBy: { ingredientId: "asc" },
               include: {
@@ -283,6 +284,7 @@ export const kitchenRepository = {
     mealType: "LUNCH" | "AFTERNOON",
     schoolId: string,
     entryIds: string[],
+    menuDayId?: string,
   ) {
     return client.dailyAllergyPortion.findFirst({
       where: {
@@ -290,7 +292,9 @@ export const kitchenRepository = {
           mealDate: menuDate,
           mealType,
           status: "FINALIZED",
-          Class: { schoolId },
+          Class: menuDayId
+            ? classScopeForMenuDay(schoolId, menuDayId)
+            : { schoolId },
         },
         ingredientEntryId: { in: entryIds },
         portionCount: { gt: 0 },
@@ -363,6 +367,10 @@ export const kitchenRepository = {
         id: true,
         name: true,
         cookingMode: true,
+        grades: {
+          select: { id: true, name: true },
+          orderBy: [{ name: "asc" }, { id: "asc" }],
+        },
         lunchTime: true,
         afternoonMealTime: true,
         academicYears: {

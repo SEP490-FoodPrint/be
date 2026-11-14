@@ -31,6 +31,35 @@ function schoolIdFor(principal: AuthPrincipal) {
   return principal.schoolId;
 }
 
+function menuAcceptsDemand(
+  menu: AllocationDay["menus"][number],
+  demand: AllocationDay["demands"][number],
+) {
+  return (
+    menu.menuDayDishes.some((dish) => dish.mealType === demand.mealType) &&
+    (menu.WeeklyMenu?.isSchoolWide !== false ||
+      menu.WeeklyMenu.grades.some(
+        (grade) => grade.gradeId === demand.Class.gradeId,
+      ))
+  );
+}
+function batchAcceptsDemand(
+  data: AllocationDay,
+  batchId: string,
+  demandId: string,
+) {
+  const batch = data.batches.find((row) => row.id === batchId);
+  const menu = data.menus.find((row) => row.id === batch?.menuDayId);
+  const demand = data.demands.find((row) => row.id === demandId);
+  return !!(
+    menu &&
+    batch &&
+    demand &&
+    batch.mealType === demand.mealType &&
+    menuAcceptsDemand(menu, demand)
+  );
+}
+
 function projectDistribution(
   data: AllocationDay,
 ): AllocationDayResponse["distribution"] {
@@ -58,6 +87,7 @@ function projectDistribution(
       if (
         !batch ||
         batch.mealType !== demand.mealType ||
+        !batchAcceptsDemand(data, batchId, demand.id) ||
         allocatedPortions <= 0 ||
         rows.length !== batch.dishes.length ||
         batch.dishes.some(
@@ -161,6 +191,14 @@ export function projectAllocationDay(
   const batches: AllocationDayResponse["batches"] = data.batches.map(
     (batch) => ({
       id: batch.id,
+      eligibleDemandIds: data.demands
+        .filter((demand) => batchAcceptsDemand(data, batch.id, demand.id))
+        .map((demand) => demand.id),
+      scopeLabel:
+        data.menus
+          .find((menu) => menu.id === batch.menuDayId)
+          ?.WeeklyMenu?.grades.map((grade) => grade.grade.name)
+          .join(", ") || "Toàn trường",
       mealType: batch.mealType,
       plannedPortions: batch.plannedPortions,
       note: batch.note,
@@ -174,86 +212,120 @@ export function projectAllocationDay(
   const demands: AllocationDayResponse["demands"] = [];
   let issue: string | undefined;
   let demandPending = false;
-  const meals = mealTypes.flatMap((mealType) => {
-    const menus = data.menus.filter((menu) =>
-      menu.menuDayDishes.some((dish) => dish.mealType === mealType),
-    );
-    const rawBatches = data.batches.filter(
-      (batch) => batch.mealType === mealType,
-    );
-    const mealBatches = batches.filter((batch) => batch.mealType === mealType);
-    const daily = data.demands.filter((demand) => demand.mealType === mealType);
-    if (!menus.length && !rawBatches.length && !daily.length) return [];
-    const menu = menus[0];
+  for (const demand of data.demands.filter((row) => row.totalPortions > 0)) {
     if (
-      menus.length !== 1 ||
-      rawBatches.some((batch) => batch.menuDayId !== menu?.id)
+      data.menus.filter((menu) => menuAcceptsDemand(menu, demand)).length !== 1
     )
-      issue ??= "Thực đơn của bữa và các lô cần được đối soát.";
-    const groups =
-      menu?.portionGroups.filter((group) => group.mealType === mealType) ?? [];
-    const common = groups.find((group) => group.isDefault);
-    const mealDishes =
-      menu?.menuDayDishes.filter((dish) => dish.mealType === mealType) ?? [];
-    if (!daily.length || daily.some((demand) => demand.status !== "FINALIZED"))
-      demandPending = true;
-    let finalized = 0;
-    for (const demand of daily.filter(
-      (entry) => entry.status === "FINALIZED",
-    )) {
-      const commonCount = demand.portionGroups.find(
-        (group) => group.portionGroupId === common?.id,
-      )?.portionCount;
-      if (
-        demand.dailyAllergyPortions.length ||
-        (groups.length
-          ? commonCount !== demand.totalPortions ||
-            demand.portionGroups.some(
-              (group) =>
-                group.portionGroupId !== common?.id && group.portionCount > 0,
-            )
-          : demand.portionGroups.length > 0)
-      )
-        issue ??= "Chưa xác định được số suất nhóm chung riêng cho từng lô.";
-      finalized += commonCount ?? demand.totalPortions;
-      demands.push({
-        id: demand.id,
-        name: demand.Class.name,
-        mealType,
-        totalPortions: commonCount ?? demand.totalPortions,
-        locked:
-          !!demand.MealAllocation &&
-          demand.MealAllocation.status !== "ALLOCATED",
-      });
-    }
-    for (const batch of rawBatches) {
-      if (
-        !batch.plannedPortions ||
-        batch.plannedPortions < 0 ||
-        (batch.status === "COMPLETED" && !batch.completedAt) ||
-        batch.dishes.length !== mealDishes.length ||
-        !batch.dishes.length ||
-        batch.dishes.some(
-          (dish) =>
-            dish.plannedPortions !== batch.plannedPortions ||
-            !mealDishes.some((required) => required.dishId === dish.dishId),
+      issue ??=
+        "Lớp chưa có thực đơn phù hợp hoặc đang thuộc nhiều phạm vi thực đơn trong cùng bữa.";
+  }
+  if (
+    data.batches.some(
+      (batch) => !data.menus.some((menu) => menu.id === batch.menuDayId),
+    )
+  )
+    issue ??= "Lô chế biến không thuộc thực đơn đã duyệt trong ngày.";
+  const menuStats = mealTypes
+    .flatMap((mealType) =>
+      data.menus
+        .filter((menu) =>
+          menu.menuDayDishes.some((dish) => dish.mealType === mealType),
         )
+        .map((menu) => ({ mealType, menu })),
+    )
+    .flatMap(({ mealType, menu }) => {
+      const rawBatches = data.batches.filter(
+        (batch) => batch.mealType === mealType && batch.menuDayId === menu.id,
+      );
+      const mealBatches = batches.filter((batch) =>
+        rawBatches.some((raw) => raw.id === batch.id),
+      );
+      const daily = data.demands.filter(
+        (demand) =>
+          demand.mealType === mealType && menuAcceptsDemand(menu, demand),
+      );
+      const groups =
+        menu?.portionGroups.filter((group) => group.mealType === mealType) ??
+        [];
+      const common = groups.find((group) => group.isDefault);
+      const mealDishes =
+        menu?.menuDayDishes.filter((dish) => dish.mealType === mealType) ?? [];
+      if (
+        !daily.length ||
+        daily.some((demand) => demand.status !== "FINALIZED")
       )
-        issue ??=
-          "Có lô thiếu dữ liệu hoặc số suất các món trong lô không khớp.";
-    }
-    const planned = mealBatches.reduce(
-      (sum, batch) => sum + (batch.plannedPortions ?? 0),
-      0,
-    );
-    const cooked = mealBatches
-      .filter((batch) => batch.status === "COMPLETED")
-      .reduce((sum, batch) => sum + (batch.plannedPortions ?? 0), 0);
-    const sampled = mealBatches
-      .filter((batch) => batch.status === "COMPLETED" && batch.hasSample)
-      .reduce((sum, batch) => sum + (batch.plannedPortions ?? 0), 0);
-    if (!finalized) demandPending = true;
-    return [{ mealType, finalized, planned, cooked, sampled }];
+        demandPending = true;
+      let finalized = 0;
+      for (const demand of daily.filter(
+        (entry) => entry.status === "FINALIZED",
+      )) {
+        const commonCount = demand.portionGroups.find(
+          (group) => group.portionGroupId === common?.id,
+        )?.portionCount;
+        if (
+          demand.dailyAllergyPortions.length ||
+          (groups.length
+            ? commonCount !== demand.totalPortions ||
+              demand.portionGroups.some(
+                (group) =>
+                  group.portionGroupId !== common?.id && group.portionCount > 0,
+              )
+            : demand.portionGroups.length > 0)
+        )
+          issue ??= "Chưa xác định được số suất nhóm chung riêng cho từng lô.";
+        finalized += commonCount ?? demand.totalPortions;
+        demands.push({
+          id: demand.id,
+          name: demand.Class.name,
+          mealType,
+          totalPortions: commonCount ?? demand.totalPortions,
+          locked:
+            !!demand.MealAllocation &&
+            demand.MealAllocation.status !== "ALLOCATED",
+        });
+      }
+      for (const batch of rawBatches) {
+        if (
+          !batch.plannedPortions ||
+          batch.plannedPortions < 0 ||
+          (batch.status === "COMPLETED" && !batch.completedAt) ||
+          batch.dishes.length !== mealDishes.length ||
+          !batch.dishes.length ||
+          batch.dishes.some(
+            (dish) =>
+              dish.plannedPortions !== batch.plannedPortions ||
+              !mealDishes.some((required) => required.dishId === dish.dishId),
+          )
+        )
+          issue ??=
+            "Có lô thiếu dữ liệu hoặc số suất các món trong lô không khớp.";
+      }
+      const planned = mealBatches.reduce(
+        (sum, batch) => sum + (batch.plannedPortions ?? 0),
+        0,
+      );
+      const cooked = mealBatches
+        .filter((batch) => batch.status === "COMPLETED")
+        .reduce((sum, batch) => sum + (batch.plannedPortions ?? 0), 0);
+      const sampled = mealBatches
+        .filter((batch) => batch.status === "COMPLETED" && batch.hasSample)
+        .reduce((sum, batch) => sum + (batch.plannedPortions ?? 0), 0);
+      if (!finalized) demandPending = true;
+      return [{ mealType, finalized, planned, cooked, sampled }];
+    });
+  const meals = mealTypes.flatMap((mealType) => {
+    const stats = menuStats.filter((row) => row.mealType === mealType);
+    return stats.length
+      ? [
+          {
+            mealType,
+            finalized: stats.reduce((sum, row) => sum + row.finalized, 0),
+            planned: stats.reduce((sum, row) => sum + row.planned, 0),
+            cooked: stats.reduce((sum, row) => sum + row.cooked, 0),
+            sampled: stats.reduce((sum, row) => sum + row.sampled, 0),
+          },
+        ]
+      : [];
   });
   const totals = meals.reduce(
     (sum, meal) => ({
@@ -315,14 +387,14 @@ export function projectAllocationDay(
       "Chưa có đủ số suất giáo viên đã chốt.",
       "RETRY",
     );
-  if (meals.some((meal) => meal.planned > meal.finalized))
+  if (menuStats.some((meal) => meal.planned > meal.finalized))
     return locked(
       "RECONCILE",
       "Số suất của lô vượt số suất giáo viên đã chốt.",
       "COOKING",
     );
   if (
-    meals.some((meal) => meal.planned < meal.finalized) ||
+    menuStats.some((meal) => meal.planned < meal.finalized) ||
     batches.some((batch) => batch.status !== "COMPLETED")
   )
     return locked(
@@ -332,7 +404,7 @@ export function projectAllocationDay(
     );
   if (
     missingSampleBatches ||
-    meals.some((meal) => meal.sampled !== meal.finalized)
+    menuStats.some((meal) => meal.sampled !== meal.finalized)
   )
     return locked(
       "SAMPLES_PENDING",
@@ -375,6 +447,7 @@ export function projectAllocationDay(
       if (
         !batch ||
         !raw ||
+        !batchAcceptsDemand(data, batchId, demand.id) ||
         batch.mealType !== demand.mealType ||
         count <= 0 ||
         rows.length !== raw.dishes.length ||
@@ -461,6 +534,7 @@ function prepareChanges(
         !demand ||
         demand.locked ||
         demand.mealType !== batch.mealType ||
+        !batchAcceptsDemand(data, batch.id, demand.id) ||
         seen.has(demand.id)
       )
         throw new HttpError(400, "Lớp không hợp lệ hoặc bị trùng trong lô");

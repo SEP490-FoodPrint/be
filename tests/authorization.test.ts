@@ -84,15 +84,17 @@ void test("identity rejects missing, inactive, mismatched and unscoped accounts"
     assert.throws(() => principalFromIdentity(value), status(403));
 });
 void test("all list resources deny absent grants, including System Admin", () => {
-  for (const scope of Object.values(listScopes)) {
+  for (const [resource, scope] of Object.entries(listScopes)) {
     assert.throws(() => scope({ ...testAdmin, permissions: [] }), status(403));
-    assert.deepEqual(
-      scope({
-        ...testAdmin,
-        permissions: INITIAL_PERMISSIONS.map((p) => p.code),
-      }),
-      {},
-    );
+    const grantedSystem = {
+      ...testAdmin,
+      permissions: INITIAL_PERMISSIONS.map((p) => p.code),
+    };
+    if (resource === "source-facility") {
+      assert.throws(() => scope(grantedSystem), status(403));
+    } else {
+      assert.deepEqual(scope(grantedSystem), {});
+    }
   }
 });
 void test("school grade service requires BGH even when SYSTEM has class.manage", async () => {

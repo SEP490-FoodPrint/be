@@ -1,7 +1,8 @@
 import { Router } from "express";
 import type { RequestHandler } from "express";
 import { authenticate } from "../../middlewares/auth.middleware";
-import { requireResource } from "../../middlewares/permission.middleware";
+import { requirePrincipal } from "../../utils/authorization";
+import { sourceFacilityManagementScope } from "../../utils/resource-access";
 import { createSourceFacilityController } from "./source-facility.controller";
 import {
   sourceFacilityService,
@@ -14,12 +15,19 @@ export function createSourceFacilityRouter(
 ) {
   const router = Router();
   const controller = createSourceFacilityController(service);
-  router.get(
-    "/",
-    authHandler,
-    requireResource("source-facility"),
-    controller.getAll,
-  );
+  router.use(authHandler, (req, _res, next) => {
+    try {
+      sourceFacilityManagementScope(requirePrincipal(req));
+      next();
+    } catch (error) {
+      next(error);
+    }
+  });
+  router.get("/", controller.getAll);
+  router.post("/", controller.create);
+  router.get("/:sourceFacilityId", controller.getDetail);
+  router.patch("/:sourceFacilityId", controller.update);
+  router.post("/:sourceFacilityId/deactivate", controller.deactivate);
   return router;
 }
 
