@@ -929,6 +929,8 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         1,
       );
       const batch = plans[0].batches[0];
+      assert.equal(batch.status, "CONFIRMED");
+      assert(batch.confirmedAt);
       assert.equal(batch.plannedPortions, 120);
       assert.equal(batch.dishes.length, 2);
       assert.equal(
@@ -1280,19 +1282,28 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       assert.deepEqual(await organizations.getCookingMode(reviewer), {
         cookingMode: "SEPARATE_BY_LOT",
       });
-      let grPlan = await batches.plan({ ...grKey, dishId: grCommon }, chef);
+      const grPlan = await batches.plan({ ...grKey, dishId: grCommon }, chef);
       assert.deepEqual(
         grPlan.batches.map((b) => b.plannedPortions).sort((a, b) => a! - b!),
         [13, 13, 32, 62],
       );
       const grDeleted = grPlan.batches.find((b) => b.plannedPortions === 62)!;
       assert.equal("update" in batches, false);
-      assert.equal(
-        (await batches.remove(grDeleted.id, chef))
-          .mealSeasoningReservationsReleased,
-        false,
+      assert(grPlan.batches.every((batch) => batch.status === "CONFIRMED"));
+      await assert.rejects(
+        () => batches.remove(grDeleted.id, chef),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 409,
       );
-      grPlan = await batches.plan({ ...grKey, dishId: grCommon }, chef);
+      const repeatedPlan = await batches.plan(
+        { ...grKey, dishId: grCommon },
+        chef,
+      );
+      assert.equal(repeatedPlan.created, false);
+      assert.deepEqual(
+        repeatedPlan.batches.map((batch) => batch.id).sort(),
+        grPlan.batches.map((batch) => batch.id).sort(),
+      );
       assert.equal(
         grPlan.batches.reduce((n, b) => n + b.plannedPortions!, 0),
         120,
