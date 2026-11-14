@@ -82,13 +82,14 @@ Given that feature description, do this:
 
    **Resolution order for `SPECIFY_FEATURE_DIRECTORY`**:
    1. If the user explicitly provided `SPECIFY_FEATURE_DIRECTORY` (e.g., via environment variable, argument, or configuration), use it as-is
-   2. Otherwise, auto-generate it under `specs/`:
-      - Check `.specify/init-options.json` for `feature_numbering` (preferred) or `branch_numbering` (deprecated, migration only — will be removed in a future release)
-      - If `"timestamp"`: prefix is `YYYYMMDD-HHMMSS` (current timestamp)
-      - If `"sequential"` or absent: prefix is `NNN` (next available 3-digit number after scanning existing directories in `specs/`)
-      - Construct the directory name: `<prefix>-<short-name>` (e.g., `003-user-auth` or `20260319-143022-user-auth`)
-      - Set `SPECIFY_FEATURE_DIRECTORY` to `specs/<directory-name>`
-      - If `branch_numbering` was used (and `feature_numbering` was absent), emit a one-line warning: "⚠️ `branch_numbering` in init-options.json is deprecated. Rename to `feature_numbering`."
+   2. Otherwise, use `specs/<short-name>` without a sequence prefix, for example `specs/user-auth`.
+      - When already on a valid feat/fix/refactor/perf/docs work branch, prefer its feature slug (without an optional legacy three-digit prefix) as the short name so the default directory matches CI. Otherwise use the concise kebab-case name from step 1. Honor an explicit user-provided name or path.
+      - FoodPrint does not require sequential numbering. Do not scan for a next number, add a numeric/timestamp prefix, or call the upstream create-new-feature script to generate one.
+      - The upstream `feature_numbering`/`branch_numbering` settings do not control this repository's default naming. Leave generated Spec Kit scaffolding and init-options unchanged.
+      - New work branches use `<type>/<feature-slug>`; a branch may add a descriptive suffix when continuing an existing feature. Use the repository's spec-gate matching rules in `contribute.md` section 8.2.
+      - Existing numbered directories and explicit `SPECIFY_FEATURE_DIRECTORY` paths remain supported as-is. Do not rename legacy specs or branches automatically.
+      - Before creating a default directory, check for an existing feature with that name, including a legacy numbered directory. If it exists, do not overwrite it, create an unnumbered duplicate, or add a sequence number to avoid the collision. Report the existing path; update that feature through the amendment workflow or choose a distinct descriptive slug for genuinely new work.
+      - Set `SPECIFY_FEATURE_DIRECTORY` to the resolved path.
 
    **Create the directory and spec file**:
    - `mkdir -p SPECIFY_FEATURE_DIRECTORY`
@@ -101,12 +102,12 @@ Given that feature description, do this:
        "feature_directory": "<resolved feature dir>"
      }
      ```
-     Write the actual resolved directory path value (for example, `specs/003-user-auth`), not the literal string `SPECIFY_FEATURE_DIRECTORY`.
+     Write the actual resolved directory path value (for example, `specs/user-auth`), not the literal string `SPECIFY_FEATURE_DIRECTORY`.
      This allows downstream commands (`$speckit-plan`, `$speckit-tasks`, etc.) to locate the feature directory without relying on git branch name conventions.
 
    **IMPORTANT**:
    - You must only create one feature per `$speckit-specify` invocation
-   - The spec directory name and the git branch name are independent — they may be the same but that is the user's choice
+   - Feature path resolution is independent of git branch discovery; branch/spec association still follows the repository naming rules, and explicit user-provided paths take precedence
    - The spec directory and file are always created by this command, never by the hook
 
 4. Load the resolved active `spec-template` file to understand required sections.
