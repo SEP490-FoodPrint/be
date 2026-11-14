@@ -5,16 +5,19 @@ import {
   withSchoolTransaction,
 } from "../../utils/authorization";
 import { HttpError } from "../../utils/http-error";
+import { currentAcademicYear } from "../class/academic-year";
 import type { MenuApprovalDecisionRequestDTO } from "./menu-approval.request.dto";
 import type {
   MenuApprovalDecisionResponseDTO,
   MenuApprovalDetailResponseDTO,
+  MenuApprovalGradeCoverageDTO,
 } from "./menu-approval.response.dto";
 import {
   menuApprovalRepository,
   type ApprovalDecisionRow,
   type ApprovalDetailRow,
   type FinalizedPortionRow,
+  type GradeCoverageRow,
   type MenuApprovalRepository,
 } from "./menu-approval.repository";
 
@@ -58,8 +61,14 @@ function requireBoardSchool(principal: AuthPrincipal): string {
   return principal.schoolId;
 }
 
+const NUTRITION_ROLE_LABEL = "Nhân viên Dinh dưỡng";
+
+/**
+ * Số suất của một ngày = bữa đông nhất trong ngày (không cộng trưa + chiều),
+ * vì cùng một học sinh có thể ăn cả hai bữa.
+ */
 function portionsByDate(
-  rows: FinalizedPortionRow[],
+  rows: Pick<FinalizedPortionRow, "mealDate" | "totalPortions">[],
 ): ReadonlyMap<string, number> {
   const result = new Map<string, number>();
   for (const row of rows) {
@@ -69,9 +78,81 @@ function portionsByDate(
   return result;
 }
 
+/** Cộng suất theo ngày rồi lấy bữa đông nhất của từng ngày, giống portionsByDate. */
+function weeklyPortions(rows: GradeCoverageRow["portions"]): number {
+  const byMeal = new Map<string, { mealDate: Date; totalPortions: number }>();
+  for (const row of rows) {
+    const key = `${row.mealDate.toISOString().slice(0, 10)}|${row.mealType}`;
+    const current = byMeal.get(key);
+    byMeal.set(key, {
+      mealDate: row.mealDate,
+      totalPortions: (current?.totalPortions ?? 0) + row.totalPortions,
+    });
+  }
+  let total = 0;
+  for (const value of portionsByDate([...byMeal.values()]).values()) {
+    total += value;
+  }
+  return total;
+}
+
+function mapGradeCoverage(
+  menu: ApprovalDetailRow,
+  academicYear: string,
+  coverage: GradeCoverageRow,
+): MenuApprovalGradeCoverageDTO {
+  const menuGradeIds = new Set(menu.grades?.map((grade) => grade.gradeId));
+  const otherGradeIds = new Set(coverage.otherMenuGradeIds);
+  const grades = coverage.grades.map((grade) => {
+    const inThisMenu = menu.isSchoolWide || menuGradeIds.has(grade.id);
+    return {
+      id: grade.id,
+      name: grade.name,
+      activeClasses: grade.activeClasses,
+      portions: weeklyPortions(
+        coverage.portions.filter((row) => row.gradeId === grade.id),
+      ),
+      inThisMenu,
+      hasMenuThisWeek:
+        inThisMenu ||
+        otherGradeIds.has(grade.id) ||
+        coverage.hasOtherSchoolWideMenu,
+    };
+  });
+  const warnings: string[] = [];
+  const missing = grades.filter(
+    (grade) => grade.activeClasses > 0 && !grade.hasMenuThisWeek,
+  );
+  if (missing.length) {
+    warnings.push(
+      `Khối chưa có thực đơn trong tuần: ${missing.map((grade) => grade.name).join(", ")}`,
+    );
+  }
+  const emptyGrades = grades.filter(
+    (grade) => grade.inThisMenu && grade.activeClasses === 0,
+  );
+  if (!menu.isSchoolWide && emptyGrades.length) {
+    warnings.push(
+      `Khối áp dụng chưa có lớp đang hoạt động năm ${academicYear}: ${emptyGrades.map((grade) => grade.name).join(", ")}`,
+    );
+  }
+  if (coverage.unassignedActiveClasses > 0) {
+    warnings.push(
+      `${coverage.unassignedActiveClasses} lớp đang hoạt động chưa được gán khối${menu.isSchoolWide ? "" : " nên không thuộc thực đơn theo khối nào"}`,
+    );
+  }
+  return {
+    academicYear,
+    grades,
+    unassignedActiveClasses: coverage.unassignedActiveClasses,
+    warnings,
+  };
+}
+
 function mapDetail(
   menu: ApprovalDetailRow,
   finalizedPortions: FinalizedPortionRow[],
+  coverage: GradeCoverageRow,
 ): MenuApprovalDetailResponseDTO {
   const healthReview = menu.menuReviewRecords.find(
     (review) => review.User.Role.code === ROLES.SCHOOL_NUTRITION_OFFICER,
@@ -135,12 +216,17 @@ function mapDetail(
         "Toàn trường",
       audienceDetail: "Số suất ăn được xác định theo kế hoạch phục vụ",
       servingPeriod: `${formatDate(firstDate)} - ${formatDate(lastDate)}`,
-      proposer: "Cán bộ Y tế",
-      proposerDetail: menu.School.name,
+      proposer: menu.User?.fullName ?? NUTRITION_ROLE_LABEL,
+      proposerDetail: `${NUTRITION_ROLE_LABEL} · ${menu.School.name}`,
       supplier: `${supplierIds.size} nhà cung cấp`,
     },
     compliance: [],
     days,
+    gradeCoverage: mapGradeCoverage(
+      menu,
+      currentAcademicYear(menu.weekStartDate),
+      coverage,
+    ),
     medicalReview: {
       status:
         healthReview?.decision === "APPROVED"
@@ -150,7 +236,7 @@ function mapDetail(
             : "Chưa thẩm định",
       isApproved: healthReview?.decision === "APPROVED",
       reviewer: healthReview?.User.fullName ?? "Chưa phân công",
-      role: "Cán bộ Y tế",
+      role: NUTRITION_ROLE_LABEL,
       reviewedAt: formatDateTime(healthReview?.reviewedAt ?? null) ?? "—",
       note: healthReview?.feedback ?? "Chưa có nhận xét thẩm định.",
       documents: [],
@@ -195,12 +281,22 @@ export function createMenuApprovalService(
       if (!menu) {
         throw new HttpError(404, "Không tìm thấy thực đơn của trường");
       }
-      const portions = await repository.findFinalizedPortions(
-        menu.menuDays.map((day) => day.menuDate),
-        schoolId,
-        menu.grades?.map((grade) => grade.gradeId) ?? [],
-      );
-      return mapDetail(menu, portions);
+      const dates = menu.menuDays.map((day) => day.menuDate);
+      const [portions, coverage] = await Promise.all([
+        repository.findFinalizedPortions(
+          dates,
+          schoolId,
+          menu.grades?.map((grade) => grade.gradeId) ?? [],
+        ),
+        repository.findGradeCoverage({
+          schoolId,
+          weeklyMenuId: menu.id,
+          weekStartDate: menu.weekStartDate,
+          academicYear: currentAcademicYear(menu.weekStartDate),
+          dates,
+        }),
+      ]);
+      return mapDetail(menu, portions, coverage);
     },
 
     async decide(

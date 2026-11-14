@@ -9,6 +9,7 @@ import {
 import type {
   ApprovalDecisionRow,
   ApprovalDetailRow,
+  GradeCoverageRow,
   MenuApprovalRepository,
 } from "../src/modules/menu-approval/menu-approval.repository";
 import { validateMenuApprovalDecision } from "../src/modules/menu-approval/menu-approval.validation";
@@ -105,6 +106,7 @@ function decisionHarness(options?: {
     connect: () => Promise.resolve(transactionDatabase(actor)),
     findDetail: () => Promise.resolve(null),
     findFinalizedPortions: () => Promise.resolve([]),
+    findGradeCoverage: () => Promise.resolve(emptyCoverage()),
     findForDecision: () => Promise.resolve(options?.week ?? decisionWeek()),
     createReview: (_tx, input) => {
       writes.reviews.push(input);
@@ -254,6 +256,16 @@ void test("a non-board account cannot decide even with the permission", async ()
   assert.equal(writes.reviews.length, 0);
 });
 
+function emptyCoverage(): GradeCoverageRow {
+  return {
+    grades: [],
+    unassignedActiveClasses: 0,
+    portions: [],
+    otherMenuGradeIds: [],
+    hasOtherSchoolWideMenu: false,
+  };
+}
+
 function detailRow(): ApprovalDetailRow {
   const monday = new Date("2026-11-02T00:00:00.000Z");
   return {
@@ -262,7 +274,9 @@ function detailRow(): ApprovalDetailRow {
     status: "PENDING_APPROVAL",
     submittedAt: new Date("2026-10-30T01:00:00.000Z"),
     weekStartDate: monday,
+    isSchoolWide: true,
     School: { name: "Trường A" },
+    User: { fullName: "Nguyễn Dinh Dưỡng" },
     menuDays: [
       {
         id: "00000000-0000-4000-8000-0000000000d1",
@@ -305,6 +319,7 @@ void test("approval detail stays in school scope and uses finalized class demand
           totalPortions: 390,
         },
       ]),
+    findGradeCoverage: () => Promise.resolve(emptyCoverage()),
     findForDecision: () => Promise.resolve(null),
     createReview: () => Promise.reject(new Error("not used")),
     updateAllDays: () => Promise.reject(new Error("not used")),
@@ -347,6 +362,7 @@ void test("approval uses selected grades for demand and suppliers from the saved
       selectedGrades = gradeIds;
       return Promise.resolve([]);
     },
+    findGradeCoverage: () => Promise.resolve(emptyCoverage()),
   } as unknown as MenuApprovalRepository;
   const detail = await createMenuApprovalService(repository).getDetail(
     menuId,
@@ -367,6 +383,7 @@ void test("approval detail is restricted to the school management board", async 
       return Promise.resolve(detailRow());
     },
     findFinalizedPortions: () => Promise.resolve([]),
+    findGradeCoverage: () => Promise.resolve(emptyCoverage()),
     findForDecision: () => Promise.resolve(null),
     createReview: () => Promise.reject(new Error("not used")),
     updateAllDays: () => Promise.reject(new Error("not used")),
@@ -381,4 +398,104 @@ void test("approval detail is restricted to the school management board", async 
     (error: unknown) => error instanceof HttpError && error.statusCode === 403,
   );
   assert.equal(reads, 0);
+});
+
+void test("approval detail names the nutrition officer and breaks demand down by grade", async () => {
+  const monday = new Date("2026-11-02T00:00:00.000Z");
+  const menu = detailRow();
+  menu.isSchoolWide = false;
+  menu.grades = [
+    { gradeId: "grade-1", grade: { name: "Khối 1" } },
+    { gradeId: "grade-3", grade: { name: "Khối 3" } },
+  ] as never;
+  let coverageInput: Record<string, unknown> | undefined;
+  const repository = {
+    findDetail: () => Promise.resolve(menu),
+    findFinalizedPortions: () => Promise.resolve([]),
+    findGradeCoverage: (input: Record<string, unknown>) => {
+      coverageInput = input;
+      return Promise.resolve({
+        grades: [
+          { id: "grade-1", name: "Khối 1", activeClasses: 2 },
+          { id: "grade-2", name: "Khối 2", activeClasses: 3 },
+          { id: "grade-3", name: "Khối 3", activeClasses: 0 },
+          { id: "grade-4", name: "Khối 4", activeClasses: 1 },
+        ],
+        unassignedActiveClasses: 2,
+        portions: [
+          {
+            gradeId: "grade-1",
+            mealDate: monday,
+            mealType: "LUNCH" as const,
+            totalPortions: 30,
+          },
+          {
+            gradeId: "grade-1",
+            mealDate: monday,
+            mealType: "LUNCH" as const,
+            totalPortions: 25,
+          },
+          {
+            gradeId: "grade-1",
+            mealDate: monday,
+            mealType: "AFTERNOON" as const,
+            totalPortions: 50,
+          },
+          {
+            gradeId: null,
+            mealDate: monday,
+            mealType: "LUNCH" as const,
+            totalPortions: 9,
+          },
+        ],
+        otherMenuGradeIds: ["grade-4"],
+        hasOtherSchoolWideMenu: false,
+      });
+    },
+  } as unknown as MenuApprovalRepository;
+  const detail = await createMenuApprovalService(repository).getDetail(
+    menuId,
+    board,
+  );
+
+  assert.equal(detail.summary.proposer, "Nguyễn Dinh Dưỡng");
+  assert.equal(
+    detail.summary.proposerDetail,
+    "Nhân viên Dinh dưỡng · Trường A",
+  );
+  assert.equal(detail.medicalReview.role, "Nhân viên Dinh dưỡng");
+  assert.equal(coverageInput?.academicYear, "2026-2027");
+  assert.equal(coverageInput?.weeklyMenuId, menuId);
+
+  const byId = new Map(
+    detail.gradeCoverage.grades.map((grade) => [grade.id, grade]),
+  );
+  assert.equal(byId.get("grade-1")?.portions, 55);
+  assert.equal(byId.get("grade-1")?.inThisMenu, true);
+  assert.equal(byId.get("grade-2")?.hasMenuThisWeek, false);
+  assert.equal(byId.get("grade-4")?.hasMenuThisWeek, true);
+  assert.equal(byId.get("grade-4")?.inThisMenu, false);
+  assert.deepEqual(detail.gradeCoverage.warnings, [
+    "Khối chưa có thực đơn trong tuần: Khối 2",
+    "Khối áp dụng chưa có lớp đang hoạt động năm 2026-2027: Khối 3",
+    "2 lớp đang hoạt động chưa được gán khối nên không thuộc thực đơn theo khối nào",
+  ]);
+});
+
+void test("a school-wide menu covers every grade", async () => {
+  const repository = {
+    findDetail: () => Promise.resolve(detailRow()),
+    findFinalizedPortions: () => Promise.resolve([]),
+    findGradeCoverage: () =>
+      Promise.resolve({
+        ...emptyCoverage(),
+        grades: [{ id: "grade-1", name: "Khối 1", activeClasses: 2 }],
+      }),
+  } as unknown as MenuApprovalRepository;
+  const detail = await createMenuApprovalService(repository).getDetail(
+    menuId,
+    board,
+  );
+  assert.equal(detail.gradeCoverage.grades[0]?.inThisMenu, true);
+  assert.deepEqual(detail.gradeCoverage.warnings, []);
 });
