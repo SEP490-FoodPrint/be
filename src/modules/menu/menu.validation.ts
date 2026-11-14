@@ -107,6 +107,12 @@ export const menuIdParamsSchema = z.strictObject({ menuId: requestUuidSchema });
 export const menuSubmitSchema = z.strictObject({});
 export const menuAcademicCalendarQuerySchema = z.strictObject({});
 export const menuWeekScheduleQuerySchema = z.strictObject({
+  menuId: requestUuidSchema.optional(),
+  gradeIds: z
+    .string()
+    .transform((value) => value.split(","))
+    .pipe(z.array(requestUuidSchema).min(1).max(100))
+    .optional(),
   date: calendarDateSchema.default(
     () =>
       new Date(
@@ -372,15 +378,19 @@ export const menuFiltersSchema = paginationSchema
     status: query.status,
     search: query.search,
   }));
-export const menuAllergyCheckSchema = z
-  .strictObject({
-    ingredientIds: z
-      .array(requestUuidSchema, { error: "Danh sách nguyên liệu không hợp lệ" })
-      .min(1, { error: "Cần chọn ít nhất một nguyên liệu" })
-      .max(100, { error: "Tối đa 100 nguyên liệu" })
-      .superRefine((ids, context) => uniqueIssues(ids, context)),
-  })
-  .transform((body) => body.ingredientIds);
+export const menuAllergyCheckSchema = z.strictObject({
+  gradeIds: z
+    .array(requestUuidSchema)
+    .min(1)
+    .max(100)
+    .superRefine((ids, context) => uniqueIssues(ids, context))
+    .optional(),
+  ingredientIds: z
+    .array(requestUuidSchema, { error: "Danh sách nguyên liệu không hợp lệ" })
+    .min(1, { error: "Cần chọn ít nhất một nguyên liệu" })
+    .max(100, { error: "Tối đa 100 nguyên liệu" })
+    .superRefine((ids, context) => uniqueIssues(ids, context)),
+});
 
 export const validateMenuListQuery = (value: unknown) =>
   parseRequest(menuListQuerySchema, value);

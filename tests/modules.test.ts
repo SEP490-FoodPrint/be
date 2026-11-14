@@ -514,10 +514,13 @@ void test("allergy-check honors the class allergy permission separately from men
   assert.equal(databaseCalls, 0);
   await assert.rejects(
     () =>
-      service.allergyCheck([testStaff.id], {
-        ...testStaff,
-        permissions: ["menu.view"],
-      }),
+      service.allergyCheck(
+        { ingredientIds: [testStaff.id] },
+        {
+          ...testStaff,
+          permissions: ["menu.view"],
+        },
+      ),
     (e: unknown) => e instanceof HttpError && e.statusCode === 403,
   );
 });

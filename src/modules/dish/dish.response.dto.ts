@@ -16,6 +16,10 @@ export interface DishRecipeDTO {
     gradeName: string;
     lines: {
       ingredientEntryId: string;
+      ingredientId: string;
+      name: string;
+      supplierId: string;
+      supplierName: string;
       ingredientRole: string;
       requiredQuantity: string;
       unit: string;

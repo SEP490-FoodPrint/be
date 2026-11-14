@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from "../../generated/prisma/client";
 import { getPrisma } from "../../utils/database";
 
 export const approvalDetailInclude = {
+  grades: { select: { gradeId: true, grade: { select: { name: true } } } },
   School: { select: { name: true } },
   menuDays: {
     orderBy: { menuDate: "asc" as const },
@@ -9,6 +10,13 @@ export const approvalDetailInclude = {
       menuDayDishes: {
         orderBy: { displayOrder: "asc" as const },
         include: {
+          ingredients: {
+            include: {
+              ingredient: {
+                include: { Supplier: { select: { id: true, name: true } } },
+              },
+            },
+          },
           Dish: {
             include: {
               dishIngredientEntries: {
@@ -73,6 +81,7 @@ export interface MenuApprovalRepository {
   findFinalizedPortions(
     dates: Date[],
     schoolId: string,
+    gradeIds?: string[],
   ): Promise<FinalizedPortionRow[]>;
   findForDecision(
     tx: TransactionClient,
@@ -118,7 +127,7 @@ export function createMenuApprovalRepository(
       });
     },
 
-    async findFinalizedPortions(dates, schoolId) {
+    async findFinalizedPortions(dates, schoolId, gradeIds = []) {
       if (!dates.length) return [];
       const prisma = await getClient();
       const rows = await prisma.dailyMealPortion.groupBy({
@@ -126,7 +135,10 @@ export function createMenuApprovalRepository(
         where: {
           mealDate: { in: dates },
           status: "FINALIZED",
-          Class: { schoolId },
+          Class: {
+            schoolId,
+            ...(gradeIds.length ? { gradeId: { in: gradeIds } } : {}),
+          },
         },
         _sum: { totalPortions: true },
       });

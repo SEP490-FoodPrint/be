@@ -82,6 +82,10 @@ function recipeDTO(row: RecipeRows[number]): DishRecipeDTO {
       gradeName: profile.grade.name,
       lines: profile.lines.map((line) => ({
         ingredientEntryId: line.ingredientEntryId,
+        ingredientId: line.entry.ingredientId,
+        name: line.entry.Ingredient.name,
+        supplierId: line.entry.Ingredient.supplierId,
+        supplierName: line.entry.Ingredient.Supplier.name,
         ingredientRole: line.ingredientRole,
         requiredQuantity: line.requiredQuantity.toString(),
         unit: line.unit,

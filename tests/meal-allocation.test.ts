@@ -46,6 +46,73 @@ function fixture(): AllocationDay {
   };
 }
 
+function gradeFixture(): AllocationDay {
+  const data = fixture();
+  data.demands = data.demands.slice(0, 2);
+  data.demands.forEach((demand, index) => {
+    demand.Class.gradeId = `grade${index}`;
+    demand.totalPortions = 50;
+  });
+  data.menus = [0, 1].map((index) => ({
+    ...data.menus[0],
+    id: `menu${index}`,
+    WeeklyMenu: {
+      isSchoolWide: false,
+      grades: [
+        { gradeId: `grade${index}`, grade: { name: `Khối ${index + 1}` } },
+      ],
+    },
+    menuDayDishes: [{ dishId: `dish${index}`, mealType: "LUNCH" }],
+  }));
+  data.batches.forEach((batch, index) => {
+    batch.menuDayId = `menu${index}`;
+    batch.plannedPortions = 50;
+    batch.dishes = [
+      { ...batch.dishes[0], dishId: `dish${index}`, plannedPortions: 50 },
+    ];
+  });
+  return data;
+}
+
+void test("hai thực đơn cùng bữa tính suất theo khối và chỉ cho phân bổ tới lớp đúng khối", () => {
+  const data = gradeFixture();
+  const ready = projectAllocationDay(data, date);
+  assert.equal(ready.status, "READY");
+  assert.equal(ready.totals.finalized, 100);
+  assert.deepEqual(
+    ready.batches.map((batch) => batch.eligibleDemandIds),
+    [["d0"], ["d1"]],
+  );
+  assert.deepEqual(
+    ready.batches.map((batch) => batch.scopeLabel),
+    ["Khối 1", "Khối 2"],
+  );
+  data.batches[0].plannedPortions = 60;
+  data.batches[0].dishes[0].plannedPortions = 60;
+  data.batches[1].plannedPortions = 40;
+  data.batches[1].dishes[0].plannedPortions = 40;
+  assert.equal(
+    projectAllocationDay(data, date).status,
+    "RECONCILE",
+    "không bù số suất giữa các khối dù tổng vẫn đủ",
+  );
+});
+
+void test("lớp chưa gán khối và lịch sử phân bổ sai khối phải đối soát", () => {
+  const data = gradeFixture();
+  data.demands[0].Class.gradeId = null;
+  assert.equal(projectAllocationDay(data, date).status, "RECONCILE");
+  data.demands[0].Class.gradeId = "grade0";
+  data.demands[0].MealAllocation = {
+    id: "wrong-scope",
+    status: "ALLOCATED",
+    mealAllocationBatches: [
+      { cookingBatchId: "b1", dishId: "dish1", allocatedPortions: 50 },
+    ],
+  };
+  assert.equal(projectAllocationDay(data, date).status, "RECONCILE");
+});
+
 void test("mở màn hình khi đủ suất, ưu tiên nấu trước lưu mẫu", () => {
   const data = fixture();
   assert.equal(projectAllocationDay(data, date).status, "READY");

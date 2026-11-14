@@ -11,7 +11,9 @@ import { createMenuRouter } from "../src/modules/menu/menu.routes";
 import {
   validateMenuFilters,
   validateMenuWeekSchedule,
+  validateAllergyCheck,
 } from "../src/modules/menu/menu.validation";
+import { menuRepository } from "../src/modules/menu/menu.repository";
 import { createKitchenService } from "../src/modules/kitchen/kitchen.service";
 import { createKitchenRouter } from "../src/modules/kitchen/kitchen.routes";
 import { validateKitchenFilters } from "../src/modules/kitchen/kitchen.validation";
@@ -53,10 +55,130 @@ function academicCalendarDatabase(configured = true) {
           return Promise.resolve(configured ? [row] : []);
         },
       },
-      weeklyMenu: { findFirst: () => Promise.resolve(null) },
+      weeklyMenu: { findMany: () => Promise.resolve([]) },
     },
   };
 }
+
+void test("week schedule keeps grade menus separate and selects only an exact grade set or menu ID", async () => {
+  const { db } = academicCalendarDatabase();
+  const first = {
+    id: testStaff.id,
+    title: "Khối nhỏ",
+    status: "APPROVED",
+    isSchoolWide: false,
+    grades: [{ gradeId: testAdmin.id, grade: { name: "Khối 1" } }],
+    menuDays: [
+      {
+        id: "day-one",
+        menuDate: new Date("2026-11-09"),
+        approvalStatus: "APPROVED",
+        note: null,
+        menuDayDishes: [{ dishId: "rice", mealType: "LUNCH" }],
+      },
+    ],
+  };
+  const second = {
+    ...first,
+    id: testAdmin.id,
+    title: "Khối lớn",
+    grades: [{ gradeId: testStaff.id, grade: { name: "Khối 5" } }],
+    menuDays: [{ ...first.menuDays[0], id: "day-two" }],
+  };
+  db.weeklyMenu.findMany = (() => Promise.resolve([first, second])) as never;
+  const service = createMenuService(undefined, () =>
+    Promise.resolve(db as never),
+  );
+  const unselected = await service.getWeekSchedule("2026-11-09", principal);
+  assert.equal(unselected.weeklyMenuId, null);
+  assert.equal(unselected.availableMenus.length, 2);
+  assert(unselected.days.every((day) => !day.hasMenu));
+  const selected = await service.getWeekSchedule("2026-11-09", principal, {
+    menuId: second.id,
+  });
+  assert.equal(selected.days[0].menuDayId, "day-two");
+  assert.equal(selected.targetScope, "Khối 5");
+  const exact = await service.getWeekSchedule("2026-11-09", principal, {
+    gradeIds: [testAdmin.id],
+  });
+  assert.equal(exact.weeklyMenuId, first.id);
+  const different = await service.getWeekSchedule("2026-11-09", principal, {
+    gradeIds: [testStaff.id, testAdmin.id],
+  });
+  assert.equal(different.weeklyMenuId, null);
+  await assert.rejects(
+    service.getWeekSchedule("2026-11-09", principal, {
+      menuId: "foreign-menu",
+    }),
+    (error: unknown) => error instanceof HttpError && error.statusCode === 404,
+  );
+});
+
+void test("allergy preview filters classes by validated school grades and rejects foreign grades", async () => {
+  let where: unknown;
+  const tx = {
+    schoolGrade: { findMany: () => Promise.resolve([{ id: testAdmin.id }]) },
+    ingredient: {
+      findMany: () => Promise.resolve([{ id: testStaff.id, name: "Thịt" }]),
+    },
+    classAllergy: {
+      findMany: (args: { where: unknown }) => {
+        where = args.where;
+        return Promise.resolve([]);
+      },
+    },
+  };
+  const db = {
+    $transaction: (operation: (client: typeof tx) => Promise<unknown>) =>
+      operation(tx),
+  };
+  const service = createMenuService(undefined, () =>
+    Promise.resolve(db as never),
+  );
+  const actor = {
+    ...principal,
+    permissions: [...principal.permissions, "class_allergy.view"],
+  };
+  const input = validateAllergyCheck({
+    ingredientIds: [testStaff.id],
+    gradeIds: [testAdmin.id],
+  });
+  await service.allergyCheck(input, actor);
+  assert.deepEqual((where as { Class: unknown }).Class, {
+    schoolId: principal.schoolId,
+    status: "ACTIVE",
+    gradeId: { in: [testAdmin.id] },
+  });
+  tx.schoolGrade.findMany = () => Promise.resolve([]);
+  await assert.rejects(
+    service.allergyCheck(input, actor),
+    (error: unknown) => error instanceof HttpError && error.statusCode === 422,
+  );
+});
+
+void test("menu day allergy queries share the same school and grade scope as kitchen demand", async () => {
+  let query: unknown;
+  await menuRepository.classAllergies(
+    {
+      classAllergy: {
+        findMany: (args: unknown) => {
+          query = args;
+          return Promise.resolve([]);
+        },
+      },
+    } as never,
+    [testStaff.id],
+    principal.schoolId!,
+    "menu-day",
+  );
+  const classFilter = (
+    query as { where: { Class: { schoolId: string; OR: unknown[] } } }
+  ).where.Class;
+  assert.equal(classFilter.schoolId, principal.schoolId);
+  assert.equal(classFilter.OR.length, 2);
+  assert(JSON.stringify(classFilter).includes("menu-day"));
+  assert(JSON.stringify(classFilter).includes("isSchoolWide"));
+});
 
 void test("nutrition context reads current school meal times with menu.view and rejects tenant overrides", async (context) => {
   const calls: Record<string, unknown>[] = [];

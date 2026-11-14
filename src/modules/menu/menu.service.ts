@@ -51,6 +51,7 @@ import type {
   MenuAllergyCheckInput,
   MenuIngredientKind,
   MenuAcademicCalendarQuery,
+  MenuWeekScheduleQuery,
 } from "./menu.request.dto";
 
 type Tx = Prisma.TransactionClient;
@@ -340,10 +341,8 @@ function createIngredientOperations(
       );
     },
 
-    async allergyCheck(
-      ingredientIds: MenuAllergyCheckInput,
-      principal: AuthPrincipal,
-    ) {
+    async allergyCheck(input: MenuAllergyCheckInput, principal: AuthPrincipal) {
+      const { ingredientIds, gradeIds = [] } = input;
       const schoolId = schoolScope(principal);
 
       assertPermission(principal, "class_allergy.view");
@@ -352,6 +351,12 @@ function createIngredientOperations(
 
       return db.$transaction(
         async (tx) => {
+          if (
+            gradeIds.length &&
+            (await repository.schoolGrades(tx, schoolId, gradeIds)).length !==
+              gradeIds.length
+          )
+            throw new HttpError(422, "Khối phải thuộc trường đang làm việc");
           const ingredients = await repository.allergyIngredients(
             tx,
             ingredientIds,
@@ -369,6 +374,8 @@ function createIngredientOperations(
             tx,
             ingredientIds,
             schoolId,
+            undefined,
+            gradeIds,
           );
 
           const conflicts = ingredients
@@ -1145,6 +1152,37 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
       canEditMenuDay(day.approvalStatus, parent.status);
 
     const current = await repository.menuDayHeaders(tx, id);
+    const snapshot =
+      gradeIds.length && current.length ? await owned(tx, id, schoolId) : null;
+    const canonicalNorms = (
+      dishes: MenuStandardsInput["dishes"],
+      seasonings: MenuStandardsInput["seasonings"],
+    ) =>
+      JSON.stringify({
+        dishes: dishes
+          .map((dish) => ({
+            dishId: dish.dishId,
+            ingredients: dish.ingredients
+              .map((line) => ({
+                ingredientId: line.ingredientId,
+                quantity: new Prisma.Decimal(
+                  line.quantityPerPortion,
+                ).toString(),
+                unit: line.unit,
+              }))
+              .sort((a, b) => a.ingredientId.localeCompare(b.ingredientId)),
+          }))
+          .sort((a, b) => a.dishId.localeCompare(b.dishId)),
+        seasonings: seasonings
+          .map((line) => ({
+            ingredientEntryId: line.ingredientEntryId,
+            quantity: new Prisma.Decimal(line.quantityPerPortion).toString(),
+            unit: line.unit,
+          }))
+          .sort((a, b) =>
+            a.ingredientEntryId.localeCompare(b.ingredientEntryId),
+          ),
+      });
 
     for (const old of current.filter(
       (d) => !input.days.some((v) => +v.menuDate === +d.menuDate),
@@ -1319,7 +1357,41 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
       const desired: { dishId: string; mealType: "LUNCH" | "AFTERNOON" }[] = [];
 
       for (const meal of day.meals) {
-        if (meal.useDishRecipes || gradeIds.length > 0) {
+        const storedDay = snapshot?.menuDays.find(
+          (stored) => stored.id === old?.id,
+        );
+        const storedDishes =
+          storedDay?.menuDayDishes.filter(
+            (dish) => dish.mealType === meal.mealType,
+          ) ?? [];
+        const unchanged =
+          storedDay &&
+          meal.dishes.every((dish) => dish.dishId) &&
+          canonicalNorms(
+            meal.dishes.map((dish) => ({
+              dishId: dish.dishId!,
+              ingredients: dish.ingredients,
+            })),
+            meal.seasonings,
+          ) ===
+            canonicalNorms(
+              storedDishes.map((dish) => ({
+                dishId: dish.dishId,
+                ingredients: dish.ingredients.map((line) => ({
+                  ingredientId: line.ingredientId,
+                  quantityPerPortion: line.quantityPerPortion.toString(),
+                  unit: line.unit,
+                })),
+              })),
+              storedDay.mealSeasonings
+                .filter((line) => line.mealType === meal.mealType)
+                .map((line) => ({
+                  ingredientEntryId: line.ingredientEntryId,
+                  quantityPerPortion: line.quantityPerPortion.toString(),
+                  unit: line.unit,
+                })),
+            );
+        if (meal.useDishRecipes || (gradeIds.length > 0 && !unchanged)) {
           if (meal.dishes.some((d) => !d.dishId))
             throw new HttpError(
               422,
@@ -2140,6 +2212,7 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
     async getWeekSchedule(
       inputDate: string | Date,
       principal: AuthPrincipal,
+      selection: Pick<MenuWeekScheduleQuery, "menuId" | "gradeIds"> = {},
     ): Promise<MenuWeekScheduleDTO> {
       const schoolId = schoolScope(principal);
       const scope = listScopes.menu(principal);
@@ -2157,7 +2230,7 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
 
       const weekInfo = getSchoolWeekSchedule(date);
 
-      const [academicYears, weeklyMenu] = await Promise.all([
+      const [academicYears, weeklyMenus] = await Promise.all([
         repository.academicYears(db, schoolId),
         repository.weekScheduleMenu(
           db,
@@ -2165,6 +2238,31 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
           new Date(weekInfo.weekStartDate + "T00:00:00.000Z"),
         ),
       ]);
+
+      const weeklyMenu = selection.menuId
+        ? weeklyMenus.find((menu) => menu.id === selection.menuId)
+        : selection.gradeIds
+          ? weeklyMenus.find(
+              (menu) =>
+                JSON.stringify(menu.grades.map((g) => g.gradeId).sort()) ===
+                JSON.stringify([...selection.gradeIds!].sort()),
+            )
+          : weeklyMenus.length === 1
+            ? weeklyMenus[0]
+            : undefined;
+      if (selection.menuId && !weeklyMenu)
+        throw new HttpError(
+          404,
+          "Không tìm thấy thực đơn của tuần và trường đã chọn",
+        );
+      const availableMenus = weeklyMenus.map((menu) => ({
+        id: menu.id,
+        title: menu.title,
+        status: menu.status,
+        isSchoolWide: menu.isSchoolWide,
+        gradeIds: menu.grades.map((g) => g.gradeId),
+        gradeNames: menu.grades.map((g) => g.grade.name),
+      }));
 
       const academicYear = academicYears.find(
         (year) =>
@@ -2244,6 +2342,12 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
 
         weekEndDate: weekInfo.weekEndDate,
 
+        availableMenus,
+        gradeIds: weeklyMenu?.grades.map((g) => g.gradeId) ?? [],
+        targetScope: weeklyMenu
+          ? weeklyMenu.grades.map((g) => g.grade.name).join(", ") ||
+            "Toàn trường"
+          : "",
         weeklyMenuId: weeklyMenu?.id ?? null,
 
         weeklyMenuStatus: weeklyMenu?.status ?? null,
@@ -2290,6 +2394,9 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
 
 function mapMenuSummary(row: MenuSummaryRow): MenuSummaryDTO {
   return {
+    gradeIds: row.grades.map((grade) => grade.gradeId),
+    gradeNames: row.grades.map((grade) => grade.grade.name),
+    isSchoolWide: row.isSchoolWide,
     id: row.id,
     schoolId: row.schoolId,
     weekStartDate: row.weekStartDate.toISOString().slice(0, 10),

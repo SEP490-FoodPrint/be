@@ -528,6 +528,7 @@ export const menuRepository = {
     ingredientIds: string[],
     schoolId: string,
     menuDayId?: string,
+    gradeIds: string[] = [],
   ) {
     return client.classAllergy.findMany({
       where: {
@@ -536,6 +537,7 @@ export const menuRepository = {
             ? classScopeForMenuDay(schoolId, menuDayId)
             : { schoolId }),
           status: "ACTIVE",
+          ...(gradeIds.length ? { gradeId: { in: gradeIds } } : {}),
         },
 
         IngredientEntry: {
@@ -1089,7 +1091,7 @@ export const menuRepository = {
     scope: Prisma.WeeklyMenuWhereInput,
     weekStartDate: Date,
   ) {
-    return client.weeklyMenu.findFirst({
+    return client.weeklyMenu.findMany({
       where: {
         AND: [
           scope,
@@ -1105,6 +1107,10 @@ export const menuRepository = {
         status: true,
 
         title: true,
+        isSchoolWide: true,
+        grades: {
+          select: { gradeId: true, grade: { select: { name: true } } },
+        },
 
         menuDays: {
           select: {
@@ -1160,6 +1166,8 @@ export const menuRepository = {
   },
 };
 const select = {
+  isSchoolWide: true,
+  grades: { select: { gradeId: true, grade: { select: { name: true } } } },
   id: true,
 
   schoolId: true,
