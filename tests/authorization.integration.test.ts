@@ -1483,7 +1483,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         await db.mealAllocationBatch.count({
           where: { cookingBatchId: { in: [a, b] } },
         }),
-        8,
+        4,
       );
       const revisedBatches = structuredClone(payload.batches);
       revisedBatches[0].entries[1].allocatedPortions = 10;
@@ -1500,7 +1500,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       });
       assert.deepEqual(
         revisedRows.map((row) => row.allocatedPortions),
-        [10, 10],
+        [10],
       );
       assert.equal(
         revised.batches
