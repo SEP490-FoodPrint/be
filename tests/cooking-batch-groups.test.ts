@@ -6,6 +6,7 @@ import {
   groupDishPlans,
   type DishPlans,
 } from "../src/modules/kitchen/kitchen.service";
+import { kitchenRepository } from "../src/modules/kitchen/kitchen.repository";
 import { validateKitchenPlan } from "../src/modules/kitchen/kitchen.validation";
 import { testStaff } from "./helpers/authorization";
 import { createRetainedSampleService } from "../src/modules/retained-sample/retained-sample.service";
@@ -246,6 +247,11 @@ function fixture(mode: CookingMode, shared = false) {
           afternoonMealTime: date,
         })),
     },
+    schoolAcademicYear: { findFirst: () => Promise.resolve(null) },
+    class: {
+      findMany: (): Promise<{ id: string; name: string }[]> =>
+        Promise.resolve([]),
+    },
     menuDay: {
       findFirst: () =>
         Promise.resolve().then(() => ({
@@ -440,6 +446,56 @@ function fixture(mode: CookingMode, shared = false) {
     usage,
   };
 }
+
+void test("unfinalized class lookup uses the menu school and grade, academic year, date and meal", async () => {
+  const date = new Date("2026-11-11T00:00:00Z");
+  let classQuery: Record<string, unknown> | undefined;
+  const tx = {
+    schoolAcademicYear: {
+      findFirst: () => Promise.resolve({ academicYear: "2026-2027" }),
+    },
+    class: {
+      findMany: (query: Record<string, unknown>) => {
+        classQuery = query;
+        return Promise.resolve([{ id: "c", name: "2A" }]);
+      },
+    },
+  };
+  const missing = await kitchenRepository.unfinalizedClasses(
+    tx as never,
+    meal,
+    principal.schoolId!,
+    date,
+  );
+  assert.equal(missing[0].name, "2A");
+  const where = classQuery!.where as { AND: unknown[] };
+  assert.deepEqual(where.AND[1], {
+    OR: [{ academicYear: "2026-2027" }, { academicYear: null }],
+  });
+  assert.deepEqual(where.AND[2], {
+    status: "ACTIVE",
+    dailyMealPortions: {
+      none: { mealDate: date, mealType: "LUNCH", status: "FINALIZED" },
+    },
+  });
+  assert.match(JSON.stringify(where.AND[0]), new RegExp(principal.schoolId!));
+  assert.match(JSON.stringify(where.AND[0]), new RegExp(meal.menuDayId));
+});
+
+void test("preview and create wait for all eligible classes without reserving stock", async () => {
+  const f = fixture("COMBINE_LOTS");
+  f.tx.class.findMany = () => Promise.resolve([{ id: "class-2", name: "2A" }]);
+  await assert.rejects(
+    f.service.preview(validateKitchenPlan(meal), principal),
+    { statusCode: 409 },
+  );
+  await assert.rejects(f.service.plan(validateKitchenPlan(meal), principal), {
+    statusCode: 409,
+  });
+  assert.equal(f.groups.length, 0);
+  assert.equal(f.children.length, 0);
+  assert.equal(f.usage.length, 0);
+});
 
 void test("meal API creates one child per dish and lot, and retry never reserves twice", async () => {
   const f = fixture("SEPARATE_BY_LOT");

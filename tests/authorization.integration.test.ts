@@ -843,6 +843,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         data: {
           schoolId: school.id,
           name: "API class",
+          academicYear: "2029-2030",
           registeredMealPortions: 120,
         },
       });
@@ -1237,6 +1238,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         data: {
           schoolId: school.id,
           name: "Group class",
+          academicYear: "2031-2032",
           registeredMealPortions: 120,
         },
       });

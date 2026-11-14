@@ -1,3 +1,4 @@
+import { kitchenRepository } from "../kitchen/kitchen.repository";
 import { Prisma, type PrismaClient } from "../../generated/prisma/client";
 import { readDatabaseMealRecipe } from "../dish/dish.service";
 
@@ -675,6 +676,12 @@ function createIngredientOperations(
           );
 
           const portions = demand.totalPortions;
+          const missingClasses = await kitchenRepository.unfinalizedClasses(
+            tx,
+            meal,
+            schoolId,
+            day.menuDate,
+          );
 
           const main = await repository.recipeRequirements(tx, meal);
 
@@ -888,7 +895,9 @@ function createIngredientOperations(
 
             portions,
 
-            portionsFinalized: portions > 0,
+            portionsFinalized: portions > 0 && missingClasses.length === 0,
+
+            unfinalizedClasses: missingClasses,
 
             dishPortions: Object.fromEntries(demand.dishPortions),
 

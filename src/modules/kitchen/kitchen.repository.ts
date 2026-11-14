@@ -220,6 +220,51 @@ function kitchenFilterWhere(
 }
 
 export const kitchenRepository = {
+  async unfinalizedClasses(
+    client: Tx,
+    meal: { menuDayId: string; mealType: "LUNCH" | "AFTERNOON" },
+    schoolId: string,
+    menuDate: Date,
+  ) {
+    const year = await client.schoolAcademicYear.findFirst({
+      where: {
+        schoolId,
+        startDate: { lte: menuDate },
+        endDate: { gte: menuDate },
+      },
+      select: { academicYear: true },
+      orderBy: { startDate: "desc" },
+    });
+    return client.class.findMany({
+      where: {
+        AND: [
+          classScopeForMenuDay(schoolId, meal.menuDayId),
+          ...(year
+            ? [
+                {
+                  OR: [
+                    { academicYear: year.academicYear },
+                    { academicYear: null },
+                  ],
+                },
+              ]
+            : []),
+          {
+            status: "ACTIVE",
+            dailyMealPortions: {
+              none: {
+                mealDate: menuDate,
+                mealType: meal.mealType,
+                status: "FINALIZED",
+              },
+            },
+          },
+        ],
+      },
+      select: { id: true, name: true },
+      orderBy: [{ name: "asc" }, { id: "asc" }],
+    });
+  },
   findMealDishPlans(
     client: Tx,
     meal: { menuDayId: string; mealType: "LUNCH" | "AFTERNOON" },
