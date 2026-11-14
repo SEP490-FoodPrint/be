@@ -7,6 +7,7 @@ import {
 } from "../../utils/authorization";
 import { getPrisma } from "../../utils/database";
 import { HttpError } from "../../utils/http-error";
+import { isAssignableAcademicYear } from "../class/academic-year";
 import type {
   CreateAcademicYearRequestDTO,
   UpdateAcademicYearRequestDTO,
@@ -98,6 +99,7 @@ function duplicateError(error: unknown): never {
 export function createSchoolAcademicYearService(
   repository: SchoolAcademicYearRepository = schoolAcademicYearRepository,
   connect: () => Promise<PrismaClient> = getPrisma,
+  clock: () => Date = () => new Date(),
 ) {
   return {
     async list(principal: AuthPrincipal) {
@@ -115,6 +117,11 @@ export function createSchoolAcademicYearService(
       principal: AuthPrincipal,
     ) {
       requireBoard(principal, MANAGE_PERMISSION);
+      if (!isAssignableAcademicYear(input.academicYear, clock()))
+        throw new HttpError(
+          409,
+          "Không thể tạo niên khóa đã qua, chỉ được tạo niên khóa hiện tại hoặc sắp tới",
+        );
       try {
         return await withSchoolTransaction(
           await connect(),
