@@ -1,3 +1,5 @@
+import { cloudinaryUpload } from "../../utils/cloudinary-upload";
+import type { ImageAsset } from "../../utils/cloudinary-upload.types";
 import type { Prisma } from "../../generated/prisma/client";
 import type { AuthPrincipal } from "../../types/auth";
 import {
@@ -17,12 +19,16 @@ import type {
   IngredientQueryRequest,
   IngredientParamsRequest,
   IngredientHideRequest,
+  IngredientSingleUploadRequest,
+  IngredientMultipleUploadRequest,
 } from "./ingredient.request.dto";
 import type {
   IngredientCategoryResponse,
   IngredientResponse,
   LegacyIngredientResponse,
   IngredientPageResponse,
+  IngredientImageResponse,
+  IngredientImagesResponse,
 } from "./ingredient.response.dto";
 import {
   ingredientRepository,
@@ -32,6 +38,16 @@ import {
   type LegacyIngredientRow,
 } from "./ingredient.repository";
 
+function imageDto(asset: ImageAsset): IngredientImageResponse {
+  return {
+    publicId: asset.publicId,
+    url: asset.url,
+    format: asset.format,
+    bytes: asset.bytes,
+    width: asset.width,
+    height: asset.height,
+  };
+}
 function categoryDto(row: IngredientCategoryRow): IngredientCategoryResponse {
   return {
     id: row.id,
@@ -43,7 +59,12 @@ function legacyDto(row: LegacyIngredientRow): LegacyIngredientResponse {
   return {
     id: row.id,
     supplierId: row.supplierId,
+    supplierName: row.Supplier?.name ?? null,
+    supplier: row.Supplier
+      ? { id: row.Supplier.id, name: row.Supplier.name }
+      : null,
     name: row.name,
+    description: row.description ?? null,
     defaultUnit: row.defaultUnit,
     category: row.ingredientCategory?.categoryName ?? null,
     status: row.status,
@@ -76,6 +97,10 @@ function found(row: IngredientRow | null): IngredientRow {
 export function createIngredientService(
   repo: IngredientRepository = ingredientRepository,
   connect = getPrisma,
+  uploader: Pick<
+    typeof cloudinaryUpload,
+    "uploadImage" | "uploadImages"
+  > = cloudinaryUpload,
 ) {
   async function scope(
     principal: AuthPrincipal,
@@ -112,7 +137,60 @@ export function createIngredientService(
     if (categoryId && !(await repo.categoryExists(categoryId, tx)))
       throw new HttpError(400, "Danh mục nguyên liệu không tồn tại");
   }
+  async function currentUploadScope(principal: AuthPrincipal) {
+    const original = ingredientManagementScope(principal);
+    return databaseOperation(async () => {
+      const actor = await repo.actor(principal.id);
+      const current = await scope(actor);
+      if (current.supplierId !== original.supplierId)
+        throw new HttpError(403, "Phạm vi tài khoản đã thay đổi");
+      return current;
+    });
+  }
   return {
+    async authorizeUpload(principal: AuthPrincipal) {
+      await databaseOperation(() => scope(principal));
+    },
+    async uploadImage(
+      input: IngredientSingleUploadRequest,
+      principal: AuthPrincipal,
+    ): Promise<IngredientImageResponse> {
+      const access = await currentUploadScope(principal);
+      return imageDto(
+        await uploader.uploadImage(input.file, {
+          namespace: "ingredients",
+          ownerId: access.supplierId,
+        }),
+      );
+    },
+    async uploadImages(
+      input: IngredientMultipleUploadRequest,
+      principal: AuthPrincipal,
+    ): Promise<IngredientImagesResponse> {
+      const access = await currentUploadScope(principal);
+      const results = await uploader.uploadImages(input.files, {
+        namespace: "ingredients",
+        ownerId: access.supplierId,
+      });
+      return {
+        results: results.map((result) =>
+          result.status === "success"
+            ? {
+                index: result.index,
+                status: "success",
+                asset: imageDto(result.asset),
+              }
+            : {
+                index: result.index,
+                status: "failed",
+                error: {
+                  code: result.error.code,
+                  message: result.error.message,
+                },
+              },
+        ),
+      };
+    },
     async getAll(query: IngredientQueryRequest, principal: AuthPrincipal) {
       const access = listScopes.ingredient(principal);
       return databaseOperation(async () =>
