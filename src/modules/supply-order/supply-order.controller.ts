@@ -7,6 +7,8 @@ import {
 } from "./supply-order.service";
 import {
   validateSupplyOrderListQuery,
+  validateSupplyOrderDetailParams,
+  validateSupplyOrderDetailQuery,
   validateSupplyOrderAcceptParams,
   validateSupplyOrderAcceptBody,
   validateSupplyOrderAcceptQuery,
@@ -20,6 +22,12 @@ export function createSupplyOrderController(
       const query = validateSupplyOrderListQuery(req.query);
       const result = await service.getAll(query, requirePrincipal(req));
       sendSuccess(res, result, "Lấy danh sách yêu cầu cung ứng thành công");
+    }),
+    getDetail: asyncHandler(async (req, res) => {
+      const params = validateSupplyOrderDetailParams(req.params);
+      validateSupplyOrderDetailQuery(req.query);
+      const result = await service.getDetail(params, requirePrincipal(req));
+      sendSuccess(res, result, "Lấy chi tiết yêu cầu cung ứng thành công");
     }),
     accept: asyncHandler(async (req, res) => {
       const params = validateSupplyOrderAcceptParams(req.params);

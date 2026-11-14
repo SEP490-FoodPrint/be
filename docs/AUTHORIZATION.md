@@ -349,3 +349,19 @@ Scope chỉ lấy từ principal đã xác thực và áp vào WHERE của repos
 facilityCode do hệ thống sinh theo dãy riêng mỗi supplier, bắt đầu FP-SF-00001; supplier khác được phép có cùng mã, nên mã không thay UUID trong đường dẫn. Người dùng không nhập/sửa mã, supplierId, trạng thái hoặc audit. Không xóa hoặc kích hoạt lại; dừng giữ isVisible, mã và liên kết lô nguyên liệu. Mã legacy null/không chuẩn được giữ nguyên.
 
 Hợp đồng chi tiết: [Source Facility API](../specs/027-source-facility-management/contracts/source-facility-api.md).
+
+## Tiếp nhận yêu cầu nguyên liệu phía nhà cung cấp
+
+| Endpoint                               | Quyền và phạm vi                                                                                                                                    |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET `/api/supply-requests`             | `supply_request.view`; SUPPLIER chỉ admin/staff hiện tại, chỉ đơn của nhà cung cấp ngoài DRAFT; SCHOOL/SYSTEM giữ scope và projection cũ.           |
+| GET `/api/supply-requests/:id`         | `supply_request.view`; chỉ INGREDIENT_SUPPLIER_ADMIN/INGREDIENT_SUPPLIER_STAFF thuộc SUPPLIER, đúng supplierId và ngoài DRAFT.                      |
+| POST `/api/supply-requests/:id/accept` | `supply_request.accept`; cùng hai role supplier, xác minh lại quyền/membership/trạng thái trong Serializable transaction. Không yêu cầu quyền view. |
+
+Nhánh danh sách SUPPLIER hỗ trợ `status` trong SENT/ACCEPTED/IN_PROGRESS/COMPLETED/CANCELLED; mặc định cả năm trạng thái. Giữ page mặc định 1, limit mặc định 20/tối đa 100 và hasNext; thêm schoolName, requestedDeliveryDate và sentAt. SCHOOL/SYSTEM vẫn chỉ nhận page/limit, gửi status trả 400; trường vẫn xem được bản nháp của chính mình theo quyền. Không lấy supplierId/schoolId từ query để mở rộng scope.
+
+Chi tiết trả đủ dòng kể cả nguyên liệu/entry đã ngừng hoạt động. Số lượng là chuỗi Decimal, đơn vị lấy từ dòng đơn, ngày giao YYYY-MM-DD, timestamp ISO và dữ liệu thiếu giữ null. Người nhận biểu diễn bằng acceptedByUserId, không trả hồ sơ tài khoản, email/phone hay contractSnapshot. Ngoài scope/không tồn tại/DRAFT đều 404 với detail/accept.
+
+Nhận mới chỉ SENT -> ACCEPTED, ghi người/thời điểm cùng transaction. Supplier tạm dừng hoặc admin một bên DEACTIVATED ngăn nhận mới; school tạm dừng tạo đơn không ngăn nhận đơn đã gửi. ACCEPTED/IN_PROGRESS trả receipt bốn trường cũ sau kiểm tra quyền và scope, không ghi đè thông tin đầu tiên hoặc updatedAt, kể cả khi supplier đã tạm dừng. COMPLETED/CANCELLED trả 409. Quyền bị tắt cho từng người vẫn có hiệu lực, không bypass SYSTEM và không cache phân quyền.
+
+Thiết kế và hợp đồng: [supplier-order-intake](../specs/supplier-order-intake/contracts/supply-requests.md). Không thêm schema hoặc quyền mới; kết quả kiểm chứng thực tế được ghi tại [quickstart](../specs/supplier-order-intake/quickstart.md).
