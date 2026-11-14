@@ -58,6 +58,9 @@ function requireBoardSchool(principal: AuthPrincipal): string {
   return principal.schoolId;
 }
 
+const NUTRITION_ROLE_LABEL = "Nhân viên Dinh dưỡng";
+
+/** Số suất một ngày = bữa đông nhất (không cộng trưa + chiều). */
 function portionsByDate(
   rows: FinalizedPortionRow[],
 ): ReadonlyMap<string, number> {
@@ -135,8 +138,8 @@ function mapDetail(
         "Toàn trường",
       audienceDetail: "Số suất ăn được xác định theo kế hoạch phục vụ",
       servingPeriod: `${formatDate(firstDate)} - ${formatDate(lastDate)}`,
-      proposer: "Cán bộ Y tế",
-      proposerDetail: menu.School.name,
+      proposer: menu.User?.fullName ?? NUTRITION_ROLE_LABEL,
+      proposerDetail: `${NUTRITION_ROLE_LABEL} · ${menu.School.name}`,
       supplier: `${supplierIds.size} nhà cung cấp`,
     },
     compliance: [],
@@ -150,7 +153,7 @@ function mapDetail(
             : "Chưa thẩm định",
       isApproved: healthReview?.decision === "APPROVED",
       reviewer: healthReview?.User.fullName ?? "Chưa phân công",
-      role: "Cán bộ Y tế",
+      role: NUTRITION_ROLE_LABEL,
       reviewedAt: formatDateTime(healthReview?.reviewedAt ?? null) ?? "—",
       note: healthReview?.feedback ?? "Chưa có nhận xét thẩm định.",
       documents: [],
