@@ -81,11 +81,13 @@ export interface DeliveryListItemDTO {
   requestNo: string | null;
   supplierId: string;
   supplierName: string | null;
+  supplierPhone?: string | null;
   status: DeliveryStatus;
   vehiclePlate: string | null;
   expectedArrivalAt: string | null;
   arrivedAt: string | null;
   receivedAt: string | null;
+  requestedDeliveryDate?: string | null;
   note: string | null;
   deliveryApprovals: DeliveryApprovalItemDTO[];
   deliveryItems?: DeliveryItemSummaryDTO[];
@@ -101,4 +103,3 @@ export interface DeliveryListResponseDTO {
     hasNext: boolean;
   };
 }
-

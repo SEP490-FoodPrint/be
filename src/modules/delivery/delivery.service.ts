@@ -47,6 +47,7 @@ const select = {
     select: {
       id: true,
       name: true,
+      phone: true,
     },
   },
   SupplyRequest: {
@@ -138,11 +139,14 @@ export function createDeliveryService(read: ListReader = readFromDatabase) {
           requestNo: row.SupplyRequest?.requestNo ?? null,
           supplierId: row.supplierId,
           supplierName: row.Supplier?.name ?? null,
+          supplierPhone: row.Supplier?.phone ?? null,
           status: row.status,
           vehiclePlate: row.vehiclePlate ?? null,
           expectedArrivalAt: row.expectedArrivalAt?.toISOString() ?? null,
           arrivedAt: row.arrivedAt?.toISOString() ?? null,
           receivedAt: row.receivedAt?.toISOString() ?? null,
+          requestedDeliveryDate:
+            row.SupplyRequest?.requestedDeliveryDate?.toISOString() ?? null,
           note: row.note ?? row.SupplyRequest?.note ?? null,
           deliveryApprovals:
             row.deliveryApprovals?.map((a) => ({

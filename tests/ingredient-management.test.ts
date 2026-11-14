@@ -155,6 +155,10 @@ function fixture() {
       description: null,
       coverImage: null,
       imageDescription: [],
+      Supplier: {
+        id: supplierId,
+        name: "Supplier A",
+      },
     },
   ];
   const repo: IngredientRepository = {
@@ -246,6 +250,8 @@ void test("management services enforce supplier scopes, safe serialization and P
     [
       "id",
       "supplierId",
+      "supplier",
+      "supplierName",
       "name",
       "defaultUnit",
       "description",

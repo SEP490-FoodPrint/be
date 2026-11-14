@@ -7,5 +7,5 @@
 - API danh sách đợt giao nhận `GET /api/deliveries` truy vấn trực tiếp từ cơ sở dữ liệu thật, mở rộng thông tin Nhà cung cấp đối tác (`Supplier.name`), mã đơn đặt hàng gốc (`SupplyRequest.requestNo`), ngày giờ giao nhận, hội đồng nghiệm thu 4 bên (`deliveryApprovals`) và chi tiết hàng giao (`deliveryItems`).
 - Cho phép vai trò Quản lý nguyên liệu (quyền `supply_request.create`) truy cập API tổng hợp suất ăn điểm danh theo ngày `GET /api/v1/daily-meal-portions` để tự động tính toán cân đối sĩ số đơn giao Đợt 2 từ dữ liệu chốt của GVCN.
 - API quản lý kho và lô hàng nguyên liệu `GET /api/ingredient-lots` truy vấn trực tiếp từ cơ sở dữ liệu thật, mở rộng thông tin chi tiết mặt hàng nguyên liệu, nhà cung cấp, cơ sở nguồn và phiếu giao nhận phục vụ màn hình Quản lý Kho đồ khô.
+- API danh sách đợt giao hàng `GET /api/deliveries` bổ sung thông tin liên hệ nhà cung cấp và ngày hẹn giao phục vụ màn hình Theo dõi đơn hàng & Vận chuyển.
 - Loại bỏ hoàn toàn mock data ở cả frontend và backend, đồng bộ 100% dữ liệu thực từ PostgreSQL.
-
