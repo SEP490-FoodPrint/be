@@ -396,6 +396,7 @@ export function createMealAttendanceService(
         "daily_meal_portion.view",
         "cooking_batch.view",
         "menu.view",
+        "supply_request.create",
       );
       if (principal.orgType !== "SCHOOL" || !principal.schoolId)
         throw new HttpError(403, "C岷 ph岷 vi tr瓢峄漬g");
@@ -422,12 +423,71 @@ export function createMealAttendanceService(
           const pending = await tx.dailyMealPortion.count({
             where: { ...where, status: "DRAFT" },
           });
+
+          const schoolClasses = await tx.class.findMany({
+            where: {
+              schoolId: principal.schoolId!,
+              status: "ACTIVE",
+              ...(principal.role === "HOMEROOM_TEACHER" && {
+                homeroomAssignments: {
+                  some: { teacherUserId: principal.id, endedAt: null },
+                },
+              }),
+            },
+            select: {
+              id: true,
+              name: true,
+              registeredMealPortions: true,
+              homeroomAssignments: {
+                where: { endedAt: null },
+                select: {
+                  Teacher: { select: { fullName: true } },
+                },
+              },
+            },
+            orderBy: { name: "asc" },
+          });
+
+          const portions = await tx.dailyMealPortion.findMany({
+            where,
+            select: {
+              id: true,
+              classId: true,
+              totalPortions: true,
+              status: true,
+              finalizedAt: true,
+              allergyNotes: true,
+              User: { select: { fullName: true } },
+            },
+          });
+
+          const portionMap = new Map(portions.map((p) => [p.classId, p]));
+
+          const classes = schoolClasses.map((cls) => {
+            const p = portionMap.get(cls.id);
+            const teacherName =
+              cls.homeroomAssignments[0]?.Teacher?.fullName ||
+              p?.User?.fullName ||
+              null;
+            return {
+              classId: cls.id,
+              className: cls.name,
+              registeredPortions: cls.registeredMealPortions,
+              actualPortions: p ? p.totalPortions : 0,
+              status: p ? p.status : "NOT_REPORTED",
+              teacherName,
+              finalizedAt: p?.finalizedAt ? p.finalizedAt.toISOString() : null,
+              allergyNotes: p?.allergyNotes || null,
+            };
+          });
+
           return {
             date: query.date.toISOString().slice(0, 10),
             mealType: query.mealType,
             totalPortions: demand._sum.totalPortions ?? 0,
             finalizedClasses: demand._count,
             pendingClasses: pending,
+            classes,
           };
         },
         { isolationLevel: "RepeatableRead" },

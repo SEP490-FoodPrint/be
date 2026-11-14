@@ -5,3 +5,4 @@
 - [x] T003 Ánh xạ dữ liệu nhà cung cấp và mô tả trong mapper `legacyDto` tại `src/modules/ingredient/ingredient.service.ts`.
 - [x] T004 Kiểm tra tương thích dữ liệu live với frontend và loại bỏ hoàn toàn mock data.
 - [x] T005 Bổ sung thông tin nhà cung cấp, đơn đặt hàng, hội đồng 4 bên và chi tiết đợt giao trong `GET /api/deliveries` tại `src/modules/delivery/delivery.service.ts`.
+- [x] T006 Mở rộng quyền truy cập API `GET /api/v1/daily-meal-portions` cho `supply_request.create` tại `src/modules/meal-attendance/meal-attendance.routes.ts` và `src/modules/meal-attendance/meal-attendance.service.ts`.

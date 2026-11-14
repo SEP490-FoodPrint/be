@@ -5,5 +5,6 @@
 - Bổ sung trường mô tả và yêu cầu bảo quản quy cách (`description`) từ bảng `ingredients`.
 - Danh mục nguyên liệu chuẩn hóa định dạng dữ liệu DTO, phục vụ màn hình Danh mục nguyên liệu bên frontend hiển thị chính xác theo DB mà không phụ thuộc mock data.
 - API danh sách đợt giao nhận `GET /api/deliveries` truy vấn trực tiếp từ cơ sở dữ liệu thật, mở rộng thông tin Nhà cung cấp đối tác (`Supplier.name`), mã đơn đặt hàng gốc (`SupplyRequest.requestNo`), ngày giờ giao nhận, hội đồng nghiệm thu 4 bên (`deliveryApprovals`) và chi tiết hàng giao (`deliveryItems`).
+- Cho phép vai trò Quản lý nguyên liệu (quyền `supply_request.create`) truy cập API tổng hợp suất ăn điểm danh theo ngày `GET /api/v1/daily-meal-portions` để tự động tính toán cân đối sĩ số đơn giao Đợt 2 từ dữ liệu chốt của GVCN.
 - Loại bỏ hoàn toàn mock data ở cả frontend và backend, đồng bộ 100% dữ liệu thực từ PostgreSQL.
 
