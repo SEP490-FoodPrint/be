@@ -1,5 +1,6 @@
--- DropIndex
-DROP INDEX "foodprint"."weekly_menus_school_id_week_start_date_key";
+-- The baseline declares this uniqueness as a table constraint, which owns its index.
+ALTER TABLE "foodprint"."weekly_menus"
+  DROP CONSTRAINT "weekly_menus_school_id_week_start_date_key";
 
 -- AlterTable
 ALTER TABLE "foodprint"."weekly_menus" ADD COLUMN     "is_school_wide" BOOLEAN NOT NULL DEFAULT true;
