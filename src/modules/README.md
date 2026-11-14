@@ -139,7 +139,7 @@ Hai list đơn vị nhận search/status và trả contact/total; nhóm con phâ
 
 Module ingredient đã tách đầy đủ routes/controller/validation/service/repository và hai file Request/Response DTO theo AGENTS.md; phần mô tả bốn file ở trên áp dụng cho các module danh sách legacy chưa chuyển đổi. Controller validate qua Zod; service xác lập scope, transaction và map DTO; repository thực hiện mọi truy vấn/khóa với shared client.
 
-Ngoài GET đọc nghiệp vụ `/api/ingredients`, module có nhóm `/api/ingredients/management` dành riêng cho Supplier Admin với permission ingredient.manage: GET danh sách, GET categories, GET :ingredientId, POST tạo, PATCH :ingredientId và POST :ingredientId/hide. Chi tiết tại [AUTHORIZATION.md](../../docs/AUTHORIZATION.md#quản-trị-nguyên-liệu-nhà-cung-cấp).
+Ngoài GET đọc nghiệp vụ `/api/ingredients`, module có nhóm `/api/ingredients/management` dành riêng cho Supplier Admin với permission ingredient.manage: GET danh sách, GET categories, GET :ingredientId, POST tạo, PATCH :ingredientId, POST :ingredientId/hide và hai API upload ảnh. Chi tiết tại [AUTHORIZATION.md](../../docs/AUTHORIZATION.md#quản-trị-nguyên-liệu-nhà-cung-cấp).
 
 IngredientCategory là danh mục dùng chung chỉ đọc trong module ingredient, không có chức năng quản trị danh mục. categoryId thay cột category; coverImage một ảnh và imageDescription nhiều ảnh là các tham chiếu có sẵn. Ẩn chuyển INACTIVE, giữ dữ liệu/lịch sử và không cung cấp bật lại hoặc xóa.
 
@@ -152,3 +152,11 @@ Module source-facility sở hữu cơ sở nguồn cung theo supplier, không ph
 Controller chỉ validate/call service/sendSuccess; validation dùng Zod strict; hai file Request/Response DTO tách riêng chỉ được service dùng; repository chứa truy vấn/khóa. Cấp mã FP-SF theo supplier bằng numeric max, unique scoped và retry transaction, không thay schema hoặc mã legacy. Cơ sở dừng vẫn xem/sửa được; không xóa, kích hoạt lại hoặc đổi liên kết IngredientLot.
 
 Xem [hợp đồng API](../../specs/027-source-facility-management/contracts/source-facility-api.md) và [kế hoạch](../../specs/027-source-facility-management/plan.md).
+
+## Luồng tiếp nhận yêu cầu nguyên liệu
+
+Module `supply-order` sở hữu GET `/api/supply-requests`, GET `/api/supply-requests/:id` và POST `/api/supply-requests/:id/accept`. Hai vai trò admin/staff nhà cung cấp sử dụng danh sách/chi tiết với `supply_request.view`, tiếp nhận với `supply_request.accept`; quyền đọc và ghi độc lập, scope lấy từ membership hiện hành.
+
+Danh sách supplier ẩn DRAFT, hỗ trợ status và phân trang, bổ sung tên trường/ngày giao/thời điểm gửi. Chi tiết có đủ dòng nguyên liệu, số lượng dạng chuỗi Decimal, đơn vị, ghi chú và receipt đầu tiên. GET phía SCHOOL/SYSTEM giữ hợp đồng cũ. Tiếp nhận kế thừa intake guard/transaction hiện có, nhận lại không ghi đè người hoặc thời điểm đầu tiên.
+
+POST tạo `/api/supply-requests`, POST gửi `/:id/send` và GET `/:id/contract-evidence` vẫn thuộc `supplier-onboarding` với mount trực tiếp dưới `/api`; không dùng tiền tố tên module trong URL. Xem [hợp đồng supplier intake](../../specs/supplier-order-intake/contracts/supply-requests.md).

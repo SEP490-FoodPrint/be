@@ -17,12 +17,9 @@ const makePlan = (count: number, lot: string, amount = count) => ({
   lots: [{ ingredientLotId: lot, quantityUsed: String(amount), unit: "g" }],
 });
 
-void test("B1 splits into two full child meals when only chicken changes lot", () => {
+void test("separate mode keeps one dish per child and does not split unrelated dishes", () => {
   const input: DishPlans[] = [
-    {
-      dishId: "chicken",
-      plans: [makePlan(60, "chicken-1"), makePlan(40, "chicken-2")],
-    },
+    { dishId: "chicken", plans: [makePlan(60, "c1"), makePlan(40, "c2")] },
     ...["beef", "rice", "soup"].map((dishId) => ({
       dishId,
       plans: [makePlan(100, dishId)],
@@ -31,33 +28,17 @@ void test("B1 splits into two full child meals when only chicken changes lot", (
   const children = groupDishPlans(input, "SEPARATE_BY_LOT");
   assert.deepEqual(
     children.map((c) => c.plannedPortions),
-    [60, 40],
+    [60, 40, 100, 100, 100],
   );
   assert.deepEqual(
-    children.map((c) => c.dishes.map((d) => d.dishId)),
-    [
-      ["chicken", "beef", "rice", "soup"],
-      ["chicken", "beef", "rice", "soup"],
-    ],
+    children.map((c) => c.dishes[0].dishId),
+    ["chicken", "chicken", "beef", "rice", "soup"],
   );
-  assert.deepEqual(
-    children.map((c) => c.dishes[0].lots[0].ingredientLotId),
-    ["chicken-1", "chicken-2"],
-  );
-  for (const dishId of ["beef", "rice", "soup"]) {
-    const amounts = children.map(
-      (c) => c.dishes.find((d) => d.dishId === dishId)!.lots[0].quantityUsed,
-    );
-    assert.deepEqual(amounts, ["60.000", "40.000"]);
-  }
-  assert.equal(
-    input[1].plans[0].lots[0].quantityUsed,
-    "100",
-    "grouping must not mutate the original plan",
-  );
+  assert.ok(children.every((c) => c.dishes.length === 1));
+  assert.equal(input[1].plans[0].lots[0].quantityUsed, "100");
 });
 
-void test("different recipe boundaries and unequal allergy dish demand conserve every dish and lot", () => {
+void test("different ingredient lots and allergy demand conserve every dish and lot", () => {
   const input: DishPlans[] = [
     { dishId: "chicken", plans: [makePlan(60, "c1"), makePlan(40, "c2")] },
     { dishId: "rice", plans: [makePlan(30, "r1"), makePlan(70, "r2")] },
@@ -66,35 +47,31 @@ void test("different recipe boundaries and unequal allergy dish demand conserve 
   const children = groupDishPlans(input, "SEPARATE_BY_LOT");
   assert.deepEqual(
     children.map((c) => c.plannedPortions),
-    [10, 20, 30, 40],
+    [60, 40, 30, 70, 10],
   );
+  assert.ok(children.every((c) => c.dishes.length === 1));
   for (const dish of input) {
     const actual = children.flatMap((c) =>
       c.dishes.filter((d) => d.dishId === dish.dishId),
     );
     assert.equal(
       actual.reduce((n, d) => n + d.plannedPortions, 0),
-      dish.plans.reduce((n, p) => n + p.plannedPortions, 0),
+      dish.plans.reduce((n, plan) => n + plan.plannedPortions, 0),
     );
     for (const plan of dish.plans) {
-      const lot = plan.lots[0];
       const used = actual
         .flatMap((d) => d.lots)
-        .filter((l) => l.ingredientLotId === lot.ingredientLotId)
+        .filter((l) => l.ingredientLotId === plan.lots[0].ingredientLotId)
         .reduce((n, l) => n.add(l.quantityUsed), new Prisma.Decimal(0));
       assert.equal(
         used.toString(),
-        new Prisma.Decimal(lot.quantityUsed).toString(),
+        new Prisma.Decimal(plan.lots[0].quantityUsed).toString(),
       );
     }
   }
-  assert.equal(
-    children[1].dishes.some((d) => d.dishId === "alternative"),
-    false,
-  );
 });
 
-void test("combine mode keeps one child containing every dish, even when serving demands differ", () => {
+void test("combine mode makes one child per dish even with unequal demand", () => {
   const children = groupDishPlans(
     [
       {
@@ -110,15 +87,15 @@ void test("combine mode keeps one child containing every dish, even when serving
     ],
     "COMBINE_LOTS",
   );
-  assert.equal(children.length, 1);
+  assert.equal(children.length, 2);
   assert.deepEqual(
-    children[0].dishes.map((d) => d.plannedPortions),
+    children.map((c) => c.dishes[0].plannedPortions),
     [90, 10],
   );
   assert.equal(children[0].dishes[0].lots.length, 2);
 });
 
-void test("grouping rejects duplicate dishes and splitting beyond supported numeric precision", () => {
+void test("planning rejects duplicate dishes, invalid portions and invalid combine plans", () => {
   assert.throws(() =>
     groupDishPlans(
       [
@@ -130,11 +107,14 @@ void test("grouping rejects duplicate dishes and splitting beyond supported nume
   );
   assert.throws(() =>
     groupDishPlans(
-      [
-        { dishId: "a", plans: [makePlan(3, "a", 1)] },
-        { dishId: "b", plans: [makePlan(1, "b")] },
-      ],
+      [{ dishId: "a", plans: [makePlan(0, "l")] }],
       "SEPARATE_BY_LOT",
+    ),
+  );
+  assert.throws(() =>
+    groupDishPlans(
+      [{ dishId: "a", plans: [makePlan(1, "l1"), makePlan(1, "l2")] }],
+      "COMBINE_LOTS",
     ),
   );
 });
@@ -517,18 +497,18 @@ void test("preview and create wait for all eligible classes without reserving st
   assert.equal(f.usage.length, 0);
 });
 
-void test("meal API applies school mode, creates B1 with both full child meals and retries without allocating again", async () => {
+void test("meal API creates one child per dish and lot, and retry never reserves twice", async () => {
   const f = fixture("SEPARATE_BY_LOT");
   const result = await f.service.plan(validateKitchenPlan(meal), principal);
   assert.equal(result.groups.length, 1);
-  assert.equal(result.batches.length, 2);
+  assert.equal(result.batches.length, 5);
   assert.deepEqual(
     result.batches.map((b) => b.dishes.length),
-    [4, 4],
+    [1, 1, 1, 1, 1],
   );
   assert.deepEqual(
     result.batches.map((b) => b.plannedPortions),
-    [60, 40],
+    [60, 40, 100, 100, 100],
   );
   assert.equal(
     result.batches.every((b) => b.batchGroupId === result.groups[0].id),
@@ -537,28 +517,29 @@ void test("meal API applies school mode, creates B1 with both full child meals a
   const retried = await f.service.plan(validateKitchenPlan(meal), principal);
   assert.equal(retried.created, false);
   assert.equal(f.groups.length, 1);
-  assert.equal(f.children.length, 2);
+  assert.equal(f.children.length, 5);
   await f.service.confirm(f.children[0].id, principal);
   await f.service.complete(f.children[0].id, principal);
   await f.service.complete(f.children[0].id, principal);
-  assert.equal(f.usage.length, 4, "retry must not consume stock twice");
+  assert.equal(f.usage.length, 1, "retry must not consume stock twice");
   assert.equal(
     f.lots.find((l) => l.id === "rice")!.availableQuantity.toString(),
-    "40",
+    "100",
   );
   assert.equal(f.children[1].status, "CONFIRMED");
 });
 
-void test("two dishes sharing one stock lot reserve once per dish but post one aggregated usage per child lot", async () => {
+void test("two single-dish children sharing one lot each post their own stock usage", async () => {
   const f = fixture("COMBINE_LOTS", true);
   const result = await f.service.plan(validateKitchenPlan(meal), principal);
-  assert.equal(result.batches.length, 1);
-  assert.equal(result.batches[0].dishes.length, 2);
+  assert.equal(result.batches.length, 2);
+  assert.ok(result.batches.every((batch) => batch.dishes.length === 1));
   await f.service.confirm(f.children[0].id, principal);
   const completed = await f.service.complete(f.children[0].id, principal);
   assert.equal(completed.inventoryDeducted, true);
-  assert.equal(f.usage.length, 1);
-  assert.equal(f.usage[0].quantity.toString(), "200");
+  await f.service.complete(f.children[1].id, principal);
+  assert.equal(f.usage.length, 2);
+  assert.equal(f.usage[0].quantity.toString(), "100");
   assert.equal(f.lots[0].availableQuantity.toString(), "0");
   assert.equal(f.lots[0].status, "DEPLETED");
 });
@@ -589,7 +570,7 @@ void test("school policy cannot be overridden in the planning request and unauth
   assert.equal(connected, false);
 });
 
-void test("a multi-dish child requires a dish for sampling and stores separate idempotent samples", async () => {
+void test("single-dish samples are idempotent and historical multi-dish samples remain supported", async () => {
   const f = fixture("COMBINE_LOTS", true);
   await f.service.plan(validateKitchenPlan(meal), principal);
   const child = f.children[0];
@@ -633,6 +614,8 @@ void test("a multi-dish child requires a dish for sampling and stores separate i
           const sample: SampleRow = {
             ...data,
             id: `sample-${saved.length}`,
+            photoPublicId: null,
+            photoHash: null,
             quantity: new Prisma.Decimal(data.quantity),
             status: "STORED",
             disposedAt: null,
@@ -664,19 +647,23 @@ void test("a multi-dish child requires a dish for sampling and stores separate i
     storageLocation: "Fridge",
     sampledAt: new Date(),
   };
-  await assert.rejects(service.create(child.id, input, principal));
+  const single = await service.create(child.id, input, principal);
+  assert.equal(single.created, true);
+  assert.equal(single.dishId, child.dishes[0].dishId);
+  const repeat = await service.create(child.id, input, principal);
+  assert.equal(repeat.created, false);
   await assert.rejects(
     service.create(child.id, { ...input, dishId: "foreign-dish" }, principal),
   );
-  assert.equal(saved.length, 0);
-  for (const dish of child.dishes) {
-    const request = { ...input, dishId: dish.dishId };
-    const first = await service.create(child.id, request, principal);
-    const retry = await service.create(child.id, request, principal);
-    assert.equal(first.created, true);
-    assert.equal(retry.created, false);
-    assert.equal(first.dishId, dish.dishId);
-  }
+  // A historical multi-dish child still requires selecting the remaining dish.
+  child.dishes.push(...f.children[1].dishes);
+  await assert.rejects(service.create(child.id, input, principal));
+  const second = await service.create(
+    child.id,
+    { ...input, dishId: child.dishes[1].dishId },
+    principal,
+  );
+  assert.equal(second.created, true);
   assert.equal(saved.length, 2);
 });
 
@@ -686,7 +673,7 @@ void test("preview does not persist or consume stock; confirming starts cooking 
   const preview = await f.service.preview(validateKitchenPlan(meal), principal);
   assert.deepEqual(
     preview.batches.map((b) => b.plannedPortions),
-    [60, 40],
+    [60, 40, 100, 100, 100],
   );
   assert.equal(f.groups.length, 0);
   assert.equal(f.children.length, 0);

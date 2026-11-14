@@ -36,6 +36,8 @@ const summarySelect = {
       userId: true,
       decision: true,
       reason: true,
+      photoPublicId: true,
+      photoHash: true,
       decidedAt: true,
       Role: { select: { code: true, name: true } },
       User: { select: { fullName: true } },
@@ -177,9 +179,10 @@ export const deliveryInspectionRepository = {
     roleId: string,
     decision: "APPROVE" | "REJECT",
     reason: string | null,
+    photo: { photoPublicId: string; photoHash: string } | null = null,
   ) {
     return tx.deliveryApproval.create({
-      data: { deliveryId, userId, roleId, decision, reason },
+      data: { deliveryId, userId, roleId, decision, reason, ...photo },
     });
   },
   setStatus(

@@ -248,3 +248,54 @@ void test("academic-year routes enforce permissions and expose no delete", async
   );
   assert.deepEqual(calls, ["create"]);
 });
+
+void test("academic-year create requires N-N+1 label, dates are free", () => {
+  const base = {
+    academicYear: "2026-2027",
+    startDate: "2026-08-20",
+    endDate: "2027-06-15",
+    holidays: [],
+  };
+  assert.doesNotThrow(() => validateCreateAcademicYear(base));
+  assert.doesNotThrow(() =>
+    validateCreateAcademicYear({
+      ...base,
+      startDate: "2027-01-05",
+      endDate: "2028-01-05",
+    }),
+  );
+  for (const input of [
+    { ...base, academicYear: "Năm 2026" },
+    { ...base, academicYear: "2026-2028" },
+  ]) {
+    assert.throws(() => validateCreateAcademicYear(input), isBadRequest);
+  }
+});
+
+void test("academic-year create rejects past years before touching the database", async () => {
+  const NOV_2026 = new Date("2026-11-14T03:00:00Z");
+  let connected = false;
+  const service = createSchoolAcademicYearService(
+    {} as SchoolAcademicYearRepository,
+    () => {
+      connected = true;
+      return Promise.reject(new Error("should not connect"));
+    },
+    () => NOV_2026,
+  );
+  const input = {
+    academicYear: "2025-2026",
+    startDate: "2025-09-05",
+    endDate: "2026-05-30",
+    holidays: [],
+  };
+  await assert.rejects(
+    service.create(input, board),
+    (error: unknown) => error instanceof HttpError && error.statusCode === 409,
+  );
+  assert.equal(connected, false);
+  await assert.rejects(
+    service.create({ ...input, academicYear: "2026-2027" }, board),
+    /should not connect/,
+  );
+});

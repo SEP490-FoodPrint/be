@@ -28,7 +28,8 @@ export async function loadAllocationFixture(
   const weeklyMenuId = fixtureId("week");
   const menuDayId = fixtureId("day");
   const batchGroupId = fixtureId("group");
-  const dishIds = [fixtureId("rice"), fixtureId("main")];
+  // Two stock-lot batches of the same dish provide 60 + 40 meal portions.
+  const dishIds = [fixtureId("rice")];
   const batchIds = [fixtureId("batch-A"), fixtureId("batch-B")];
   const demandIds = [
     fixtureId("demand-A"),
@@ -184,7 +185,7 @@ export async function loadAllocationFixture(
         },
         update: lifecycle,
       });
-      for (const [dishIndex, dishId] of dishIds.entries()) {
+      for (const dishId of dishIds) {
         await tx.cookingBatchDish.upsert({
           where: { cookingBatchId_dishId: { cookingBatchId, dishId } },
           create: {
@@ -196,7 +197,7 @@ export async function loadAllocationFixture(
           },
           update: {},
         });
-        if (cooked && (index === 0 || state === "ready" || dishIndex === 0)) {
+        if (cooked && (index === 0 || state === "ready")) {
           await tx.retainedFoodSample.upsert({
             where: { cookingBatchId_dishId: { cookingBatchId, dishId } },
             create: {

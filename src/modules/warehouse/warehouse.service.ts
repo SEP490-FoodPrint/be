@@ -21,6 +21,67 @@ const select = {
   status: true,
   createdAt: true,
   updatedAt: true,
+  DeliveryItem: {
+    select: {
+      id: true,
+      actualQuantity: true,
+      unit: true,
+      Delivery: {
+        select: {
+          id: true,
+          deliveryNo: true,
+          status: true,
+          expectedArrivalAt: true,
+          arrivedAt: true,
+          receivedAt: true,
+        },
+      },
+      SupplyRequestItem: {
+        select: {
+          id: true,
+          ingredientEntryId: true,
+          requestedQuantity: true,
+          unit: true,
+          IngredientEntry: {
+            select: {
+              id: true,
+              handlingType: true,
+              storageRequirements: true,
+              shelfLifeDays: true,
+              Ingredient: {
+                select: {
+                  id: true,
+                  name: true,
+                  defaultUnit: true,
+                  description: true,
+                  ingredientCategory: {
+                    select: {
+                      id: true,
+                      categoryName: true,
+                    },
+                  },
+                  Supplier: {
+                    select: {
+                      id: true,
+                      name: true,
+                      phone: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+  SourceFacility: {
+    select: {
+      id: true,
+      name: true,
+      facilityCode: true,
+    },
+  },
 } as const satisfies Prisma.IngredientLotSelect;
 
 type ListRow = Prisma.IngredientLotGetPayload<{ select: typeof select }>;
@@ -47,7 +108,7 @@ export function createWarehouseService(read: ListReader = readFromDatabase) {
             ...listWindow(query),
             where,
             select,
-            orderBy: [{ id: "asc" }],
+            orderBy: [{ createdAt: "desc" }],
           }),
         query,
       );

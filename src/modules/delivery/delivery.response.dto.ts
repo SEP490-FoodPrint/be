@@ -29,6 +29,7 @@ export interface DeliveryInspectionDTO {
     userName: string;
     decision: ApprovalDecision;
     reason: string | null;
+    photoUrl: string | null;
     decidedAt: string;
   }[];
   deliveryItems?: {
@@ -49,4 +50,57 @@ export interface DeliveryInspectionDTO {
       status: IngredientLotStatus;
     }[];
   }[];
+}
+
+export interface DeliveryApprovalItemDTO {
+  id: string;
+  roleId: string;
+  roleCode: string;
+  roleName: string;
+  userId: string;
+  userName: string;
+  decision: ApprovalDecision;
+  reason: string | null;
+  decidedAt: string;
+}
+
+export interface DeliveryItemSummaryDTO {
+  id: string;
+  actualQuantity: string;
+  unit: string;
+  note: string | null;
+  requestedQuantity: string | null;
+  ingredientName: string | null;
+  handlingType: string | null;
+}
+
+export interface DeliveryListItemDTO {
+  id: string;
+  deliveryNo: string;
+  supplyRequestId: string;
+  orderNo: string | null;
+  requestNo: string | null;
+  supplierId: string;
+  supplierName: string | null;
+  supplierPhone?: string | null;
+  status: DeliveryStatus;
+  vehiclePlate: string | null;
+  expectedArrivalAt: string | null;
+  arrivedAt: string | null;
+  receivedAt: string | null;
+  requestedDeliveryDate?: string | null;
+  note: string | null;
+  deliveryApprovals: DeliveryApprovalItemDTO[];
+  deliveryItems?: DeliveryItemSummaryDTO[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DeliveryListResponseDTO {
+  items: DeliveryListItemDTO[];
+  pagination: {
+    page: number;
+    limit: number;
+    hasNext: boolean;
+  };
 }

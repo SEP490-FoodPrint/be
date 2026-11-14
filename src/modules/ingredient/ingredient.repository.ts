@@ -11,15 +11,21 @@ export const ingredientCategorySelect = {
   categoryName: true,
   categoryDescription: true,
 } as const;
+export const ingredientSupplierSelect = {
+  id: true,
+  name: true,
+} as const;
 export const ingredientLegacySelect = {
   id: true,
   supplierId: true,
   name: true,
   defaultUnit: true,
+  description: true,
   status: true,
   createdAt: true,
   updatedAt: true,
   ingredientCategory: { select: ingredientCategorySelect },
+  Supplier: { select: ingredientSupplierSelect },
 } as const satisfies Prisma.IngredientSelect;
 const select = {
   ...ingredientLegacySelect,
@@ -68,8 +74,8 @@ export function createIngredientRepository(connect = getPrisma) {
         orderBy: { id: "asc" },
       });
     },
-    actor(id: string, tx: Tx) {
-      return loadPrincipal(id, tx);
+    async actor(id: string, tx?: Tx) {
+      return loadPrincipal(id, tx ?? (await connect()));
     },
     async supplierStatus(scope: IngredientManagementScope, tx?: Tx) {
       const db = tx ?? (await connect());

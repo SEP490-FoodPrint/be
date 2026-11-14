@@ -300,7 +300,9 @@ Nhóm `/api/ingredients/management` yêu cầu tài khoản ACTIVE, role `INGRED
 
 Danh sách chỉ nhận page/limit, mặc định 1/20, limit tối đa 100, envelope items/pagination.hasNext hiện hành. Scope từ principal, không từ supplierId do client gửi. Target ngoài sở hữu và không tồn tại cùng 404. Trùng tên trong cùng supplier kể cả đang ẩn trả 409. Quyền đọc GET `/api/ingredients` hiện có giữ nguyên, gồm staff được cấp quyền đọc hợp lệ.
 
-Input chỉ gồm name/defaultUnit/description/categoryId/coverImage/imageDescription; tạo cần name và defaultUnit. PATCH bỏ qua giữ nguyên, null xóa trường nullable, [] xóa danh sách ảnh. coverImage tối đa một tham chiếu; imageDescription nhiều tham chiếu theo thứ tự. Chấp nhận URL HTTP/HTTPS không credentials hoặc đường dẫn bắt đầu /, tối đa 2048 ký tự; không upload hoặc fetch ảnh. categoryId nullable tham chiếu danh mục có sẵn; chưa có API quản trị danh mục. Chi tiết input/output tại [contract](../specs/008-supplier-ingredient-management/contracts/ingredient-management.md).
+Input tạo/sửa chỉ gồm name/defaultUnit/description/categoryId/coverImage/imageDescription; tạo cần name và defaultUnit. PATCH bỏ qua giữ nguyên, null xóa trường nullable, [] xóa danh sách ảnh. coverImage tối đa một tham chiếu; imageDescription nhiều tham chiếu theo thứ tự. Chấp nhận URL HTTP/HTTPS không credentials hoặc đường dẫn bắt đầu /, tối đa 2048 ký tự. categoryId nullable tham chiếu danh mục có sẵn; chưa có API quản trị danh mục. Chi tiết input/output tại [contract](../specs/008-supplier-ingredient-management/contracts/ingredient-management.md).
+
+Hai API `POST /api/ingredients/management/upload-image` và `POST /api/ingredients/management/upload-images` nhận multipart lần lượt một ảnh `image` hoặc từ một đến năm ảnh `images` (JPEG/PNG/WebP, tối đa 5 MiB mỗi ảnh). API dùng cùng quyền quản trị nguyên liệu; upload trước khi tạo/sửa và trả URL để gửi trong body JSON riêng. Single trả 201; batch trả 200 và kết quả thành công/thất bại cho từng tệp theo thứ tự. Chi tiết tại [contract upload](../specs/ingredient-image-upload/contracts/ingredient-upload-api.md).
 
 Ẩn không xóa dữ liệu hoặc thay đổi hồ sơ đã có. Lựa chọn nguyên liệu mới và supplier discovery chỉ dùng nguyên liệu ACTIVE; menu/hợp đồng/lịch sử kho vẫn đọc được liên kết cũ. Các phản hồi legacy giữ category dạng tên/null suy ra từ quan hệ, không giữ thêm cột category trong DB.
 
@@ -347,3 +349,19 @@ Scope chỉ lấy từ principal đã xác thực và áp vào WHERE của repos
 facilityCode do hệ thống sinh theo dãy riêng mỗi supplier, bắt đầu FP-SF-00001; supplier khác được phép có cùng mã, nên mã không thay UUID trong đường dẫn. Người dùng không nhập/sửa mã, supplierId, trạng thái hoặc audit. Không xóa hoặc kích hoạt lại; dừng giữ isVisible, mã và liên kết lô nguyên liệu. Mã legacy null/không chuẩn được giữ nguyên.
 
 Hợp đồng chi tiết: [Source Facility API](../specs/027-source-facility-management/contracts/source-facility-api.md).
+
+## Tiếp nhận yêu cầu nguyên liệu phía nhà cung cấp
+
+| Endpoint                               | Quyền và phạm vi                                                                                                                                    |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET `/api/supply-requests`             | `supply_request.view`; SUPPLIER chỉ admin/staff hiện tại, chỉ đơn của nhà cung cấp ngoài DRAFT; SCHOOL/SYSTEM giữ scope và projection cũ.           |
+| GET `/api/supply-requests/:id`         | `supply_request.view`; chỉ INGREDIENT_SUPPLIER_ADMIN/INGREDIENT_SUPPLIER_STAFF thuộc SUPPLIER, đúng supplierId và ngoài DRAFT.                      |
+| POST `/api/supply-requests/:id/accept` | `supply_request.accept`; cùng hai role supplier, xác minh lại quyền/membership/trạng thái trong Serializable transaction. Không yêu cầu quyền view. |
+
+Nhánh danh sách SUPPLIER hỗ trợ `status` trong SENT/ACCEPTED/IN_PROGRESS/COMPLETED/CANCELLED; mặc định cả năm trạng thái. Giữ page mặc định 1, limit mặc định 20/tối đa 100 và hasNext; thêm schoolName, requestedDeliveryDate và sentAt. SCHOOL/SYSTEM vẫn chỉ nhận page/limit, gửi status trả 400; trường vẫn xem được bản nháp của chính mình theo quyền. Không lấy supplierId/schoolId từ query để mở rộng scope.
+
+Chi tiết trả đủ dòng kể cả nguyên liệu/entry đã ngừng hoạt động. Số lượng là chuỗi Decimal, đơn vị lấy từ dòng đơn, ngày giao YYYY-MM-DD, timestamp ISO và dữ liệu thiếu giữ null. Người nhận biểu diễn bằng acceptedByUserId, không trả hồ sơ tài khoản, email/phone hay contractSnapshot. Ngoài scope/không tồn tại/DRAFT đều 404 với detail/accept.
+
+Nhận mới chỉ SENT -> ACCEPTED, ghi người/thời điểm cùng transaction. Supplier tạm dừng hoặc admin một bên DEACTIVATED ngăn nhận mới; school tạm dừng tạo đơn không ngăn nhận đơn đã gửi. ACCEPTED/IN_PROGRESS trả receipt bốn trường cũ sau kiểm tra quyền và scope, không ghi đè thông tin đầu tiên hoặc updatedAt, kể cả khi supplier đã tạm dừng. COMPLETED/CANCELLED trả 409. Quyền bị tắt cho từng người vẫn có hiệu lực, không bypass SYSTEM và không cache phân quyền.
+
+Thiết kế và hợp đồng: [supplier-order-intake](../specs/supplier-order-intake/contracts/supply-requests.md). Không thêm schema hoặc quyền mới; kết quả kiểm chứng thực tế được ghi tại [quickstart](../specs/supplier-order-intake/quickstart.md).

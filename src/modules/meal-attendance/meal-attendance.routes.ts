@@ -58,6 +58,7 @@ export function createMealAttendanceRouter(
         "daily_meal_portion.view",
         "cooking_batch.view",
         "menu.view",
+        "supply_request.create",
       ),
       controller.summary,
     );
