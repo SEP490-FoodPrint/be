@@ -1564,6 +1564,7 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
             ),
           );
         }
+        await local.query("SET search_path TO foodprint, public");
         const school = (
           await local.query<{ id: string }>(
             "INSERT INTO foodprint.schools(name) VALUES ('Single dish school') RETURNING id",
