@@ -151,4 +151,4 @@ Module source-facility sở hữu cơ sở nguồn cung theo supplier, không ph
 
 Controller chỉ validate/call service/sendSuccess; validation dùng Zod strict; hai file Request/Response DTO tách riêng chỉ được service dùng; repository chứa truy vấn/khóa. Cấp mã FP-SF theo supplier bằng numeric max, unique scoped và retry transaction, không thay schema hoặc mã legacy. Cơ sở dừng vẫn xem/sửa được; không xóa, kích hoạt lại hoặc đổi liên kết IngredientLot.
 
-Xem [hợp đồng API](../../specs/026-source-facility-management/contracts/source-facility-api.md) và [kế hoạch](../../specs/026-source-facility-management/plan.md).
+Xem [hợp đồng API](../../specs/027-source-facility-management/contracts/source-facility-api.md) và [kế hoạch](../../specs/027-source-facility-management/plan.md).

@@ -1,10 +1,10 @@
 # Tasks: Quản lý cơ sở cung cấp nguyên liệu
 
-**Input**: Design documents từ specs/026-source-facility-management/
+**Input**: Design documents từ specs/027-source-facility-management/
 
 **Prerequisites**: [plan.md](plan.md), [spec.md](spec.md), [research.md](research.md), [data-model.md](data-model.md), [contracts/source-facility-api.md](contracts/source-facility-api.md), [quickstart.md](quickstart.md).
 
-**Branch**: feat/026-source-facility-management
+**Branch**: feat/027-source-facility-management
 
 **Tests**: Bao gồm kiểm thử được yêu cầu bởi các acceptance scenario và SC-001–006 trong spec, cùng chiến lược kiểm chứng đã chốt trong plan. Viết các ca của mỗi story trước implementation và quan sát thất bại đúng hành vi còn thiếu; không yêu cầu suite phải lỗi import hoặc lỗi biên dịch. Kiểm thử PostgreSQL thực chỉ chạy khi instance disposable được chọn rõ ràng và được phép; mọi trạng thái bị chặn phải được ghi thật.
 
@@ -18,13 +18,13 @@
 
 ## Path Conventions
 
-Đường dẫn dưới đây tương đối từ repository root. Source tại src/, test tại tests/, tài liệu feature tại specs/026-source-facility-management/. Repository hiện có, không khởi tạo project hoặc cài dependency mới.
+Đường dẫn dưới đây tương đối từ repository root. Source tại src/, test tại tests/, tài liệu feature tại specs/027-source-facility-management/. Repository hiện có, không khởi tạo project hoặc cài dependency mới.
 
 ## Phase 1: Setup — Chuẩn bị phạm vi và test seam
 
 **Purpose**: Xác nhận baseline và chuẩn bị fixture tái sử dụng, không tác động database.
 
-- [x] T001 Đối chiếu nhánh feat/026-source-facility-management, Node/npm theo .nvmrc và package.json, module hiện có với specs/026-source-facility-management/plan.md; ghi prerequisite còn thiếu vào specs/026-source-facility-management/quickstart.md, xác nhận không cần thay prisma/schema.prisma hoặc migration.
+- [x] T001 Đối chiếu nhánh feat/027-source-facility-management, Node/npm theo .nvmrc và package.json, module hiện có với specs/027-source-facility-management/plan.md; ghi prerequisite còn thiếu vào specs/027-source-facility-management/quickstart.md, xác nhận không cần thay prisma/schema.prisma hoặc migration.
 - [x] T002 Chuẩn bị factory AuthPrincipal, repository/connect giả lập và HTTP helper trong tests/source-facility-management.test.ts; chuẩn bị nhóm fixture source facility dùng lại supplier/admin/session và cleanup của tests/authorization.integration.test.ts, chưa chạy hoặc tạo dữ liệu ngoài database disposable.
 
 **Checkpoint**: Có test seam để inject service/repository và fixture tích hợp dùng chung; không tạo framework/client/database mới.
@@ -36,7 +36,7 @@
 - [x] T003 [P] Thêm SourceFacilityManagementScope và sourceFacilityManagementScope tại src/utils/resource-access.ts: đúng INGREDIENT_SUPPLIER_ADMIN, SUPPLIER membership hợp lệ, source_facility.manage; đồng bộ listScopes["source-facility"] để bỏ nhánh SYSTEM toàn cục và staff, luôn trả phạm vi supplierId tin cậy.
 - [x] T004 [P] Hoàn thiện trường văn bản dùng chung, schema query page/limit và params sourceFacilityId tại src/modules/source-facility/source-facility.validation.ts; dùng Zod strict, parseRequest/requestUuidSchema, trim, giới hạn phân trang hiện có và lỗi tiếng Việt; chưa thêm hành vi create/update/deactivate trước task story tương ứng.
 - [x] T005 Tạo các Request DTO query/params trong src/modules/source-facility/source-facility.request.dto.ts bằng z.infer với type-only import schema từ src/modules/source-facility/source-facility.validation.ts; chỉ service được import DTO, bổ sung DTO từng thao tác ở phase story.
-- [x] T006 [P] Tạo hợp đồng list item/page/detail/create trong src/modules/source-facility/source-facility.response.dto.ts theo allowlist tại specs/026-source-facility-management/contracts/source-facility-api.md; ngày giờ là string ISO, facilityCode read giữ string|null cho legacy và create mới là string.
+- [x] T006 [P] Tạo hợp đồng list item/page/detail/create trong src/modules/source-facility/source-facility.response.dto.ts theo allowlist tại specs/027-source-facility-management/contracts/source-facility-api.md; ngày giờ là string ISO, facilityCode read giữ string|null cho legacy và create mới là string.
 - [x] T007 Tạo src/modules/source-facility/source-facility.repository.ts với select/list/find scoped, actor qua loadPrincipal(id, tx), supplierStatus, lockSupplier, lockTarget, nameExists và nhận diện constraint lỗi tên/mã; dùng client chung, internal input types, locks supplier trước target, không import DTO hoặc tự mở transaction.
 - [x] T008 Tái cấu trúc src/modules/source-facility/source-facility.service.ts sang repository injection: chuyển mọi Prisma query/select/where/order sang src/modules/source-facility/source-facility.repository.ts, map allowlist/ISO trong service, kiểm tra supplier ACTIVE cho read và tạo write helper dùng authorizationTransaction để recheck actor/quyền/scope/supplier trong cùng tx; giữ getAll hoạt động và không đổi kiểu seam ngoài phạm vi cần thiết.
 
@@ -131,10 +131,10 @@
 **Purpose**: Đồng bộ tài liệu/quyền và kiểm chứng toàn bộ feature.
 
 - [x] T037 [P] Cập nhật docs/AUTHORIZATION.md với đúng năm endpoint, supplier-admin-only kể cả danh sách, permission source_facility.manage và scope supplier; ghi ngoại lệ rõ với mô tả SYSTEM toàn cục chung hiện có, không thêm permission/grant mới.
-- [x] T038 [P] Cập nhật src/modules/README.md về ownership/module và năm endpoint source facility, mã riêng mỗi supplier, không xóa và bảo toàn lịch sử; liên kết contract specs/026-source-facility-management/contracts/source-facility-api.md khi phù hợp.
+- [x] T038 [P] Cập nhật src/modules/README.md về ownership/module và năm endpoint source facility, mã riêng mỗi supplier, không xóa và bảo toàn lịch sử; liên kết contract specs/027-source-facility-management/contracts/source-facility-api.md khi phù hợp.
 - [x] T039 [P] Đăng ký tests/source-facility-management.test.ts vào script test:unit tại package.json; giữ test:authorization/CI hiện có để chạy phần integration đã mở rộng, không thêm framework/dependency hoặc thay lockfile.
 - [x] T040 Rà soát và bổ sung kiểm chứng xuyên suốt năm route trong tests/source-facility-management.test.ts, tests/authorization.integration.test.ts, tests/authorization.test.ts và tests/modules.test.ts: staff/SYSTEM có permission vẫn bị chặn, cập nhật kỳ vọng generic list scope cho chức năng admin-only, supplier/account inactive, unknown/readonly input, actor recheck cùng tx, safe projection/ISO, 404 không lộ tenant, lỗi 503 không lộ SQL; kiểm tra không còn Prisma query hoặc DTO import sai tầng trong src/modules/source-facility/.
-- [x] T041 Chạy npm run prisma:validate, npm run validate và npm run test:unit; chạy npm run test:authorization khi hạ tầng disposable được chọn/được phép, theo specs/026-source-facility-management/quickstart.md; ghi lệnh, pass/fail, thời gian concurrency/fixture lớn hoặc prerequisite bị chặn vào quickstart.md, đối chiếu FR-001–017/SC-001–006 và cập nhật checkbox đã hoàn thành trong specs/026-source-facility-management/tasks.md bằng kết quả thật.
+- [x] T041 Chạy npm run prisma:validate, npm run validate và npm run test:unit; chạy npm run test:authorization khi hạ tầng disposable được chọn/được phép, theo specs/027-source-facility-management/quickstart.md; ghi lệnh, pass/fail, thời gian concurrency/fixture lớn hoặc prerequisite bị chặn vào quickstart.md, đối chiếu FR-001–017/SC-001–006 và cập nhật checkbox đã hoàn thành trong specs/027-source-facility-management/tasks.md bằng kết quả thật.
 
 **Checkpoint**: Không đánh dấu hoàn tất kiểm chứng PostgreSQL khi chỉ có mock/unit hoặc thiếu hạ tầng; không chạy lại các bước đã đạt trừ khi có thay đổi/lỗi mới. Không reformat cả repository để sửa lỗi cũ ngoài feature.
 

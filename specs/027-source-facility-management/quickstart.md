@@ -1,6 +1,6 @@
 # Quickstart: Kiểm chứng quản lý cơ sở cung cấp
 
-**Branch**: feat/026-source-facility-management
+**Branch**: feat/027-source-facility-management
 
 Tài liệu này hướng dẫn kiểm chứng chức năng đã triển khai. Kết quả thực thi ngày 2026-11-14 được ghi ở cuối tài liệu; phần thiết kế ban đầu không chạy kiểm thử hạ tầng. Xem [contract](contracts/source-facility-api.md) và [data model](data-model.md) để đối chiếu kết quả.
 
@@ -75,7 +75,7 @@ Sau khi các kiểm tra cần thiết đạt, đối chiếu SC-001–006 trong 
 
 ## Implementation log — 2026-11-14
 
-- T001: Node v24.22.1, npm 11.19.1; nhánh feat/026-source-facility-management; dependencies đã có. Git/Docker/ESLint/Prettier ignores đã bao phủ artifacts, .env, dependencies và client sinh tự động; không cần sửa ignore hoặc thêm dependency.
+- T001: Node v24.22.1, npm 11.19.1; nhánh feat/027-source-facility-management; dependencies đã có. Git/Docker/ESLint/Prettier ignores đã bao phủ artifacts, .env, dependencies và client sinh tự động; không cần sửa ignore hoặc thêm dependency.
 - Kiểm thử DB chọn container PostgreSQL 18 tạm riêng foodprint-sf-test-026, cổng loopback 55432, selector foodprint_migration_test; không dùng PostgreSQL thành viên tại cổng 5433. Redis local hiện có dùng session/key test riêng theo suite. Container DB tạm sẽ được dừng sau kiểm chứng.
 - Typecheck đầu tiên cho thấy Prisma Client có sẵn chưa theo kịp schema hiện tại (thiếu SchoolGrade/DishCategory và các model khác); sinh lại client trước kiểm tra cuối, không sửa schema/database.
 

@@ -346,4 +346,4 @@ Scope chỉ lấy từ principal đã xác thực và áp vào WHERE của repos
 
 facilityCode do hệ thống sinh theo dãy riêng mỗi supplier, bắt đầu FP-SF-00001; supplier khác được phép có cùng mã, nên mã không thay UUID trong đường dẫn. Người dùng không nhập/sửa mã, supplierId, trạng thái hoặc audit. Không xóa hoặc kích hoạt lại; dừng giữ isVisible, mã và liên kết lô nguyên liệu. Mã legacy null/không chuẩn được giữ nguyên.
 
-Hợp đồng chi tiết: [Source Facility API](../specs/026-source-facility-management/contracts/source-facility-api.md).
+Hợp đồng chi tiết: [Source Facility API](../specs/027-source-facility-management/contracts/source-facility-api.md).

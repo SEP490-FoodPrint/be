@@ -1,6 +1,6 @@
 # Feature Specification: Quản lý cơ sở cung cấp nguyên liệu
 
-**Feature Branch**: `feat/026-source-facility-management`
+**Feature Branch**: `feat/027-source-facility-management`
 
 **Created**: 2026-11-14
 

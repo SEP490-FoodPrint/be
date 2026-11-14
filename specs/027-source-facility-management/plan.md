@@ -1,8 +1,8 @@
 # Implementation Plan: Quản lý cơ sở cung cấp nguyên liệu
 
-**Branch**: feat/026-source-facility-management | **Date**: 2026-11-14 | **Spec**: [spec.md](spec.md)
+**Branch**: feat/027-source-facility-management | **Date**: 2026-11-14 | **Spec**: [spec.md](spec.md)
 
-**Input**: specs/026-source-facility-management/spec.md
+**Input**: specs/027-source-facility-management/spec.md
 
 ## Summary
 
@@ -39,7 +39,7 @@ Tách repository và hai DTO khỏi module hiện có, dùng strict Zod, service
 | III. An toàn DB               | PASS          | PASS        | Giữ nguyên schema, partial index và dữ liệu cũ; không introspect/DDL/migration/seed; integration chỉ dùng database local mới tạo khi được phép. |
 | IV. Transaction/cache/limiter | PASS          | PASS        | Service mở authorizationTransaction; mọi repo call/đọc actor/cấp mã/ghi cùng tx; không cache mới, giữ fail-closed limiter.                      |
 | V. HTTP và output             | PASS          | PASS        | Giữ response helpers, error.fields, safe projection và ISO timestamps; không trả raw records hoặc bigint.                                       |
-| VI. Spec-driven               | PASS          | PASS        | Spec 026 đã xác nhận cách cấp mã; branch đúng quy ước; tạo tasks bằng speckit-tasks trước khi viết code.                                        |
+| VI. Spec-driven               | PASS          | PASS        | Spec 027 đã xác nhận cách cấp mã; branch đúng quy ước; tạo tasks bằng speckit-tasks trước khi viết code.                                        |
 
 Không có vi phạm cần miễn trừ. tasks.md đã được sinh và thực thi; kết quả kiểm chứng được ghi trong quickstart.md. Không có extensions.yml khi kiểm tra nên bỏ qua before_plan/after_plan.
 
@@ -48,7 +48,7 @@ Không có vi phạm cần miễn trừ. tasks.md đã được sinh và thực 
 ### Documentation (this feature)
 
 ```text
-specs/026-source-facility-management/
+specs/027-source-facility-management/
   spec.md
   plan.md
   research.md
