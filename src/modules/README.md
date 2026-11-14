@@ -144,3 +144,11 @@ Ngoài GET đọc nghiệp vụ `/api/ingredients`, module có nhóm `/api/ingre
 IngredientCategory là danh mục dùng chung chỉ đọc trong module ingredient, không có chức năng quản trị danh mục. categoryId thay cột category; coverImage một ảnh và imageDescription nhiều ảnh là các tham chiếu có sẵn. Ẩn chuyển INACTIVE, giữ dữ liệu/lịch sử và không cung cấp bật lại hoặc xóa.
 
 `permission.repository.ts` cung cấp version writes cho User/Role khi thay denial/grants trong transaction quản trị quyền hiện có. Intake/lifecycle dùng shared Role lock và recheck để không nhận công việc mới theo snapshot quyền đã bị thu hồi; không thêm API quản trị mới.
+
+### Source facility: cơ sở cung cấp của từng nhà cung cấp
+
+Module source-facility sở hữu cơ sở nguồn cung theo supplier, không phải danh mục dùng chung. Base /api/source-facilities gồm GET danh sách, GET /:sourceFacilityId, POST tạo, PATCH /:sourceFacilityId và POST /:sourceFacilityId/deactivate. Cả năm thao tác chỉ dành INGREDIENT_SUPPLIER_ADMIN với source_facility.manage và supplier ACTIVE; staff/SYSTEM không có ngoại lệ.
+
+Controller chỉ validate/call service/sendSuccess; validation dùng Zod strict; hai file Request/Response DTO tách riêng chỉ được service dùng; repository chứa truy vấn/khóa. Cấp mã FP-SF theo supplier bằng numeric max, unique scoped và retry transaction, không thay schema hoặc mã legacy. Cơ sở dừng vẫn xem/sửa được; không xóa, kích hoạt lại hoặc đổi liên kết IngredientLot.
+
+Xem [hợp đồng API](../../specs/027-source-facility-management/contracts/source-facility-api.md) và [kế hoạch](../../specs/027-source-facility-management/plan.md).
