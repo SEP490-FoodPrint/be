@@ -13,24 +13,6 @@ export interface MenuApprovalDayResponseDTO {
   snack: MenuApprovalDishResponseDTO[];
 }
 
-export interface MenuApprovalGradeCoverageItemDTO {
-  id: string;
-  name: string;
-  activeClasses: number;
-  /** Tổng suất đã chốt trong tuần (mỗi ngày lấy bữa đông nhất). */
-  portions: number;
-  inThisMenu: boolean;
-  /** Khối có thực đơn trong tuần (thực đơn này, thực đơn khối khác hoặc toàn trường). */
-  hasMenuThisWeek: boolean;
-}
-
-export interface MenuApprovalGradeCoverageDTO {
-  academicYear: string;
-  grades: MenuApprovalGradeCoverageItemDTO[];
-  unassignedActiveClasses: number;
-  warnings: string[];
-}
-
 export interface MenuApprovalDetailResponseDTO {
   id: string;
   title: string | null;
@@ -48,7 +30,6 @@ export interface MenuApprovalDetailResponseDTO {
   };
   compliance: never[];
   days: MenuApprovalDayResponseDTO[];
-  gradeCoverage: MenuApprovalGradeCoverageDTO;
   medicalReview: {
     status: string;
     isApproved: boolean;

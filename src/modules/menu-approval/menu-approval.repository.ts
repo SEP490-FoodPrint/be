@@ -4,7 +4,6 @@ import { getPrisma } from "../../utils/database";
 export const approvalDetailInclude = {
   grades: { select: { gradeId: true, grade: { select: { name: true } } } },
   School: { select: { name: true } },
-  User: { select: { fullName: true } },
   menuDays: {
     orderBy: { menuDate: "asc" as const },
     include: {
@@ -74,21 +73,6 @@ export interface FinalizedPortionRow {
   totalPortions: number;
 }
 
-export interface GradeCoverageRow {
-  grades: { id: string; name: string; activeClasses: number }[];
-  unassignedActiveClasses: number;
-  /** Suất FINALIZED theo khối, ngày và bữa; gradeId null = lớp chưa gán khối. */
-  portions: {
-    gradeId: string | null;
-    mealDate: Date;
-    mealType: "LUNCH" | "AFTERNOON";
-    totalPortions: number;
-  }[];
-  /** Khối đã thuộc một thực đơn khác của cùng tuần. */
-  otherMenuGradeIds: string[];
-  hasOtherSchoolWideMenu: boolean;
-}
-
 type TransactionClient = Prisma.TransactionClient;
 
 export interface MenuApprovalRepository {
@@ -99,13 +83,6 @@ export interface MenuApprovalRepository {
     schoolId: string,
     gradeIds?: string[],
   ): Promise<FinalizedPortionRow[]>;
-  findGradeCoverage(input: {
-    schoolId: string;
-    weeklyMenuId: string;
-    weekStartDate: Date;
-    academicYear: string;
-    dates: Date[];
-  }): Promise<GradeCoverageRow>;
   findForDecision(
     tx: TransactionClient,
     id: string,
@@ -170,81 +147,6 @@ export function createMenuApprovalRepository(
         mealType: row.mealType,
         totalPortions: row._sum.totalPortions ?? 0,
       }));
-    },
-
-    async findGradeCoverage({
-      schoolId,
-      weeklyMenuId,
-      weekStartDate,
-      academicYear,
-      dates,
-    }) {
-      const prisma = await getClient();
-      const activeClass = {
-        schoolId,
-        status: "ACTIVE" as const,
-        academicYear,
-      };
-      const [grades, unassignedActiveClasses, portionRows, otherGrades, other] =
-        await Promise.all([
-          prisma.schoolGrade.findMany({
-            where: { schoolId },
-            orderBy: { name: "asc" },
-            select: {
-              id: true,
-              name: true,
-              _count: { select: { classes: { where: activeClass } } },
-            },
-          }),
-          prisma.class.count({ where: { ...activeClass, gradeId: null } }),
-          dates.length
-            ? prisma.dailyMealPortion.findMany({
-                where: {
-                  mealDate: { in: dates },
-                  status: "FINALIZED",
-                  Class: { schoolId },
-                },
-                select: {
-                  mealDate: true,
-                  mealType: true,
-                  totalPortions: true,
-                  Class: { select: { gradeId: true } },
-                },
-              })
-            : Promise.resolve([]),
-          prisma.weeklyMenuGrade.findMany({
-            where: {
-              schoolId,
-              weekStartDate,
-              weeklyMenuId: { not: weeklyMenuId },
-            },
-            select: { gradeId: true },
-          }),
-          prisma.weeklyMenu.count({
-            where: {
-              schoolId,
-              weekStartDate,
-              isSchoolWide: true,
-              id: { not: weeklyMenuId },
-            },
-          }),
-        ]);
-      return {
-        grades: grades.map((grade) => ({
-          id: grade.id,
-          name: grade.name,
-          activeClasses: grade._count.classes,
-        })),
-        unassignedActiveClasses,
-        portions: portionRows.map((row) => ({
-          gradeId: row.Class.gradeId,
-          mealDate: row.mealDate,
-          mealType: row.mealType,
-          totalPortions: row.totalPortions,
-        })),
-        otherMenuGradeIds: otherGrades.map((row) => row.gradeId),
-        hasOtherSchoolWideMenu: other > 0,
-      };
     },
 
     findForDecision(tx, id, schoolId) {
