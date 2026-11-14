@@ -1494,4 +1494,53 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
       );
     },
   );
+  await context.test(
+    "grade menu migration replaces the baseline constraint and permits distinct grade scopes",
+    async () => {
+      const school = (
+        await db.query<{ id: string }>(
+          "INSERT INTO foodprint.schools(name) VALUES ('Menu grade migration') RETURNING id",
+        )
+      ).rows[0];
+      const user = (
+        await db.query<{ id: string }>(
+          "SELECT id FROM foodprint.users WHERE username = 'backfill_test'",
+        )
+      ).rows[0];
+      const grades = (
+        await db.query<{ id: string }>(
+          "INSERT INTO foodprint.school_grades(school_id,name) VALUES ($1,'Khối 1'), ($1,'Khối 2') RETURNING id",
+          [school.id],
+        )
+      ).rows;
+      const menus = (
+        await db.query<{ id: string }>(
+          "INSERT INTO foodprint.weekly_menus(school_id,created_by_user_id,week_start_date,is_school_wide) VALUES ($1,$2,'2032-01-05',false), ($1,$2,'2032-01-05',false) RETURNING id",
+          [school.id, user.id],
+        )
+      ).rows;
+      await db.query(
+        "INSERT INTO foodprint.weekly_menu_grades(weekly_menu_id,school_id,week_start_date,grade_id) VALUES ($1,$2,'2032-01-05',$3),($4,$2,'2032-01-05',$5)",
+        [menus[0].id, school.id, grades[0].id, menus[1].id, grades[1].id],
+      );
+      await assert.rejects(
+        db.query(
+          "UPDATE foodprint.weekly_menu_grades SET grade_id=$1 WHERE weekly_menu_id=$2",
+          [grades[0].id, menus[1].id],
+        ),
+        (error) => sqlState(error, "23505"),
+      );
+      await db.query(
+        "INSERT INTO foodprint.weekly_menus(school_id,created_by_user_id,week_start_date) VALUES ($1,$2,'2032-01-12')",
+        [school.id, user.id],
+      );
+      await assert.rejects(
+        db.query(
+          "INSERT INTO foodprint.weekly_menus(school_id,created_by_user_id,week_start_date) VALUES ($1,$2,'2032-01-12')",
+          [school.id, user.id],
+        ),
+        (error) => sqlState(error, "23505"),
+      );
+    },
+  );
 });

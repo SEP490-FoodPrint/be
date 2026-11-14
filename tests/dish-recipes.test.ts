@@ -1,12 +1,56 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Prisma } from "../src/generated/prisma/client";
-import { aggregateDishRecipes } from "../src/modules/dish/dish.service";
+import {
+  aggregateDishRecipes,
+  selectDishGradeRecipes,
+} from "../src/modules/dish/dish.service";
 import { validateDishRecipe } from "../src/modules/dish/dish.validation";
 import { expandMenuHolidays } from "../src/modules/menu/menu.service";
 import { assertPortionGroupSafety } from "../src/modules/kitchen/kitchen.service";
 
 type Rows = Parameters<typeof aggregateDishRecipes>[0];
+
+void test("grade recipe selection compares normalized quantities and never falls back to another grade", () => {
+  const profile = (gradeId: string, quantity: string, unit: string) => ({
+    gradeId,
+    lines: [
+      {
+        ingredientEntryId: "meat",
+        ingredientRole: "MAIN",
+        requiredQuantity: new Prisma.Decimal(quantity),
+        unit,
+        entry: { ingredientId: "meat", Ingredient: { defaultUnit: "g" } },
+      },
+    ],
+  });
+  const rows = [
+    {
+      id: "dish",
+      name: "Dish",
+      dishIngredientEntries: [],
+      gradeRecipes: [
+        profile("small", "80", "g"),
+        profile("large", "0.08", "kg"),
+      ],
+    },
+  ] as unknown as Rows;
+  const selected = selectDishGradeRecipes(rows, ["small", "large"]);
+  assert.equal(
+    selected[0].dishIngredientEntries[0].requiredQuantity.toString(),
+    "80",
+  );
+  assert.equal(rows[0].dishIngredientEntries.length, 0);
+  assert.throws(() => selectDishGradeRecipes(rows, ["missing"]), {
+    statusCode: 422,
+  });
+  rows[0].gradeRecipes[1].lines[0].requiredQuantity = new Prisma.Decimal(
+    "0.12",
+  );
+  assert.throws(() => selectDishGradeRecipes(rows, ["small", "large"]), {
+    statusCode: 422,
+  });
+});
 
 void test("school holidays include range endpoints, legacy dates, reasons and year boundaries", () => {
   const days = expandMenuHolidays(
