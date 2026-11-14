@@ -76,6 +76,7 @@ export const dishRecipeController = {
       await dishRecipeService.preview(
         validateRecipeSelection(req.body).dishIds,
         requirePrincipal(req),
+        validateRecipeSelection(req.body).gradeIds,
       ),
     );
   }),

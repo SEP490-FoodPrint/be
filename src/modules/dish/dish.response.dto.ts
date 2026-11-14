@@ -11,6 +11,16 @@ export interface DishRecipeDTO {
   category: string | null;
   categoryLabel: string | null;
   description: string | null;
+  gradeRecipes?: {
+    gradeId: string;
+    gradeName: string;
+    lines: {
+      ingredientEntryId: string;
+      ingredientRole: string;
+      requiredQuantity: string;
+      unit: string;
+    }[];
+  }[];
   lines: {
     ingredientEntryId: string;
     ingredientId: string;
