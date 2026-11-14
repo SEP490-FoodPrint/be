@@ -152,3 +152,11 @@ Module source-facility sở hữu cơ sở nguồn cung theo supplier, không ph
 Controller chỉ validate/call service/sendSuccess; validation dùng Zod strict; hai file Request/Response DTO tách riêng chỉ được service dùng; repository chứa truy vấn/khóa. Cấp mã FP-SF theo supplier bằng numeric max, unique scoped và retry transaction, không thay schema hoặc mã legacy. Cơ sở dừng vẫn xem/sửa được; không xóa, kích hoạt lại hoặc đổi liên kết IngredientLot.
 
 Xem [hợp đồng API](../../specs/027-source-facility-management/contracts/source-facility-api.md) và [kế hoạch](../../specs/027-source-facility-management/plan.md).
+
+## Luồng tiếp nhận yêu cầu nguyên liệu
+
+Module `supply-order` sở hữu GET `/api/supply-requests`, GET `/api/supply-requests/:id` và POST `/api/supply-requests/:id/accept`. Hai vai trò admin/staff nhà cung cấp sử dụng danh sách/chi tiết với `supply_request.view`, tiếp nhận với `supply_request.accept`; quyền đọc và ghi độc lập, scope lấy từ membership hiện hành.
+
+Danh sách supplier ẩn DRAFT, hỗ trợ status và phân trang, bổ sung tên trường/ngày giao/thời điểm gửi. Chi tiết có đủ dòng nguyên liệu, số lượng dạng chuỗi Decimal, đơn vị, ghi chú và receipt đầu tiên. GET phía SCHOOL/SYSTEM giữ hợp đồng cũ. Tiếp nhận kế thừa intake guard/transaction hiện có, nhận lại không ghi đè người hoặc thời điểm đầu tiên.
+
+POST tạo `/api/supply-requests`, POST gửi `/:id/send` và GET `/:id/contract-evidence` vẫn thuộc `supplier-onboarding` với mount trực tiếp dưới `/api`; không dùng tiền tố tên module trong URL. Xem [hợp đồng supplier intake](../../specs/supplier-order-intake/contracts/supply-requests.md).

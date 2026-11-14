@@ -831,7 +831,12 @@ void test("account lifecycle respects scope and intake state on disposable Postg
       const permission = await db.permission.findUniqueOrThrow({
         where: { code: "supply_request.accept" },
       });
-      for (const mutation of ["permission", "status", "membership"] as const) {
+      for (const mutation of [
+        "permission",
+        "status",
+        "membership",
+        "role",
+      ] as const) {
         const label = `identity-${mutation}`;
         const organization = await db.supplier.create({
           data: { name: label },
@@ -887,6 +892,15 @@ void test("account lifecycle respects scope and intake state on disposable Postg
                 where: { id: member.id },
                 data: { status: "INACTIVE" },
               });
+            else if (mutation === "role")
+              await tx.user.update({
+                where: { id: member.id },
+                data: {
+                  roleId: await role("SYSTEM_ADMIN"),
+                  roleCode: "SYSTEM_ADMIN",
+                  supplierId: null,
+                },
+              });
             else
               await tx.user.update({
                 where: { id: member.id },
@@ -921,6 +935,7 @@ void test("account lifecycle respects scope and intake state on disposable Postg
         "role-grant",
         "status",
         "membership",
+        "role",
       ] as const) {
         await testContext.test(mutation, async () => {
           const label = `inflight-${mutation}`;
@@ -990,6 +1005,15 @@ void test("account lifecycle respects scope and intake state on disposable Postg
               await db.user.update({
                 where: { id: member.id },
                 data: { status: "INACTIVE" },
+              });
+            else if (mutation === "role")
+              await db.user.update({
+                where: { id: member.id },
+                data: {
+                  roleId: await role("SYSTEM_ADMIN"),
+                  roleCode: "SYSTEM_ADMIN",
+                  supplierId: null,
+                },
               });
             else
               await db.user.update({
@@ -1494,6 +1518,149 @@ void test("account lifecycle respects scope and intake state on disposable Postg
         { state: "ACTIVE" },
         principal,
       );
+    },
+  );
+
+  await context.test(
+    "supplier acceptance and school admin deactivation respect both serial orders",
+    async () => {
+      for (const acceptanceFirst of [true, false]) {
+        const fixture = await schoolFixture(
+          `accept-deactivate-${acceptanceFirst}`,
+        );
+        const order = await db.supplyRequest.create({
+          data: {
+            requestNo: `ACCEPT-DEACTIVATE-${acceptanceFirst}`,
+            schoolId: fixture.school.id,
+            supplierId: supplier.id,
+            createdByUserId: fixture.staff.id,
+            status: "SENT",
+          },
+        });
+        const accept = (
+          hold: () => Promise<void>,
+          started: () => void = () => undefined,
+        ) =>
+          createSupplyOrderService(undefined, {
+            transaction: (fn) => authorizationTransaction(db, fn),
+            guard: {
+              async assertAccess(tx, actor, command) {
+                const current = await guardBarrier(started).assertAccess(
+                  tx,
+                  actor,
+                  command,
+                );
+                await hold();
+                return current;
+              },
+            },
+          }).accept({ id: order.id }, supplierActor);
+        const outcomes = acceptanceFirst
+          ? await overlap(
+              (hold) => accept(hold),
+              (started) =>
+                lifecycleBarrier(undefined, started).deactivate(
+                  { userId: fixture.admin.id },
+                  principal,
+                ),
+            )
+          : await overlap(
+              (hold) =>
+                lifecycleBarrier(hold).deactivate(
+                  { userId: fixture.admin.id },
+                  principal,
+                ),
+              (started) => accept(() => Promise.resolve(), started),
+            );
+        assert.equal(outcomes[0].status, "fulfilled");
+        if (acceptanceFirst) assert.equal(outcomes[1].status, "fulfilled");
+        else assertBlocked(outcomes[1]);
+        const stored = await db.supplyRequest.findUniqueOrThrow({
+          where: { id: order.id },
+        });
+        assert.equal(stored.status, acceptanceFirst ? "ACCEPTED" : "SENT");
+        assert.equal(
+          stored.acceptedByUserId,
+          acceptanceFirst ? supplierActor.id : null,
+        );
+        assert.equal(stored.acceptedAt !== null, acceptanceFirst);
+        assert.equal(
+          (await db.user.findUniqueOrThrow({ where: { id: fixture.admin.id } }))
+            .status,
+          "DEACTIVATED",
+        );
+      }
+    },
+  );
+
+  await context.test(
+    "supplier can accept a sent order from a paused school and retry its receipt after intake and school deactivation",
+    async () => {
+      const fixture = await schoolFixture("accept-paused-school");
+      const order = await db.supplyRequest.create({
+        data: {
+          requestNo: "ACCEPT-PAUSED-SCHOOL",
+          schoolId: fixture.school.id,
+          supplierId: supplier.id,
+          createdByUserId: fixture.staff.id,
+          status: "SENT",
+        },
+      });
+      await lifecycle.setIntakeState(
+        { userId: fixture.admin.id },
+        { state: "PAUSED" },
+        principal,
+      );
+      const first = await supply.accept({ id: order.id }, supplierActor);
+      assert.equal(first.status, "ACCEPTED");
+      const stored = await db.supplyRequest.findUniqueOrThrow({
+        where: { id: order.id },
+      });
+      await lifecycle.setIntakeState(
+        { userId: supplierAdmin.id },
+        { state: "PAUSED_FOR_FOOD_SAFETY_INSPECTION" },
+        principal,
+      );
+      try {
+        await lifecycle.deactivate({ userId: fixture.admin.id }, principal);
+        assert.deepEqual(
+          await supply.accept({ id: order.id }, supplierActor),
+          first,
+        );
+        const afterRetry = await db.supplyRequest.findUniqueOrThrow({
+          where: { id: order.id },
+        });
+        assert.deepEqual(
+          afterRetry,
+          stored,
+          "read-only receipt must not mutate timestamps or content",
+        );
+        await db.supplyRequest.update({
+          where: { id: order.id },
+          data: { status: "IN_PROGRESS" },
+        });
+        const inProgress = await db.supplyRequest.findUniqueOrThrow({
+          where: { id: order.id },
+        });
+        assert.deepEqual(await supply.accept({ id: order.id }, supplierActor), {
+          ...first,
+          status: "IN_PROGRESS",
+        });
+        assert.deepEqual(
+          await db.supplyRequest.findUniqueOrThrow({ where: { id: order.id } }),
+          inProgress,
+        );
+      } finally {
+        await lifecycle.setIntakeState(
+          { userId: supplierAdmin.id },
+          { state: "ACTIVE" },
+          principal,
+        );
+        await db.supplyRequest.update({
+          where: { id: order.id },
+          data: { status: "COMPLETED" },
+        });
+      }
     },
   );
 
