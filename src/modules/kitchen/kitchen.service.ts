@@ -1204,6 +1204,17 @@ export function createKitchenLifecycle(
             409,
             "Chỉ lập mẻ cho thực đơn đã duyệt và món đang hoạt động",
           );
+        const missingClasses = await repository.unfinalizedClasses(
+          tx,
+          meal,
+          schoolId,
+          menu.menuDate,
+        );
+        if (missingClasses.length)
+          throw new HttpError(
+            409,
+            `Chưa chốt suất ăn cho các lớp: ${missingClasses.map((row) => row.name).join(", ")}`,
+          );
         const demand = await readMealPortionDemand(
           tx,
           meal,
