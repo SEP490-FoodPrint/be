@@ -29,6 +29,7 @@ export interface DeliveryInspectionDTO {
     userName: string;
     decision: ApprovalDecision;
     reason: string | null;
+    photoUrl: string | null;
     decidedAt: string;
   }[];
   deliveryItems?: {

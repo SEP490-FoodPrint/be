@@ -1,6 +1,7 @@
 import { Router } from "express";
 import type { RequestHandler } from "express";
 import { authenticate } from "../../middlewares/auth.middleware";
+import { receivePhoto } from "../../utils/record-photo";
 import {
   requireResource,
   requirePermission,
@@ -27,6 +28,7 @@ export function createDeliveryRouter(
     "/:id/inspection",
     authHandler,
     requirePermission("delivery.inspect"),
+    receivePhoto,
     inspectionController.decide,
   );
   router.get(
