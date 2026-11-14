@@ -43,7 +43,12 @@ function legacyDto(row: LegacyIngredientRow): LegacyIngredientResponse {
   return {
     id: row.id,
     supplierId: row.supplierId,
+    supplierName: row.Supplier?.name ?? null,
+    supplier: row.Supplier
+      ? { id: row.Supplier.id, name: row.Supplier.name }
+      : null,
     name: row.name,
+    description: row.description ?? null,
     defaultUnit: row.defaultUnit,
     category: row.ingredientCategory?.categoryName ?? null,
     status: row.status,
