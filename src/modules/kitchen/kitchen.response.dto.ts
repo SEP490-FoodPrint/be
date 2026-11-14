@@ -135,3 +135,30 @@ export interface CookingBatchAllPageResponseDTO {
     hasNext: boolean;
   };
 }
+
+export interface CookingBatchPreviewDTO {
+  cookingModeApplied: CookingMode;
+  planVersion: string;
+  batches: {
+    plannedPortions: number;
+    dishes: {
+      dishId: string;
+      name: string;
+      plannedPortions: number;
+      lots: {
+        ingredientLotId: string;
+        quantityUsed: string;
+        unit: string;
+        lotCode: string | null;
+        ingredientName: string | null;
+      }[];
+    }[];
+  }[];
+  seasonings: {
+    ingredientLotId: string;
+    quantityUsed: string;
+    unit: string;
+    lotCode: string | null;
+    ingredientName: string | null;
+  }[];
+}

@@ -157,9 +157,15 @@ function fixture(mode: CookingMode, shared = false) {
   type Lot = {
     id: string;
     unit: string;
+    lotCode: string;
     availableQuantity: Prisma.Decimal;
     status: string;
-    DeliveryItem: { SupplyRequestItem: { ingredientEntryId: string } };
+    DeliveryItem: {
+      SupplyRequestItem: {
+        ingredientEntryId: string;
+        IngredientEntry: { Ingredient: { name: string } };
+      };
+    };
   };
   const lots: Lot[] = (
     shared
@@ -173,10 +179,16 @@ function fixture(mode: CookingMode, shared = false) {
         ]
   ).map(([id, entry, amount]) => ({
     id: String(id),
+    lotCode: String(id),
     unit: "g",
     availableQuantity: new Prisma.Decimal(amount),
     status: "AVAILABLE",
-    DeliveryItem: { SupplyRequestItem: { ingredientEntryId: String(entry) } },
+    DeliveryItem: {
+      SupplyRequestItem: {
+        ingredientEntryId: String(entry),
+        IngredientEntry: { Ingredient: { name: String(entry) } },
+      },
+    },
   }));
   const dishEntries = shared
     ? [
@@ -261,7 +273,11 @@ function fixture(mode: CookingMode, shared = false) {
           approvalStatus: "APPROVED",
           menuDayDishes: dishEntries.map(([dishId, entry]) => ({
             dishId,
-            Dish: { schoolId: principal.schoolId, status: "ACTIVE" },
+            Dish: {
+              schoolId: principal.schoolId,
+              status: "ACTIVE",
+              name: dishId,
+            },
             ingredients: [
               {
                 ingredientId: entry,
@@ -314,9 +330,9 @@ function fixture(mode: CookingMode, shared = false) {
           const child: Child = {
             ...data,
             id: `child-${children.length}`,
-            status: "UNCONFIRMED",
+            status: data.status,
             note: null,
-            confirmedAt: null,
+            confirmedAt: data.confirmedAt,
             completedAt: null,
             createdAt: date,
             updatedAt: date,
@@ -474,7 +490,7 @@ void test("meal API applies school mode, creates B1 with both full child meals a
     f.lots.find((l) => l.id === "rice")!.availableQuantity.toString(),
     "40",
   );
-  assert.equal(f.children[1].status, "UNCONFIRMED");
+  assert.equal(f.children[1].status, "CONFIRMED");
 });
 
 void test("two dishes sharing one stock lot reserve once per dish but post one aggregated usage per child lot", async () => {
@@ -606,4 +622,49 @@ void test("a multi-dish child requires a dish for sampling and stores separate i
     assert.equal(first.dishId, dish.dishId);
   }
   assert.equal(saved.length, 2);
+});
+
+void test("preview does not persist or consume stock; confirming starts cooking and rejects stale previews", async () => {
+  const f = fixture("SEPARATE_BY_LOT");
+  const before = f.lots.map((lot) => lot.availableQuantity.toString());
+  const preview = await f.service.preview(validateKitchenPlan(meal), principal);
+  assert.deepEqual(
+    preview.batches.map((b) => b.plannedPortions),
+    [60, 40],
+  );
+  assert.equal(f.groups.length, 0);
+  assert.equal(f.children.length, 0);
+  assert.equal(f.usage.length, 0);
+  assert.deepEqual(
+    f.lots.map((lot) => lot.availableQuantity.toString()),
+    before,
+  );
+  await assert.rejects(
+    f.service.plan(
+      validateKitchenPlan({ ...meal, planVersion: "0".repeat(64) }),
+      principal,
+    ),
+    { statusCode: 409 },
+  );
+  assert.equal(f.children.length, 0);
+  f.lots[0].availableQuantity = new Prisma.Decimal(50);
+  f.lots[1].availableQuantity = new Prisma.Decimal(50);
+  await assert.rejects(
+    f.service.plan(
+      validateKitchenPlan({ ...meal, planVersion: preview.planVersion }),
+      principal,
+    ),
+    { statusCode: 409 },
+  );
+  assert.equal(f.children.length, 0);
+  f.lots[0].availableQuantity = new Prisma.Decimal(60);
+  f.lots[1].availableQuantity = new Prisma.Decimal(40);
+  const created = await f.service.plan(
+    validateKitchenPlan({ ...meal, planVersion: preview.planVersion }),
+    principal,
+  );
+  assert.ok(
+    created.batches.every((b) => b.status === "CONFIRMED" && b.confirmedAt),
+  );
+  await f.service.complete(f.children[0].id, principal);
 });

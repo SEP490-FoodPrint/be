@@ -248,7 +248,7 @@ export const kitchenRepository = {
           orderBy: { dishId: "asc" },
           select: {
             dishId: true,
-            Dish: { select: { schoolId: true, status: true } },
+            Dish: { select: { schoolId: true, status: true, name: true } },
             ingredients: {
               orderBy: { ingredientId: "asc" },
               include: {
