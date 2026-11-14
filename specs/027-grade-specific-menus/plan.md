@@ -20,3 +20,5 @@ Chạy Prisma validate/generate, typecheck/build/lint BE, các kiểm thử nghi
 ## Tiến độ
 
 Phần đầu đã thêm schema, migration chưa áp dụng và bộ định lượng món theo khối trên API danh mục/preview. Sáu kiểm thử recipe đã đạt, gồm so sánh sau quy đổi đơn vị, không sửa dữ liệu đầu vào và chặn khối thiếu/khác định lượng. Chưa nối phạm vi khối vào tạo thực đơn, nhu cầu, mẻ, phân bổ và frontend; toàn bộ tính năng chưa sẵn sàng sử dụng.
+
+Phần tiếp theo đã nối `gradeIds` vào tạo thực đơn và bắt buộc dùng bộ định lượng các khối đã chọn cho ngày có thể chỉnh sửa. Giữ nguyên snapshot của ngày đã duyệt. Chặn khối ngoài trường, phạm vi chồng nhau và thay đổi khối của thực đơn có sẵn. Dị ứng khi tạo/gửi duyệt và nhu cầu/dị ứng khi lập mẻ dùng phạm vi lớp theo ngày thực đơn. Typecheck và compile BE đạt; 27 kiểm thử menu/create và cooking đạt. Chưa hoàn thiện chọn nhiều thực đơn trong lịch tuần, lọc phân bổ và frontend; chưa áp dụng migration.

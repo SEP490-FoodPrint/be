@@ -80,6 +80,7 @@ export async function reviewMenuAllergies(
         tx,
         [...names.keys()],
         schoolId,
+        day.id,
       );
       const conflicts = [
         ...new Set(rows.map((row) => row.ingredientEntryId)),
@@ -1138,6 +1139,7 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
     schoolId: string,
   ) {
     const parent = await repository.menuEditHeader(tx, id);
+    const gradeIds = parent.grades?.map((grade) => grade.gradeId) ?? [];
 
     const editable = (day: { approvalStatus: string }) =>
       canEditMenuDay(day.approvalStatus, parent.status);
@@ -1317,7 +1319,7 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
       const desired: { dishId: string; mealType: "LUNCH" | "AFTERNOON" }[] = [];
 
       for (const meal of day.meals) {
-        if (meal.useDishRecipes) {
+        if (meal.useDishRecipes || gradeIds.length > 0) {
           if (meal.dishes.some((d) => !d.dishId))
             throw new HttpError(
               422,
@@ -1327,6 +1329,7 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
             tx,
             schoolId,
             meal.dishes.map((d) => d.dishId!),
+            gradeIds,
           );
           meal.dishes = recipe.dishes.map((d) => ({ ...d, name: undefined }));
           meal.seasonings = recipe.seasonings.map(
@@ -1577,6 +1580,7 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
           tx,
           ingredientIds,
           schoolId,
+          day.id,
         );
         if (
           conflicts.some(
@@ -1605,6 +1609,12 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
     schoolId: string,
   ) {
     const menu = await owned(tx, id, schoolId);
+    if (
+      input.gradeIds &&
+      JSON.stringify([...input.gradeIds].sort()) !==
+        JSON.stringify((menu.grades ?? []).map((row) => row.gradeId).sort())
+    )
+      throw new HttpError(409, "Không đổi phạm vi khối của thực đơn đã tạo");
     if (
       !["DRAFT", "REVISION_REQUIRED", "PENDING_APPROVAL"].includes(menu.status)
     )
@@ -1714,11 +1724,34 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
 
         async (tx, actor, schoolId) => {
           assertPermission(actor, "class_allergy.view");
+          const gradeIds = input.gradeIds ?? [];
+          if (
+            gradeIds.length &&
+            (await repository.schoolGrades(tx, schoolId, gradeIds)).length !==
+              gradeIds.length
+          )
+            throw new HttpError(
+              422,
+              "Khối đã chọn không thuộc trường đang đăng nhập",
+            );
           const existingWeekly = await repository.menuForWeek(
             tx,
             schoolId,
             input.weekStartDate,
+            gradeIds,
           );
+          if (existingWeekly) {
+            const existingGrades =
+              existingWeekly.grades?.map((row) => row.gradeId).sort() ?? [];
+            if (
+              JSON.stringify(existingGrades) !==
+              JSON.stringify([...gradeIds].sort())
+            )
+              throw new HttpError(
+                409,
+                "Khối đã có thực đơn trong tuần này; hãy sửa thực đơn hiện có hoặc chọn các khối khác",
+              );
+          }
 
           if (existingWeekly) {
             assertPermission(actor, "menu.update");
@@ -1892,6 +1925,7 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
             actor.id,
             input.weekStartDate,
             input.title,
+            gradeIds,
           );
 
           await writeDays(tx, menu.id, input, schoolId);

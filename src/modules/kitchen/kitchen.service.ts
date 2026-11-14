@@ -1,3 +1,4 @@
+import { classScopeForMenuDay } from "../menu/menu.repository";
 import { createHash, randomUUID } from "node:crypto";
 import {
   Prisma,
@@ -499,7 +500,7 @@ export async function readMealPortionDemand(
       mealDate: menuDate,
       mealType: meal.mealType,
       status: "FINALIZED",
-      Class: { schoolId },
+      Class: classScopeForMenuDay(schoolId, meal.menuDayId),
     },
     include: { portionGroups: true, dailyAllergyPortions: true },
   });
@@ -648,7 +649,7 @@ export async function reserveMealSeasonings(
           mealDate: menuDate,
           mealType: meal.mealType,
           status: "FINALIZED",
-          Class: { schoolId },
+          Class: classScopeForMenuDay(schoolId, meal.menuDayId),
         },
         ingredientEntryId: { in: entryIds },
         portionCount: { gt: 0 },
@@ -995,6 +996,10 @@ export async function readSchoolContext(
     id: school.id,
     name: school.name,
     cookingMode: school.cookingMode,
+    grades: (school.grades ?? []).map((grade) => ({
+      id: grade.id,
+      name: grade.name,
+    })),
     lunchTime: school.lunchTime?.toISOString().slice(11, 16) ?? null,
     afternoonMealTime:
       school.afternoonMealTime?.toISOString().slice(11, 16) ?? null,
@@ -1274,6 +1279,7 @@ export function createKitchenLifecycle(
             meal.mealType,
             schoolId,
             entryIds,
+            meal.menuDayId,
           ))
         )
           throw new HttpError(

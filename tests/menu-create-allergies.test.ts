@@ -315,6 +315,22 @@ function fixture(t: TestContext, existing = false, healthPermission = true) {
   };
 }
 
+void test("menu creation rejects grades outside the school and overlapping scope before writing", async (t) => {
+  const f = fixture(t, true);
+  const input = { ...f.input, gradeIds: [id(90)] };
+  Object.assign(f.tx, { schoolGrade: { findMany: () => Promise.resolve([]) } });
+  await assert.rejects(f.service.create(input, f.principal), {
+    statusCode: 422,
+  });
+  Object.assign(f.tx, {
+    schoolGrade: { findMany: () => Promise.resolve([{ id: id(90) }]) },
+  });
+  await assert.rejects(f.service.create(input, f.principal), {
+    statusCode: 409,
+  });
+  assert.equal(f.counts().committedWrites, 0);
+});
+
 void test("dish category persists through create/read/update and old updates do not clear it", async (t) => {
   const f = fixture(t);
   let category: string | null = null;

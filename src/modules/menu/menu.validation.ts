@@ -279,6 +279,12 @@ const writeDaySchema = z.strictObject({
 export const menuWriteSchema = z
   .strictObject({
     weekStartDate: calendarDateSchema,
+    gradeIds: z
+      .array(requestUuidSchema)
+      .min(1)
+      .max(100)
+      .refine((ids) => new Set(ids).size === ids.length)
+      .optional(),
     title: requiredText(255)
       .nullish()
       .transform((value) => value ?? null),
