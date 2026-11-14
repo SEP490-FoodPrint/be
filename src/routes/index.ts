@@ -44,12 +44,16 @@ import { createSchoolOverviewRouter } from "../modules/school-overview/school-ov
 import { createSupplierOnboardingRouter } from "../modules/supplier-onboarding/supplier-onboarding.routes";
 import { createSchoolAcademicYearRouter } from "../modules/school-academic-year/school-academic-year.routes";
 import { createSampleStorageRouter } from "../modules/sample-storage/sample-storage.routes";
+import { createBlockchainTodoRouter } from "../modules/blockchain-todo/blockchain-todo.routes";
 
 export function createApiRouter(
   authHandler: RequestHandler = authenticate,
   authServices?: AuthServices,
 ) {
   const router = Router();
+  if (process.env.NODE_ENV === "development") {
+    router.use("/blockchain-todos", createBlockchainTodoRouter());
+  }
 
   // Health check endpoint
   router.get("/health", (req, res) => {
