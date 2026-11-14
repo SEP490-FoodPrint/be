@@ -3,9 +3,15 @@ export interface IngredientCategoryResponse {
   categoryName: string;
   categoryDescription: string | null;
 }
+export interface IngredientSupplierResponse {
+  id: string;
+  name: string;
+}
 export interface IngredientResponse {
   id: string;
   supplierId: string;
+  supplierName?: string | null;
+  supplier?: IngredientSupplierResponse | null;
   name: string;
   defaultUnit: string;
   description: string | null;
@@ -20,7 +26,10 @@ export interface IngredientResponse {
 export interface LegacyIngredientResponse {
   id: string;
   supplierId: string;
+  supplierName?: string | null;
+  supplier?: IngredientSupplierResponse | null;
   name: string;
+  description: string | null;
   category: string | null;
   defaultUnit: string;
   status: "ACTIVE" | "INACTIVE";
