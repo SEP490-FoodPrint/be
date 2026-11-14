@@ -1,4 +1,5 @@
 import type { AuthPrincipal } from "../../types/auth";
+import { recordPhotoUrl, type RecordPhoto } from "../../utils/record-photo";
 import {
   assertPermission,
   databaseOperation,
@@ -250,6 +251,7 @@ function inspectionDTO(
       userName: approval.User.fullName,
       decision: approval.decision,
       reason: approval.reason,
+      photoUrl: recordPhotoUrl(approval.photoPublicId),
       decidedAt: approval.decidedAt.toISOString(),
     })),
   };
@@ -352,6 +354,7 @@ export function createDeliveryInspectionService(
       id: string,
       input: DeliveryInspectionDecisionDTO,
       principal: AuthPrincipal,
+      photo: RecordPhoto | null = null,
     ) {
       inspectionScope(principal);
       return withSchoolTransaction(
@@ -384,7 +387,8 @@ export function createDeliveryInspectionService(
             if (
               existing.userId !== actor.id ||
               existing.decision !== input.decision ||
-              existing.reason !== input.reason
+              existing.reason !== input.reason ||
+              (existing.photoHash ?? null) !== (photo?.photoHash ?? null)
             )
               throw new HttpError(
                 409,
@@ -489,6 +493,7 @@ export function createDeliveryInspectionService(
             actor.roleId,
             input.decision,
             input.reason,
+            photo,
           );
           if (
             input.decision === "REJECT" &&

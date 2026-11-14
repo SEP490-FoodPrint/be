@@ -558,6 +558,8 @@ void test("single-dish samples are idempotent and historical multi-dish samples 
           const sample: SampleRow = {
             ...data,
             id: `sample-${saved.length}`,
+            photoPublicId: null,
+            photoHash: null,
             quantity: new Prisma.Decimal(data.quantity),
             status: "STORED",
             disposedAt: null,

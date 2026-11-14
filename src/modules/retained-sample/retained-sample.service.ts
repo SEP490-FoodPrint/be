@@ -1,5 +1,6 @@
 ﻿import type { PrismaClient } from "../../generated/prisma/client";
 import type { AuthPrincipal } from "../../types/auth";
+import { recordPhotoUrl, type RecordPhoto } from "../../utils/record-photo";
 import {
   assertPermission,
   withSchoolTransaction,
@@ -33,6 +34,7 @@ function mapSample(row: SampleRow): RetainedSampleResponseDTO {
     quantity: row.quantity?.toString() ?? null,
     unit: row.unit,
     storageLocation: row.storageLocation,
+    photoUrl: recordPhotoUrl(row.photoPublicId),
     status: row.status,
     disposedAt: row.disposedAt?.toISOString() ?? null,
     disposalNote: row.disposalNote,
@@ -74,6 +76,7 @@ export function createRetainedSampleService(
       cookingBatchId: string,
       input: FoodSampleInput,
       principal: AuthPrincipal,
+      photo: RecordPhoto | null = null,
     ): Promise<RetainedSampleResponseDTO & { created: boolean }> {
       return withSchoolTransaction(
         await connect(),
@@ -105,7 +108,8 @@ export function createRetainedSampleService(
                 String(Number(input.quantity)) ||
               existing.unit !== input.unit ||
               existing.storageLocation !== input.storageLocation ||
-              +existing.sampledAt !== +input.sampledAt
+              +existing.sampledAt !== +input.sampledAt ||
+              (existing.photoHash ?? null) !== (photo?.photoHash ?? null)
             ) {
               throw new HttpError(
                 409,
@@ -124,6 +128,7 @@ export function createRetainedSampleService(
             );
           const sample = await repository.create(tx, cookingBatchId, actor.id, {
             ...input,
+            ...photo,
             dishId,
           });
           return { ...mapSample(sample), created: true };
