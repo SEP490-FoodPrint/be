@@ -4,6 +4,7 @@ import { getPrisma } from "../../utils/database";
 export const approvalDetailInclude = {
   grades: { select: { gradeId: true, grade: { select: { name: true } } } },
   School: { select: { name: true } },
+  User: { select: { fullName: true } },
   menuDays: {
     orderBy: { menuDate: "asc" as const },
     include: {
