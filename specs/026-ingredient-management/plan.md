@@ -6,6 +6,7 @@
 4. Mở rộng truy vấn `select` và response DTO cho danh sách đợt giao nhận `GET /api/deliveries` phục vụ màn hình Phiếu nhập hàng.
 5. Kiểm thử kết nối dữ liệu danh mục nguyên liệu và phiếu giao nhận với frontend.
 6. Cho phép quyền `supply_request.create` truy cập API tổng hợp suất ăn `GET /api/v1/daily-meal-portions`.
+7. Mở rộng truy vấn `select` cho API lô hàng tồn kho `GET /api/ingredient-lots` phục vụ màn hình Quản lý Kho đồ khô.
 
 ## Constitution Check
 

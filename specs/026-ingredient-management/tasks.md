@@ -6,3 +6,4 @@
 - [x] T004 Kiểm tra tương thích dữ liệu live với frontend và loại bỏ hoàn toàn mock data.
 - [x] T005 Bổ sung thông tin nhà cung cấp, đơn đặt hàng, hội đồng 4 bên và chi tiết đợt giao trong `GET /api/deliveries` tại `src/modules/delivery/delivery.service.ts`.
 - [x] T006 Mở rộng quyền truy cập API `GET /api/v1/daily-meal-portions` cho `supply_request.create` tại `src/modules/meal-attendance/meal-attendance.routes.ts` và `src/modules/meal-attendance/meal-attendance.service.ts`.
+- [x] T007 Bổ sung thông tin mặt hàng, nhà cung cấp, đợt giao nhận và cơ sở nguồn trong `GET /api/ingredient-lots` tại `src/modules/warehouse/warehouse.service.ts`.
