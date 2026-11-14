@@ -1,6 +1,32 @@
 import type { Prisma } from "../../generated/prisma/client";
 import { getPrisma } from "../../utils/database";
 import { listWindow } from "../../utils/list-query";
+/** Classes eligible for one concrete menu day, including legacy school-wide menus. */
+export function classScopeForMenuDay(
+  schoolId: string,
+  menuDayId: string,
+): Prisma.ClassWhereInput {
+  return {
+    schoolId,
+    OR: [
+      {
+        School: {
+          weeklyMenus: {
+            some: { isSchoolWide: true, menuDays: { some: { id: menuDayId } } },
+          },
+        },
+      },
+      {
+        grade: {
+          weeklyMenus: {
+            some: { weeklyMenu: { menuDays: { some: { id: menuDayId } } } },
+          },
+        },
+      },
+    ],
+  };
+}
+
 type Tx = Prisma.TransactionClient;
 type MealType = "LUNCH" | "AFTERNOON";
 type MenuStatus =
@@ -50,6 +76,7 @@ interface ReviewWrite {
   feedback: string | null;
 }
 const menuDetail = {
+  grades: { include: { grade: { select: { name: true } } } },
   menuDays: {
     orderBy: { menuDate: "asc" },
 
@@ -122,6 +149,7 @@ const menuDetail = {
 } as const satisfies Prisma.WeeklyMenuInclude;
 
 const menuListInclude = {
+  grades: { include: { grade: { select: { name: true } } } },
   menuDays: {
     orderBy: { menuDate: "asc" },
 
@@ -495,10 +523,22 @@ export const menuRepository = {
       select: { id: true, name: true },
     });
   },
-  classAllergies(client: Tx, ingredientIds: string[], schoolId: string) {
+  classAllergies(
+    client: Tx,
+    ingredientIds: string[],
+    schoolId: string,
+    menuDayId?: string,
+    gradeIds: string[] = [],
+  ) {
     return client.classAllergy.findMany({
       where: {
-        Class: { schoolId, status: "ACTIVE" },
+        Class: {
+          ...(menuDayId
+            ? classScopeForMenuDay(schoolId, menuDayId)
+            : { schoolId }),
+          status: "ACTIVE",
+          ...(gradeIds.length ? { gradeId: { in: gradeIds } } : {}),
+        },
 
         IngredientEntry: {
           schoolId,
@@ -715,7 +755,11 @@ export const menuRepository = {
     return client.weeklyMenu.findUniqueOrThrow({
       where: { id },
 
-      select: { status: true, submittedAt: true },
+      select: {
+        status: true,
+        submittedAt: true,
+        grades: { select: { gradeId: true } },
+      },
     });
   },
   menuDayHeaders(client: Tx, id: string) {
@@ -887,9 +931,31 @@ export const menuRepository = {
       include: menuDetail,
     });
   },
-  menuForWeek(client: Tx, schoolId: string, weekStartDate: Date) {
+  schoolGrades(client: Tx, schoolId: string, gradeIds: string[]) {
+    return client.schoolGrade.findMany({
+      where: { schoolId, id: { in: gradeIds } },
+      select: { id: true },
+    });
+  },
+  menuForWeek(
+    client: Tx,
+    schoolId: string,
+    weekStartDate: Date,
+    gradeIds: string[] = [],
+  ) {
     return client.weeklyMenu.findFirst({
-      where: { schoolId, weekStartDate: weekStartDate },
+      where: {
+        schoolId,
+        weekStartDate,
+        ...(gradeIds.length
+          ? {
+              OR: [
+                { isSchoolWide: true },
+                { grades: { some: { gradeId: { in: gradeIds } } } },
+              ],
+            }
+          : {}),
+      },
 
       include: menuDetail,
     });
@@ -920,12 +986,21 @@ export const menuRepository = {
     createdByUserId: string,
     weekStartDate: Date,
     title: string | null,
+    gradeIds: string[] = [],
   ) {
     return client.weeklyMenu.create({
       data: {
         schoolId,
 
         createdByUserId,
+        isSchoolWide: gradeIds.length === 0,
+        ...(gradeIds.length
+          ? {
+              grades: {
+                createMany: { data: gradeIds.map((gradeId) => ({ gradeId })) },
+              },
+            }
+          : {}),
 
         weekStartDate: weekStartDate,
 
@@ -1016,7 +1091,7 @@ export const menuRepository = {
     scope: Prisma.WeeklyMenuWhereInput,
     weekStartDate: Date,
   ) {
-    return client.weeklyMenu.findFirst({
+    return client.weeklyMenu.findMany({
       where: {
         AND: [
           scope,
@@ -1032,6 +1107,10 @@ export const menuRepository = {
         status: true,
 
         title: true,
+        isSchoolWide: true,
+        grades: {
+          select: { gradeId: true, grade: { select: { name: true } } },
+        },
 
         menuDays: {
           select: {
@@ -1087,6 +1166,8 @@ export const menuRepository = {
   },
 };
 const select = {
+  isSchoolWide: true,
+  grades: { select: { gradeId: true, grade: { select: { name: true } } } },
   id: true,
 
   schoolId: true,

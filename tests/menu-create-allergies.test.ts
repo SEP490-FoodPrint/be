@@ -315,6 +315,56 @@ function fixture(t: TestContext, existing = false, healthPermission = true) {
   };
 }
 
+void test("menu creation rejects grades outside the school and overlapping scope before writing", async (t) => {
+  const f = fixture(t, true);
+  const input = { ...f.input, gradeIds: [id(90)] };
+  Object.assign(f.tx, { schoolGrade: { findMany: () => Promise.resolve([]) } });
+  await assert.rejects(f.service.create(input, f.principal), {
+    statusCode: 422,
+  });
+  Object.assign(f.tx, {
+    schoolGrade: { findMany: () => Promise.resolve([{ id: id(90) }]) },
+  });
+  await assert.rejects(f.service.create(input, f.principal), {
+    statusCode: 409,
+  });
+  assert.equal(f.counts().committedWrites, 0);
+});
+
+void test("saving an unchanged grade menu preserves its recipe snapshot without reading current catalogue profiles", async (t) => {
+  const f = fixture(t, true);
+  const day = f.menu.menuDays[0];
+  t.mock.method(repository, "menuEditHeader", () =>
+    Promise.resolve({
+      status: "DRAFT",
+      submittedAt: null,
+      grades: [{ gradeId: id(90) }],
+    } as never),
+  );
+  t.mock.method(repository, "menuDayHeaders", () =>
+    Promise.resolve([
+      { id: day.id, menuDate: day.menuDate, approvalStatus: "DRAFT" },
+    ] as never),
+  );
+  t.mock.method(repository, "dayBatchCount", () => Promise.resolve(0));
+  t.mock.method(repository, "daySeasoningLotCount", () => Promise.resolve(0));
+  t.mock.method(repository, "updateDayNote", () =>
+    Promise.resolve({ id: day.id } as never),
+  );
+  Object.assign(f.tx, {
+    dish: {
+      findMany: () =>
+        assert.fail("unchanged snapshot must not read current dish profiles"),
+    },
+  });
+  const saved = await f.service.update(f.menu.id, f.input, f.principal);
+  assert.equal(
+    saved.menuDays[0].menuDayDishes[0].ingredients[0].quantityPerPortion.toString(),
+    "80",
+  );
+  assert.equal(f.counts().committedWrites, 1);
+});
+
 void test("dish category persists through create/read/update and old updates do not clear it", async (t) => {
   const f = fixture(t);
   let category: string | null = null;

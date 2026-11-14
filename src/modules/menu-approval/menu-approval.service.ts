@@ -92,8 +92,8 @@ function mapDetail(
         supplier:
           [
             ...new Set(
-              placement.Dish.dishIngredientEntries.map(
-                (link) => link.IngredientEntry.Ingredient.Supplier.name,
+              placement.ingredients.map(
+                (link) => link.ingredient.Supplier.name,
               ),
             ),
           ].join(", ") || null,
@@ -115,9 +115,7 @@ function mapDetail(
   const supplierIds = new Set(
     menu.menuDays.flatMap((day) =>
       day.menuDayDishes.flatMap((placement) =>
-        placement.Dish.dishIngredientEntries.map(
-          (link) => link.IngredientEntry.Ingredient.Supplier.id,
-        ),
+        placement.ingredients.map((link) => link.ingredient.Supplier.id),
       ),
     ),
   );
@@ -132,7 +130,9 @@ function mapDetail(
     submittedAt: formatDateTime(menu.submittedAt),
     submissionVersion: menu.submittedAt?.toISOString() ?? null,
     summary: {
-      audience: "Toàn trường",
+      audience:
+        menu.grades?.map((grade) => grade.grade.name).join(", ") ||
+        "Toàn trường",
       audienceDetail: "Số suất ăn được xác định theo kế hoạch phục vụ",
       servingPeriod: `${formatDate(firstDate)} - ${formatDate(lastDate)}`,
       proposer: "Cán bộ Y tế",
@@ -198,6 +198,7 @@ export function createMenuApprovalService(
       const portions = await repository.findFinalizedPortions(
         menu.menuDays.map((day) => day.menuDate),
         schoolId,
+        menu.grades?.map((grade) => grade.gradeId) ?? [],
       );
       return mapDetail(menu, portions);
     },

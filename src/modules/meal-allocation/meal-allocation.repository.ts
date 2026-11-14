@@ -15,6 +15,14 @@ export async function readAllocationDay(
       orderBy: { id: "asc" },
       select: {
         id: true,
+        WeeklyMenu: {
+          select: {
+            isSchoolWide: true,
+            grades: {
+              select: { gradeId: true, grade: { select: { name: true } } },
+            },
+          },
+        },
         menuDayDishes: {
           select: { dishId: true, mealType: true },
           orderBy: [{ mealType: "asc" }, { dishId: "asc" }],
@@ -60,7 +68,7 @@ export async function readAllocationDay(
         mealType: true,
         totalPortions: true,
         status: true,
-        Class: { select: { id: true, name: true } },
+        Class: { select: { id: true, name: true, gradeId: true } },
         portionGroups: {
           orderBy: { portionGroupId: "asc" },
           select: { portionGroupId: true, portionCount: true },
@@ -90,7 +98,15 @@ export async function readAllocationDay(
   return { menus, batches, demands };
 }
 
-export type AllocationDay = Awaited<ReturnType<typeof readAllocationDay>>;
+type RawAllocationDay = Awaited<ReturnType<typeof readAllocationDay>>;
+export type AllocationDay = Omit<RawAllocationDay, "menus" | "demands"> & {
+  menus: (Omit<RawAllocationDay["menus"][number], "WeeklyMenu"> & {
+    WeeklyMenu?: RawAllocationDay["menus"][number]["WeeklyMenu"];
+  })[];
+  demands: (Omit<RawAllocationDay["demands"][number], "Class"> & {
+    Class: { id: string; name: string; gradeId?: string | null };
+  })[];
+};
 
 export async function confirmAllocationDistribution(
   tx: Prisma.TransactionClient,

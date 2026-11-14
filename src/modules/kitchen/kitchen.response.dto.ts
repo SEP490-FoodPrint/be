@@ -90,6 +90,7 @@ export interface CookingBatchStatsResponseDTO {
 }
 
 export interface SchoolContextResponseDTO {
+  grades: { id: string; name: string }[];
   id: string;
   name: string;
   cookingMode: CookingMode | null;

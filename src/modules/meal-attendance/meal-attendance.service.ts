@@ -198,7 +198,19 @@ export function createMealAttendanceService(
         where: {
           menuDay: {
             menuDate: demand.mealDate,
-            WeeklyMenu: { schoolId: principal.schoolId! },
+            WeeklyMenu: {
+              schoolId: principal.schoolId!,
+              OR: [
+                { isSchoolWide: true },
+                {
+                  grades: {
+                    some: {
+                      grade: { classes: { some: { id: demand.classId } } },
+                    },
+                  },
+                },
+              ],
+            },
           },
           mealType: demand.mealType,
         },
@@ -245,7 +257,19 @@ export function createMealAttendanceService(
             where: {
               id: input.menuDayId,
               menuDate: demand.mealDate,
-              WeeklyMenu: { schoolId },
+              WeeklyMenu: {
+                schoolId,
+                OR: [
+                  { isSchoolWide: true },
+                  {
+                    grades: {
+                      some: {
+                        grade: { classes: { some: { id: demand.classId } } },
+                      },
+                    },
+                  },
+                ],
+              },
             },
             select: { approvalStatus: true },
           });
