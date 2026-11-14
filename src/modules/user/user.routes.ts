@@ -1,7 +1,10 @@
 import { Router } from "express";
 import type { RequestHandler } from "express";
 import { authenticate } from "../../middlewares/auth.middleware";
-import { requireResource } from "../../middlewares/permission.middleware";
+import {
+  requirePermission,
+  requireResource,
+} from "../../middlewares/permission.middleware";
 import { createUserController } from "./user.controller";
 import { userService, type UserService } from "./user.service";
 
@@ -22,11 +25,31 @@ export function createUserSchoolRouter(
   service: UserService = userService,
 ) {
   const router = Router({ mergeParams: true });
+  const controller = createUserController(service);
+  router.get("/", authHandler, requireResource("user"), controller.getBySchool);
   router.get(
+    "/:userId",
+    authHandler,
+    requirePermission("school_user.manage"),
+    controller.getSchoolAccount,
+  );
+  router.post(
     "/",
     authHandler,
-    requireResource("user"),
-    createUserController(service).getBySchool,
+    requirePermission("school_user.manage"),
+    controller.createSchoolAccount,
+  );
+  router.put(
+    "/:userId",
+    authHandler,
+    requirePermission("school_user.manage"),
+    controller.updateSchoolAccount,
+  );
+  router.patch(
+    "/:userId/status",
+    authHandler,
+    requirePermission("school_user.manage"),
+    controller.toggleAccountStatus,
   );
   return router;
 }
