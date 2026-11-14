@@ -237,6 +237,43 @@ function fixture() {
 const statusIs = (statusCode: number) => (error: unknown) =>
   error instanceof HttpError && error.statusCode === statusCode;
 
+void test("uploaded HTTPS references survive ingredient create and update in order", async () => {
+  const f = fixture();
+  const urls = [
+    "https://res.cloudinary.com/demo/image/upload/a.jpg",
+    "https://res.cloudinary.com/demo/image/upload/b.png",
+    "https://res.cloudinary.com/demo/image/upload/c.webp",
+  ];
+  const created = await f.service.create(
+    validateIngredientCreate({
+      name: "Uploaded rice",
+      defaultUnit: "kg",
+      coverImage: urls[0],
+      imageDescription: urls,
+    }),
+    principal,
+  );
+  assert.equal(created.coverImage, urls[0]);
+  assert.deepEqual(created.imageDescription, urls);
+  const updated = await f.service.update(
+    { ingredientId },
+    validateIngredientUpdate({
+      coverImage: urls[2],
+      imageDescription: urls.slice().reverse(),
+    }),
+    principal,
+  );
+  assert.equal(updated.coverImage, urls[2]);
+  assert.deepEqual(updated.imageDescription, urls.slice().reverse());
+  const retained = await f.service.update(
+    { ingredientId },
+    validateIngredientUpdate({ name: "Renamed" }),
+    principal,
+  );
+  assert.equal(retained.coverImage, urls[2]);
+  assert.deepEqual(retained.imageDescription, urls.slice().reverse());
+});
+
 void test("management services enforce supplier scopes, safe serialization and PATCH semantics", async () => {
   const f = fixture();
   const result = await f.service.listManagement(

@@ -40,3 +40,22 @@ export interface IngredientPageResponse<T> {
   items: T[];
   pagination: { page: number; limit: number; hasNext: boolean };
 }
+
+export interface IngredientImageResponse {
+  publicId: string;
+  url: string;
+  format: "jpg" | "png" | "webp";
+  bytes: number;
+  width: number;
+  height: number;
+}
+export type IngredientImageResult =
+  | { index: number; status: "success"; asset: IngredientImageResponse }
+  | {
+      index: number;
+      status: "failed";
+      error: { code: string; message: string };
+    };
+export interface IngredientImagesResponse {
+  results: IngredientImageResult[];
+}
