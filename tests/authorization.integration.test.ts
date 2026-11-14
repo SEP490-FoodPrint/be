@@ -937,27 +937,36 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         batches.plan(key, chef),
       ]);
       assert.equal(plans.filter((p) => p.created).length, 1);
+      const lunchBatches = plans[0].batches;
+      assert.equal(lunchBatches.length, 2);
       assert.equal(
         await db.cookingBatch.count({
           where: { menuDayId: key.menuDayId, mealType: key.mealType },
         }),
-        1,
+        2,
       );
-      const batch = plans[0].batches[0];
+      assert(lunchBatches.every((child) => child.dishes.length === 1));
+      const batch = lunchBatches.find((child) =>
+        child.dishes.some((d) => d.dishId === mainDish.dishId),
+      )!;
+      const sideBatch = lunchBatches.find((child) =>
+        child.dishes.some((d) => d.dishId === sideDish.dishId),
+      )!;
       assert.equal(batch.status, "CONFIRMED");
       assert(batch.confirmedAt);
       assert.equal(batch.plannedPortions, 120);
-      assert.equal(batch.dishes.length, 2);
       assert.equal(
-        batch.dishes
-          .find((d) => d.dishId === mainDish.dishId)!
-          .cookingBatchLots.reduce((n, l) => n + Number(l.quantityUsed), 0),
+        batch.dishes[0].cookingBatchLots.reduce(
+          (n, l) => n + Number(l.quantityUsed),
+          0,
+        ),
         9.6,
       );
       assert.equal(
-        batch.dishes
-          .find((d) => d.dishId === sideDish.dishId)!
-          .cookingBatchLots.reduce((n, l) => n + Number(l.quantityUsed), 0),
+        sideBatch.dishes[0].cookingBatchLots.reduce(
+          (n, l) => n + Number(l.quantityUsed),
+          0,
+        ),
         1.2,
       );
       await assert.rejects(
@@ -966,7 +975,10 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       );
       const side = (
         await batches.plan({ ...key, dishId: sideDish.dishId }, chef)
-      ).batches[0];
+      ).batches.find((child) =>
+        child.dishes.some((d) => d.dishId === sideDish.dishId),
+      )!;
+      assert.equal(side.id, sideBatch.id);
       assert.equal(
         await db.menuMealSeasoningLot.count({
           where: { menuDayId: day.id, mealType: "LUNCH" },
@@ -987,27 +999,44 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         batches.complete(batch.id, chef),
         batches.complete(batch.id, chef),
       ]);
-      assert(
-        completed.every((c) => c.inventoryDeducted && c.mealSeasoningsConsumed),
-      );
+      assert(completed.every((c) => c.inventoryDeducted));
+      assert(completed.every((c) => !c.mealSeasoningsConsumed));
       assert.equal(
         await db.inventoryTransaction.count({
           where: { referenceType: "COOKING_BATCH", referenceId: batch.id },
         }),
-        3,
+        new Set(
+          batch.dishes[0].cookingBatchLots.map((lot) => lot.ingredientLotId),
+        ).size,
       );
-      assert.equal(
-        (
-          await db.ingredientLot.findUniqueOrThrow({
-            where: { id: rice.lots[0].id },
-          })
-        ).availableQuantity.toString(),
-        "0",
-      );
+      // The side dish can reserve part of the first lot; only the main batch
+      // has consumed stock so far, regardless of which dish was planned first.
+      for (const lot of rice.lots) {
+        const remaining = batch.dishes[0].cookingBatchLots
+          .filter((usage) => usage.ingredientLotId === lot.id)
+          .reduce(
+            (quantity, usage) => quantity.minus(usage.quantityUsed),
+            lot.availableQuantity,
+          );
+        assert.equal(
+          (
+            await db.ingredientLot.findUniqueOrThrow({ where: { id: lot.id } })
+          ).availableQuantity.toString(),
+          remaining.toString(),
+        );
+      }
       assert.equal(
         (await batches.complete(side.id, chef)).mealSeasoningsConsumed,
         true,
       );
+      for (const lot of rice.lots) {
+        assert.equal(
+          (
+            await db.ingredientLot.findUniqueOrThrow({ where: { id: lot.id } })
+          ).availableQuantity.toString(),
+          "0",
+        );
+      }
       const shared = await db.menuMealSeasoningLot.findMany({
         where: { menuDayId: day.id, mealType: "LUNCH" },
       });
@@ -1032,6 +1061,11 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         (await samples.create(batch.id, sampleInput, chef)).created,
         false,
       );
+      assert.deepEqual(
+        (await samples.forBatch(batch.id, chef)).map((sample) => sample.dishId),
+        [mainDish.dishId],
+      );
+      assert.deepEqual(await samples.forBatch(side.id, chef), []);
       assert.equal(
         Date.parse(saved.expiresAt) - Date.parse(saved.sampledAt),
         86400000,
@@ -1300,13 +1334,22 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       const grPlan = await batches.plan({ ...grKey, dishId: grCommon }, chef);
       assert.deepEqual(
         grPlan.batches.map((b) => b.plannedPortions).sort((a, b) => a! - b!),
-        [13, 13, 32, 62],
+        [13, 45, 75, 107],
       );
-      const grDeleted = grPlan.batches.find((b) => b.plannedPortions === 62)!;
+      assert(grPlan.batches.every((batch) => batch.dishes.length === 1));
+      const grPlannedFor = (dishId: string) =>
+        grPlan.batches
+          .flatMap((batch) => batch.dishes)
+          .filter((dish) => dish.dishId === dishId)
+          .reduce((n, dish) => n + dish.plannedPortions!, 0);
+      assert.equal(grPlannedFor(grCommon), 120);
+      assert.equal(grPlannedFor(grRegular), 107);
+      assert.equal(grPlannedFor(grAlt), 13);
+      const grFirst = grPlan.batches[0];
       assert.equal("update" in batches, false);
       assert(grPlan.batches.every((batch) => batch.status === "CONFIRMED"));
       await assert.rejects(
-        () => batches.remove(grDeleted.id, chef),
+        () => batches.remove(grFirst.id, chef),
         (error: unknown) =>
           error instanceof HttpError && error.statusCode === 409,
       );
@@ -1321,7 +1364,8 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       );
       assert.equal(
         grPlan.batches.reduce((n, b) => n + b.plannedPortions!, 0),
-        120,
+        // Portions are counted per dish: 120 common + 107 regular + 13 alternative.
+        240,
       );
       await batches.confirm(grPlan.batches[0].id, chef);
       await assert.rejects(
@@ -1460,7 +1504,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         await db.mealAllocationBatch.count({
           where: { cookingBatchId: { in: [a, b] } },
         }),
-        8,
+        4,
       );
       const revisedBatches = structuredClone(payload.batches);
       revisedBatches[0].entries[1].allocatedPortions = 10;
@@ -1477,7 +1521,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       });
       assert.deepEqual(
         revisedRows.map((row) => row.allocatedPortions),
-        [10, 10],
+        [10],
       );
       assert.equal(
         revised.batches
