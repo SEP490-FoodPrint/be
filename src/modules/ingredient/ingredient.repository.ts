@@ -74,8 +74,8 @@ export function createIngredientRepository(connect = getPrisma) {
         orderBy: { id: "asc" },
       });
     },
-    actor(id: string, tx: Tx) {
-      return loadPrincipal(id, tx);
+    async actor(id: string, tx?: Tx) {
+      return loadPrincipal(id, tx ?? (await connect()));
     },
     async supplierStatus(scope: IngredientManagementScope, tx?: Tx) {
       const db = tx ?? (await connect());
