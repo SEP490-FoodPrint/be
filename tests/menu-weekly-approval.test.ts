@@ -263,6 +263,7 @@ function detailRow(): ApprovalDetailRow {
     submittedAt: new Date("2026-10-30T01:00:00.000Z"),
     weekStartDate: monday,
     School: { name: "Trường A" },
+    User: { fullName: "Nguyễn Dinh Dưỡng" },
     menuDays: [
       {
         id: "00000000-0000-4000-8000-0000000000d1",
@@ -317,6 +318,12 @@ void test("approval detail stays in school scope and uses finalized class demand
   assert.equal(detail.canDecide, true);
   assert.equal(detail.approval.approver, null);
   assert.equal(detail.approval.note, "");
+  assert.equal(detail.summary.proposer, "Nguyễn Dinh Dưỡng");
+  assert.equal(
+    detail.summary.proposerDetail,
+    "Nhân viên Dinh dưỡng · Trường A",
+  );
+  assert.equal(detail.medicalReview.role, "Nhân viên Dinh dưỡng");
 });
 
 void test("approval uses selected grades for demand and suppliers from the saved menu ingredients", async () => {

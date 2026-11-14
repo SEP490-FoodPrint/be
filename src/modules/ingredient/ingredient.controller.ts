@@ -12,12 +12,51 @@ import {
   validateIngredientCreate,
   validateIngredientUpdate,
   validateIngredientHide,
+  validateIngredientUploadEnvelope,
+  validateIngredientSingleUpload,
+  validateIngredientMultipleUpload,
 } from "./ingredient.validation";
 
 export function createIngredientController(
   service: IngredientService = ingredientService,
 ) {
   return {
+    authorizeUpload: (
+      req: import("express").Request,
+      _res: import("express").Response,
+      next: import("express").NextFunction,
+    ) => {
+      void service
+        .authorizeUpload(requirePrincipal(req))
+        .then(() => next())
+        .catch(next);
+    },
+    uploadImage: asyncHandler(async (req, res) => {
+      validateIngredientUploadEnvelope(req.body, req.query);
+      const files = Array.isArray(req.files) ? req.files : [];
+      sendSuccess(
+        res,
+        await service.uploadImage(
+          validateIngredientSingleUpload(files),
+          requirePrincipal(req),
+        ),
+        "Tải ảnh thành công",
+        201,
+      );
+    }),
+    uploadImages: asyncHandler(async (req, res) => {
+      validateIngredientUploadEnvelope(req.body, req.query);
+      const files = Array.isArray(req.files) ? req.files : [];
+      sendSuccess(
+        res,
+        await service.uploadImages(
+          validateIngredientMultipleUpload(files),
+          requirePrincipal(req),
+        ),
+        "Đã xử lý lượt tải ảnh",
+        200,
+      );
+    }),
     getAll: asyncHandler(async (req, res) => {
       sendSuccess(
         res,

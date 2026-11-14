@@ -1,4 +1,5 @@
 import { requirePrincipal } from "../../utils/authorization";
+import { uploadRecordPhoto, removeRecordPhoto } from "../../utils/record-photo";
 import { asyncHandler } from "../../utils/async-handler";
 import { sendSuccess } from "../../utils/response";
 import {
@@ -24,11 +25,18 @@ export function createRetainedSampleController(
         ),
     ),
     create: asyncHandler(async (req, res) => {
-      const result = await service.create(
-        uuid(req.params.id),
-        validateFoodSample(req.body),
-        requirePrincipal(req),
-      );
+      const id = uuid(req.params.id);
+      const input = validateFoodSample(req.body);
+      const principal = requirePrincipal(req);
+      const upload = await uploadRecordPhoto(principal.id, req.file);
+      let result;
+      try {
+        result = await service.create(id, input, principal, upload?.photo);
+      } catch (error) {
+        if (upload) await removeRecordPhoto(upload.document);
+        throw error;
+      }
+      if (upload && !result.created) await removeRecordPhoto(upload.document);
       sendSuccess(
         res,
         result,
