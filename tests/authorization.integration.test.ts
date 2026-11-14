@@ -1009,18 +1009,34 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           batch.dishes[0].cookingBatchLots.map((lot) => lot.ingredientLotId),
         ).size,
       );
-      assert.equal(
-        (
-          await db.ingredientLot.findUniqueOrThrow({
-            where: { id: rice.lots[0].id },
-          })
-        ).availableQuantity.toString(),
-        "0",
-      );
+      // The side dish can reserve part of the first lot; only the main batch
+      // has consumed stock so far, regardless of which dish was planned first.
+      for (const lot of rice.lots) {
+        const remaining = batch.dishes[0].cookingBatchLots
+          .filter((usage) => usage.ingredientLotId === lot.id)
+          .reduce(
+            (quantity, usage) => quantity.minus(usage.quantityUsed),
+            lot.availableQuantity,
+          );
+        assert.equal(
+          (
+            await db.ingredientLot.findUniqueOrThrow({ where: { id: lot.id } })
+          ).availableQuantity.toString(),
+          remaining.toString(),
+        );
+      }
       assert.equal(
         (await batches.complete(side.id, chef)).mealSeasoningsConsumed,
         true,
       );
+      for (const lot of rice.lots) {
+        assert.equal(
+          (
+            await db.ingredientLot.findUniqueOrThrow({ where: { id: lot.id } })
+          ).availableQuantity.toString(),
+          "0",
+        );
+      }
       const shared = await db.menuMealSeasoningLot.findMany({
         where: { menuDayId: day.id, mealType: "LUNCH" },
       });
