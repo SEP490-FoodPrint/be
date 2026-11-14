@@ -1,10 +1,10 @@
 <!--
 Sync Impact Report
-- Version: (template) → 1.0.0
-- Nguyên tắc được thêm: I–VI (lần phê chuẩn đầu tiên, rút từ AGENTS.md)
-- Mục được thêm: Ràng buộc kỹ thuật, Quy trình phát triển, Governance
-- Template cần đồng bộ: .specify/templates/plan-template.md (Constitution Check đọc file này) ✅ không cần sửa
-- Việc còn lại: không
+- Version: 1.0.0 → 2.0.0
+- Nguyên tắc sửa: VI — bỏ yêu cầu số tuần tự trên nhánh/thư mục spec; giữ kiểm tra spec bắt buộc và tương thích tên cũ.
+- Đồng bộ: AGENTS.md, contribute.md, docs/SPEC_KIT_GUIDE.md, PR template, Spec gate/tests và skill speckit-specify.
+- Template upstream .specify/templates/: không sửa; tên feature được quyết định bởi skill local, các placeholder có số chỉ là ví dụ tương thích.
+- Việc còn lại: không.
 -->
 
 # Hiến chương FoodPrint Backend
@@ -51,7 +51,7 @@ Hiến chương này tóm tắt các nguyên tắc **không được vi phạm**
 
 ### VI. Phát triển theo spec (Spec-Driven)
 
-- Mọi PR thay đổi `src/**` hoặc `prisma/**` (gồm `feat`, `fix`, `refactor`, `perf`) phải đi kèm `specs/NNN-slug/` có đủ `spec.md`, `plan.md`, `tasks.md` và chạy trên branch `<type>/NNN-slug`. Spec và code nằm chung một PR.
+- Mọi PR thay đổi `src/**` hoặc `prisma/**` (gồm `feat`, `fix`, `refactor`, `perf`) phải đi kèm `specs/<feature-slug>/` có đủ `spec.md`, `plan.md`, `tasks.md` và chạy trên branch `<type>/<feature-slug>`; có thể thêm hậu tố mô tả cho nhánh khi dùng lại spec. Số thứ tự không bắt buộc; spec/nhánh cũ có số vẫn được hỗ trợ và không cần đổi tên. Spec và code nằm chung một PR, một nhánh chỉ sửa spec thuộc tính năng tương ứng.
 - Chỉ triển khai yêu cầu đã được xác nhận trong spec. Mọi điểm chưa rõ được đánh dấu `[NEEDS CLARIFICATION: ...]` và phải được giải quyết (ví dụ bằng `$speckit-clarify`) trước khi merge.
 - Khi yêu cầu thay đổi, cập nhật spec/plan/tasks trong cùng PR với code; không để code và spec lệch nhau.
 
@@ -74,4 +74,4 @@ Hiến chương này tóm tắt các nguyên tắc **không được vi phạm**
 - Sửa hiến chương qua PR riêng (`docs(constitution): ...`), cập nhật Sync Impact Report và version theo semver: MAJOR khi bỏ/định nghĩa lại nguyên tắc, MINOR khi thêm nguyên tắc/mục, PATCH khi làm rõ câu chữ.
 - Reviewer kiểm tra PR tuân thủ hiến chương; spec gate trong CI chỉ kiểm tra cấu trúc, không thay thế review nội dung.
 
-**Version**: 1.0.0 | **Ratified**: 2026-11-06 | **Last Amended**: 2026-11-06
+**Version**: 2.0.0 | **Ratified**: 2026-11-06 | **Last Amended**: 2026-11-14
