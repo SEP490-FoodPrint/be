@@ -19,6 +19,7 @@ import {
   writeAllocationDay,
   type AllocationDay,
 } from "./meal-allocation.repository";
+import { anchorDistribution } from "../blockchain-distribution/blockchain-distribution.service";
 
 const mealTypes = ["LUNCH", "AFTERNOON"] as const;
 const dateFormatter = new Intl.DateTimeFormat("sv-SE", {
@@ -643,7 +644,7 @@ export function createMealAllocationService(
       requireKitchenStaff(principal);
       assertPermission(principal, "meal_allocation.update");
       schoolIdFor(principal);
-      return withSchoolTransaction(
+      const result = await withSchoolTransaction(
         await connect(),
         principal,
         "meal_allocation.update",
@@ -654,7 +655,9 @@ export function createMealAllocationService(
           const day = new Date(date);
           const data = await readAllocationDay(tx, schoolId, day);
           const view = projectAllocationDay(data, date);
-          if (view.distribution.status === "DISTRIBUTED") return view;
+          if (view.distribution.status === "DISTRIBUTED") {
+            return { view, ids: [], schoolId, date, actorId: actor.id };
+          }
           if (view.revision !== input.revision)
             throw new HttpError(
               409,
@@ -682,12 +685,36 @@ export function createMealAllocationService(
               409,
               "Dữ liệu phân bổ đã thay đổi. Vui lòng tải lại.",
             );
-          return projectAllocationDay(
-            await readAllocationDay(tx, schoolId, day),
+          return {
+            view: projectAllocationDay(
+              await readAllocationDay(tx, schoolId, day),
+              date,
+            ),
+            ids,
+            schoolId,
             date,
-          );
+            actorId: actor.id,
+          };
         },
       );
+
+      // Asynchronous background blockchain post (fire-and-forget)
+      if (result.ids.length > 0) {
+        void anchorDistribution(
+          result.ids,
+          result.schoolId,
+          result.date,
+          result.actorId,
+        ).catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          console.warn(
+            "[BlockchainPostHook] Không thể ghi nhận phân bổ lên Blockchain ngầm:",
+            message,
+          );
+        });
+      }
+
+      return result.view;
     },
   };
 }

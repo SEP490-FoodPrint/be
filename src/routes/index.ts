@@ -45,6 +45,8 @@ import { createSupplierOnboardingRouter } from "../modules/supplier-onboarding/s
 import { createSchoolAcademicYearRouter } from "../modules/school-academic-year/school-academic-year.routes";
 import { createSampleStorageRouter } from "../modules/sample-storage/sample-storage.routes";
 import { createBlockchainTodoRouter } from "../modules/blockchain-todo/blockchain-todo.routes";
+import { createBlockchainDistributionRouter } from "../modules/blockchain-distribution/blockchain-distribution.routes";
+import { createBlockchainTraceabilityRouter } from "../modules/blockchain-traceability/blockchain-traceability.routes";
 
 export function createApiRouter(
   authHandler: RequestHandler = authenticate,
@@ -53,6 +55,14 @@ export function createApiRouter(
   const router = Router();
   if (process.env.NODE_ENV === "development") {
     router.use("/blockchain-todos", createBlockchainTodoRouter());
+    router.use(
+      "/blockchain-distribution",
+      createBlockchainDistributionRouter(),
+    );
+    router.use(
+      "/blockchain-traceability",
+      createBlockchainTraceabilityRouter(),
+    );
   }
 
   // Health check endpoint
