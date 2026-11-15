@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { documentStorage } from "../src/utils/onboarding-documents";
 import { test } from "node:test";
 import {
   createDeliveryInspectionService,
@@ -611,6 +612,18 @@ void test("decision bodies reject forged actors and require a rejection reason; 
 });
 
 void test("HTTP inspection endpoints validate actors, expose the shared four-role contract and keep immutable decisions", async (t) => {
+  t.mock.method(documentStorage, "upload", () =>
+    Promise.resolve({
+      id,
+      field: "photo",
+      publicId: "private/inspection.jpg",
+      format: "jpg" as const,
+      fileName: "inspection.jpg",
+      bytes: 3,
+    }),
+  );
+  t.mock.method(documentStorage, "download", () => "signed-photo-link");
+  t.mock.method(documentStorage, "remove", () => Promise.resolve());
   const f = decisionFixture();
   let principal: AuthPrincipal | undefined = f.actors[0];
   const authenticate: RequestHandler = (req, _res, next) => {
@@ -627,12 +640,17 @@ void test("HTTP inspection endpoints validate actors, expose the shared four-rol
   const http = await startHttp(app);
   t.after(() => http.close());
   const path = `/deliveries/${f.data.deliveries[0].id}/inspection`;
-  const post = (body: unknown) =>
-    http.request(path, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+  const post = (body: unknown) => {
+    const data = new FormData();
+    for (const [key, value] of Object.entries(body as Record<string, string>))
+      data.set(key, value);
+    data.set(
+      "photo",
+      new Blob([new Uint8Array([255, 216, 255])], { type: "image/jpeg" }),
+      "inspection.jpg",
+    );
+    return http.request(path, { method: "POST", body: data });
+  };
   assert.equal(
     (await post({ decision: "APPROVE", roleId: f.actors[1].roleId })).status,
     400,
