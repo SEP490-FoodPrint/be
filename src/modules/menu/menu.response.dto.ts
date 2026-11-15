@@ -105,3 +105,18 @@ export interface MenuCreationAllergyReportDTO {
     }[];
   }[];
 }
+
+export interface MenuGradeBatchResponseDTO {
+  menus: {
+    id: string;
+    gradeIds: string[];
+    gradeNames: string[];
+    status: WeeklyMenuStatus;
+  }[];
+  submitted: boolean;
+  hasUnresolvedAllergies: boolean;
+  allergyChecks: (MenuCreationAllergyReportDTO["allergyChecks"][number] & {
+    gradeId: string;
+    gradeName: string;
+  })[];
+}

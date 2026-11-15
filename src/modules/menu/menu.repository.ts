@@ -935,7 +935,7 @@ export const menuRepository = {
   schoolGrades(client: Tx, schoolId: string, gradeIds: string[]) {
     return client.schoolGrade.findMany({
       where: { schoolId, id: { in: gradeIds } },
-      select: { id: true },
+      select: { id: true, name: true },
     });
   },
   menuForWeek(
