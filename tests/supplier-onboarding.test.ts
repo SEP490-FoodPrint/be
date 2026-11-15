@@ -2,6 +2,7 @@ import { RequestValidationError } from "../src/utils/request-validation";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  activationDate,
   contractIssues,
   intervalsOverlap,
   schoolToday,
@@ -122,10 +123,29 @@ void test("school pause blocks draft creation and sending while SENT retries rem
   assert.equal(writes, 0);
 });
 
-void test("contract eligibility requires signed and compliance evidence, dates, scope and a valid basis", () => {
+void test("contract eligibility requires signed evidence, dates, scope and a valid basis", () => {
   assert.deepEqual(contractIssues(complete(), today), []);
-  assert.ok(
-    contractIssues({ ...complete(), documents: [] }, today).length >= 2,
+  assert.ok(contractIssues({ ...complete(), documents: [] }, today).length);
+  // Chọn chứng nhận ATTP của NCC thì không bắt trường tải lại hồ sơ ATTP.
+  assert.deepEqual(
+    contractIssues(
+      { ...complete(), documents: [{ kind: "SIGNED_CONTRACT" }] },
+      today,
+    ),
+    [],
+  );
+  // Căn cứ miễn cấp phải kèm minh chứng.
+  assert.equal(
+    contractIssues(
+      {
+        ...complete(),
+        certification: null,
+        exemptionNote: "Cơ sở nhỏ lẻ được miễn",
+        documents: [{ kind: "SIGNED_CONTRACT" }],
+      },
+      today,
+    ).length,
+    1,
   );
   assert.ok(contractIssues({ ...complete(), items: [] }, today).length);
   assert.ok(
@@ -163,6 +183,29 @@ void test("contract eligibility requires signed and compliance evidence, dates, 
     [],
   );
   assert.deepEqual(contractIssues({ ...complete(), endsOn: today }, today), []);
+});
+
+void test("future contracts can be activated ahead of their start date", () => {
+  const nextWeek = new Date(today.getTime() + 7 * 86400000);
+  const future = {
+    ...complete(),
+    startsOn: tomorrow,
+    endsOn: nextWeek,
+    certification: {
+      status: "ACTIVE",
+      issuedDate: yesterday,
+      expiryDate: nextWeek,
+    },
+  };
+  assert.equal(activationDate(future, today).getTime(), tomorrow.getTime());
+  assert.deepEqual(contractIssues(future, activationDate(future, today)), []);
+  assert.equal(activationDate(complete(), today).getTime(), today.getTime());
+  assert.ok(
+    contractIssues(
+      { ...complete(), endsOn: yesterday },
+      activationDate({ startsOn: yesterday }, today),
+    ).length,
+  );
 });
 
 void test("file verification uses content, restricts size, removes path/control characters and computes immutable hash", () => {
