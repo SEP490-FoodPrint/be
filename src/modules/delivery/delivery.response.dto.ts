@@ -9,10 +9,12 @@ export interface DeliveryInspectionDTO {
   deliveryNo: string;
   schoolId: string;
   sourceType: "REQUEST" | "STANDALONE";
+  traceabilityVersion: number | null;
   supplyRequestId: string | null;
   requestNo: string | null;
   supplierName: string;
   status: DeliveryStatus;
+  statusLabel: string;
   expectedArrivalAt: string | null;
   arrivedAt: string | null;
   receivedAt: string | null;
@@ -40,6 +42,11 @@ export interface DeliveryInspectionDTO {
     category: string | null;
     actualQuantity: string;
     unit: string;
+    sourceFacility: {
+      id: string | null;
+      name: string;
+      facilityCode: string | null;
+    } | null;
     ingredientLots: {
       id: string;
       lotCode: string;

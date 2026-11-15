@@ -38,6 +38,22 @@ const positiveDecimalQuantitySchema = z
     value.includes(".") ? value.replace(/0+$/, "").replace(/\.$/, "") : value,
   );
 
+export const requiredVehiclePlateSchema = z
+  .string({ error: "Biển số xe là bắt buộc" })
+  .trim()
+  .min(1, { error: "Biển số xe không được để trống" })
+  .max(40, { error: "Biển số xe chỉ nhận tối đa 40 ký tự" });
+
+export const requiredIsoDateTimeSchema = z.iso
+  .datetime({
+    offset: true,
+    error: "expectedArrivalAt phải là thời gian ISO8601 có múi giờ",
+  })
+  .refine((value) => Number.isFinite(Date.parse(value)), {
+    error: "expectedArrivalAt không hợp lệ",
+  })
+  .transform((value) => new Date(value).toISOString());
+
 export const optionalIsoDateTimeSchema = z
   .union([
     z.iso
@@ -61,18 +77,44 @@ export const supplierOrderIdempotencyHeaderSchema = z.strictObject({
     .pipe(requestUuidSchema),
 });
 
+export const requestSourceSelectionSchema = z.strictObject({
+  supplyRequestItemId: requestUuidSchema,
+  sourceFacilityId: requestUuidSchema,
+});
+
 export const createFromRequestBodySchema = z.strictObject({
   sourceType: z.literal("REQUEST", {
     error: "sourceType phải là REQUEST hoặc STANDALONE",
   }),
   supplyRequestId: requestUuidSchema,
-  expectedArrivalAt: optionalIsoDateTimeSchema,
-  vehiclePlate: optionalTrimmedText(40, "Biển số xe"),
+  sources: z
+    .array(requestSourceSelectionSchema, {
+      error: "Danh sách nguồn cung ứng phải là mảng",
+    })
+    .min(1, { error: "Đơn theo yêu cầu phải chọn ít nhất 1 nguồn cung ứng" })
+    .superRefine((sources, ctx) => {
+      const seen = new Set<string>();
+      for (let i = 0; i < sources.length; i += 1) {
+        const itemId = sources[i].supplyRequestItemId;
+        if (seen.has(itemId)) {
+          ctx.addIssue({
+            code: "custom",
+            path: [i, "supplyRequestItemId"],
+            message: "Dòng yêu cầu cung ứng bị trùng lặp nguồn cung",
+          });
+        } else {
+          seen.add(itemId);
+        }
+      }
+    }),
+  expectedArrivalAt: requiredIsoDateTimeSchema,
+  vehiclePlate: requiredVehiclePlateSchema,
   note: optionalTrimmedText(2000, "Ghi chú"),
 });
 
 export const standaloneDeliveryItemSchema = z.strictObject({
   ingredientId: requestUuidSchema,
+  sourceFacilityId: requestUuidSchema,
   actualQuantity: positiveDecimalQuantitySchema,
   unit: requiredText(30),
 });
@@ -82,8 +124,8 @@ export const createStandaloneBodySchema = z.strictObject({
     error: "sourceType phải là REQUEST hoặc STANDALONE",
   }),
   schoolId: requestUuidSchema,
-  expectedArrivalAt: optionalIsoDateTimeSchema,
-  vehiclePlate: optionalTrimmedText(40, "Biển số xe"),
+  expectedArrivalAt: requiredIsoDateTimeSchema,
+  vehiclePlate: requiredVehiclePlateSchema,
   note: optionalTrimmedText(2000, "Ghi chú"),
   items: z
     .array(standaloneDeliveryItemSchema, {
@@ -124,6 +166,8 @@ export const supplierOrderOptionsQuerySchema = z
     path: ["page"],
     error: "page vượt giới hạn phân trang",
   });
+
+export const supplierOrderLabelsQuerySchema = supplierOrderOptionsQuerySchema;
 
 export const supplierOrderListQuerySchema = z
   .strictObject({
@@ -176,6 +220,10 @@ export function validateCreateSupplierOrderBody(value: unknown) {
 
 export function validateSupplierOrderOptionsQuery(value: unknown) {
   return parseRequest(supplierOrderOptionsQuerySchema, value);
+}
+
+export function validateSupplierOrderLabelsQuery(value: unknown) {
+  return parseRequest(supplierOrderLabelsQuerySchema, value);
 }
 
 export function validateSupplierOrderListQuery(value: unknown) {

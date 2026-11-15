@@ -13,6 +13,7 @@ export const supplierOrderSummarySelect = {
   id: true,
   deliveryNo: true,
   creationMode: true,
+  traceabilityVersion: true,
   schoolId: true,
   supplierId: true,
   supplyRequestId: true,
@@ -39,6 +40,11 @@ export const supplierOrderDetailSelect = {
       ingredientId: true,
       ingredientEntryId: true,
       supplyRequestItemId: true,
+      sourceFacilityId: true,
+      sourceFacilityNameSnapshot: true,
+      sourceFacilityCodeSnapshot: true,
+      ingredientNameSnapshot: true,
+      qrUrl: true,
       actualQuantity: true,
       unit: true,
       note: true,
@@ -46,6 +52,41 @@ export const supplierOrderDetailSelect = {
     },
   },
 } satisfies Prisma.DeliverySelect;
+
+export const supplierOrderSourceFacilityOptionSelect = {
+  id: true,
+  facilityCode: true,
+  name: true,
+} satisfies Prisma.SourceFacilitySelect;
+
+export const supplierOrderSourceFacilityValidationSelect = {
+  id: true,
+  supplierId: true,
+  facilityCode: true,
+  name: true,
+  status: true,
+} satisfies Prisma.SourceFacilitySelect;
+
+export const supplierOrderLabelDeliverySelect = {
+  id: true,
+  supplierId: true,
+  deliveryNo: true,
+  traceabilityVersion: true,
+  Supplier: { select: { name: true } },
+} satisfies Prisma.DeliverySelect;
+
+export const supplierOrderLabelItemSelect = {
+  id: true,
+  deliveryId: true,
+  sourceFacilityId: true,
+  sourceFacilityNameSnapshot: true,
+  sourceFacilityCodeSnapshot: true,
+  ingredientNameSnapshot: true,
+  actualQuantity: true,
+  unit: true,
+  qrUrl: true,
+  Ingredient: { select: { name: true } },
+} satisfies Prisma.DeliveryItemSelect;
 
 export const supplierOrderSupplyRequestSelect = {
   id: true,
@@ -125,6 +166,24 @@ export type SupplierOrderIngredientValidationRecord =
     select: typeof supplierOrderIngredientValidationSelect;
   }>;
 
+export type SupplierOrderSourceFacilityOptionRecord =
+  Prisma.SourceFacilityGetPayload<{
+    select: typeof supplierOrderSourceFacilityOptionSelect;
+  }>;
+
+export type SupplierOrderSourceFacilityValidationRecord =
+  Prisma.SourceFacilityGetPayload<{
+    select: typeof supplierOrderSourceFacilityValidationSelect;
+  }>;
+
+export type SupplierOrderLabelDeliveryRecord = Prisma.DeliveryGetPayload<{
+  select: typeof supplierOrderLabelDeliverySelect;
+}>;
+
+export type SupplierOrderLabelItemRecord = Prisma.DeliveryItemGetPayload<{
+  select: typeof supplierOrderLabelItemSelect;
+}>;
+
 export interface SupplierOrderIngredientEntryMatch {
   id: string;
   ingredientId: string;
@@ -134,6 +193,12 @@ export interface SupplierOrderCreateDeliveryItemInput {
   supplyRequestItemId: string | null;
   ingredientId: string;
   ingredientEntryId: string | null;
+  sourceFacilityId: string | null;
+  sourceFacilityNameSnapshot: string | null;
+  sourceFacilityCodeSnapshot: string | null;
+  ingredientNameSnapshot: string | null;
+  qrToken: string | null;
+  qrUrl: string | null;
   actualQuantity: Prisma.Decimal;
   unit: string;
   note: string | null;
@@ -144,6 +209,7 @@ export interface SupplierOrderCreateDeliveryInput {
   creationMode: DeliveryCreationMode;
   creationKey: string;
   creationFingerprint: string;
+  traceabilityVersion: number | null;
   schoolId: string;
   supplierId: string;
   supplyRequestId: string | null;
@@ -157,6 +223,18 @@ export interface SupplierOrderCreateDeliveryInput {
 
 export interface SupplierOrderOptionsCommand {
   supplierId: string;
+  skip: number;
+  take: number;
+}
+
+export interface SupplierOrderSourceFacilityOptionsCommand {
+  scope: SupplierOrderScope & Prisma.SourceFacilityWhereInput;
+  skip: number;
+  take: number;
+}
+
+export interface SupplierOrderLabelListCommand {
+  deliveryId: string;
   skip: number;
   take: number;
 }
@@ -185,6 +263,23 @@ export interface SupplierOrderRepository {
     db: SupplierOrderDb,
     supplyRequestId: string,
   ): Promise<boolean>;
+  lockSupplierForDeliveryNumber(
+    db: SupplierOrderDb,
+    supplierId: string,
+  ): Promise<void>;
+  findHighestCanonicalDeliverySequence(
+    db: SupplierOrderDb,
+    supplierId: string,
+  ): Promise<bigint>;
+  lockSourceFacilities(
+    db: SupplierOrderDb,
+    supplierId: string,
+    sourceFacilityIds: readonly string[],
+  ): Promise<void>;
+  findSourceFacilitiesByIds(
+    db: SupplierOrderDb,
+    sourceFacilityIds: readonly string[],
+  ): Promise<SupplierOrderSourceFacilityValidationRecord[]>;
   createDeliveryWithItems(
     db: SupplierOrderDb,
     input: SupplierOrderCreateDeliveryInput,
@@ -201,6 +296,10 @@ export interface SupplierOrderRepository {
     db: SupplierOrderDb,
     command: SupplierOrderOptionsCommand,
   ): Promise<SupplierOrderIngredientOptionRecord[]>;
+  listSourceFacilityOptions(
+    db: SupplierOrderDb,
+    command: SupplierOrderSourceFacilityOptionsCommand,
+  ): Promise<SupplierOrderSourceFacilityOptionRecord[]>;
   findIngredientsByIds(
     db: SupplierOrderDb,
     ingredientIds: readonly string[],
@@ -219,6 +318,15 @@ export interface SupplierOrderRepository {
     scope: SupplierOrderScope & Prisma.DeliveryWhereInput,
     id: string,
   ): Promise<SupplierOrderDetailRecord | null>;
+  findDeliveryForLabels(
+    db: SupplierOrderDb,
+    scope: SupplierOrderScope & Prisma.DeliveryWhereInput,
+    id: string,
+  ): Promise<SupplierOrderLabelDeliveryRecord | null>;
+  listDeliveryLabelItems(
+    db: SupplierOrderDb,
+    command: SupplierOrderLabelListCommand,
+  ): Promise<SupplierOrderLabelItemRecord[]>;
 }
 
 export const supplierOrderRepository: SupplierOrderRepository = {
@@ -248,6 +356,36 @@ export const supplierOrderRepository: SupplierOrderRepository = {
     return existing !== null;
   },
 
+  async lockSupplierForDeliveryNumber(db, supplierId) {
+    await db.$queryRaw`SELECT id FROM foodprint.suppliers WHERE id = ${supplierId}::uuid FOR UPDATE`;
+  },
+
+  async findHighestCanonicalDeliverySequence(db, supplierId) {
+    // Regex predicate must run before ::numeric cast so legacy non-numeric codes never abort the query.
+    const rows = await db.$queryRaw<{ maxSeq: string | null }[]>`
+      SELECT MAX(substring(delivery_no FROM 7)::numeric)::text AS "maxSeq"
+      FROM foodprint.deliveries
+      WHERE supplier_id = ${supplierId}::uuid
+        AND delivery_no ~ '^FP-DE-([0-9]{5}|[1-9][0-9]{5,73})$'
+        AND delivery_no <> 'FP-DE-00000'
+    `;
+    const rawMax = rows[0]?.maxSeq;
+    return rawMax ? BigInt(rawMax) : 0n;
+  },
+
+  async lockSourceFacilities(db, supplierId, sourceFacilityIds) {
+    for (const id of [...new Set(sourceFacilityIds)].sort()) {
+      await db.$queryRaw`SELECT id FROM foodprint.source_facilities WHERE id = ${id}::uuid AND supplier_id = ${supplierId}::uuid FOR UPDATE`;
+    }
+  },
+
+  findSourceFacilitiesByIds(db, sourceFacilityIds) {
+    return db.sourceFacility.findMany({
+      where: { id: { in: [...new Set(sourceFacilityIds)] } },
+      select: supplierOrderSourceFacilityValidationSelect,
+    });
+  },
+
   createDeliveryWithItems(db, input) {
     return db.delivery.create({
       data: {
@@ -255,6 +393,7 @@ export const supplierOrderRepository: SupplierOrderRepository = {
         creationMode: input.creationMode,
         creationKey: input.creationKey,
         creationFingerprint: input.creationFingerprint,
+        traceabilityVersion: input.traceabilityVersion,
         schoolId: input.schoolId,
         supplierId: input.supplierId,
         supplyRequestId: input.supplyRequestId,
@@ -268,9 +407,33 @@ export const supplierOrderRepository: SupplierOrderRepository = {
             supplyRequestItemId: item.supplyRequestItemId,
             ingredientId: item.ingredientId,
             ingredientEntryId: item.ingredientEntryId,
+            sourceFacilityId: item.sourceFacilityId,
+            sourceFacilityNameSnapshot: item.sourceFacilityNameSnapshot,
+            sourceFacilityCodeSnapshot: item.sourceFacilityCodeSnapshot,
+            ingredientNameSnapshot: item.ingredientNameSnapshot,
+            qrToken: item.qrToken,
+            qrUrl: item.qrUrl,
             actualQuantity: item.actualQuantity,
             unit: item.unit,
             note: item.note,
+            ...(input.traceabilityVersion === 1
+              ? {
+                  ingredientLots: {
+                    create: [
+                      {
+                        sourceFacilityId: item.sourceFacilityId,
+                        lotCode: "PLAN-01",
+                        manufactureDate: null,
+                        expiryDate: null,
+                        receivedQuantity: item.actualQuantity,
+                        availableQuantity: new Prisma.Decimal(0),
+                        unit: item.unit,
+                        status: "BLOCKED",
+                      },
+                    ],
+                  },
+                }
+              : {}),
           })),
         },
       },
@@ -324,6 +487,16 @@ export const supplierOrderRepository: SupplierOrderRepository = {
     });
   },
 
+  listSourceFacilityOptions(db, command) {
+    return db.sourceFacility.findMany({
+      where: command.scope,
+      select: supplierOrderSourceFacilityOptionSelect,
+      orderBy: [{ id: "asc" }],
+      skip: command.skip,
+      take: command.take,
+    });
+  },
+
   findIngredientsByIds(db, ingredientIds) {
     return db.ingredient.findMany({
       where: { id: { in: [...ingredientIds] } },
@@ -371,6 +544,23 @@ export const supplierOrderRepository: SupplierOrderRepository = {
     return db.delivery.findFirst({
       where: { AND: [scope, { id }] },
       select: supplierOrderDetailSelect,
+    });
+  },
+
+  findDeliveryForLabels(db, scope, id) {
+    return db.delivery.findFirst({
+      where: { AND: [scope, { id }] },
+      select: supplierOrderLabelDeliverySelect,
+    });
+  },
+
+  listDeliveryLabelItems(db, command) {
+    return db.deliveryItem.findMany({
+      where: { deliveryId: command.deliveryId },
+      select: supplierOrderLabelItemSelect,
+      orderBy: [{ id: "asc" }],
+      skip: command.skip,
+      take: command.take,
     });
   },
 };

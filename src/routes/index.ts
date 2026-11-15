@@ -46,10 +46,17 @@ import { createSchoolOverviewRouter } from "../modules/school-overview/school-ov
 import { createSupplierOnboardingRouter } from "../modules/supplier-onboarding/supplier-onboarding.routes";
 import { createSchoolAcademicYearRouter } from "../modules/school-academic-year/school-academic-year.routes";
 import { createSampleStorageRouter } from "../modules/sample-storage/sample-storage.routes";
+import { createDeliveryTraceRouter } from "../modules/delivery-trace/delivery-trace.routes";
+import type { DeliveryTraceService } from "../modules/delivery-trace/delivery-trace.service";
+
+export type ApiRouterServices = {
+  deliveryTraceService?: DeliveryTraceService;
+};
 
 export function createApiRouter(
   authHandler: RequestHandler = authenticate,
   authServices?: AuthServices,
+  apiServices?: ApiRouterServices,
 ) {
   const router = Router();
 
@@ -63,6 +70,11 @@ export function createApiRouter(
       timestamp: new Date().toISOString(),
     });
   });
+
+  router.use(
+    "/public/delivery-items",
+    createDeliveryTraceRouter(apiServices?.deliveryTraceService),
+  );
 
   router.use(createPermissionRouter(authHandler));
   router.use(createSupplierOnboardingRouter(authHandler));

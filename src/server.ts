@@ -5,7 +5,7 @@ import {
   createRedisRateLimitStore,
   disconnectRedis,
 } from "./config/redis";
-import { readRateLimitConfig } from "./config/env";
+import { readPublicTraceOrigin, readRateLimitConfig } from "./config/env";
 import { createApiRateLimiter } from "./middlewares/rate-limit.middleware";
 import { startEmailRuntime } from "./utils/email-runtime";
 
@@ -33,6 +33,7 @@ const closeConnections = (): Promise<void> => {
 
 const startServer = async () => {
   const rateLimitConfig = readRateLimitConfig();
+  const publicTraceOrigin = readPublicTraceOrigin();
   // 1. Kiểm tra kết nối PostgreSQL
   await connectDB();
   await connectRedis();
@@ -49,6 +50,7 @@ const startServer = async () => {
     console.log(
       `📡 Health check endpoint: http://localhost:${PORT}/api/health`,
     );
+    console.log(`🔗 Public trace origin: ${publicTraceOrigin}`);
   });
 
   server.on("error", (err: NodeJS.ErrnoException) => {

@@ -21,6 +21,7 @@ src/generated/prisma/
 .env*
 !.env.example
 !.env.sample
+!.env.test.example
 build/
 Thumbs.db
 *.tmp

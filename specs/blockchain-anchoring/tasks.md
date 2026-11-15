@@ -2,8 +2,8 @@
 
 ## C1. Migration và schema
 
-- [x] Viết migration `20261118000100_blockchain_proof_versions`: enum, ba bảng version, CHECK, unique.
-- [x] Viết migration `20261118000200_traceability_verify_permission`.
+- [x] Viết migration `20261119000100_blockchain_proof_versions`: enum, ba bảng version, CHECK, unique.
+- [x] Viết migration `20261119000200_traceability_verify_permission`.
 - [x] Cập nhật `prisma/schema.prisma`; chạy `prisma:validate`, `prisma:generate`.
 
 ## C2. Hạ tầng dùng chung

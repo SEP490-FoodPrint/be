@@ -1,3 +1,4 @@
+import { recordLocalTestDatabase } from "./helpers/local-test-database";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -543,6 +544,7 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
     async () => {
       const name = `foodprint_migration_test_school_${randomUUID().replaceAll("-", "")}`;
       await db.query(`CREATE DATABASE "${name}"`);
+      recordLocalTestDatabase(name);
       const fresh = new URL(url);
       fresh.pathname = `/${name}`;
       await runPrisma(fresh.toString(), ["migrate", "deploy"]);
@@ -718,6 +720,7 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
     async () => {
       const name = `foodprint_migration_test_fresh_${randomUUID().replaceAll("-", "")}`;
       await db.query(`CREATE DATABASE "${name}"`);
+      recordLocalTestDatabase(name);
       const fresh = new URL(url);
       fresh.pathname = `/${name}`;
       await runPrisma(fresh.toString(), ["migrate", "deploy"]);
@@ -838,6 +841,7 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
       const name =
         "foodprint_migration_test_codes_" + randomUUID().replaceAll("-", "");
       await db.query(`CREATE DATABASE "${name}"`);
+      recordLocalTestDatabase(name);
       const fresh = new URL(url);
       fresh.pathname = "/" + name;
       const legacy = new Client({ connectionString: fresh.toString() });
@@ -983,6 +987,7 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
     async () => {
       const name = `foodprint_migration_test_cooking_${randomUUID().replaceAll("-", "")}`;
       await db.query(`CREATE DATABASE "${name}"`);
+      recordLocalTestDatabase(name);
       const fresh = new URL(url);
       fresh.pathname = `/${name}`;
       const legacy = new Client({ connectionString: fresh.toString() });
@@ -1161,6 +1166,7 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
         "20261113000100_link_meal_complaints_to_daily_meal_portions";
       const name = `foodprint_migration_test_complaints_${randomUUID().replaceAll("-", "")}`;
       await db.query(`CREATE DATABASE "${name}"`);
+      recordLocalTestDatabase(name);
       const fresh = new URL(url);
       fresh.pathname = `/${name}`;
       const legacy = new Client({ connectionString: fresh.toString() });
@@ -1247,6 +1253,7 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
     async () => {
       const name = `foodprint_migration_test_intake_${randomUUID().replaceAll("-", "")}`;
       await db.query(`CREATE DATABASE "${name}"`);
+      recordLocalTestDatabase(name);
       const fresh = new URL(url);
       fresh.pathname = `/${name}`;
       const legacy = new Client({ connectionString: fresh.toString() });
@@ -1373,6 +1380,7 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
     async () => {
       const name = `foodprint_migration_test_late_${randomUUID().replaceAll("-", "")}`;
       await db.query(`CREATE DATABASE "${name}"`);
+      recordLocalTestDatabase(name);
       const isolated = new URL(url);
       isolated.pathname = `/${name}`;
       const temporary = await mkdtemp(
@@ -1548,6 +1556,7 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
     async () => {
       const name = `foodprint_migration_test_single_${randomUUID().replaceAll("-", "")}`;
       await db.query(`CREATE DATABASE "${name}"`);
+      recordLocalTestDatabase(name);
       const target = new URL(url);
       target.pathname = `/${name}`;
       const local = new Client({ connectionString: target.toString() });
@@ -1674,6 +1683,7 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
     async () => {
       const name = `foodprint_migration_test_soc_${randomUUID().replaceAll("-", "")}`;
       await db.query(`CREATE DATABASE "${name}"`);
+      recordLocalTestDatabase(name);
       const fresh = new URL(url);
       fresh.pathname = `/${name}`;
       const legacy = new Client({ connectionString: fresh.toString() });
@@ -2005,6 +2015,412 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
           (error) =>
             sqlState(error, "23514", "chk_delivery_item_unit_not_blank"),
         );
+      } finally {
+        await legacy.end();
+        await db.query(`DROP DATABASE "${name}"`);
+      }
+    },
+  );
+
+  await context.test(
+    "supplier delivery traceability migration preserves baseline histories and multi-lot sources, moves delivery_no uniqueness per supplier, and enforces v1 metadata checks",
+    async () => {
+      const name = `foodprint_migration_test_trace_${randomUUID().replaceAll("-", "")}`;
+      await db.query(`CREATE DATABASE "${name}"`);
+      recordLocalTestDatabase(name);
+      const fresh = new URL(url);
+      fresh.pathname = `/${name}`;
+      const legacy = new Client({ connectionString: fresh.toString() });
+      await legacy.connect();
+      try {
+        await legacy.query("SET search_path TO foodprint, public");
+        const migration = "20261118000100_supplier_delivery_traceability";
+        for (const previous of migrationNames.filter(
+          (value) => value < migration,
+        )) {
+          await legacy.query(
+            await readFile(
+              path.join(root, "prisma/migrations", previous, "migration.sql"),
+              "utf8",
+            ),
+          );
+        }
+        const sql = await readFile(
+          path.join(root, "prisma/migrations", migration, "migration.sql"),
+          "utf8",
+        );
+
+        const supplierRole = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.roles(code,name,type) VALUES ('INGREDIENT_SUPPLIER_ADMIN','Supplier Admin','SUPPLIER') RETURNING id",
+          )
+        ).rows[0].id;
+        const schoolRole = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.roles(code,name,type) VALUES ('SCHOOL_ADMINISTRATION','School Admin','SCHOOL') RETURNING id",
+          )
+        ).rows[0].id;
+        const school = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.schools(name) VALUES ('Trace Migration School') RETURNING id",
+          )
+        ).rows[0].id;
+        const supplierA = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.suppliers(name) VALUES ('Trace Supplier A') RETURNING id",
+          )
+        ).rows[0].id;
+        const supplierB = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.suppliers(name) VALUES ('Trace Supplier B') RETURNING id",
+          )
+        ).rows[0].id;
+        const supplierUserA = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.users(role_id,role_code,supplier_id,username,email,password_hash,full_name,status) VALUES ($1,'INGREDIENT_SUPPLIER_ADMIN',$2,'trace-sup-a','trace-sup-a@example.test','hash','Trace Sup A','ACTIVE') RETURNING id",
+            [supplierRole, supplierA],
+          )
+        ).rows[0].id;
+        const supplierUserB = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.users(role_id,role_code,supplier_id,username,email,password_hash,full_name,status) VALUES ($1,'INGREDIENT_SUPPLIER_ADMIN',$2,'trace-sup-b','trace-sup-b@example.test','hash','Trace Sup B','ACTIVE') RETURNING id",
+            [supplierRole, supplierB],
+          )
+        ).rows[0].id;
+        const schoolUser = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.users(role_id,role_code,school_id,username,email,password_hash,full_name,status) VALUES ($1,'SCHOOL_ADMINISTRATION',$2,'trace-sch','trace-sch@example.test','hash','Trace Sch','ACTIVE') RETURNING id",
+            [schoolRole, school],
+          )
+        ).rows[0].id;
+        const facA1 = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.source_facilities(supplier_id,facility_code,name,status) VALUES ($1,'SF-A1','Trang trại A1','ACTIVE') RETURNING id",
+            [supplierA],
+          )
+        ).rows[0].id;
+        const facA2NullCode = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.source_facilities(supplier_id,facility_code,name,status) VALUES ($1,NULL,'Hợp tác xã cũ không mã','ACTIVE') RETURNING id",
+            [supplierA],
+          )
+        ).rows[0].id;
+        const ingA1 = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.ingredients(supplier_id,name,default_unit) VALUES ($1,'Rau cải xanh','kg') RETURNING id",
+            [supplierA],
+          )
+        ).rows[0].id;
+        const ingB1 = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.ingredients(supplier_id,name,default_unit) VALUES ($1,'Gạo ST25','kg') RETURNING id",
+            [supplierB],
+          )
+        ).rows[0].id;
+        const entryA1 = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.ingredient_entries(school_id,ingredient_id,handling_type) VALUES ($1,$2,'DIRECT_USE') RETURNING id",
+            [school, ingA1],
+          )
+        ).rows[0].id;
+        const sr1 = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.supply_requests(request_no,school_id,supplier_id,created_by_user_id,status) VALUES ('SR-TRACE-1',$1,$2,$3,'IN_PROGRESS') RETURNING id",
+            [school, supplierA, schoolUser],
+          )
+        ).rows[0].id;
+        const sri1 = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.supply_request_items(supply_request_id,ingredient_entry_id,requested_quantity,unit) VALUES ($1,$2,15.000,'kg') RETURNING id",
+            [sr1, entryA1],
+          )
+        ).rows[0].id;
+
+        const preservedCreatedAt = "2025-05-10T08:00:00.000Z";
+        const preservedUpdatedAt = "2025-05-10T09:30:00.000Z";
+        const legacyD1 = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.deliveries(delivery_no,supply_request_id,school_id,supplier_id,creation_mode,status,created_by_user_id,received_by_user_id,received_at,created_at,updated_at) VALUES ('DG-HIST-001',$1,$2,$3,NULL,'RECEIVED',$4,$5,$6,$7,$6) RETURNING id",
+            [
+              sr1,
+              school,
+              supplierA,
+              supplierUserA,
+              schoolUser,
+              preservedUpdatedAt,
+              preservedCreatedAt,
+            ],
+          )
+        ).rows[0].id;
+        const legacyD2 = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.deliveries(delivery_no,supply_request_id,school_id,supplier_id,creation_mode,status,created_by_user_id,created_at,updated_at) VALUES ('DG-HIST-002',$1,$2,$3,NULL,'REJECTED',$4,$5,$6) RETURNING id",
+            [
+              sr1,
+              school,
+              supplierA,
+              supplierUserA,
+              preservedCreatedAt,
+              preservedUpdatedAt,
+            ],
+          )
+        ).rows[0].id;
+        const legacyItem1 = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.delivery_items(delivery_id,supply_request_item_id,ingredient_id,ingredient_entry_id,actual_quantity,unit,note) VALUES ($1,$2,$3,$4,15.000,'kg','Lô hỗn hợp cũ') RETURNING id",
+            [legacyD1, sri1, ingA1, entryA1],
+          )
+        ).rows[0].id;
+        const approval1 = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.delivery_approvals(delivery_id,user_id,role_id,decision) VALUES ($1,$2,$3,'APPROVE') RETURNING id",
+            [legacyD1, schoolUser, schoolRole],
+          )
+        ).rows[0].id;
+        const lot1 = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.ingredient_lots(delivery_item_id,source_facility_id,lot_code,received_quantity,available_quantity,unit,status) VALUES ($1,$2,'OLD-L1',10.000,10.000,'kg','AVAILABLE') RETURNING id",
+            [legacyItem1, facA1],
+          )
+        ).rows[0].id;
+        const lot2 = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.ingredient_lots(delivery_item_id,source_facility_id,lot_code,received_quantity,available_quantity,unit,status) VALUES ($1,$2,'OLD-L2',5.000,5.000,'kg','AVAILABLE') RETURNING id",
+            [legacyItem1, facA2NullCode],
+          )
+        ).rows[0].id;
+        const inv1 = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.inventory_transactions(ingredient_lot_id,movement_type,quantity,unit,created_by_user_id) VALUES ($1,'RECEIPT',10.000,'kg',$2) RETURNING id",
+            [lot1, schoolUser],
+          )
+        ).rows[0].id;
+        const inv2 = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.inventory_transactions(ingredient_lot_id,movement_type,quantity,unit,created_by_user_id) VALUES ($1,'RECEIPT',5.000,'kg',$2) RETURNING id",
+            [lot2, schoolUser],
+          )
+        ).rows[0].id;
+
+        const readBaselineState = async () => {
+          const deliveries = (
+            await legacy.query(
+              "SELECT id, delivery_no, status::text, creation_mode::text, created_at::text, updated_at::text FROM foodprint.deliveries ORDER BY delivery_no",
+            )
+          ).rows;
+          const items = (
+            await legacy.query(
+              "SELECT id, delivery_id, supply_request_item_id, ingredient_id, ingredient_entry_id, actual_quantity::text, unit, note FROM foodprint.delivery_items ORDER BY id",
+            )
+          ).rows;
+          const approvals = (
+            await legacy.query(
+              "SELECT id, delivery_id, user_id, role_id, decision::text FROM foodprint.delivery_approvals ORDER BY id",
+            )
+          ).rows;
+          const lots = (
+            await legacy.query(
+              "SELECT id, delivery_item_id, source_facility_id, lot_code, received_quantity::text, available_quantity::text, unit, status::text FROM foodprint.ingredient_lots ORDER BY lot_code",
+            )
+          ).rows;
+          const inventory = (
+            await legacy.query(
+              "SELECT id, ingredient_lot_id, movement_type::text, quantity::text, unit FROM foodprint.inventory_transactions ORDER BY id",
+            )
+          ).rows;
+          return { deliveries, items, approvals, lots, inventory };
+        };
+
+        const before = await readBaselineState();
+        await legacy.query(sql);
+        const after = await readBaselineState();
+        assert.deepEqual(after, before);
+
+        const legacyMeta = (
+          await legacy.query<{
+            traceability_version: number | null;
+            source_facility_id: string | null;
+            source_facility_name_snapshot: string | null;
+            source_facility_code_snapshot: string | null;
+            ingredient_name_snapshot: string | null;
+            qr_token: string | null;
+            qr_url: string | null;
+          }>(
+            `SELECT d.traceability_version, di.source_facility_id, di.source_facility_name_snapshot,
+                    di.source_facility_code_snapshot, di.ingredient_name_snapshot, di.qr_token, di.qr_url
+             FROM foodprint.deliveries d
+             JOIN foodprint.delivery_items di ON di.delivery_id = d.id
+             WHERE d.id = $1`,
+            [legacyD1],
+          )
+        ).rows[0];
+        assert.deepEqual(legacyMeta, {
+          traceability_version: null,
+          source_facility_id: null,
+          source_facility_name_snapshot: null,
+          source_facility_code_snapshot: null,
+          ingredient_name_snapshot: null,
+          qr_token: null,
+          qr_url: null,
+        });
+        assert.ok(approval1 && inv1 && inv2 && legacyD2);
+
+        const fingerprint = "b".repeat(64);
+        const eta = "2026-11-20T06:00:00.000Z";
+        const v1SupA = (
+          await legacy.query<{ id: string }>(
+            `INSERT INTO foodprint.deliveries(
+               delivery_no, supply_request_id, school_id, supplier_id, creation_mode,
+               creation_key, creation_fingerprint, traceability_version, status,
+               created_by_user_id, expected_arrival_at, vehicle_plate
+             ) VALUES ('FP-DE-00001', NULL, $1, $2, 'STANDALONE', $3, $4, 1, 'IN_TRANSIT', $5, $6, '51A-12345')
+             RETURNING id`,
+            [school, supplierA, randomUUID(), fingerprint, supplierUserA, eta],
+          )
+        ).rows[0].id;
+        await legacy.query(
+          `INSERT INTO foodprint.deliveries(
+             delivery_no, supply_request_id, school_id, supplier_id, creation_mode,
+             creation_key, creation_fingerprint, traceability_version, status,
+             created_by_user_id, expected_arrival_at, vehicle_plate
+           ) VALUES ('FP-DE-00001', NULL, $1, $2, 'STANDALONE', $3, $4, 1, 'IN_TRANSIT', $5, $6, '29B-54321')`,
+          [school, supplierB, randomUUID(), fingerprint, supplierUserB, eta],
+        );
+        await assert.rejects(
+          legacy.query(
+            `INSERT INTO foodprint.deliveries(
+               delivery_no, supply_request_id, school_id, supplier_id, creation_mode,
+               creation_key, creation_fingerprint, traceability_version, status,
+               created_by_user_id, expected_arrival_at, vehicle_plate
+             ) VALUES ('FP-DE-00001', NULL, $1, $2, 'STANDALONE', $3, $4, 1, 'IN_TRANSIT', $5, $6, '51A-99999')`,
+            [school, supplierA, randomUUID(), fingerprint, supplierUserA, eta],
+          ),
+          (error) => sqlState(error, "23505", "uq_deliveries_supplier_no"),
+        );
+
+        for (const [badSql, badParams] of [
+          [
+            "INSERT INTO foodprint.deliveries(delivery_no, supply_request_id, school_id, supplier_id, creation_mode, creation_key, creation_fingerprint, traceability_version, status, created_by_user_id, expected_arrival_at, vehicle_plate) VALUES ('FP-DE-00002', NULL, $1, $2, 'STANDALONE', $3, $4, 2, 'IN_TRANSIT', $5, $6, '51A-12345')",
+            [school, supplierA, randomUUID(), fingerprint, supplierUserA, eta],
+          ],
+          [
+            "INSERT INTO foodprint.deliveries(delivery_no, supply_request_id, school_id, supplier_id, creation_mode, creation_key, creation_fingerprint, traceability_version, status, created_by_user_id, expected_arrival_at, vehicle_plate) VALUES ('FP-DE-00002', NULL, $1, $2, 'STANDALONE', $3, $4, 1, 'IN_TRANSIT', $5, $6, '   ')",
+            [school, supplierA, randomUUID(), fingerprint, supplierUserA, eta],
+          ],
+          [
+            "INSERT INTO foodprint.deliveries(delivery_no, supply_request_id, school_id, supplier_id, creation_mode, creation_key, creation_fingerprint, traceability_version, status, created_by_user_id, expected_arrival_at, vehicle_plate) VALUES ('FP-DE-00002', NULL, $1, $2, 'STANDALONE', $3, $4, 1, 'IN_TRANSIT', $5, NULL, '51A-12345')",
+            [school, supplierA, randomUUID(), fingerprint, supplierUserA],
+          ],
+          [
+            "INSERT INTO foodprint.deliveries(delivery_no, supply_request_id, school_id, supplier_id, creation_mode, creation_key, creation_fingerprint, traceability_version, status, created_by_user_id, expected_arrival_at, vehicle_plate) VALUES ('FP-DE-00000', NULL, $1, $2, 'STANDALONE', $3, $4, 1, 'IN_TRANSIT', $5, $6, '51A-12345')",
+            [school, supplierA, randomUUID(), fingerprint, supplierUserA, eta],
+          ],
+          [
+            "INSERT INTO foodprint.deliveries(delivery_no, supply_request_id, school_id, supplier_id, creation_mode, creation_key, creation_fingerprint, traceability_version, status, created_by_user_id, expected_arrival_at, vehicle_plate) VALUES ('FP-DE-000001', NULL, $1, $2, 'STANDALONE', $3, $4, 1, 'IN_TRANSIT', $5, $6, '51A-12345')",
+            [school, supplierA, randomUUID(), fingerprint, supplierUserA, eta],
+          ],
+          [
+            "INSERT INTO foodprint.deliveries(delivery_no, supply_request_id, school_id, supplier_id, creation_mode, creation_key, creation_fingerprint, traceability_version, status, created_by_user_id, expected_arrival_at, vehicle_plate) VALUES ('FP-DE-00002', NULL, $1, $2, 'STANDALONE', $3, $4, 1, 'CREATED', $5, $6, '51A-12345')",
+            [school, supplierA, randomUUID(), fingerprint, supplierUserA, eta],
+          ],
+        ] as const) {
+          await assert.rejects(legacy.query(badSql, [...badParams]), (error) =>
+            sqlState(error, "23514", "chk_delivery_traceability_version"),
+          );
+        }
+
+        const token1 = "c".repeat(64);
+        await legacy.query(
+          `INSERT INTO foodprint.delivery_items(
+             delivery_id, supply_request_item_id, ingredient_id, ingredient_entry_id,
+             source_facility_id, source_facility_name_snapshot, source_facility_code_snapshot,
+             ingredient_name_snapshot, qr_token, qr_url, actual_quantity, unit
+           ) VALUES ($1, NULL, $2, NULL, $3, 'Hợp tác xã cũ không mã', NULL, 'Rau cải xanh', $4, $5, 4.000, 'kg')`,
+          [
+            v1SupA,
+            ingA1,
+            facA2NullCode,
+            token1,
+            `https://trace.example.test/api/public/delivery-items/${token1}`,
+          ],
+        );
+
+        const partialItemSql = [
+          [
+            "INSERT INTO foodprint.delivery_items(delivery_id, supply_request_item_id, ingredient_id, ingredient_entry_id, source_facility_id, source_facility_name_snapshot, source_facility_code_snapshot, ingredient_name_snapshot, qr_token, qr_url, actual_quantity, unit) VALUES ($1, NULL, $2, NULL, $3, 'Trang trại A1', NULL, 'Gạo ST25', NULL, NULL, 1.000, 'kg')",
+            [v1SupA, ingB1, facA1],
+            "chk_delivery_item_v1_metadata",
+          ],
+          [
+            "INSERT INTO foodprint.delivery_items(delivery_id, supply_request_item_id, ingredient_id, ingredient_entry_id, source_facility_id, source_facility_name_snapshot, source_facility_code_snapshot, ingredient_name_snapshot, qr_token, qr_url, actual_quantity, unit) VALUES ($1, NULL, $2, NULL, NULL, NULL, 'SF-ONLY', NULL, NULL, NULL, 1.000, 'kg')",
+            [v1SupA, ingB1],
+            "chk_delivery_item_v1_metadata",
+          ],
+          [
+            "INSERT INTO foodprint.delivery_items(delivery_id, supply_request_item_id, ingredient_id, ingredient_entry_id, source_facility_id, source_facility_name_snapshot, source_facility_code_snapshot, ingredient_name_snapshot, qr_token, qr_url, actual_quantity, unit) VALUES ($1, NULL, $2, NULL, $3, 'Trang trại A1', 'SF-A1', 'Gạo ST25', 'INVALID-TOKEN', 'https://trace.example.test/x', 1.000, 'kg')",
+            [v1SupA, ingB1, facA1],
+            "chk_delivery_item_qr_token_format",
+          ],
+          [
+            "INSERT INTO foodprint.delivery_items(delivery_id, supply_request_item_id, ingredient_id, ingredient_entry_id, source_facility_id, source_facility_name_snapshot, source_facility_code_snapshot, ingredient_name_snapshot, qr_token, qr_url, actual_quantity, unit) VALUES ($1, NULL, $2, NULL, $3, 'Trang trại A1', 'SF-A1', 'Gạo ST25', $4, 'https://trace.example.test/x', 1.000, 'kg')",
+            [v1SupA, ingB1, facA1, token1],
+            "delivery_items_qr_token_key",
+          ],
+        ] as const;
+
+        for (const [
+          sqlItem,
+          paramsItem,
+          expectedConstraint,
+        ] of partialItemSql) {
+          await assert.rejects(
+            legacy.query(sqlItem, [...paramsItem]),
+            (error) =>
+              sqlState(
+                error,
+                expectedConstraint === "delivery_items_qr_token_key"
+                  ? "23505"
+                  : "23514",
+                expectedConstraint,
+              ),
+          );
+        }
+
+        const preservedIndexes = (
+          await legacy.query<{ indexname: string; indexdef: string }>(
+            `SELECT indexname, indexdef
+             FROM pg_indexes
+             WHERE schemaname = 'foodprint'
+               AND indexname IN (
+                 'uq_deliveries_supplier_no',
+                 'uq_deliveries_request_mode',
+                 'uq_deliveries_creation_idempotency',
+                 'uq_inventory_initial_receipt_per_lot',
+                 'uq_source_facility_supplier_code',
+                 'delivery_items_qr_token_key'
+               )
+             ORDER BY indexname`,
+          )
+        ).rows;
+        assert.deepEqual(
+          preservedIndexes.map((row) => row.indexname),
+          [
+            "delivery_items_qr_token_key",
+            "uq_deliveries_creation_idempotency",
+            "uq_deliveries_request_mode",
+            "uq_deliveries_supplier_no",
+            "uq_inventory_initial_receipt_per_lot",
+            "uq_source_facility_supplier_code",
+          ],
+        );
+        const requestModeDef = preservedIndexes.find(
+          (row) => row.indexname === "uq_deliveries_request_mode",
+        )?.indexdef;
+        const idempotencyDef = preservedIndexes.find(
+          (row) => row.indexname === "uq_deliveries_creation_idempotency",
+        )?.indexdef;
+        assert.ok(requestModeDef?.includes("REQUEST"));
+        assert.ok(idempotencyDef?.includes("creation_key IS NOT NULL"));
       } finally {
         await legacy.end();
         await db.query(`DROP DATABASE "${name}"`);

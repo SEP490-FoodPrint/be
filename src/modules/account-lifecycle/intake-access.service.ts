@@ -22,6 +22,7 @@ export type IntakeOperation =
       operation: "START_ORDER_PROCESSING";
       orderId: string;
       requiredPermission?: string;
+      sourceFacilityIds?: readonly string[];
     }
   | {
       operation: "CONTINUE_ACCEPTED_WORK";
@@ -32,6 +33,7 @@ export type IntakeOperation =
       operation: "SUPPLIER_CREATE_STANDALONE_DELIVERY";
       schoolId: string;
       ingredientIds: readonly string[];
+      sourceFacilityIds?: readonly string[];
     };
 
 type PrincipalLoader = (
@@ -302,6 +304,12 @@ export function createIntakeAccessService(
         await repo.lockRelationship(tx, command.schoolId, supplierId);
         if (command.ingredientIds.length > 0)
           await repo.lockIngredients(tx, command.ingredientIds);
+        if (command.sourceFacilityIds && command.sourceFacilityIds.length > 0)
+          await repo.lockSourceFacilities(
+            tx,
+            command.sourceFacilityIds,
+            supplierId,
+          );
         const current = await loadActor(actor.id, tx);
         checkSameIdentity(current, actor);
         assertSupplierActor(
@@ -469,6 +477,18 @@ export function createIntakeAccessService(
         userIds: [actor.id],
       });
       if (before) await repo.lockOrder(tx, before.id);
+      if (
+        command.operation === "START_ORDER_PROCESSING" &&
+        command.sourceFacilityIds &&
+        command.sourceFacilityIds.length > 0 &&
+        isSupplier
+      ) {
+        await repo.lockSourceFacilities(
+          tx,
+          command.sourceFacilityIds,
+          supplierId,
+        );
+      }
       const current = await loadActor(actor.id, tx);
       checkSameIdentity(current, actor);
       if (command.operation === "SUPPLIER_ACCEPT_ORDER")
