@@ -20,18 +20,19 @@ if [ ! -e .env ]; then cp .env.example .env; fi
 
 Điền cấu hình riêng trong `.env`:
 
-| Biến                                     | Ý nghĩa                                                                                        |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`                           | URL PostgreSQL của chính máy mình, chứa user/password, host, port và database thật             |
-| `PORT`                                   | Cổng API, mặc định `5000`                                                                      |
-| `NODE_ENV`                               | `development` khi code local                                                                   |
-| `CLIENT_URL`                             | Origin frontend local, mặc định `http://localhost:3001`                                        |
-| `JWT_SECRET`                             | Secret ngẫu nhiên riêng để ký JWT; thay placeholder trong mẫu                                  |
-| `AUTH_ACCESS_TTL_SECONDS`                | Access token: mặc định 900 giây, cho phép 60–3600 giây                                         |
-| `AUTH_REFRESH_TTL_SECONDS`               | Phiên refresh: mặc định 604800 giây, tối đa 30 ngày và phải dài hơn access token               |
-| `RESEND_API_KEY`, `RESEND_FROM`          | API key Resend và sender thuộc domain đã verify để gửi mã xác minh email và khôi phục mật khẩu |
-| `REDIS_URL`, `REDIS_PORT`                | URL Redis local và cổng Docker, mặc định `redis://127.0.0.1:6379/0`, `6379`                    |
-| `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX` | Cửa sổ đếm theo milliseconds và số request/IP, mặc định `60000`, `300`                         |
+| Biến                                     | Ý nghĩa                                                                                           |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                           | URL PostgreSQL của chính máy mình, chứa user/password, host, port và database thật                |
+| `PORT`                                   | Cổng API, mặc định `5000`                                                                         |
+| `NODE_ENV`                               | `development` khi code local                                                                      |
+| `CLIENT_URL`                             | Origin frontend local, mặc định `http://localhost:3001`                                           |
+| `PUBLIC_TRACE_ORIGIN`                    | Origin HTTP/HTTPS cố định sinh URL tem QR; giữ ổn định hostname đã in, không lấy từ header `Host` |
+| `JWT_SECRET`                             | Secret ngẫu nhiên riêng để ký JWT; thay placeholder trong mẫu                                     |
+| `AUTH_ACCESS_TTL_SECONDS`                | Access token: mặc định 900 giây, cho phép 60–3600 giây                                            |
+| `AUTH_REFRESH_TTL_SECONDS`               | Phiên refresh: mặc định 604800 giây, tối đa 30 ngày và phải dài hơn access token                  |
+| `RESEND_API_KEY`, `RESEND_FROM`          | API key Resend và sender thuộc domain đã verify để gửi mã xác minh email và khôi phục mật khẩu    |
+| `REDIS_URL`, `REDIS_PORT`                | URL Redis local và cổng Docker, mặc định `redis://127.0.0.1:6379/0`, `6379`                       |
+| `RATE_LIMIT_WINDOW_MS`, `RATE_LIMIT_MAX` | Cửa sổ đếm theo milliseconds và số request/IP, mặc định `60000`, `300`                            |
 
 Ví dụ cấu trúc URL, cần thay user/password/database/port cho đúng máy:
 
@@ -261,7 +262,9 @@ Team tạo nhánh `<type>/<kebab-case-description>` từ `dev`, mở PR vào `de
 
 `test:unit` liệt kê rõ các file test không cần hạ tầng; thêm file vào script khi bổ sung unit test. Các script Redis integration hiện hữu tiếp tục chạy local khi có Redis.
 
-Workflow chỉ có quyền đọc repository; các action được pin bằng commit SHA. Job Code quality dùng URL PostgreSQL placeholder trên `127.0.0.1:1` và JWT secret dành riêng cho test. Job PostgreSQL migrations dựng PostgreSQL 18 và Redis 7 tạm, kiểm tra baseline/migration/CHECK bằng `npm run test:migrations`, signup/login/phân quyền bằng `npm run test:authorization`, rotation/TTL bằng `npm run test:auth:redis`. Check Backend quality tổng hợp cả hai kết quả, nên migration lỗi vẫn chặn check bắt buộc hiện có. Các job quality không cần `.env`/GitHub Secrets thật và không kết nối Azure. Sau khi check Backend quality của push vào `dev` PASS, workflow gọi job CD Azure ở mục 10; PR và `main` không deploy database này. `HUSKY=0` chỉ áp dụng trong CI vì các bước kiểm tra được chạy trực tiếp.
+Workflow chỉ có quyền đọc repository; các action được pin bằng commit SHA. Job Code quality dùng URL PostgreSQL placeholder trên `127.0.0.1:1` và JWT secret dành riêng cho test. Job PostgreSQL migrations dựng PostgreSQL 18 và Redis 7 tạm, kiểm tra baseline/migration/CHECK bằng `npm run test:migrations`, signup/login/phân quyền bằng `npm run test:authorization`, lifecycle tài khoản bằng `npm run test:account-lifecycle:integration`, rotation/TTL bằng `npm run test:auth:redis` và tạo đơn giao/QR/kiểm nhận bằng `npm run test:supplier-orders:integration`. Check Backend quality tổng hợp cả hai kết quả, nên migration lỗi vẫn chặn check bắt buộc hiện có. Các job quality không cần `.env`/GitHub Secrets thật và không kết nối Azure. Sau khi check Backend quality của push vào `dev` PASS, workflow gọi job CD Azure ở mục 10; PR và `main` không deploy database này. `HUSKY=0` chỉ áp dụng trong CI vì các bước kiểm tra được chạy trực tiếp.
+
+Lưu ý triển khai tính năng đơn giao `v1` và tem QR: luôn hoàn tất `db:migrate:deploy` trên database đích trước khi phát hành backend `v1` hoặc client gửi payload bắt buộc `sources`/`sourceFacilityId`/`expectedArrivalAt`/`vehiclePlate`; không tự cấp quyền hay seed ngầm; giữ cố định hostname trong `PUBLIC_TRACE_ORIGIN` khi đã in tem nhãn QR (endpoint công khai `/api/public/delivery-items/:token` trả HTML/JSON allowlist 8 trường, che token trong log HTTP/lỗi).
 
 Để tái hiện kiểm tra trên một checkout sạch, chưa có `.env`:
 
@@ -370,3 +373,26 @@ MIGRATION_TEST_DATABASE_URL='<disposable-local-test-url>' npm run test:authoriza
 ```
 
 Upload ảnh nguyên liệu dùng hai API trong [hợp đồng upload](specs/ingredient-image-upload/contracts/ingredient-upload-api.md), với cấu hình Cloudinary trong `.env` và header CSRF hiện hành. Thư viện Sharp yêu cầu cài dependency native phù hợp môi trường Node trong `.nvmrc`.
+
+## 12. Chạy test trên PostgreSQL local đã kết nối DataGrip
+
+Không cần tạo lại container PostgreSQL. Dùng instance local hiện có, với cấu hình test riêng; DATABASE_URL của ứng dụng không bị đổi. Cấu hình đã chọn ở máy phát triển này là 127.0.0.1:5433, user foodprint_admin. Mật khẩu chỉ lưu trong file bị gitignore `.env.test.local`; mẫu dùng chung là [.env.test.example](.env.test.example). Giá trị mật khẩu được đọc như văn bản, runner tự encode URL; không cần gửi mật khẩu qua chat hoặc đặt URL có mật khẩu vào command/history.
+
+Nếu máy khác chưa có file cấu hình, copy mẫu thành `.env.test.local`, sửa host/port/user/password cho PostgreSQL loopback của mình. User test cần CREATEDB (hoặc superuser); không tự cấp thêm quyền bằng runner. Có thể dùng user test riêng nếu operator đã tạo. TEST_REDIS_URL phải là Redis local.
+
+```bash
+npm run test:local:check
+npm run test:local:migrations
+npm run test:local:authorization
+npm run test:local:lifecycle
+npm run test:local:supplier-orders
+npm run test:local:unit
+# Chạy tất cả các nhóm trên, dừng khi có nhóm thất bại:
+npm run test:local
+```
+
+`check` xác minh kết nối/quyền và tạo một lần database điều phối `foodprint_migration_test` nếu chưa tồn tại. Database này được giữ lại; runner không reset/xóa nó hoặc database ứng dụng. Mỗi lần chạy nhóm DB, runner tạo database gốc mới, cấp MIGRATION_TEST_DATABASE_URL/DATABASE_URL chỉ cho child process, các harness tạo database con như trước. Local runner ghi tên chính xác sau mỗi CREATE thành công vào manifest riêng, rồi dọn đúng các tên trong manifest khi test xong hoặc thất bại; không scan/drop theo prefix, không dọn database của lần cũ hay một lệnh chạy khác. Database đã được harness dọn sẽ được bỏ qua. Các connection còn mở trong database thử của chính lần chạy có thể bị đóng khi cleanup.
+
+Chỉ những database thử do lần chạy tạo mới được phép ghi/xóa. Các lệnh này là operator action cho instance local đã chọn; không trỏ chúng vào Azure hoặc database thành viên. CI và các lệnh test gốc vẫn giữ cấu hình/harness cũ; manifest registry là no-op nếu không chạy qua wrapper local.
+
+Giữ instance cố định giúp bỏ bước khởi tạo container; kiểm thử migration vẫn replay SQL trên database trống và integration vẫn cần schema/fixture mới để kết quả độc lập. Chỉ chạy `test:local:unit` khi không cần PostgreSQL/Redis; lệnh unit không cần `.env.test.local`. Không tái dùng schema có dữ liệu cũ để giả lập một kết quả kiểm thử migration mới.

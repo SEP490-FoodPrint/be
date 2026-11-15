@@ -143,6 +143,9 @@ jobs:
       - name: Verify supplier contracts and tenant isolation
         run: npm run test:supplier-onboarding
 
+      - name: Verify supplier order creation, QR trace and school receipt lifecycle
+        run: npm run test:supplier-orders:integration
+
   spec_gate:
     name: Spec gate
     if: github.event_name == 'pull_request'

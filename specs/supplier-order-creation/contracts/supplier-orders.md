@@ -1,99 +1,104 @@
-# HTTP Contract: Supplier order creation
+# HTTP Contract: Đơn giao hàng có nguồn cung / QR
 
-## Base và quyền
+**Revision**: 2026-11-15. Thay contract baseline cho create; routes GET cũ giữ envelope và raw status. Mọi route mô tả ở đây là thiết kế mục tiêu, không khẳng định đã implement.
 
-Nhóm mới `/api/deliveries/management` trên module `supplier-order`, đăng ký trước các route động delivery. Chỉ tài khoản ACTIVE, membership SUPPLIER và role INGREDIENT_SUPPLIER_ADMIN hoặc INGREDIENT_SUPPLIER_STAFF. Không SYSTEM bypass.
+## Quyền và phạm vi
 
-POST và các options yêu cầu delivery.manage. Management list/detail giữ policy delivery resource: có delivery.view HOẶC delivery.manage HOẶC delivery.receive, đồng thời đúng hai role. Mọi list gọi listScopes và repository WHERE có supplierId tin cậy; options schools lọc quan hệ ACTIVE thuộc supplier hiện tại. Không cấp quyền mới hoặc tự bật lại denial.
-
-Envelope: giữ sendSuccess/sendError. Creation thành công lần đầu HTTP201, replay cùng key/payload HTTP200. Errors có message tiếng Việt và validation field paths; không phản chiếu raw values. Các DTO không trả DB record, creationKey/hash, hợp đồng hoặc hồ sơ tài khoản.
+- Supplier admin/staff ACTIVE, membership hợp lệ; POST/options/labels cần `delivery.manage`; management GET list/detail giữ `delivery.view` hoặc `delivery.manage` hoặc `delivery.receive`.
+- SupplierId lấy AuthPrincipal, không nhận override. Mọi list (kể cả options/labels) dùng trusted scope qua resource-access; repositories áp WHERE supplierId và target ownership.
+- Arrival và inspection: đúng SCHOOL của Delivery, một trong bốn role `SCHOOL_NUTRITION_OFFICER`, `SCHOOL_KITCHEN_STAFF`, `INGREDIENT_MANAGEMENT_DEPARTMENT`, `PARENTS_COMMITTEE`, có `delivery.view` và `delivery.inspect`.
+- Chỉ public point lookup bằng QR token được không đăng nhập; không thay quyền `GET /api/traceability-anchors` hiện có.
 
 ## POST `/api/deliveries/management`
 
-Header `Idempotency-Key`: UUID bắt buộc; một giá trị duy nhất, chuẩn hóa lowercase. Không nhận key qua body/query. Query rỗng. JSON body là strict discriminated union theo sourceType.
+Query rỗng. `Authorization: Bearer ...`, `Content-Type: application/json`, `Idempotency-Key: <UUID>` bắt buộc. Body strict theo sourceType.
 
 ### REQUEST
 
 ```json
 {
   "sourceType": "REQUEST",
-  "supplyRequestId": "00000000-0000-4000-8000-000000000001",
+  "supplyRequestId": "61000000-0000-4000-8000-202611080001",
+  "sources": [
+    {
+      "supplyRequestItemId": "61100000-0000-4000-8000-202611080001",
+      "sourceFacilityId": "11111111-1111-4111-8111-111111111111"
+    }
+  ],
+  "vehiclePlate": "29C-123.45",
   "expectedArrivalAt": "2026-11-20T08:30:00+07:00",
-  "vehiclePlate": "51C-12345",
-  "note": "Giao theo yêu cầu đã tiếp nhận"
+  "note": "Giao toàn bộ theo yêu cầu"
 }
 ```
 
-Không nhận schoolId/supplierId/items/quantity override. Repository đọc toàn bộ dòng nguồn; service kiểm tra nguồn đúng supplier, đã tiếp nhận/còn được thực hiện và chưa có bất kỳ Delivery cho nguồn. Copy đúng toàn bộ lượng/unit/note; source ACCEPTED -> IN_PROGRESS nguyên tử, IN_PROGRESS giữ nguyên. Nội dung sai/ngoài scope/đã có phiếu không được sinh phiếu mới.
+sources không rỗng, không trùng supplyRequestItemId, phải đúng và đủ tập dòng trong nguồn; ví dụ trên chỉ hợp lệ với yêu cầu một dòng. Không nhận items, schoolId, supplierId hoặc override lượng/đơn vị/nguyên liệu. Nguồn ACCEPTED/IN_PROGRESS thuộc supplier và chưa có bất kỳ Delivery; thiếu/thừa/sai dòng nguồn409, không tiết lộ nguồn ngoài scope. Mỗi cơ sở ACTIVE và thuộc supplier; source ngoài scope404 như không tồn tại, source đã dừng409. Copy toàn bộ lượng/đơn vị/note nguồn; chỉ bổ sung facility.
 
 ### STANDALONE
 
 ```json
 {
   "sourceType": "STANDALONE",
-  "schoolId": "00000000-0000-4000-8000-000000000002",
+  "schoolId": "10000000-0000-4000-8000-000000000001",
+  "vehiclePlate": "29C-123.45",
+  "expectedArrivalAt": "2026-11-20T08:30:00+07:00",
+  "note": "Giao chủ động hoặc giao lại bằng đơn thủ công",
   "items": [
     {
-      "ingredientId": "00000000-0000-4000-8000-000000000003",
-      "quantity": "12.125",
-      "unit": "kg",
-      "note": "Giao chủ động"
+      "ingredientId": "00000057-0000-4000-8000-000000000001",
+      "sourceFacilityId": "11111111-1111-4111-8111-111111111111",
+      "actualQuantity": "12.500",
+      "unit": "kg"
     }
-  ],
-  "expectedArrivalAt": null,
-  "vehiclePlate": null,
-  "note": null
+  ]
 }
 ```
 
-schoolId bắt buộc nhưng chỉ là target; kiểm tra lại quan hệ ACTIVE và trạng thái đối tác trong transaction. Không nhận supplyRequestId/supplyRequestItemId/previousDeliveryId/supplierId. Không cần lịch sử từ chối. Nguyên liệu ACTIVE thuộc supplier hiện tại, unit bằng defaultUnit; không tự tạo entry trường. Thao tác tạo hợp lệ khi chưa có entry, trước receipt phải có entry theo data-model.
+Items 1..100, không trùng ingredientId; strict item không nhận note riêng/QR/snapshot/sourceRequestItem. actualQuantity là chuỗi dương tối đa11 chữ số nguyên và3 chữ số thập phân, không exponent/NaN/Infinity, chuẩn hóa trước hash. Unit trim1..30, bằng defaultUnit; nguyên liệu ACTIVE thuộc supplier. Facility như REQUEST. School phải thuộc tập linked ACTIVE và đủ điều kiện mới; sourceRequest/previousDelivery không bắt buộc và không được gửi. Thiếu school entry không chặn create; final receipt vẫn yêu cầu entry ACTIVE.
 
-### Validation chung
+### Chung, kết quả và retry
 
-- UUID theo schema chung, lowercase; body strictObject trong từng nhánh, gom lỗi safeParse.
-- items chỉ STANDALONE: 1..100 dòng, ingredientId không trùng. quantity chỉ chuỗi số thập phân dương, tối đa 11 chữ số phần nguyên và 3 chữ số phần lẻ, không exponent/NaN/Infinity; dùng Decimal, không Number. Canonicalize để hash không phân biệt 12.0/12.000.
-- unit trim 1..30 ký tự. note trim, tối đa 2000, omitted/null/empty -> null. vehiclePlate trim tối đa40, omitted/null/empty -> null. expectedArrivalAt omitted/null -> null, nếu có phải ISO8601 có timezone; không thêm luật bắt buộc tương lai chưa được yêu cầu.
-- REQUEST không nhận items ngay cả khi trùng dữ liệu nguồn. Nguồn không có dòng ->409, không tạo phiếu rỗng.
+Plate bắt buộc string trim1..40, ETA bắt buộc ISO8601 với timezone/offset hợp lệ, lưu UTC; không tự thêm điều kiện ngày phải tương lai. Note optional/null/empty ->null, trim tối đa2000. UUID lowercase như shared validator. Không nhận deliveryNo/status/actor/snapshot/token/version từ client. Lỗi input gom field paths, không phản chiếu giá trị nhạy cảm.
 
-### Kết quả tạo/chi tiết
+Thành công lần đầu201, replay cùng key/canonical body200, cùng Delivery và cùng timestamps/mã/token/URL; khác body với cùng key409. Key scoped supplier+actor. REQUEST key mới sau khi nguồn có phiếu vẫn409. Reorder selections/items không tạo hash khác; đổi facility/metadata phải409 với cùng key. Old payload thiếu dữ liệu mới400; không nâng cấp record cũ bằng replay.
 
-`data` có id, deliveryNo, sourceType (REQUEST/STANDALONE), supplierId, schoolId, schoolName, supplyRequestId|null, requestNo|null, status, createdByUserId|null, expectedArrivalAt|null, vehiclePlate|null, note|null, createdAt, updatedAt, items.
+`data` là Detail: các field header hiện hành, thêm traceabilityVersion, statusLabel, items. Đơn v1 raw `status: IN_TRANSIT`, mã `FP-DE-00001` tăng riêng supplier; source có thì request chuyển IN_PROGRESS trong cùng commit. Không trả creationKey/fingerprint. Mỗi item: id, ingredientId, ingredientName (snapshot v1), ingredientEntryId|null, supplyRequestItemId|null, actualQuantity (chuỗi), unit, note|null; thêm sourceFacility `{id,name,facilityCode|null}` hoặc null legacy, traceUrl hoặc null legacy. Không trả raw token riêng/lot token trong management DTO. Tạo xong N dòng có N QR ổn định và N lô dự kiến BLOCKED, available0, không receipt; PNG có thể lấy qua labels. Lỗi render trong lần tạo trước commit không lưu đơn thiếu QR.
 
-Mỗi item có id, ingredientId, ingredientName, ingredientEntryId|null, supplyRequestItemId|null, quantity (chuỗi Decimal), unit, note|null. quantity map từ actualQuantity persistence; ngày giờ ISO UTC, null hiện diện tường minh. Không trả email/phone/password/contractSnapshot. Chi tiết lịch sử có thể có createdByUserId null, không tự điền người tạo.
+## GET management list/detail
 
-Idempotency scoped supplier+actor+key; reload current auth trước replay. Cùng canonical payload trả cùng record không đổi updatedAt. Cùng key khác payload ->409. Key mới tạo standalone mới có thể cùng nội dung; REQUEST vẫn409 nếu nguồn đã có phiếu. Lỗi sau header/item/source update rollback toàn bộ.
+Giữ `GET /api/deliveries/management` query strict page1/limit20 tối đa100, sourceType và raw status tùy chọn; không nhận supplier/school/search tùy ý. Summary không chứa items/PNG/token; thêm statusLabel và traceabilityVersion. Thứ tự createdAt desc/id asc, limit+1, pagination `{page,limit,hasNext}`.
 
-## GET `/api/deliveries/management`
+`GET /api/deliveries/management/:id` query rỗng, UUID + supplier scope; Detail như trên. Các mã FP-DE trùng giữa suppliers vẫn lấy đúng record bằng UUID và principal. Legacy có metadata/nguồn/QR null không bị coi là dữ liệu mới sai. Không thêm lookup đơn bằng deliveryNo đơn lẻ.
 
-Query strict: page mặc định1; limit20/tối đa100; sourceType optional REQUEST/STANDALONE; status optional enum DeliveryStatus hiện hành. Số nguyên dương, offset <=2147483647. Không nhận schoolId/supplierId/sort/search hoặc filters ngoài hợp đồng.
+## GET options
 
-Response data `{items: Summary[], pagination:{page,limit,hasNext}}`. Summary gồm các field header của detail, không items; createdAt desc rồi id asc, limit+1. Lịch sử creationMode null có nguồn hiển thị sourceType REQUEST. Scope SUPPLIER luôn áp dụng độc lập filters; rỗng hoặc trang vượt -> items[], hasNext false. Không thêm total count.
+Các route query strict page/limit, cùng pagination; thứ tự id asc:
 
-## GET `/api/deliveries/management/:id`
+| Route dưới `/api/deliveries/management` | data.items                                                                                |
+| --------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `/options/schools`                      | `{id,code,name}` thuộc linked ACTIVE và điều kiện cung ứng mới như hiện hành.             |
+| `/options/ingredients`                  | `{id,name,defaultUnit,categoryId,categoryName}` ACTIVE đúng supplier.                     |
+| `/options/source-facilities` (mới)      | `{id,facilityCode,name}` ACTIVE đúng supplier; facilityCode có thể null với cơ sở legacy. |
 
-Params UUID, query rỗng. Cùng DTO chi tiết creation. Không tồn tại/ngoài supplier ->404. Bản ghi legacy được map canonical fields, nguồn giữ nguyên.
+Options không trao quyền thêm/sửa/dừng source; staff đủ manage được chọn source. Không lọc theo isVisible để mất nguồn thuộc sở hữu, không công khai list options. Tạo rechecks mọi target dù options đã trả hợp lệ.
 
-## GET `/api/deliveries/management/options/schools`
+## GET `/api/deliveries/management/:id/labels`
 
-Quyền manage, đúng role SUPPLIER. Query page/limit như trên; không nhận supplierId override. Trả `{items:[{id,name}],pagination}`; School đủ điều kiện cung ứng mới, quan hệ ACTIVE thuộc supplier hiện tại, tránh trùng school nếu có lịch sử quan hệ; thứ tự id asc. Không có trường -> items[]; POST vẫn recheck, không coi options là ủy quyền ghi.
+Protected `delivery.manage`, query page1/limit20 tối đa100. Kiểm target UUID/ownership trước pagination; v1 trả `{items,pagination}` theo item.id asc. Mỗi label: deliveryItemId, deliveryNo, supplierName, ingredientNameSnapshot hiển thị dưới ingredientName, actualQuantity (chuỗi), unit, sourceFacility `{name,facilityCode|null}`, traceUrl và qrImageDataUrl (`data:image/png;base64,...`). Không thêm contacts/account data/lot token. N dòng lấy đủ các trang có đúng N label; reprint cùng URL/QR, không ghi DB. Source code null vẫn có tên nguồn để in. Legacy chưa có traceabilityVersion1 trả409 “Đơn lịch sử chưa có nhãn QR theo dòng”. Target ngoài supplier404. Render lỗi503, không thay đổi database.
 
-## GET `/api/deliveries/management/options/ingredients`
+## POST `/api/deliveries/:id/arrival`
 
-Quyền manage, đúng role; query page/limit. Chỉ Ingredient ACTIVE của supplier hiện tại; `{items:[{id,name,defaultUnit}],pagination}`. Không dùng endpoint ingredient management chỉ dành admin để staff phải được quyền ngoài phạm vi. Các option list cũng dùng trusted scope tại resource-access (helper operation-specific nếu cần), không coi scope chỉ là role.
+Mới, thuộc module delivery, đúng bốn role của trường + quyền view/inspect, JSON strict `{}`, query rỗng. Supplier và public không được gọi thay trường. Không nhận arrivedAt/status/lots/quantity từ client.
 
-## Tương thích API hiện có
+Khóa/recheck nguồn nếu có và Delivery đúng trường. V1 IN_TRANSIT -> ARRIVED, ghi server arrivedAt,200 trả inspection detail với statusLabel. Không nhập kho hoặc tạo approval. Nguồn CANCELLED/đơn đã hủy409; legacy CREATED không tự nâng cấp sang luồng mới. Nếu arrival đã ghi và trạng thái ARRIVED/PENDING_APPROVAL/RECEIVED/REJECTED, gửi lại200 đúng kết quả hiện tại và arrivedAt cũ, không downgrade; chưa arrival mà status khác IN_TRANSIT409. Ngoài scope/not found404. Role/phân quyền không hợp lệ403.
 
-- GET `/api/deliveries` giữ envelope, field cũ và permission/scope hiện hành; supplyRequestId nullable cho standalone, requestNo/orderNo/requestedDeliveryDate/requestedQuantity null khi không có nguồn; field school/ingredient lấy chuẩn trực tiếp. Bản ghi có nguồn không đổi giá trị. Dời Prisma args khỏi service khi chạm sửa.
-- GET/POST inspection hiện có giữ bốn role/quyền và quyết định bất biến. Bổ sung schoolId/sourceType, supplyRequestId/requestNo nullable. Với standalone, redeliveryRequiredCount/redeliveryLimit/cancellationNotice là null vì không có nhóm yêu cầu; không giả zero bằng một nhóm nguồn giả. Có nguồn giữ số liệu/cancellation notice như cũ.
-- Receipt standalone vẫn yêu cầu đủ bốn approval, trạng thái/lots hợp lệ, mapping IngredientEntry đúng trường/nguyên liệu và receipt đúng một lần; thiếu mapping trả409 trước ghi nhận. Không mở route nhập lô hoặc đổi trạng thái ARRIVED trong feature này.
-- Source-based reject count/cancel/budget unchanged. Standalone reject chỉ REJECTED phiếu hiện tại, không sửa bất kỳ SupplyRequest/Delivery khác không liên quan.
+Mọi lần gọi arrival, kể cả replay, đều yêu cầu parent traceabilityVersion1 trước xét trạng thái; record legacy có IN_TRANSIT hoặc arrivedAt cũ cũng không được vào nhánh replay của route mới (409).
 
-## Lỗi
+## Inspection hiện hành
 
-| HTTP    | Trường hợp                                                                                                          |
-| ------- | ------------------------------------------------------------------------------------------------------------------- |
-| 400     | Body/query/header/UUID/Decimal sai hoặc trường lạ                                                                   |
-| 401/403 | Auth hiện hành, role/org/membership/quyền sai                                                                       |
-| 404     | Nguồn/phiếu ngoài scope hoặc không tồn tại; trường/ingredient không có trong tập được phép                          |
-| 409     | Nguồn chưa đủ trạng thái/đã có phiếu; quan hệ/pause thay đổi; idempotency key khác nội dung; thiếu mapping nhận kho |
-| 429/503 | Limiter và dependency/database theo handler hiện hành, không lộ SQL/URL/secret                                      |
+Giữ GET/POST `/api/deliveries/:id/inspection` và GET `/api/deliveries/inspections`, quyền/ảnh/decision/reason như baseline. Bổ sung source v1 vào chi tiết kiểm tra và statusLabel nhất quán; không công khai các DTO này. Kiểm khi ARRIVED/PENDING_APPROVAL, một bất biến decision mỗi role; APPROVE1..3 giữ PENDING_APPROVAL, đủ4 + receipt hợp lệ chuyển RECEIVED/“Hoàn thành”. REJECT có reason chuyển REJECTED/“Yêu cầu giao hàng lại”, chặn quyết định mới sau đó.
+
+Receipt rechecks lot.sourceFacilityId bằng nguồn dòng v1 và các điều kiện stock hiện hữu. Lỗi missing school entry, lệch lượng/nguồn, lot history hoặc ngày không hợp lệ409 và rollback quyết định cuối/receipt. Cơ sở dừng sau tạo không làm sai lịch sử. Không thêm step APPROVED/COMPLETED enum hoặc đổi raw status cũ. Giữ cap3 nguồn; standalone counters/limit/cancellationNotice null, không nhóm mọi nguồn null hoặc tự nối đơn thủ công vào chuỗi cũ.
+
+## Lỗi và hợp đồng liên quan
+
+400 input;401 chưa đăng nhập;403 sai role/quyền;404 target ngoài scope/không có;409 state/mapping/fingerprint/nguồn conflict;429 rate limit;503 dependency. Giữ `sendSuccess`/`sendError` envelope. Ngoại lệ HTML công khai được quy định riêng trong [public-trace.md](public-trace.md). Các input/fields mới là thay đổi hợp đồng có chủ ý của amendment; phải cập nhật client và tài liệu authorization trước release.

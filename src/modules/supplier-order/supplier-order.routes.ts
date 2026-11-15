@@ -20,7 +20,13 @@ export function createSupplierOrderRouter(
     authHandler,
     controller.listIngredientOptions,
   );
+  router.get(
+    "/options/source-facilities",
+    authHandler,
+    controller.listSourceFacilityOptions,
+  );
   router.get("/", authHandler, controller.list);
+  router.get("/:id/labels", authHandler, controller.listLabels);
   router.get("/:id", authHandler, controller.detail);
   router.post("/", authHandler, controller.create);
 

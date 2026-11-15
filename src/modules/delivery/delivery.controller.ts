@@ -4,6 +4,8 @@ import { asyncHandler } from "../../utils/async-handler";
 import { sendSuccess } from "../../utils/response";
 import { deliveryService, type DeliveryService } from "./delivery.service";
 import {
+  validateDeliveryArrivalBody,
+  validateDeliveryArrivalQuery,
   validateDeliveryListQuery,
   validateDeliveryInspectionQuery,
   validateDeliveryId,
@@ -15,6 +17,18 @@ export function createDeliveryInspectionController(
   service: DeliveryInspectionService,
 ) {
   return {
+    arrive: asyncHandler(async (req, res) => {
+      const id = validateDeliveryId(req.params).id;
+      const query = validateDeliveryArrivalQuery(req.query);
+      const body = validateDeliveryArrivalBody(req.body);
+      const result = await service.arrive(
+        id,
+        body,
+        query,
+        requirePrincipal(req),
+      );
+      sendSuccess(res, result, "Xác nhận đợt giao đã đến trường thành công");
+    }),
     decide: asyncHandler(async (req, res) => {
       const id = validateDeliveryId(req.params).id;
       const input = validateDeliveryInspectionDecision(req.body);

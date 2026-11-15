@@ -6,6 +6,7 @@ import {
   withSchoolTransaction,
 } from "../../utils/authorization";
 import { HttpError } from "../../utils/http-error";
+import { getDeliveryStatusLabel } from "../../utils/delivery-status";
 import { ROLE_LABELS } from "../../constants/roles";
 import {
   deliveryInspectionRepository as inspections,
@@ -16,6 +17,8 @@ import {
   type DeliveryListReader,
 } from "./delivery.repository";
 import type {
+  DeliveryArrivalBodyDTO,
+  DeliveryArrivalQueryDTO,
   DeliveryInspectionQueryDTO,
   DeliveryInspectionDecisionDTO,
 } from "./delivery.request.dto";
@@ -147,10 +150,12 @@ function inspectionDTO(
     deliveryNo: row.deliveryNo,
     schoolId: row.schoolId,
     sourceType,
+    traceabilityVersion: row.traceabilityVersion ?? null,
     supplyRequestId: row.supplyRequestId,
     requestNo: source?.requestNo ?? null,
     supplierName: row.Supplier.name,
     status: row.status,
+    statusLabel: getDeliveryStatusLabel(row.status),
     expectedArrivalAt: row.expectedArrivalAt?.toISOString() ?? null,
     arrivedAt: row.arrivedAt?.toISOString() ?? null,
     receivedAt: row.receivedAt?.toISOString() ?? null,
@@ -183,6 +188,49 @@ function inspectionDTO(
       reason: approval.reason,
       photoUrl: recordPhotoUrl(approval.photoPublicId),
       decidedAt: approval.decidedAt.toISOString(),
+    })),
+  };
+}
+
+function inspectionDetailDTO(
+  row: DeliveryInspectionDetailRow,
+  principal: AuthPrincipal,
+): DeliveryInspectionDTO {
+  return {
+    ...inspectionDTO(row, principal),
+    deliveryItems: row.deliveryItems.map((item) => ({
+      id: item.id,
+      ingredientName:
+        item.ingredientNameSnapshot ??
+        item.Ingredient?.name ??
+        item.SupplyRequestItem?.IngredientEntry?.Ingredient?.name ??
+        "",
+      category:
+        item.Ingredient?.ingredientCategory?.categoryName ??
+        item.SupplyRequestItem?.IngredientEntry?.Ingredient?.ingredientCategory
+          ?.categoryName ??
+        null,
+      actualQuantity: item.actualQuantity.toString(),
+      unit: item.unit,
+      sourceFacility: item.sourceFacilityNameSnapshot
+        ? {
+            id: item.sourceFacilityId ?? null,
+            name: item.sourceFacilityNameSnapshot,
+            facilityCode: item.sourceFacilityCodeSnapshot ?? null,
+          }
+        : null,
+      ingredientLots: item.ingredientLots.map((lot) => ({
+        id: lot.id,
+        lotCode: lot.lotCode,
+        qrToken: lot.qrToken,
+        sourceFacility: lot.SourceFacility?.name ?? null,
+        manufactureDate:
+          lot.manufactureDate?.toISOString().slice(0, 10) ?? null,
+        expiryDate: lot.expiryDate?.toISOString().slice(0, 10) ?? null,
+        receivedQuantity: lot.receivedQuantity.toString(),
+        unit: lot.unit,
+        status: lot.status,
+      })),
     })),
   };
 }
@@ -261,6 +309,12 @@ function assertReceipt(
           "Mặt hàng/lô giao phải khớp danh mục nguyên liệu của trường và nhà cung cấp",
         );
     }
+    if (row.traceabilityVersion === 1 && !item.sourceFacilityId) {
+      throw new HttpError(
+        409,
+        "Mặt hàng giao v1 thiếu thông tin cơ sở cung cấp",
+      );
+    }
     let total = new Prisma.Decimal(0);
     for (const lot of item.ingredientLots) {
       if (
@@ -273,6 +327,16 @@ function assertReceipt(
           409,
           "Lô nhận phải đang chặn, chưa có tồn kho và đúng Supplier",
         );
+      if (
+        row.traceabilityVersion === 1 &&
+        (!lot.sourceFacilityId ||
+          lot.sourceFacilityId !== item.sourceFacilityId)
+      ) {
+        throw new HttpError(
+          409,
+          "Lô tiếp nhận phải khớp cơ sở cung cấp của mặt hàng giao",
+        );
+      }
       const manufacture = lot.manufactureDate?.toISOString().slice(0, 10);
       const expiry = lot.expiryDate?.toISOString().slice(0, 10);
       if (
@@ -301,6 +365,71 @@ export function createDeliveryInspectionService(
   now = () => new Date(),
 ) {
   return {
+    async arrive(
+      id: string,
+      _body: DeliveryArrivalBodyDTO,
+      _query: DeliveryArrivalQueryDTO,
+      principal: AuthPrincipal,
+    ): Promise<DeliveryInspectionDTO> {
+      inspectionScope(principal);
+      return withSchoolTransaction(
+        await connect(),
+        principal,
+        "delivery.inspect",
+        async (tx, actor, schoolId) => {
+          inspectionScope(actor);
+          if (!(await inspections.lock(tx, schoolId, id)))
+            throw new HttpError(404, "Không tìm thấy đợt giao trong trường");
+          const row = await inspections.detail(tx, schoolId, id);
+          if (!row)
+            throw new HttpError(404, "Không tìm thấy đợt giao trong trường");
+          if (row.traceabilityVersion !== 1) {
+            throw new HttpError(
+              409,
+              "Đợt giao lịch sử không hỗ trợ xác nhận đến trường qua luồng mới",
+            );
+          }
+          if (
+            row.status === "CANCELLED" ||
+            row.status === "CANCELLED_MEAL" ||
+            row.SupplyRequest?.status === "CANCELLED"
+          ) {
+            throw new HttpError(
+              409,
+              "Đợt giao hoặc yêu cầu cung ứng nguồn đã bị hủy",
+            );
+          }
+          if (
+            row.arrivedAt !== null &&
+            ["ARRIVED", "PENDING_APPROVAL", "RECEIVED", "REJECTED"].includes(
+              row.status,
+            )
+          ) {
+            return inspectionDetailDTO(row, actor);
+          }
+          if (row.status !== "IN_TRANSIT" || row.arrivedAt !== null) {
+            throw new HttpError(
+              409,
+              "Trạng thái đợt giao không hợp lệ để xác nhận đến trường",
+            );
+          }
+          const updated = await inspections.markArrived(
+            tx,
+            id,
+            schoolId,
+            now(),
+          );
+          if (updated.count !== 1) {
+            throw new HttpError(
+              409,
+              "Trạng thái đợt giao đã thay đổi trước khi xác nhận đến trường",
+            );
+          }
+          const saved = (await inspections.detail(tx, schoolId, id))!;
+          return inspectionDetailDTO(saved, actor);
+        },
+      );
+    },
     async decide(
       id: string,
       input: DeliveryInspectionDecisionDTO,
@@ -537,35 +666,7 @@ export function createDeliveryInspectionService(
         const row = await inspections.detail(await connect(), schoolId, id);
         if (!row)
           throw new HttpError(404, "Không tìm thấy đợt giao trong trường");
-        return {
-          ...inspectionDTO(row, principal),
-          deliveryItems: row.deliveryItems.map((item) => ({
-            id: item.id,
-            ingredientName:
-              item.Ingredient?.name ??
-              item.SupplyRequestItem?.IngredientEntry?.Ingredient?.name ??
-              "",
-            category:
-              item.Ingredient?.ingredientCategory?.categoryName ??
-              item.SupplyRequestItem?.IngredientEntry?.Ingredient
-                ?.ingredientCategory?.categoryName ??
-              null,
-            actualQuantity: item.actualQuantity.toString(),
-            unit: item.unit,
-            ingredientLots: item.ingredientLots.map((lot) => ({
-              id: lot.id,
-              lotCode: lot.lotCode,
-              qrToken: lot.qrToken,
-              sourceFacility: lot.SourceFacility?.name ?? null,
-              manufactureDate:
-                lot.manufactureDate?.toISOString().slice(0, 10) ?? null,
-              expiryDate: lot.expiryDate?.toISOString().slice(0, 10) ?? null,
-              receivedQuantity: lot.receivedQuantity.toString(),
-              unit: lot.unit,
-              status: lot.status,
-            })),
-          })),
-        };
+        return inspectionDetailDTO(row, principal);
       });
     },
   };

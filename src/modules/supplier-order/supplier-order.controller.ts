@@ -10,6 +10,7 @@ import {
   validateSupplierOrderDetailParams,
   validateSupplierOrderEmptyQuery,
   validateSupplierOrderIdempotencyKey,
+  validateSupplierOrderLabelsQuery,
   validateSupplierOrderListQuery,
   validateSupplierOrderOptionsQuery,
 } from "./supplier-order.validation";
@@ -54,6 +55,30 @@ export function createSupplierOrderController(
         requirePrincipal(req),
       );
       sendSuccess(res, result, "Lấy danh sách nguyên liệu hợp lệ thành công");
+    }),
+
+    listSourceFacilityOptions: asyncHandler(async (req, res) => {
+      const query = validateSupplierOrderOptionsQuery(req.query);
+      const result = await service.listSourceFacilityOptions(
+        query,
+        requirePrincipal(req),
+      );
+      sendSuccess(
+        res,
+        result,
+        "Lấy danh sách cơ sở cung cấp hợp lệ thành công",
+      );
+    }),
+
+    listLabels: asyncHandler(async (req, res) => {
+      const params = validateSupplierOrderDetailParams(req.params);
+      const query = validateSupplierOrderLabelsQuery(req.query);
+      const result = await service.listLabels(
+        params,
+        query,
+        requirePrincipal(req),
+      );
+      sendSuccess(res, result, "Lấy nhãn QR giao hàng thành công");
     }),
 
     list: asyncHandler(async (req, res) => {

@@ -564,3 +564,17 @@ export function supplierOrderReadScope(
   const deliveryScope = listScopes["delivery"](principal);
   return { ...deliveryScope, supplierId };
 }
+
+export function supplierOrderSourceOptionScope(
+  principal: AuthPrincipal,
+): Prisma.SourceFacilityWhereInput & SupplierOrderScope {
+  const { supplierId } = supplierOrderManagementScope(principal);
+  return { supplierId, status: "ACTIVE" };
+}
+
+export function supplierOrderLabelScope(
+  principal: AuthPrincipal,
+): Prisma.DeliveryWhereInput & SupplierOrderScope {
+  const { supplierId } = supplierOrderManagementScope(principal);
+  return { supplierId };
+}
