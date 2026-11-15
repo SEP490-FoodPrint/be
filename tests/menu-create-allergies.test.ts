@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
-import type { PrismaClient } from "../src/generated/prisma/client";
+import { Prisma, type PrismaClient } from "../src/generated/prisma/client";
 import {
   canEditMenuDay,
   createMenuService,
@@ -13,6 +13,11 @@ import {
 import { validateMenuWrite } from "../src/modules/menu/menu.validation";
 import { validateDishRecipe } from "../src/modules/dish/dish.validation";
 import { principalFromIdentity } from "../src/utils/authorization";
+import { dishRecipeRepository } from "../src/modules/dish/dish.repository";
+import {
+  validateMenuGradeBatch,
+  validateMenuSubmitGroup,
+} from "../src/modules/menu/menu.validation";
 
 const id = (n: number) =>
   `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -793,4 +798,386 @@ void test("both save actions reject an approved week before any write", async (t
     });
   }
   assert.equal(f.counts().committedWrites, 0);
+});
+
+function gradeFixture(t: TestContext, missingSecond = false) {
+  const f = fixture(t);
+  f.menu.grades = [];
+  f.allergyRows.length = 0;
+  const grades = [
+    { id: id(90), name: "Khối 1–3" },
+    { id: id(91), name: "Khối 4–5" },
+  ];
+  let activeGrade = grades[0].id;
+  const entry = (entryId: string, ingredientId: string, name: string) => ({
+    id: entryId,
+    ingredientId,
+    schoolId: id(3),
+    status: "ACTIVE",
+    handlingType: "DRY_STOCK",
+    Ingredient: {
+      name,
+      status: "ACTIVE",
+      defaultUnit: "g",
+      Supplier: {
+        status: "ACTIVE",
+        schoolSupplierRelationships: [{ schoolId: id(3) }],
+      },
+    },
+  });
+  const meat = entry(id(10), id(7), "Thịt"),
+    salt = entry(id(8), id(9), "Muối");
+  const profiles = grades
+    .slice(0, missingSecond ? 1 : 2)
+    .map((grade, index) => ({
+      gradeId: grade.id,
+      lines: [
+        {
+          ingredientEntryId: meat.id,
+          ingredientRole: "MAIN",
+          requiredQuantity: new Prisma.Decimal(index ? "100" : "80"),
+          unit: "g",
+          entry: meat,
+        },
+        {
+          ingredientEntryId: salt.id,
+          ingredientRole: "SEASONING",
+          requiredQuantity: new Prisma.Decimal(index ? "3" : "2"),
+          unit: "g",
+          entry: salt,
+        },
+      ],
+    }));
+  t.mock.method(
+    repository,
+    "schoolGrades",
+    (_tx: unknown, schoolId: string, ids: string[]) => {
+      assert.equal(schoolId, id(3));
+      return Promise.resolve(grades.filter((grade) => ids.includes(grade.id)));
+    },
+  );
+  t.mock.method(
+    dishRecipeRepository,
+    "recipes",
+    (_tx: unknown, schoolId: string) => {
+      assert.equal(schoolId, id(3));
+      return Promise.resolve([
+        {
+          id: id(6),
+          name: "Thịt kho",
+          gradeRecipes: profiles,
+          dishIngredientEntries: [],
+        },
+      ] as never);
+    },
+  );
+  t.mock.method(dishRecipeRepository, "entries", () =>
+    Promise.resolve([meat, salt] as never),
+  );
+  t.mock.method(
+    repository,
+    "createWeeklyMenu",
+    (
+      _tx: unknown,
+      _school: string,
+      _actor: string,
+      _date: Date,
+      _title: string | null,
+      gradeIds: string[] = [],
+    ) => {
+      activeGrade = gradeIds[0];
+      f.menu.id = activeGrade === id(90) ? id(40) : id(41);
+      f.menu.grades = [
+        {
+          gradeId: activeGrade,
+          grade: {
+            name: grades.find((grade) => grade.id === activeGrade)!.name,
+          },
+        },
+      ] as never;
+      f.menu.menuDays[0].id = activeGrade === id(90) ? id(50) : id(51);
+      return Promise.resolve({ id: f.menu.id } as never);
+    },
+  );
+  t.mock.method(repository, "menuEditHeader", () =>
+    Promise.resolve({
+      status: "DRAFT",
+      submittedAt: null,
+      grades: [{ gradeId: activeGrade }],
+    } as never),
+  );
+  t.mock.method(repository, "createDay", () =>
+    Promise.resolve({ id: f.menu.menuDays[0].id } as never),
+  );
+  const insert = repository.insertDayIngredients.bind(repository);
+  const writes: { gradeId: string; quantity: string }[] = [];
+  t.mock.method(
+    repository,
+    "insertDayIngredients",
+    async (
+      tx: Parameters<typeof repository.insertDayIngredients>[0],
+      lines: Parameters<typeof repository.insertDayIngredients>[1],
+    ) => {
+      await insert(tx, lines);
+      writes.push({
+        gradeId: activeGrade,
+        quantity: lines[0].quantityPerPortion,
+      });
+      f.menu.menuDays[0].menuDayDishes[0].ingredients[0].quantityPerPortion =
+        lines[0].quantityPerPortion as never;
+      return { count: lines.length };
+    },
+  );
+  return {
+    ...f,
+    writes,
+    grades,
+    batch: {
+      ...f.input,
+      gradeIds: grades.map((grade) => grade.id),
+      submit: false,
+    },
+  };
+}
+
+void test("grade batch writes separate per-serving snapshots from one menu selection in one transaction", async (t) => {
+  const f = gradeFixture(t);
+  const result = await f.service.saveGradeBatch(f.batch, f.principal);
+  assert.deepEqual(f.writes, [
+    { gradeId: id(90), quantity: "80" },
+    { gradeId: id(91), quantity: "100" },
+  ]);
+  assert.deepEqual(
+    result.menus.map((menu) => menu.gradeIds),
+    [[id(90)], [id(91)]],
+  );
+  assert.deepEqual(
+    result.menus.map((menu) => menu.id),
+    [id(40), id(41)],
+  );
+  assert.deepEqual(
+    result.allergyChecks.map((check) => check.gradeName),
+    ["Khối 1–3", "Khối 4–5"],
+  );
+  assert.equal(result.submitted, false);
+  assert.equal(result.hasUnresolvedAllergies, false);
+  assert.equal(f.counts().committedWrites, 2);
+  assert.equal(
+    f.input.days[0].meals[0].dishes[0].ingredients[0].quantityPerPortion,
+    "80",
+  );
+});
+
+void test("grade batch rolls all prior writes back when a later grade has no recipe", async (t) => {
+  const f = gradeFixture(t, true);
+  const before = structuredClone(f.menu);
+  await assert.rejects(
+    f.service.saveGradeBatch(f.batch, f.principal),
+    /Khối 4–5.*chưa có định lượng/,
+  );
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.counts().committedWrites, 0);
+  assert.deepEqual(f.menu, before);
+});
+
+void test("grade batch refuses foreign grades before writes and rolls back incomplete combined submission", async (t) => {
+  const f = gradeFixture(t);
+  await assert.rejects(
+    f.service.saveGradeBatch({ ...f.batch, gradeIds: [id(99)] }, f.principal),
+    { statusCode: 422 },
+  );
+  assert.equal(f.counts().committedWrites, 0);
+  const before = structuredClone(f.menu);
+  await assert.rejects(
+    f.service.saveGradeBatch({ ...f.batch, submit: true }, f.principal),
+    { statusCode: 422 },
+  );
+  assert.equal(f.counts().committedWrites, 0);
+  assert.deepEqual(f.menu, before);
+});
+
+void test("batch request validation rejects duplicate grades, arbitrary tenant data and duplicate submit IDs", () => {
+  const body = {
+    weekStartDate: "2026-11-09",
+    gradeIds: [id(90), id(91)],
+    days: [
+      {
+        menuDate: "2026-11-09",
+        meals: [
+          {
+            mealType: "LUNCH",
+            useDishRecipes: true,
+            dishes: [{ dishId: id(6) }],
+          },
+        ],
+      },
+    ],
+  };
+  assert.equal(validateMenuGradeBatch(body).submit, false);
+  assert.throws(() =>
+    validateMenuGradeBatch({ ...body, gradeIds: [id(90), id(90)] }),
+  );
+  assert.throws(() => validateMenuGradeBatch({ ...body, schoolId: id(3) }));
+  assert.throws(() => validateMenuSubmitGroup({ menuIds: [id(40), id(40)] }));
+});
+
+void test("combined submission keeps every grade in draft when only one grade has an unresolved allergy", async (t) => {
+  const f = gradeFixture(t);
+  t.mock.method(f.tx.classAllergy, "findMany", () =>
+    Promise.resolve(
+      f.menu.grades[0].gradeId === id(90)
+        ? [
+            {
+              ingredientEntryId: id(10),
+              classId: id(11),
+              affectedCount: 2,
+              Class: { name: "1A" },
+              IngredientEntry: { ingredientId: id(7) },
+            },
+          ]
+        : [],
+    ),
+  );
+  const result = await f.service.saveGradeBatch(
+    { ...f.batch, submit: true },
+    f.principal,
+  );
+  assert.equal(result.hasUnresolvedAllergies, true);
+  assert.equal(result.submitted, false);
+  assert.deepEqual(
+    result.menus.map((menu) => menu.status),
+    ["DRAFT", "DRAFT"],
+  );
+  assert.deepEqual(
+    result.allergyChecks.map((check) => check.hasConflict),
+    [true, false],
+  );
+  assert.equal(f.counts().committedWrites, 2);
+});
+
+void test("group submission checks ownership first and rolls back a successful first submission if a later menu is incomplete", async (t) => {
+  const f = fixture(t);
+  f.allergyRows.length = 0;
+  f.menu.grades = [];
+  const before = structuredClone(f.menu);
+  const complete = Array.from({ length: 5 }, (_, index) => ({
+    ...structuredClone(f.menu.menuDays[0]),
+    id: id(60 + index),
+    menuDate: new Date(Date.UTC(2026, 10, 9 + index)),
+  }));
+  t.mock.method(repository, "ownedMenu", (_tx: unknown, menuId: string) =>
+    Promise.resolve(
+      menuId === id(99)
+        ? null
+        : ({
+            ...f.menu,
+            id: menuId,
+            menuDays:
+              menuId === id(40) ? complete : structuredClone(before.menuDays),
+          } as never),
+    ),
+  );
+  const submission = t.mock.method(repository, "submitWeeklyMenu", () => {
+    f.menu.status = "PENDING_APPROVAL";
+    return Promise.resolve(f.menu);
+  });
+  t.mock.method(repository, "submitDraftDays", () =>
+    Promise.resolve({ count: 5 }),
+  );
+  await assert.rejects(
+    f.service.submitGroup({ menuIds: [id(40), id(99)] }, f.principal),
+    { statusCode: 404 },
+  );
+  assert.equal(submission.mock.callCount(), 0);
+  await assert.rejects(
+    f.service.submitGroup({ menuIds: [id(40), id(41)] }, f.principal),
+    { statusCode: 422 },
+  );
+  assert.equal(submission.mock.callCount(), 1);
+  assert.deepEqual(f.menu, before);
+});
+
+void test("reopening an unchanged per-grade draft keeps frozen norms rather than current catalogue quantities", async (t) => {
+  const f = gradeFixture(t);
+  t.mock.method(repository, "dayBatchCount", () => Promise.resolve(0));
+  t.mock.method(repository, "daySeasoningLotCount", () => Promise.resolve(0));
+  t.mock.method(repository, "updateDayNote", () =>
+    Promise.resolve({ id: f.menu.menuDays[0].id } as never),
+  );
+  f.menu.grades = [{ gradeId: id(90), grade: { name: "Khối 1–3" } }] as never;
+  t.mock.method(repository, "menuForWeek", () => Promise.resolve(f.menu));
+  t.mock.method(repository, "menuDayHeaders", () =>
+    Promise.resolve([
+      {
+        id: f.menu.menuDays[0].id,
+        menuDate: f.menu.menuDays[0].menuDate,
+        approvalStatus: "DRAFT",
+      },
+    ] as never),
+  );
+  const recipeRead = t.mock.method(dishRecipeRepository, "recipes", () => {
+    throw new Error("Unchanged snapshots cannot reload catalogue recipes");
+  });
+  await f.service.saveGradeBatch(
+    { ...f.batch, gradeIds: [id(90)] },
+    f.principal,
+  );
+  assert.equal(recipeRead.mock.callCount(), 0);
+  assert.equal(f.writes[0].quantity, "80");
+  f.menu.status = "APPROVED";
+  await assert.rejects(
+    f.service.saveGradeBatch({ ...f.batch, gradeIds: [id(90)] }, f.principal),
+    { statusCode: 409 },
+  );
+});
+
+void test("a complete grade batch submits all grade snapshots together", async (t) => {
+  const f = gradeFixture(t);
+  const stored = new Map<string, typeof f.menu>();
+  f.menu.menuDays = Array.from({ length: 5 }, (_, index) => ({
+    ...structuredClone(f.menu.menuDays[0]),
+    id: id(60 + index),
+    menuDate: new Date(Date.UTC(2026, 10, 9 + index)),
+  }));
+  f.batch.days = f.menu.menuDays.map((day) => ({
+    ...structuredClone(f.input.days[0]),
+    menuDate: day.menuDate,
+  }));
+  t.mock.method(
+    repository,
+    "createDay",
+    (_tx: unknown, _weeklyId: string, date: Date) =>
+      Promise.resolve({
+        id: f.menu.menuDays.find((day) => +day.menuDate === +date)!.id,
+      } as never),
+  );
+  t.mock.method(repository, "ownedMenu", (_tx: unknown, menuId: string) => {
+    if (menuId === f.menu.id) stored.set(menuId, structuredClone(f.menu));
+    return Promise.resolve(stored.get(menuId)!);
+  });
+  t.mock.method(repository, "submitDraftDays", () =>
+    Promise.resolve({ count: 5 }),
+  );
+  t.mock.method(
+    repository,
+    "submitWeeklyMenu",
+    (_tx: unknown, menuId: string) => {
+      stored.get(menuId)!.status = "PENDING_APPROVAL";
+      if (menuId === f.menu.id) f.menu.status = "PENDING_APPROVAL";
+      return Promise.resolve(stored.get(menuId)!);
+    },
+  );
+  const result = await f.service.saveGradeBatch(
+    { ...f.batch, submit: true },
+    f.principal,
+  );
+  assert.equal(result.submitted, true);
+  assert.deepEqual(
+    result.menus.map((menu) => ({ id: menu.id, status: menu.status })),
+    [
+      { id: id(40), status: "PENDING_APPROVAL" },
+      { id: id(41), status: "PENDING_APPROVAL" },
+    ],
+  );
+  assert.equal(f.counts().committedWrites, 10);
 });

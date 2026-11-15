@@ -1,4 +1,4 @@
-# Tasks: Multi-grade menu authoring
+﻿# Tasks: Multi-grade menu authoring
 
 ## Phase 1 - Specification
 
@@ -7,22 +7,22 @@
 
 ## Phase 2 - Backend foundation
 
-- [ ] T003 [US1] Tách thao tác lưu draft trong src/modules/menu/menu.service.ts để dùng chung cùng transaction.
-- [ ] T004 [US1] Thêm validation, Request/Response DTO và route grade-batch trong src/modules/menu/.
-- [ ] T005 [US2] Bổ sung submit-group nguyên tử, ownership và quyền trong src/modules/menu/.
-- [ ] T006 [US2] Kiểm thử batch, công thức khối và rollback trong tests/menu-create-allergies.test.ts.
+- [x] T003 [US1] Tách thao tác lưu draft trong src/modules/menu/menu.service.ts để dùng chung cùng transaction.
+- [x] T004 [US1] Thêm validation, Request/Response DTO và route grade-batch trong src/modules/menu/.
+- [x] T005 [US2] Bổ sung submit-group nguyên tử, ownership và quyền trong src/modules/menu/.
+- [x] T006 [US2] Kiểm thử batch, công thức khối và rollback trong tests/menu-create-allergies.test.ts.
 
 ## Phase 3 - Frontend
 
-- [ ] T007 [US1] Preview công thức/dị ứng từng khối trong fe/src/services/MenuService/ và CreateMenuDayModal.jsx.
-- [ ] T008 [US1] Gửi batch, phục hồi lịch cùng món và xem định lượng từng khối trong fe/src/pages/SCHOOL/MenuPlanning/CreateMenu/.
-- [ ] T009 [US3] Gộp danh sách và chuyển khối chi tiết bằng fe/src/services/MenuService/listGrades.js và các màn danh sách.
-- [ ] T010 [US3] Kiểm thử API và grouping trong fe/tests/kitchen-nutrition-api.test.mjs.
+- [x] T007 [US1] Preview công thức/dị ứng từng khối trong fe/src/services/MenuService/ và CreateMenuDayModal.jsx.
+- [x] T008 [US1] Gửi batch, phục hồi lịch cùng món và xem định lượng từng khối trong fe/src/pages/SCHOOL/MenuPlanning/CreateMenu/.
+- [x] T009 [US3] Gộp danh sách và chuyển khối chi tiết bằng fe/src/services/MenuService/listGrades.js và các màn danh sách.
+- [x] T010 [US3] Kiểm thử API và grouping trong fe/tests/kitchen-nutrition-api.test.mjs.
 
 ## Phase 4 - Verification
 
-- [ ] T011 Chạy BE validate/test:unit/spec gate và FE test/build, ghi kết quả vào specs/multi-grade-menu-authoring/quickstart.md.
-- [ ] T012 Commit các file thuộc tính năng, giữ nguyên thay đổi giao diện người dùng đang làm ngoài phạm vi.
+- [x] T011 Chạy BE validate/test:unit/spec gate và FE test/build, ghi kết quả vào specs/multi-grade-menu-authoring/quickstart.md.
+- [x] T012 Commit các file thuộc tính năng, giữ nguyên thay đổi giao diện người dùng đang làm ngoài phạm vi.
 
 ## Dependencies
 

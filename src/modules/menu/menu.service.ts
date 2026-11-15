@@ -17,6 +17,7 @@ import type {
   AcademicWeekDTO,
   MenuWeekScheduleDTO,
   MenuCreationAllergyReportDTO,
+  MenuGradeBatchResponseDTO,
 } from "./menu.response.dto";
 import type { AuthPrincipal } from "../../types/auth";
 
@@ -45,6 +46,8 @@ import type {
   MenuMeal,
   MenuStandardsInput,
   MenuWrite,
+  MenuGradeBatchInput,
+  MenuSubmitGroupInput,
   MenuReviewInput,
   MenuFilters,
   MenuPortionGroupsInput,
@@ -1124,6 +1127,64 @@ function menuCategoryDto(menu: MenuDetailRow) {
   };
 }
 
+function gradeBatchWrite(
+  input: MenuWrite,
+  existing: MenuDetailRow | null,
+): MenuWrite {
+  const result = structuredClone(input);
+  for (const day of result.days) {
+    const stored = existing?.menuDays.find(
+      (row) => +row.menuDate === +day.menuDate,
+    );
+    for (const meal of day.meals) {
+      const dishes =
+        stored?.menuDayDishes.filter((row) => row.mealType === meal.mealType) ??
+        [];
+      const sameDishes =
+        JSON.stringify(meal.dishes.map((row) => row.dishId).sort()) ===
+        JSON.stringify(dishes.map((row) => row.dishId).sort());
+      if (!meal.useDishRecipes && stored && sameDishes) {
+        meal.dishes = dishes.map((row) => ({
+          dishId: row.dishId,
+          name: undefined,
+          ingredients: row.ingredients.map((line) => ({
+            ingredientId: line.ingredientId,
+            quantityPerPortion: line.quantityPerPortion.toString(),
+            unit: line.unit,
+          })),
+        }));
+        meal.seasonings = stored.mealSeasonings
+          .filter((row) => row.mealType === meal.mealType)
+          .map((line) => ({
+            ingredientEntryId: line.ingredientEntryId,
+            quantityPerPortion: line.quantityPerPortion.toString(),
+            unit: line.unit,
+          }));
+      } else {
+        meal.useDishRecipes = true;
+        meal.dishes = meal.dishes.map((row) => ({ ...row, ingredients: [] }));
+        meal.seasonings = [];
+      }
+      for (const group of meal.portionGroups ?? []) {
+        const shape = (dishIds: string[], avoidedIds: string[]) =>
+          JSON.stringify([[...dishIds].sort(), [...avoidedIds].sort()]);
+        const match = stored?.portionGroups.find(
+          (row) =>
+            row.mealType === meal.mealType &&
+            row.name === group.name &&
+            row.isDefault === group.isDefault &&
+            shape(
+              row.dishes.map((dish) => dish.dishId),
+              row.avoidances.map((line) => line.ingredientEntryId),
+            ) === shape(group.dishIds, group.avoidedIngredientEntryIds),
+        );
+        group.id = match?.id;
+      }
+    }
+  }
+  return result;
+}
+
 function createMenuOperations(connect: () => Promise<PrismaClient>) {
   async function owned(tx: Tx, id: string, schoolId: string) {
     const menu = await repository.ownedMenu(tx, id, schoolId);
@@ -1757,7 +1818,347 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
     return owned(tx, menu.id, schoolId);
   }
 
+  async function saveDraft(
+    tx: Tx,
+    actor: AuthPrincipal,
+    schoolId: string,
+    input: MenuWrite,
+    gradeBatch = false,
+  ) {
+    assertPermission(actor, "class_allergy.view");
+    const gradeIds = input.gradeIds ?? [];
+    if (
+      gradeIds.length &&
+      (await repository.schoolGrades(tx, schoolId, gradeIds)).length !==
+        gradeIds.length
+    )
+      throw new HttpError(
+        422,
+        "Khối đã chọn không thuộc trường đang đăng nhập",
+      );
+    const existingWeekly = await repository.menuForWeek(
+      tx,
+      schoolId,
+      input.weekStartDate,
+      gradeIds,
+    );
+    if (gradeBatch) input = gradeBatchWrite(input, existingWeekly);
+    if (existingWeekly) {
+      const existingGrades =
+        existingWeekly.grades?.map((row) => row.gradeId).sort() ?? [];
+      if (
+        JSON.stringify(existingGrades) !== JSON.stringify([...gradeIds].sort())
+      )
+        throw new HttpError(
+          409,
+          "Khối đã có thực đơn trong tuần này; hãy sửa thực đơn hiện có hoặc chọn các khối khác",
+        );
+    }
+
+    if (existingWeekly) {
+      assertPermission(actor, "menu.update");
+      if (
+        existingWeekly.menuDays.some(
+          (day) => day.approvalStatus === "APPROVED",
+        ) &&
+        input.title &&
+        input.title !== existingWeekly.title
+      )
+        throw new HttpError(
+          409,
+          "Không đổi tên tuần có ngày thực đơn đã duyệt",
+        );
+      if (
+        !["DRAFT", "REVISION_REQUIRED", "PENDING_APPROVAL"].includes(
+          existingWeekly.status,
+        )
+      ) {
+        throw new HttpError(
+          409,
+
+          `Thực đơn tuần này (${input.weekStartDate.toISOString().slice(0, 10)}) đã ở trạng thái ${existingWeekly.status}, không thể thêm ngày mới.`,
+        );
+      }
+
+      const incomingDates = new Set(input.days.map((d) => +d.menuDate));
+
+      const retainedDays: typeof input.days = existingWeekly.menuDays
+
+        .filter((d) => !incomingDates.has(+d.menuDate))
+
+        .map((d) => ({
+          menuDate: d.menuDate,
+
+          note: d.note,
+
+          meals: [...new Set(d.menuDayDishes.map((mdd) => mdd.mealType))].map(
+            (mealType) => ({
+              mealType,
+
+              dishes: d.menuDayDishes
+
+                .filter((mdd) => mdd.mealType === mealType)
+
+                .map((mdd) => ({
+                  dishId: mdd.dishId,
+
+                  name: undefined,
+
+                  ingredients: mdd.ingredients.map((i) => ({
+                    ingredientId: i.ingredientId,
+
+                    quantityPerPortion: i.quantityPerPortion.toString(),
+
+                    unit: i.unit,
+                  })),
+                })),
+
+              seasonings: d.mealSeasonings
+
+                .filter((s) => s.mealType === mealType)
+
+                .map((s) => ({
+                  ingredientEntryId: s.ingredientEntryId,
+
+                  quantityPerPortion: s.quantityPerPortion.toString(),
+
+                  unit: s.unit,
+                })),
+            }),
+          ),
+        }));
+
+      // A create request from the day editor writes only one meal. Merge it
+
+      // with other meals already stored on that date before writeDays,
+
+      // which replaces all meal rows for each supplied day.
+
+      const mergedIncomingDays = input.days.map((incomingDay) => {
+        const oldDay = existingWeekly.menuDays.find(
+          (day) => +day.menuDate === +incomingDay.menuDate,
+        );
+
+        if (!oldDay) return incomingDay;
+
+        const incomingMealTypes = new Set(
+          incomingDay.meals.map((meal) => meal.mealType),
+        );
+
+        const retainedMeals = [
+          ...new Set(oldDay.menuDayDishes.map((row) => row.mealType)),
+        ]
+
+          .filter((mealType) => !incomingMealTypes.has(mealType))
+
+          .map((mealType) => ({
+            mealType,
+
+            dishes: oldDay.menuDayDishes
+
+              .filter((row) => row.mealType === mealType)
+
+              .map((row) => ({
+                dishId: row.dishId,
+
+                name: undefined,
+
+                ingredients: row.ingredients.map((ingredient) => ({
+                  ingredientId: ingredient.ingredientId,
+
+                  quantityPerPortion: ingredient.quantityPerPortion.toString(),
+
+                  unit: ingredient.unit,
+                })),
+              })),
+
+            seasonings: oldDay.mealSeasonings
+
+              .filter((row) => row.mealType === mealType)
+
+              .map((row) => ({
+                ingredientEntryId: row.ingredientEntryId,
+
+                quantityPerPortion: row.quantityPerPortion.toString(),
+
+                unit: row.unit,
+              })),
+          }));
+
+        return {
+          ...incomingDay,
+
+          note: incomingDay.note ?? oldDay.note,
+
+          meals: [...retainedMeals, ...incomingDay.meals],
+        };
+      });
+
+      const mergedInput: MenuWrite = {
+        weekStartDate: input.weekStartDate,
+
+        title: existingWeekly.title,
+
+        days: [...retainedDays, ...mergedIncomingDays],
+      };
+
+      await writeDays(tx, existingWeekly.id, mergedInput, schoolId);
+
+      await repository.resetForEditing(tx, existingWeekly.id);
+      const saved = await owned(tx, existingWeekly.id, schoolId);
+      return {
+        ...saved,
+        ...(await reviewMenuAllergies(tx, saved.menuDays, schoolId)),
+      };
+    }
+
+    const years = await repository.academicYears(tx, schoolId);
+    const year = years.find(
+      (row) =>
+        getSchoolMonday(row.startDate) <= input.weekStartDate &&
+        input.weekStartDate.getTime() <
+          getSchoolMonday(row.endDate).getTime() + 7 * 86400000,
+    );
+    if (!year)
+      throw new HttpError(422, "Tuần đã chọn chưa thuộc năm học của trường");
+    const weekNumber =
+      Math.floor(
+        (input.weekStartDate.getTime() -
+          getSchoolMonday(year.startDate).getTime()) /
+          (7 * 86400000),
+      ) + 1;
+    const menu = await repository.createWeeklyMenu(
+      tx,
+      schoolId,
+      actor.id,
+      input.weekStartDate,
+      `Thực đơn tuần ${weekNumber}`,
+      gradeIds,
+    );
+
+    await writeDays(tx, menu.id, input, schoolId);
+
+    const saved = await owned(tx, menu.id, schoolId);
+    return {
+      ...saved,
+      ...(await reviewMenuAllergies(tx, saved.menuDays, schoolId)),
+    };
+  }
+
   return {
+    async saveGradeBatch(
+      input: MenuGradeBatchInput,
+      principal: AuthPrincipal,
+    ): Promise<MenuGradeBatchResponseDTO> {
+      return schoolTransaction(
+        await connect(),
+        principal,
+        "menu.create",
+        async (tx, actor, schoolId) => {
+          assertPermission(actor, "class_allergy.view");
+          if (input.submit) assertPermission(actor, "menu.update");
+          const grades = await repository.schoolGrades(
+            tx,
+            schoolId,
+            input.gradeIds,
+          );
+          if (grades.length !== input.gradeIds.length)
+            throw new HttpError(
+              422,
+              "Khối đã chọn không thuộc trường đang đăng nhập",
+            );
+          const savedMenus = [];
+          const allergyChecks: MenuGradeBatchResponseDTO["allergyChecks"] = [];
+          for (const grade of [...grades].sort((a, b) =>
+            a.id.localeCompare(b.id),
+          )) {
+            try {
+              const saved = await saveDraft(
+                tx,
+                actor,
+                schoolId,
+                {
+                  weekStartDate: input.weekStartDate,
+                  title: input.title,
+                  gradeIds: [grade.id],
+                  days: structuredClone(input.days),
+                },
+                true,
+              );
+              savedMenus.push({ saved, grade });
+              allergyChecks.push(
+                ...saved.allergyChecks.map((check) => ({
+                  ...check,
+                  gradeId: grade.id,
+                  gradeName: grade.name,
+                })),
+              );
+            } catch (error) {
+              if (error instanceof HttpError)
+                throw new HttpError(
+                  error.statusCode,
+                  `${grade.name}: ${error.message}`,
+                );
+              throw error;
+            }
+          }
+          const hasUnresolvedAllergies = savedMenus.some(
+            (row) => row.saved.hasUnresolvedAllergies,
+          );
+          const submitted = input.submit && !hasUnresolvedAllergies;
+          const menus: MenuGradeBatchResponseDTO["menus"] = [];
+          for (const { saved, grade } of savedMenus) {
+            const menu = submitted
+              ? await submitReady(tx, saved, schoolId)
+              : saved;
+            menus.push({
+              id: menu.id,
+              gradeIds: [grade.id],
+              gradeNames: [grade.name],
+              status: menu.status,
+            });
+          }
+          return { menus, submitted, hasUnresolvedAllergies, allergyChecks };
+        },
+      );
+    },
+    async submitGroup(input: MenuSubmitGroupInput, principal: AuthPrincipal) {
+      return schoolTransaction(
+        await connect(),
+        principal,
+        "menu.update",
+        async (tx, actor, schoolId) => {
+          assertPermission(actor, "class_allergy.view");
+          const menus = [];
+          for (const id of [...input.menuIds].sort()) {
+            const menu = await owned(tx, id, schoolId);
+            if (
+              !["DRAFT", "REVISION_REQUIRED", "PENDING_APPROVAL"].includes(
+                menu.status,
+              )
+            )
+              throw new HttpError(
+                409,
+                "Có thực đơn không thể gửi duyệt ở trạng thái này",
+              );
+            menus.push(menu);
+          }
+          const result = [];
+          for (const menu of menus) {
+            const saved =
+              menu.status === "PENDING_APPROVAL"
+                ? menu
+                : await submitReady(tx, menu, schoolId);
+            result.push({
+              id: saved.id,
+              gradeIds: saved.grades.map((row) => row.gradeId),
+              status: saved.status,
+            });
+          }
+          return { menus: result };
+        },
+      );
+    },
     async list(query: MenuFilters, principal: AuthPrincipal) {
       const scope = listScopes.menu(principal),
         db = await connect();
@@ -1793,235 +2194,9 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
     async create(input: MenuWrite, principal: AuthPrincipal) {
       return schoolTransaction(
         await connect(),
-
         principal,
-
         "menu.create",
-
-        async (tx, actor, schoolId) => {
-          assertPermission(actor, "class_allergy.view");
-          const gradeIds = input.gradeIds ?? [];
-          if (
-            gradeIds.length &&
-            (await repository.schoolGrades(tx, schoolId, gradeIds)).length !==
-              gradeIds.length
-          )
-            throw new HttpError(
-              422,
-              "Khối đã chọn không thuộc trường đang đăng nhập",
-            );
-          const existingWeekly = await repository.menuForWeek(
-            tx,
-            schoolId,
-            input.weekStartDate,
-            gradeIds,
-          );
-          if (existingWeekly) {
-            const existingGrades =
-              existingWeekly.grades?.map((row) => row.gradeId).sort() ?? [];
-            if (
-              JSON.stringify(existingGrades) !==
-              JSON.stringify([...gradeIds].sort())
-            )
-              throw new HttpError(
-                409,
-                "Khối đã có thực đơn trong tuần này; hãy sửa thực đơn hiện có hoặc chọn các khối khác",
-              );
-          }
-
-          if (existingWeekly) {
-            assertPermission(actor, "menu.update");
-            if (
-              existingWeekly.menuDays.some(
-                (day) => day.approvalStatus === "APPROVED",
-              ) &&
-              input.title &&
-              input.title !== existingWeekly.title
-            )
-              throw new HttpError(
-                409,
-                "Không đổi tên tuần có ngày thực đơn đã duyệt",
-              );
-            if (
-              !["DRAFT", "REVISION_REQUIRED", "PENDING_APPROVAL"].includes(
-                existingWeekly.status,
-              )
-            ) {
-              throw new HttpError(
-                409,
-
-                `Thực đơn tuần này (${input.weekStartDate.toISOString().slice(0, 10)}) đã ở trạng thái ${existingWeekly.status}, không thể thêm ngày mới.`,
-              );
-            }
-
-            const incomingDates = new Set(input.days.map((d) => +d.menuDate));
-
-            const retainedDays: typeof input.days = existingWeekly.menuDays
-
-              .filter((d) => !incomingDates.has(+d.menuDate))
-
-              .map((d) => ({
-                menuDate: d.menuDate,
-
-                note: d.note,
-
-                meals: [
-                  ...new Set(d.menuDayDishes.map((mdd) => mdd.mealType)),
-                ].map((mealType) => ({
-                  mealType,
-
-                  dishes: d.menuDayDishes
-
-                    .filter((mdd) => mdd.mealType === mealType)
-
-                    .map((mdd) => ({
-                      dishId: mdd.dishId,
-
-                      name: undefined,
-
-                      ingredients: mdd.ingredients.map((i) => ({
-                        ingredientId: i.ingredientId,
-
-                        quantityPerPortion: i.quantityPerPortion.toString(),
-
-                        unit: i.unit,
-                      })),
-                    })),
-
-                  seasonings: d.mealSeasonings
-
-                    .filter((s) => s.mealType === mealType)
-
-                    .map((s) => ({
-                      ingredientEntryId: s.ingredientEntryId,
-
-                      quantityPerPortion: s.quantityPerPortion.toString(),
-
-                      unit: s.unit,
-                    })),
-                })),
-              }));
-
-            // A create request from the day editor writes only one meal. Merge it
-
-            // with other meals already stored on that date before writeDays,
-
-            // which replaces all meal rows for each supplied day.
-
-            const mergedIncomingDays = input.days.map((incomingDay) => {
-              const oldDay = existingWeekly.menuDays.find(
-                (day) => +day.menuDate === +incomingDay.menuDate,
-              );
-
-              if (!oldDay) return incomingDay;
-
-              const incomingMealTypes = new Set(
-                incomingDay.meals.map((meal) => meal.mealType),
-              );
-
-              const retainedMeals = [
-                ...new Set(oldDay.menuDayDishes.map((row) => row.mealType)),
-              ]
-
-                .filter((mealType) => !incomingMealTypes.has(mealType))
-
-                .map((mealType) => ({
-                  mealType,
-
-                  dishes: oldDay.menuDayDishes
-
-                    .filter((row) => row.mealType === mealType)
-
-                    .map((row) => ({
-                      dishId: row.dishId,
-
-                      name: undefined,
-
-                      ingredients: row.ingredients.map((ingredient) => ({
-                        ingredientId: ingredient.ingredientId,
-
-                        quantityPerPortion:
-                          ingredient.quantityPerPortion.toString(),
-
-                        unit: ingredient.unit,
-                      })),
-                    })),
-
-                  seasonings: oldDay.mealSeasonings
-
-                    .filter((row) => row.mealType === mealType)
-
-                    .map((row) => ({
-                      ingredientEntryId: row.ingredientEntryId,
-
-                      quantityPerPortion: row.quantityPerPortion.toString(),
-
-                      unit: row.unit,
-                    })),
-                }));
-
-              return {
-                ...incomingDay,
-
-                note: incomingDay.note ?? oldDay.note,
-
-                meals: [...retainedMeals, ...incomingDay.meals],
-              };
-            });
-
-            const mergedInput: MenuWrite = {
-              weekStartDate: input.weekStartDate,
-
-              title: existingWeekly.title,
-
-              days: [...retainedDays, ...mergedIncomingDays],
-            };
-
-            await writeDays(tx, existingWeekly.id, mergedInput, schoolId);
-
-            await repository.resetForEditing(tx, existingWeekly.id);
-            const saved = await owned(tx, existingWeekly.id, schoolId);
-            return {
-              ...saved,
-              ...(await reviewMenuAllergies(tx, saved.menuDays, schoolId)),
-            };
-          }
-
-          const years = await repository.academicYears(tx, schoolId);
-          const year = years.find(
-            (row) =>
-              getSchoolMonday(row.startDate) <= input.weekStartDate &&
-              input.weekStartDate.getTime() <
-                getSchoolMonday(row.endDate).getTime() + 7 * 86400000,
-          );
-          if (!year)
-            throw new HttpError(
-              422,
-              "Tuần đã chọn chưa thuộc năm học của trường",
-            );
-          const weekNumber =
-            Math.floor(
-              (input.weekStartDate.getTime() -
-                getSchoolMonday(year.startDate).getTime()) /
-                (7 * 86400000),
-            ) + 1;
-          const menu = await repository.createWeeklyMenu(
-            tx,
-            schoolId,
-            actor.id,
-            input.weekStartDate,
-            `Thực đơn tuần ${weekNumber}`,
-            gradeIds,
-          );
-
-          await writeDays(tx, menu.id, input, schoolId);
-
-          const saved = await owned(tx, menu.id, schoolId);
-          return {
-            ...saved,
-            ...(await reviewMenuAllergies(tx, saved.menuDays, schoolId)),
-          };
-        },
+        (tx, actor, schoolId) => saveDraft(tx, actor, schoolId, input),
       );
     },
 
