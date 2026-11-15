@@ -57,7 +57,7 @@ export type NewVersion = {
 type VersionUpdate = Prisma.DeliveryInspectionVersionUpdateManyMutationInput;
 type OpenWhere = {
   id: string;
-  transactionStatus: { in: ("PREPARED" | "FAILED")[] };
+  transactionStatus: { in: ("PREPARED" | "SUBMITTED" | "FAILED")[] };
 };
 // The three version tables share every column except the business link,
 // so status writes go through one structural interface.
@@ -374,6 +374,19 @@ export function createBlockchainProofRepository() {
       }));
     },
     /** Only open versions move, so a confirmed proof is never overwritten. */
+    /** Record the sent transaction before waiting, so a timeout keeps its hash. */
+    async markSubmitted(
+      db: Db,
+      kind: ProofKind,
+      id: string,
+      data: { transactionHash: string; contractAddress: string },
+    ) {
+      const result = await writer(db, kind).updateMany({
+        where: { id, transactionStatus: { in: ["PREPARED", "FAILED"] } },
+        data: { ...data, transactionStatus: "SUBMITTED" },
+      });
+      return result.count === 1;
+    },
     async markConfirmed(
       db: Db,
       kind: ProofKind,
@@ -387,14 +400,20 @@ export function createBlockchainProofRepository() {
       },
     ) {
       const result = await writer(db, kind).updateMany({
-        where: { id, transactionStatus: { in: ["PREPARED", "FAILED"] } },
+        where: {
+          id,
+          transactionStatus: { in: ["PREPARED", "SUBMITTED", "FAILED"] },
+        },
         data: { ...data, transactionStatus: "CONFIRMED" },
       });
       return result.count === 1;
     },
     async markFailed(db: Db, kind: ProofKind, id: string, lastError: string) {
       const result = await writer(db, kind).updateMany({
-        where: { id, transactionStatus: { in: ["PREPARED", "FAILED"] } },
+        where: {
+          id,
+          transactionStatus: { in: ["PREPARED", "SUBMITTED", "FAILED"] },
+        },
         data: {
           transactionStatus: "FAILED",
           lastError,

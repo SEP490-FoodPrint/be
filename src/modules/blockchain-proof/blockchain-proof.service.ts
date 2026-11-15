@@ -1,9 +1,10 @@
-import { id as keccakId } from "ethers";
+import { id as keccakId, type ContractTransactionResponse } from "ethers";
 import type { PrismaClient, Prisma } from "../../generated/prisma/client";
 import type { AuthPrincipal } from "../../types/auth";
 import { assertPermission } from "../../utils/authorization";
 import {
-  anchorHashOnChain,
+  createBlockchainProvider,
+  getContractInstance,
   loadDeployment,
   readHashFromChain,
 } from "../../utils/blockchain";
@@ -46,15 +47,31 @@ export type ProofChain = {
     onChainHash: string | null;
     contractAddress: string;
   }>;
+  /** Sends the hash; `onSubmitted` runs once the transaction is broadcast. */
   anchor(
     recordId: string,
     dataHash: string,
+    onSubmitted: (txHash: string, contractAddress: string) => Promise<unknown>,
   ): Promise<{
     txHash: string;
     blockNumber: number;
     contractAddress: string;
   }>;
+  /** State of an earlier transaction; a reverted one counts as missing. */
+  lookup(
+    txHash: string,
+  ): Promise<
+    | { state: "mined"; blockNumber: number }
+    | { state: "pending" }
+    | { state: "missing" }
+  >;
 };
+
+/** Sepolia blocks are ~12s apart; the shared helper's 15s wait is too short. */
+function receiptTimeoutMs(): number {
+  const value = Number(process.env.BLOCKCHAIN_RECEIPT_TIMEOUT_MS);
+  return Number.isInteger(value) && value > 0 ? value : 120_000;
+}
 
 const defaultChain: ProofChain = {
   contractAddress() {
@@ -68,7 +85,46 @@ const defaultChain: ProofChain = {
     const { onChainHash, deployment } = await readHashFromChain(recordId);
     return { onChainHash, contractAddress: deployment.address };
   },
-  anchor: (recordId, dataHash) => anchorHashOnChain(recordId, dataHash),
+  async anchor(recordId, dataHash, onSubmitted) {
+    const provider = createBlockchainProvider();
+    try {
+      const { contract, deployment } = await getContractInstance(
+        provider,
+        true,
+      );
+      const confirmHash: (id: string, hash: string) => Promise<unknown> =
+        contract.getFunction("confirmHash");
+      const tx = (await confirmHash(
+        recordId,
+        dataHash,
+      )) as ContractTransactionResponse;
+      await onSubmitted(tx.hash, deployment.address);
+      const receipt = await tx.wait(1, receiptTimeoutMs());
+      if (!receipt) throw new Error("Không nhận được biên nhận giao dịch");
+      return {
+        txHash: tx.hash,
+        blockNumber: receipt.blockNumber,
+        contractAddress: deployment.address,
+      };
+    } finally {
+      provider.destroy();
+    }
+  },
+  async lookup(txHash) {
+    const provider = createBlockchainProvider();
+    try {
+      const receipt = await provider.getTransactionReceipt(txHash);
+      if (receipt)
+        return receipt.status === 1
+          ? { state: "mined", blockNumber: receipt.blockNumber }
+          : { state: "missing" };
+      return (await provider.getTransaction(txHash))
+        ? { state: "pending" }
+        : { state: "missing" };
+    } finally {
+      provider.destroy();
+    }
+  },
 };
 
 const tables: Record<ProofKind, string> = {
@@ -240,14 +296,19 @@ export function createBlockchainProofService(
     const recordId = proofRecordId(ref.kind, ref.id);
     try {
       const existing = await chain.read(recordId);
+      // A previous send that timed out keeps its hash: reuse it, never double-send.
+      const prior = row.transactionHash
+        ? await chain.lookup(row.transactionHash)
+        : null;
       if (existing.onChainHash !== null) {
+        const mined = prior?.state === "mined" ? prior : null;
         if (same(existing.onChainHash, row.dataHash))
           await repo.markConfirmed(db, ref.kind, ref.id, {
-            transactionHash: null,
-            blockNumber: null,
+            transactionHash: mined ? row.transactionHash : null,
+            blockNumber: mined ? BigInt(mined.blockNumber) : null,
             contractAddress: existing.contractAddress,
             recordedAt: now(),
-            lastError: "Đã có trên chain, không rõ giao dịch",
+            lastError: mined ? null : "Đã có trên chain, không rõ giao dịch",
           });
         else
           await repo.markFailed(
@@ -256,8 +317,23 @@ export function createBlockchainProofService(
             ref.id,
             "Hash trên chain khác hash đã lưu",
           );
+      } else if (prior?.state === "pending") {
+        await repo.markFailed(
+          db,
+          ref.kind,
+          ref.id,
+          "Giao dịch trước vẫn đang chờ xác nhận, thử lại sau",
+        );
       } else {
-        const result = await chain.anchor(recordId, row.dataHash);
+        const result = await chain.anchor(
+          recordId,
+          row.dataHash,
+          (transactionHash, contractAddress) =>
+            repo.markSubmitted(db, ref.kind, ref.id, {
+              transactionHash,
+              contractAddress,
+            }),
+        );
         await repo.markConfirmed(db, ref.kind, ref.id, {
           transactionHash: result.txHash,
           blockNumber: BigInt(result.blockNumber),

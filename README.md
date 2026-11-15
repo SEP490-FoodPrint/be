@@ -128,6 +128,8 @@ Mặc định `BLOCKCHAIN_ENABLED=false`, nghiệp vụ chạy như cũ. Để c
 
 Với Sepolia: `BLOCKCHAIN_NETWORK=sepolia`, `BLOCKCHAIN_RPC_URL` của Sepolia, và `BLOCKCHAIN_WRITER_PRIVATE_KEY` là ví đã được cấp quyền bằng `npm run set-writer:sepolia` trong repo `blockchain`. Không commit `.env` hay file key.
 
+Tx hash được lưu (`SUBMITTED`) ngay khi gửi. Nếu quá `BLOCKCHAIN_RECEIPT_TIMEOUT_MS` (mặc định 120 giây) mà chưa có receipt, version chuyển `FAILED` nhưng vẫn giữ tx hash. Gửi lại bằng `POST /api/blockchain-proofs/:kind/versions/:versionId/anchor`: giao dịch cũ đã được mine thì dùng lại tx/block của nó; nếu giao dịch cũ còn đang chờ thì không gửi thêm giao dịch mới.
+
 ## 4. Giới hạn bước thiết lập này
 
 - Schema Prisma phản ánh SQL thiết kế database mới, dùng `@map`/`@@map` để giữ nguyên tên bảng/cột và `@@schema("foodprint")`. Client generation không introspect, tạo hoặc thay đổi database.

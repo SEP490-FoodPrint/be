@@ -246,9 +246,15 @@ function proofHarness(
     onChain?: Map<string, string>;
     failRead?: boolean;
     failAnchor?: boolean;
+    /** Broadcast the transaction, then time out before it is mined. */
+    timeoutAfterSend?: boolean;
   } = {},
 ) {
   const versions: Stored[] = [];
+  const txStates = new Map<
+    string,
+    { state: "mined"; blockNumber: number } | { state: "pending" }
+  >();
   const anchored: string[] = [];
   const onChain = options.onChain ?? new Map<string, string>();
   const deliveryRow = {
@@ -366,6 +372,15 @@ function proofHarness(
     findVersion: (_db: unknown, _kind: string, id: string, school: unknown) =>
       Promise.resolve(school === "foreign" ? null : find(id)),
     listVersions: () => Promise.resolve(versions),
+    markSubmitted: (
+      _db: unknown,
+      _kind: string,
+      id: string,
+      data: Partial<Stored>,
+    ) => {
+      Object.assign(find(id)!, data, { transactionStatus: "SUBMITTED" });
+      return Promise.resolve(true);
+    },
     markConfirmed: (
       _db: unknown,
       _kind: string,
@@ -408,17 +423,21 @@ function proofHarness(
             onChainHash: onChain.get(recordId) ?? null,
             contractAddress: "0xRegistry",
           }),
-    anchor: (recordId, dataHash) => {
-      if (options.failAnchor)
-        return Promise.reject(new Error("execution reverted: NotWriter"));
+    anchor: async (recordId, dataHash, onSubmitted) => {
+      if (options.failAnchor) throw new Error("execution reverted: NotWriter");
       anchored.push(recordId);
+      const txHash = hashOf(String(anchored.length));
+      await onSubmitted(txHash, "0xRegistry");
+      if (options.timeoutAfterSend) {
+        txStates.set(txHash, { state: "pending" });
+        throw new Error("wait for transaction timeout");
+      }
       onChain.set(recordId, dataHash);
-      return Promise.resolve({
-        txHash: hashOf(String(anchored.length)),
-        blockNumber: 7,
-        contractAddress: "0xRegistry",
-      });
+      txStates.set(txHash, { state: "mined", blockNumber: 7 });
+      return { txHash, blockNumber: 7, contractAddress: "0xRegistry" };
     },
+    lookup: (txHash) =>
+      Promise.resolve(txStates.get(txHash) ?? { state: "missing" }),
   };
   const service = createBlockchainProofService({
     connect: () => Promise.resolve({} as never),
@@ -429,7 +448,15 @@ function proofHarness(
     now: () => at,
     warn: () => undefined,
   });
-  return { service, versions, anchored, onChain, sampleRow, deliveryRow };
+  return {
+    service,
+    versions,
+    anchored,
+    onChain,
+    txStates,
+    sampleRow,
+    deliveryRow,
+  };
 }
 
 const verifier = {
@@ -546,6 +573,32 @@ void test("anchorVersion confirms once, reuses a matching on-chain hash and fail
   assert.doesNotMatch(failed?.lastError ?? "", /rpc\.example/);
 });
 
+void test("a receipt timeout keeps the sent tx hash and is reconciled without resending", async () => {
+  const h = proofHarness({ timeoutAfterSend: true });
+  const ref = (await h.service.prepareDeliveryInspected(tx, A, B))!;
+  const timedOut = await h.service.anchorVersion(ref);
+  assert.equal(timedOut?.transactionStatus, "FAILED");
+  assert.equal(timedOut?.lastError, "wait for transaction timeout");
+  const sent = timedOut?.transactionHash;
+  assert.ok(sent, "the broadcast hash is stored before waiting");
+
+  // Still pending: a retry must not broadcast a second transaction.
+  const waiting = await h.service.anchorVersion(ref);
+  assert.equal(h.anchored.length, 1);
+  assert.equal(waiting?.transactionStatus, "FAILED");
+  assert.match(waiting?.lastError ?? "", /đang chờ xác nhận/);
+
+  // Mined later: the retry confirms with the original tx and block.
+  h.onChain.set(proofRecordId("deliveries", ref.id), h.versions[0].dataHash);
+  h.txStates.set(sent, { state: "mined", blockNumber: 9 });
+  const confirmed = await h.service.anchorVersion(ref);
+  assert.equal(h.anchored.length, 1);
+  assert.equal(confirmed?.transactionStatus, "CONFIRMED");
+  assert.equal(confirmed?.transactionHash, sent);
+  assert.equal(confirmed?.blockNumber, 9n);
+  assert.equal(confirmed?.lastError, null);
+});
+
 void test("scheduleAnchor runs sends one at a time and swallows failures", async () => {
   const h = proofHarness({ failAnchor: true });
   const first = (await h.service.prepareDeliveryInspected(tx, A, B))!;
@@ -649,6 +702,7 @@ void test("verify returns FAILED when the chain is unreachable", async () => {
       contractAddress: () => "0xRegistry",
       read: () => Promise.reject(new Error("timeout")),
       anchor: () => Promise.reject(new Error("unused")),
+      lookup: () => Promise.reject(new Error("unused")),
     },
     enabled: () => true,
     network: () => "sepolia",
