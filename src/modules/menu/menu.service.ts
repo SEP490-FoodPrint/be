@@ -817,13 +817,12 @@ function createIngredientOperations(
             let held = new Prisma.Decimal(0),
               used = new Prisma.Decimal(0);
 
-            for (const row of ownDish)
-              if (
-                ids.has(
-                  row.IngredientLot.DeliveryItem.SupplyRequestItem
-                    .ingredientEntryId,
-                )
-              ) {
+            for (const row of ownDish) {
+              const entryId =
+                row.IngredientLot.DeliveryItem.ingredientEntryId ??
+                row.IngredientLot.DeliveryItem.SupplyRequestItem
+                  ?.ingredientEntryId;
+              if (entryId && ids.has(entryId)) {
                 const amount = convertQuantity(
                   row.quantityUsed,
 
@@ -837,6 +836,7 @@ function createIngredientOperations(
                 else if (eligible.has(row.ingredientLotId))
                   held = held.add(amount);
               }
+            }
 
             for (const row of ownSpice)
               if (ids.has(row.ingredientEntryId)) {

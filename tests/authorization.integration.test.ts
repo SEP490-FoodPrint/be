@@ -475,7 +475,10 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         const delivery = await db.delivery.create({
           data: {
             supplyRequestId: request.id,
+            schoolId: school.id,
             supplierId: supplierA.id,
+            // Historical delivery fixture; no creation key/fingerprint from the management API.
+            creationMode: null,
             deliveryNo: randomUUID(),
             status: "ARRIVED",
             arrivedAt: new Date(),
@@ -486,6 +489,8 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           data: {
             deliveryId: delivery.id,
             supplyRequestItemId: line.id,
+            ingredientId: ingredient.id,
+            ingredientEntryId: entry.id,
             actualQuantity: "6.125",
             unit: "kg",
           },
@@ -725,7 +730,10 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       const delivery = await db.delivery.create({
         data: {
           supplyRequestId: request.id,
+          schoolId: school.id,
           supplierId: supplier.id,
+          // Historical delivery fixture; no creation key/fingerprint from the management API.
+          creationMode: null,
           deliveryNo: randomUUID(),
           status: "RECEIVED",
           receivedByUserId: chef.id,
@@ -758,6 +766,8 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           data: {
             deliveryId: delivery.id,
             supplyRequestItemId: line.id,
+            ingredientId: ingredient.id,
+            ingredientEntryId: entry.id,
             actualQuantity: total,
             unit: "kg",
           },
@@ -3232,7 +3242,10 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       const historyDelivery = await db.delivery.create({
         data: {
           supplyRequestId: historyRequest.id,
+          schoolId: historySchool.id,
           supplierId: owner.supplier.id,
+          // Historical delivery fixture; no creation key/fingerprint from the management API.
+          creationMode: null,
           deliveryNo: randomUUID(),
           status: "ARRIVED",
           arrivedAt: new Date(),
@@ -3243,6 +3256,8 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         data: {
           deliveryId: historyDelivery.id,
           supplyRequestItemId: historyLine.id,
+          ingredientId: historyIngredient.id,
+          ingredientEntryId: historyEntry.id,
           actualQuantity: "1",
           unit: "kg",
         },

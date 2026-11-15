@@ -609,7 +609,9 @@ void test("kitchen and nutrition wire contracts use real scoped PostgreSQL data"
   const delivery = await db.delivery.create({
     data: {
       supplyRequestId: supplierRequest.id,
+      schoolId: schoolA.id,
       supplierId: supplierA.id,
+      creationMode: "REQUEST",
       deliveryNo: "wire-" + randomUUID(),
     },
   });
@@ -617,6 +619,8 @@ void test("kitchen and nutrition wire contracts use real scoped PostgreSQL data"
     data: {
       deliveryId: delivery.id,
       supplyRequestItemId: requestItem.id,
+      ingredientId: rice.id,
+      ingredientEntryId: riceEntry.id,
       actualQuantity: "1000",
       unit: "g",
     },

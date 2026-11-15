@@ -136,7 +136,7 @@ export const listScopes = {
     if (p.orgType === "SYSTEM") return {};
     if (p.orgType === "SCHOOL")
       return {
-        DeliveryItem: { Delivery: { SupplyRequest: { schoolId: school(p) } } },
+        DeliveryItem: { Delivery: { schoolId: school(p) } },
       };
     if (p.orgType === "SUPPLIER")
       return { DeliveryItem: { Delivery: { supplierId: supplier(p) } } };
@@ -299,8 +299,7 @@ export const listScopes = {
   delivery: (p: AuthPrincipal): Prisma.DeliveryWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["delivery"]);
     if (p.orgType === "SYSTEM") return {};
-    if (p.orgType === "SCHOOL")
-      return { SupplyRequest: { schoolId: school(p) } };
+    if (p.orgType === "SCHOOL") return { schoolId: school(p) };
     if (p.orgType === "SUPPLIER") return { supplierId: supplier(p) };
     throw new HttpError(
       403,
@@ -323,7 +322,7 @@ export const listScopes = {
       return {
         IngredientLot: {
           DeliveryItem: {
-            Delivery: { SupplyRequest: { schoolId: school(p) } },
+            Delivery: { schoolId: school(p) },
           },
         },
       };
@@ -369,7 +368,7 @@ export const listScopes = {
     if (p.orgType === "SYSTEM") return {};
     if (p.orgType === "SCHOOL")
       return {
-        Delivery: { SupplyRequest: { schoolId: school(p) } },
+        Delivery: { schoolId: school(p) },
         ...(p.permissions.includes("ingredient_quality_feedback.view_details")
           ? {}
           : { submittedByUserId: p.id }),
@@ -441,11 +440,11 @@ export const listScopes = {
     if (p.orgType === "SCHOOL")
       return {
         OR: [
-          { Delivery: { SupplyRequest: { schoolId: school(p) } } },
+          { Delivery: { schoolId: school(p) } },
           {
             IngredientLot: {
               DeliveryItem: {
-                Delivery: { SupplyRequest: { schoolId: school(p) } },
+                Delivery: { schoolId: school(p) },
               },
             },
           },
@@ -528,4 +527,40 @@ export function ingredientManagementScope(
     );
   assertPermission(principal, "ingredient.manage");
   return { supplierId: principal.supplierId };
+}
+
+export interface SupplierOrderScope {
+  readonly supplierId: string;
+}
+
+function assertSupplierOrderActor(principal: AuthPrincipal): string {
+  if (
+    (principal.role !== ROLES.INGREDIENT_SUPPLIER_ADMIN &&
+      principal.role !== ROLES.INGREDIENT_SUPPLIER_STAFF) ||
+    principal.orgType !== ORG_TYPES.SUPPLIER ||
+    !principal.supplierId ||
+    principal.schoolId ||
+    principal.communeFoodSafetyUnitId
+  )
+    throw new HttpError(
+      403,
+      "Chỉ quản trị viên hoặc nhân viên nhà cung cấp được quản lý đơn giao hàng",
+    );
+  return principal.supplierId;
+}
+
+export function supplierOrderManagementScope(
+  principal: AuthPrincipal,
+): SupplierOrderScope {
+  const supplierId = assertSupplierOrderActor(principal);
+  assertPermission(principal, "delivery.manage");
+  return { supplierId };
+}
+
+export function supplierOrderReadScope(
+  principal: AuthPrincipal,
+): Prisma.DeliveryWhereInput & SupplierOrderScope {
+  const supplierId = assertSupplierOrderActor(principal);
+  const deliveryScope = listScopes["delivery"](principal);
+  return { ...deliveryScope, supplierId };
 }

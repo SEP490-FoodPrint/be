@@ -20,6 +20,7 @@ import {
   type UserService,
 } from "../src/modules/user/user.service";
 import { createWarehouseService } from "../src/modules/warehouse/warehouse.service";
+import { createDeliveryService } from "../src/modules/delivery/delivery.service";
 import { createRegistrationService } from "../src/modules/registration/registration.service";
 import { createRegistrationRepository } from "../src/modules/registration/registration.repository";
 import { createRegistrationRouter } from "../src/modules/registration/registration.routes";
@@ -1293,15 +1294,37 @@ void test("warehouse Decimal quantities and dates remain JSON-compatible without
         SourceFacility: null,
         DeliveryItem: {
           id: "delivery-item-1",
+          ingredientId: "ing-1",
+          ingredientEntryId: "entry-1",
           actualQuantity: new Prisma.Decimal("123.456"),
           unit: "kg",
           Delivery: {
             id: "delivery-1",
             deliveryNo: "DEL-001",
+            schoolId: testAdmin.schoolId!,
+            creationMode: "REQUEST" as const,
             status: "RECEIVED" as const,
             expectedArrivalAt: now,
             arrivedAt: now,
             receivedAt: now,
+          },
+          Ingredient: {
+            id: "ing-1",
+            name: "Gạo",
+            defaultUnit: "kg",
+            description: null,
+            ingredientCategory: null,
+            Supplier: {
+              id: "sup-1",
+              name: "Supplier A",
+              phone: "0987654321",
+            },
+          },
+          IngredientEntry: {
+            id: "entry-1",
+            handlingType: "DRY_STOCK" as const,
+            storageRequirements: null,
+            shelfLifeDays: 30,
           },
           SupplyRequestItem: {
             id: "sri-1",
@@ -1351,15 +1374,37 @@ void test("warehouse Decimal quantities and dates remain JSON-compatible without
         SourceFacility: null,
         DeliveryItem: {
           id: "delivery-item-1",
+          ingredientId: "ing-1",
+          ingredientEntryId: "entry-1",
           actualQuantity: "123.456",
           unit: "kg",
           Delivery: {
             id: "delivery-1",
             deliveryNo: "DEL-001",
+            schoolId: testAdmin.schoolId!,
+            creationMode: "REQUEST",
             status: "RECEIVED",
             expectedArrivalAt: now.toISOString(),
             arrivedAt: now.toISOString(),
             receivedAt: now.toISOString(),
+          },
+          Ingredient: {
+            id: "ing-1",
+            name: "Gạo",
+            defaultUnit: "kg",
+            description: null,
+            ingredientCategory: null,
+            Supplier: {
+              id: "sup-1",
+              name: "Supplier A",
+              phone: "0987654321",
+            },
+          },
+          IngredientEntry: {
+            id: "entry-1",
+            handlingType: "DRY_STOCK",
+            storageRequirements: null,
+            shelfLifeDays: 30,
           },
           SupplyRequestItem: {
             id: "sri-1",
@@ -1389,6 +1434,145 @@ void test("warehouse Decimal quantities and dates remain JSON-compatible without
       },
     ],
     pagination: { page: 1, limit: 20, hasNext: false },
+  });
+
+  const standaloneWarehouse = createWarehouseService(() =>
+    Promise.resolve([
+      {
+        id: "lot-standalone",
+        deliveryItemId: "di-standalone",
+        sourceFacilityId: null,
+        lotCode: "LOT-STD",
+        manufactureDate: null,
+        expiryDate: null,
+        receivedQuantity: new Prisma.Decimal("5.500"),
+        availableQuantity: new Prisma.Decimal("5.500"),
+        unit: "kg",
+        status: "AVAILABLE",
+        createdAt: now,
+        updatedAt: now,
+        SourceFacility: null,
+        DeliveryItem: {
+          id: "di-standalone",
+          ingredientId: "ing-1",
+          ingredientEntryId: "entry-1",
+          actualQuantity: new Prisma.Decimal("5.500"),
+          unit: "kg",
+          Delivery: {
+            id: "del-standalone",
+            deliveryNo: "DG-STD-1",
+            schoolId: testAdmin.schoolId!,
+            creationMode: "STANDALONE" as const,
+            status: "RECEIVED" as const,
+            expectedArrivalAt: null,
+            arrivedAt: now,
+            receivedAt: now,
+          },
+          Ingredient: {
+            id: "ing-1",
+            name: "Gạo",
+            defaultUnit: "kg",
+            description: null,
+            ingredientCategory: null,
+            Supplier: {
+              id: "sup-1",
+              name: "Supplier A",
+              phone: null,
+            },
+          },
+          IngredientEntry: {
+            id: "entry-1",
+            handlingType: "DRY_STOCK" as const,
+            storageRequirements: null,
+            shelfLifeDays: 30,
+          },
+          SupplyRequestItem: null,
+        },
+      },
+    ]),
+  );
+  const standaloneResult = await standaloneWarehouse.getAll(
+    { page: 1, limit: 20 },
+    { ...testStaff, permissions: ["inventory.view"] },
+  );
+  assert.equal(standaloneResult.items[0].DeliveryItem.SupplyRequestItem, null);
+  assert.equal(standaloneResult.items[0].DeliveryItem.Ingredient.name, "Gạo");
+  assert.equal(
+    standaloneResult.items[0].DeliveryItem.IngredientEntry?.handlingType,
+    "DRY_STOCK",
+  );
+
+  const deliveries = createDeliveryService(() =>
+    Promise.resolve([
+      {
+        id: "del-standalone",
+        deliveryNo: "DG-STD-1",
+        schoolId: testAdmin.schoolId!,
+        supplyRequestId: null,
+        supplierId: "sup-1",
+        creationMode: "STANDALONE" as const,
+        status: "CREATED" as const,
+        expectedArrivalAt: null,
+        arrivedAt: null,
+        receivedAt: null,
+        vehiclePlate: null,
+        note: "Đơn độc lập",
+        createdAt: now,
+        updatedAt: now,
+        Supplier: { id: "sup-1", name: "Supplier A", phone: null },
+        SupplyRequest: null,
+        deliveryApprovals: [],
+        deliveryItems: [
+          {
+            id: "di-standalone",
+            ingredientId: "ing-1",
+            ingredientEntryId: null,
+            supplyRequestItemId: null,
+            actualQuantity: new Prisma.Decimal("5.500"),
+            unit: "kg",
+            note: "Mới xay",
+            Ingredient: { id: "ing-1", name: "Gạo" },
+            IngredientEntry: null,
+            SupplyRequestItem: null,
+          },
+        ],
+      },
+    ]),
+  );
+  const deliveryPage = await deliveries.getAll(
+    { page: 1, limit: 20 },
+    { ...testStaff, permissions: ["delivery.view"] },
+  );
+  assert.deepEqual(deliveryPage.items[0], {
+    id: "del-standalone",
+    deliveryNo: "DG-STD-1",
+    supplyRequestId: null,
+    orderNo: null,
+    requestNo: null,
+    supplierId: "sup-1",
+    supplierName: "Supplier A",
+    supplierPhone: null,
+    status: "CREATED",
+    vehiclePlate: null,
+    expectedArrivalAt: null,
+    arrivedAt: null,
+    receivedAt: null,
+    requestedDeliveryDate: null,
+    note: "Đơn độc lập",
+    deliveryApprovals: [],
+    deliveryItems: [
+      {
+        id: "di-standalone",
+        actualQuantity: "5.5",
+        unit: "kg",
+        note: "Mới xay",
+        requestedQuantity: null,
+        ingredientName: "Gạo",
+        handlingType: null,
+      },
+    ],
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString(),
   });
 });
 

@@ -29,6 +29,7 @@ import { createRegistrationRouter } from "../modules/registration/registration.r
 import { createSchoolSupplierRouter } from "../modules/school-supplier/school-supplier.routes";
 import { createIngredientEntryRouter } from "../modules/ingredient-entry/ingredient-entry.routes";
 import { createAllergyRouter } from "../modules/allergy/allergy.routes";
+import { createSupplierOrderRouter } from "../modules/supplier-order/supplier-order.routes";
 import { createDeliveryRouter } from "../modules/delivery/delivery.routes";
 import { createDishRouter } from "../modules/dish/dish.routes";
 import { createInventoryRouter } from "../modules/inventory/inventory.routes";
@@ -134,6 +135,10 @@ export function createApiRouter(
     createIngredientEntryRouter(undefined, authHandler),
   );
   router.use("/class-allergies", createAllergyRouter(undefined, authHandler));
+  router.use(
+    "/deliveries/management",
+    createSupplierOrderRouter(undefined, authHandler),
+  );
   router.use("/deliveries", createDeliveryRouter(undefined, authHandler));
   router.use("/dishes", createDishRouter(undefined, authHandler));
   router.use(
