@@ -1,10 +1,127 @@
-import type { Prisma } from "../../generated/prisma/client";
-import type { DeliveryInspectionQueryDTO } from "./delivery.request.dto";
+import type { DeliveryStatus, Prisma } from "../../generated/prisma/client";
+import { getPrisma } from "../../utils/database";
 
 type Tx = Prisma.TransactionClient;
+
+export interface DeliveryInspectionQueryFilter {
+  page: number;
+  limit: number;
+  search?: string;
+  status?: DeliveryStatus;
+  period: "ALL" | "today" | "week";
+  date?: string;
+}
+
+export const deliveryListSelect = {
+  id: true,
+  deliveryNo: true,
+  schoolId: true,
+  supplyRequestId: true,
+  supplierId: true,
+  creationMode: true,
+  status: true,
+  expectedArrivalAt: true,
+  arrivedAt: true,
+  receivedAt: true,
+  vehiclePlate: true,
+  note: true,
+  createdAt: true,
+  updatedAt: true,
+  Supplier: {
+    select: {
+      id: true,
+      name: true,
+      phone: true,
+    },
+  },
+  SupplyRequest: {
+    select: {
+      id: true,
+      requestNo: true,
+      requestedDeliveryDate: true,
+      note: true,
+      status: true,
+    },
+  },
+  deliveryApprovals: {
+    orderBy: [{ decidedAt: "asc" }, { id: "asc" }],
+    select: {
+      id: true,
+      roleId: true,
+      userId: true,
+      decision: true,
+      reason: true,
+      decidedAt: true,
+      Role: { select: { code: true, name: true } },
+      User: { select: { fullName: true } },
+    },
+  },
+  deliveryItems: {
+    orderBy: { id: "asc" },
+    select: {
+      id: true,
+      ingredientId: true,
+      ingredientEntryId: true,
+      supplyRequestItemId: true,
+      actualQuantity: true,
+      unit: true,
+      note: true,
+      Ingredient: {
+        select: {
+          id: true,
+          name: true,
+        },
+      },
+      IngredientEntry: {
+        select: {
+          id: true,
+          handlingType: true,
+        },
+      },
+      SupplyRequestItem: {
+        select: {
+          requestedQuantity: true,
+          unit: true,
+          IngredientEntry: {
+            select: {
+              handlingType: true,
+              Ingredient: {
+                select: {
+                  name: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+} as const satisfies Prisma.DeliverySelect;
+
+export type DeliveryListRow = Prisma.DeliveryGetPayload<{
+  select: typeof deliveryListSelect;
+}>;
+export type DeliveryListArguments = Pick<
+  Prisma.DeliveryFindManyArgs,
+  "skip" | "take" | "orderBy" | "where"
+> & {
+  select: typeof deliveryListSelect;
+};
+export type DeliveryListReader = (
+  args: DeliveryListArguments,
+) => Promise<DeliveryListRow[]>;
+
+export const readDeliveriesFromDatabase: DeliveryListReader = async (args) => {
+  const prisma = await getPrisma();
+  return prisma.delivery.findMany(args);
+};
+
 const summarySelect = {
   id: true,
   deliveryNo: true,
+  schoolId: true,
+  creationMode: true,
+  traceabilityVersion: true,
   supplyRequestId: true,
   status: true,
   expectedArrivalAt: true,
@@ -52,9 +169,32 @@ const detailSelect = {
     orderBy: { id: "asc" },
     select: {
       id: true,
-      actualQuantity: true,
+      ingredientId: true,
+      ingredientEntryId: true,
       supplyRequestItemId: true,
+      sourceFacilityId: true,
+      sourceFacilityNameSnapshot: true,
+      sourceFacilityCodeSnapshot: true,
+      ingredientNameSnapshot: true,
+      actualQuantity: true,
       unit: true,
+      Ingredient: {
+        select: {
+          id: true,
+          name: true,
+          supplierId: true,
+          ingredientCategory: { select: { categoryName: true } },
+        },
+      },
+      IngredientEntry: {
+        select: {
+          id: true,
+          schoolId: true,
+          ingredientId: true,
+          status: true,
+          handlingType: true,
+        },
+      },
       SupplyRequestItem: {
         select: {
           supplyRequestId: true,
@@ -81,6 +221,7 @@ const detailSelect = {
           id: true,
           lotCode: true,
           qrToken: true,
+          sourceFacilityId: true,
           manufactureDate: true,
           expiryDate: true,
           receivedQuantity: true,
@@ -96,11 +237,11 @@ const detailSelect = {
 
 function inspectionWhere(
   schoolId: string,
-  query: DeliveryInspectionQueryDTO,
+  query: DeliveryInspectionQueryFilter,
   range?: { gte: Date; lt: Date },
 ): Prisma.DeliveryWhereInput {
   return {
-    SupplyRequest: { schoolId },
+    schoolId,
     ...(query.status ? { status: query.status } : {}),
     AND: [
       ...(query.search
@@ -155,13 +296,38 @@ export const deliveryInspectionRepository = {
   },
   async lock(tx: Tx, schoolId: string, id: string) {
     const scoped = await tx.delivery.findFirst({
-      where: { id, SupplyRequest: { schoolId } },
+      where: { id, schoolId },
       select: { supplyRequestId: true },
     });
     if (!scoped) return false;
-    await tx.$queryRaw`SELECT id FROM foodprint.supply_requests WHERE id = ${scoped.supplyRequestId}::uuid AND school_id = ${schoolId}::uuid FOR UPDATE`;
-    await tx.$queryRaw`SELECT id FROM foodprint.deliveries WHERE id = ${id}::uuid FOR UPDATE`;
+    if (scoped.supplyRequestId) {
+      await tx.$queryRaw`SELECT id FROM foodprint.supply_requests WHERE id = ${scoped.supplyRequestId}::uuid AND school_id = ${schoolId}::uuid FOR UPDATE`;
+    }
+    await tx.$queryRaw`SELECT id FROM foodprint.deliveries WHERE id = ${id}::uuid AND school_id = ${schoolId}::uuid FOR UPDATE`;
     return true;
+  },
+  findSchoolIngredientEntry(tx: Tx, schoolId: string, ingredientId: string) {
+    return tx.ingredientEntry.findUnique({
+      where: { schoolId_ingredientId: { schoolId, ingredientId } },
+      select: {
+        id: true,
+        schoolId: true,
+        ingredientId: true,
+        status: true,
+        handlingType: true,
+      },
+    });
+  },
+  attachDeliveryItemEntry(
+    tx: Tx,
+    deliveryItemId: string,
+    ingredientEntryId: string,
+  ) {
+    return tx.deliveryItem.update({
+      where: { id: deliveryItemId },
+      data: { ingredientEntryId },
+      select: { id: true, ingredientEntryId: true },
+    });
   },
   async lockLots(tx: Tx, ids: string[]) {
     for (const id of [...new Set(ids)].sort())
@@ -199,6 +365,21 @@ export const deliveryInspectionRepository = {
         ...(status === "RECEIVED"
           ? { receivedAt: now, receivedByUserId: actorId }
           : {}),
+      },
+    });
+  },
+  markArrived(tx: Tx, id: string, schoolId: string, now: Date) {
+    return tx.delivery.updateMany({
+      where: {
+        id,
+        schoolId,
+        traceabilityVersion: 1,
+        status: "IN_TRANSIT",
+        arrivedAt: null,
+      },
+      data: {
+        status: "ARRIVED",
+        arrivedAt: now,
       },
     });
   },
@@ -267,7 +448,7 @@ export const deliveryInspectionRepository = {
   list(
     tx: Tx,
     schoolId: string,
-    query: DeliveryInspectionQueryDTO,
+    query: DeliveryInspectionQueryFilter,
     range?: { gte: Date; lt: Date },
   ) {
     return tx.delivery.findMany({
@@ -281,7 +462,7 @@ export const deliveryInspectionRepository = {
   counts(
     tx: Tx,
     schoolId: string,
-    query: DeliveryInspectionQueryDTO,
+    query: DeliveryInspectionQueryFilter,
     range?: { gte: Date; lt: Date },
   ) {
     return tx.delivery.groupBy({
@@ -292,7 +473,7 @@ export const deliveryInspectionRepository = {
   },
   detail(tx: Tx, schoolId: string, id: string) {
     return tx.delivery.findFirst({
-      where: { id, SupplyRequest: { schoolId } },
+      where: { id, schoolId },
       select: detailSelect,
     });
   },

@@ -27,7 +27,11 @@ export async function uploadRecordPhoto(
   userId: string,
   file?: Express.Multer.File,
 ) {
-  if (!file) return null;
+  if (!file)
+    throw new HttpError(
+      400,
+      "Cần gửi ảnh khi kiểm tra nguyên liệu hoặc lưu mẫu.",
+    );
   if (documentFormat(file) === "pdf")
     throw new HttpError(400, "Chỉ nhận ảnh JPG hoặc PNG.");
   const document = await documentStorage.upload(userId, file);

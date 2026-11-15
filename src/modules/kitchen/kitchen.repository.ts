@@ -42,6 +42,10 @@ export const kitchenDetailSelect = {
           expiryDate: true,
           DeliveryItem: {
             select: {
+              Ingredient: { select: { name: true } },
+              IngredientEntry: {
+                select: { Ingredient: { select: { name: true } } },
+              },
               SupplyRequestItem: {
                 select: {
                   IngredientEntry: {

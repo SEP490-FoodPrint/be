@@ -6,12 +6,19 @@ import {
   withSchoolTransaction,
 } from "../../utils/authorization";
 import { HttpError } from "../../utils/http-error";
+import { getDeliveryStatusLabel } from "../../utils/delivery-status";
 import { ROLE_LABELS } from "../../constants/roles";
 import {
   deliveryInspectionRepository as inspections,
+  deliveryListSelect,
+  readDeliveriesFromDatabase,
+  type DeliveryInspectionDetailRow,
   type DeliveryInspectionRow,
+  type DeliveryListReader,
 } from "./delivery.repository";
 import type {
+  DeliveryArrivalBodyDTO,
+  DeliveryArrivalQueryDTO,
   DeliveryInspectionQueryDTO,
   DeliveryInspectionDecisionDTO,
 } from "./delivery.request.dto";
@@ -23,7 +30,6 @@ import type { PrismaClient } from "../../generated/prisma/client";
 import { listScopes } from "../../utils/resource-access";
 import { Prisma } from "../../generated/prisma/client";
 import { convertQuantity } from "../kitchen/kitchen.service";
-import type { DeliveryInspectionDetailRow } from "./delivery.repository";
 import { getPrisma } from "../../utils/database";
 import {
   listWindow,
@@ -31,90 +37,9 @@ import {
   type ListQuery,
 } from "../../utils/list-query";
 
-const select = {
-  id: true,
-  deliveryNo: true,
-  supplyRequestId: true,
-  supplierId: true,
-  status: true,
-  expectedArrivalAt: true,
-  arrivedAt: true,
-  receivedAt: true,
-  vehiclePlate: true,
-  note: true,
-  createdAt: true,
-  updatedAt: true,
-  Supplier: {
-    select: {
-      id: true,
-      name: true,
-      phone: true,
-    },
-  },
-  SupplyRequest: {
-    select: {
-      id: true,
-      requestNo: true,
-      requestedDeliveryDate: true,
-      note: true,
-      status: true,
-    },
-  },
-  deliveryApprovals: {
-    orderBy: [{ decidedAt: "asc" }, { id: "asc" }],
-    select: {
-      id: true,
-      roleId: true,
-      userId: true,
-      decision: true,
-      reason: true,
-      decidedAt: true,
-      Role: { select: { code: true, name: true } },
-      User: { select: { fullName: true } },
-    },
-  },
-  deliveryItems: {
-    orderBy: { id: "asc" },
-    select: {
-      id: true,
-      actualQuantity: true,
-      unit: true,
-      note: true,
-      SupplyRequestItem: {
-        select: {
-          requestedQuantity: true,
-          unit: true,
-          IngredientEntry: {
-            select: {
-              handlingType: true,
-              Ingredient: {
-                select: {
-                  name: true,
-                },
-              },
-            },
-          },
-        },
-      },
-    },
-  },
-} as const satisfies Prisma.DeliverySelect;
-
-type ListRow = Prisma.DeliveryGetPayload<{ select: typeof select }>;
-type ListArguments = Pick<
-  Prisma.DeliveryFindManyArgs,
-  "skip" | "take" | "orderBy" | "where"
-> & {
-  select: typeof select;
-};
-type ListReader = (args: ListArguments) => Promise<ListRow[]>;
-
-const readFromDatabase: ListReader = async (args) => {
-  const prisma = await getPrisma();
-  return prisma.delivery.findMany(args);
-};
-
-export function createDeliveryService(read: ListReader = readFromDatabase) {
+export function createDeliveryService(
+  read: DeliveryListReader = readDeliveriesFromDatabase,
+) {
   return {
     async getAll(
       query: ListQuery,
@@ -126,7 +51,7 @@ export function createDeliveryService(read: ListReader = readFromDatabase) {
           read({
             ...listWindow(query),
             where,
-            select,
+            select: deliveryListSelect,
             orderBy: [{ createdAt: "desc" }],
           }),
         query,
@@ -170,9 +95,13 @@ export function createDeliveryService(read: ListReader = readFromDatabase) {
               requestedQuantity:
                 di.SupplyRequestItem?.requestedQuantity?.toString() ?? null,
               ingredientName:
-                di.SupplyRequestItem?.IngredientEntry?.Ingredient?.name ?? null,
+                di.Ingredient?.name ??
+                di.SupplyRequestItem?.IngredientEntry?.Ingredient?.name ??
+                null,
               handlingType:
-                di.SupplyRequestItem?.IngredientEntry?.handlingType ?? null,
+                di.IngredientEntry?.handlingType ??
+                di.SupplyRequestItem?.IngredientEntry?.handlingType ??
+                null,
             })) ?? [],
           createdAt: row.createdAt.toISOString(),
           updatedAt: row.updatedAt.toISOString(),
@@ -212,13 +141,21 @@ function inspectionDTO(
   row: DeliveryInspectionRow,
   principal: AuthPrincipal,
 ): DeliveryInspectionDTO {
+  const source = row.SupplyRequest;
+  const sourceType =
+    row.creationMode ?? (row.supplyRequestId ? "REQUEST" : "STANDALONE");
+  const rejectedCount = source?._count?.deliveries ?? 0;
   return {
     id: row.id,
     deliveryNo: row.deliveryNo,
+    schoolId: row.schoolId,
+    sourceType,
+    traceabilityVersion: row.traceabilityVersion ?? null,
     supplyRequestId: row.supplyRequestId,
-    requestNo: row.SupplyRequest.requestNo,
+    requestNo: source?.requestNo ?? null,
     supplierName: row.Supplier.name,
     status: row.status,
+    statusLabel: getDeliveryStatusLabel(row.status),
     expectedArrivalAt: row.expectedArrivalAt?.toISOString() ?? null,
     arrivedAt: row.arrivedAt?.toISOString() ?? null,
     receivedAt: row.receivedAt?.toISOString() ?? null,
@@ -227,18 +164,16 @@ function inspectionDTO(
     currentRole: principal.role,
     canInspect:
       principal.permissions.includes("delivery.inspect") &&
-      (row.SupplyRequest._count?.deliveries ?? 0) <= 2 &&
-      row.SupplyRequest.status !== "CANCELLED" &&
+      (!source || (rejectedCount <= 2 && source.status !== "CANCELLED")) &&
       ["ARRIVED", "PENDING_APPROVAL"].includes(row.status) &&
       !row.deliveryApprovals.some(
         (approval) => approval.roleId === principal.roleId,
       ),
-    redeliveryRequiredCount: row.SupplyRequest._count?.deliveries ?? 0,
-    redeliveryLimit: 2,
+    redeliveryRequiredCount: source ? rejectedCount : null,
+    redeliveryLimit: source ? 2 : null,
     cancellationNotice:
-      row.SupplyRequest.status === "CANCELLED" ||
-      (row.SupplyRequest._count?.deliveries ?? 0) > 2
-        ? `Đơn ${row.SupplyRequest.requestNo}${row.SupplyRequest.status === "CANCELLED" ? " đã hủy phần chưa nhận" : " bị chặn nhận tiếp"}${(row.SupplyRequest._count?.deliveries ?? 0) > 2 ? " do tổng số lần phải giao lại vượt quá 2" : ""}. Không tiếp nhận thêm nguyên liệu của đơn này.`
+      source && (source.status === "CANCELLED" || rejectedCount > 2)
+        ? `Đơn ${source.requestNo}${source.status === "CANCELLED" ? " đã hủy phần chưa nhận" : " bị chặn nhận tiếp"}${rejectedCount > 2 ? " do tổng số lần phải giao lại vượt quá 2" : ""}. Không tiếp nhận thêm nguyên liệu của đơn này.`
         : null,
     requiredRoles: deliveryInspectionRoles.map((code) => ({
       code,
@@ -253,6 +188,49 @@ function inspectionDTO(
       reason: approval.reason,
       photoUrl: recordPhotoUrl(approval.photoPublicId),
       decidedAt: approval.decidedAt.toISOString(),
+    })),
+  };
+}
+
+function inspectionDetailDTO(
+  row: DeliveryInspectionDetailRow,
+  principal: AuthPrincipal,
+): DeliveryInspectionDTO {
+  return {
+    ...inspectionDTO(row, principal),
+    deliveryItems: row.deliveryItems.map((item) => ({
+      id: item.id,
+      ingredientName:
+        item.ingredientNameSnapshot ??
+        item.Ingredient?.name ??
+        item.SupplyRequestItem?.IngredientEntry?.Ingredient?.name ??
+        "",
+      category:
+        item.Ingredient?.ingredientCategory?.categoryName ??
+        item.SupplyRequestItem?.IngredientEntry?.Ingredient?.ingredientCategory
+          ?.categoryName ??
+        null,
+      actualQuantity: item.actualQuantity.toString(),
+      unit: item.unit,
+      sourceFacility: item.sourceFacilityNameSnapshot
+        ? {
+            id: item.sourceFacilityId ?? null,
+            name: item.sourceFacilityNameSnapshot,
+            facilityCode: item.sourceFacilityCodeSnapshot ?? null,
+          }
+        : null,
+      ingredientLots: item.ingredientLots.map((lot) => ({
+        id: lot.id,
+        lotCode: lot.lotCode,
+        qrToken: lot.qrToken,
+        sourceFacility: lot.SourceFacility?.name ?? null,
+        manufactureDate:
+          lot.manufactureDate?.toISOString().slice(0, 10) ?? null,
+        expiryDate: lot.expiryDate?.toISOString().slice(0, 10) ?? null,
+        receivedQuantity: lot.receivedQuantity.toString(),
+        unit: lot.unit,
+        status: lot.status,
+      })),
     })),
   };
 }
@@ -287,8 +265,11 @@ function assertReceipt(
   now: Date,
 ) {
   if (
-    row.supplierId !== row.SupplyRequest.supplierId ||
-    !row.deliveryItems.length
+    row.schoolId !== schoolId ||
+    !row.deliveryItems.length ||
+    (row.SupplyRequest &&
+      (row.supplierId !== row.SupplyRequest.supplierId ||
+        row.SupplyRequest.schoolId !== schoolId))
   )
     throw new HttpError(
       409,
@@ -298,18 +279,42 @@ function assertReceipt(
     .toISOString()
     .slice(0, 10);
   for (const item of row.deliveryItems) {
-    const entry = item.SupplyRequestItem.IngredientEntry;
-    if (
-      item.SupplyRequestItem.supplyRequestId !== row.supplyRequestId ||
-      entry.schoolId !== schoolId ||
-      entry.Ingredient.supplierId !== row.supplierId ||
-      !item.actualQuantity.gt(0) ||
-      !item.ingredientLots.length
-    )
+    if (row.supplyRequestId !== null) {
+      const sourceItem = item.SupplyRequestItem;
+      if (
+        !sourceItem ||
+        sourceItem.supplyRequestId !== row.supplyRequestId ||
+        sourceItem.IngredientEntry.schoolId !== schoolId ||
+        sourceItem.IngredientEntry.Ingredient.supplierId !== row.supplierId ||
+        !item.actualQuantity.gt(0) ||
+        !item.ingredientLots.length
+      )
+        throw new HttpError(
+          409,
+          "Mặt hàng/lô giao phải khớp đơn cung ứng và trường",
+        );
+    } else {
+      if (
+        item.supplyRequestItemId !== null ||
+        item.Ingredient.supplierId !== row.supplierId ||
+        !item.IngredientEntry ||
+        item.IngredientEntry.schoolId !== schoolId ||
+        item.IngredientEntry.ingredientId !== item.ingredientId ||
+        item.IngredientEntry.status !== "ACTIVE" ||
+        !item.actualQuantity.gt(0) ||
+        !item.ingredientLots.length
+      )
+        throw new HttpError(
+          409,
+          "Mặt hàng/lô giao phải khớp danh mục nguyên liệu của trường và nhà cung cấp",
+        );
+    }
+    if (row.traceabilityVersion === 1 && !item.sourceFacilityId) {
       throw new HttpError(
         409,
-        "Mặt hàng/lô giao phải khớp đơn cung ứng và trường",
+        "Mặt hàng giao v1 thiếu thông tin cơ sở cung cấp",
       );
+    }
     let total = new Prisma.Decimal(0);
     for (const lot of item.ingredientLots) {
       if (
@@ -322,6 +327,16 @@ function assertReceipt(
           409,
           "Lô nhận phải đang chặn, chưa có tồn kho và đúng Supplier",
         );
+      if (
+        row.traceabilityVersion === 1 &&
+        (!lot.sourceFacilityId ||
+          lot.sourceFacilityId !== item.sourceFacilityId)
+      ) {
+        throw new HttpError(
+          409,
+          "Lô tiếp nhận phải khớp cơ sở cung cấp của mặt hàng giao",
+        );
+      }
       const manufacture = lot.manufactureDate?.toISOString().slice(0, 10);
       const expiry = lot.expiryDate?.toISOString().slice(0, 10);
       if (
@@ -350,6 +365,71 @@ export function createDeliveryInspectionService(
   now = () => new Date(),
 ) {
   return {
+    async arrive(
+      id: string,
+      _body: DeliveryArrivalBodyDTO,
+      _query: DeliveryArrivalQueryDTO,
+      principal: AuthPrincipal,
+    ): Promise<DeliveryInspectionDTO> {
+      inspectionScope(principal);
+      return withSchoolTransaction(
+        await connect(),
+        principal,
+        "delivery.inspect",
+        async (tx, actor, schoolId) => {
+          inspectionScope(actor);
+          if (!(await inspections.lock(tx, schoolId, id)))
+            throw new HttpError(404, "Không tìm thấy đợt giao trong trường");
+          const row = await inspections.detail(tx, schoolId, id);
+          if (!row)
+            throw new HttpError(404, "Không tìm thấy đợt giao trong trường");
+          if (row.traceabilityVersion !== 1) {
+            throw new HttpError(
+              409,
+              "Đợt giao lịch sử không hỗ trợ xác nhận đến trường qua luồng mới",
+            );
+          }
+          if (
+            row.status === "CANCELLED" ||
+            row.status === "CANCELLED_MEAL" ||
+            row.SupplyRequest?.status === "CANCELLED"
+          ) {
+            throw new HttpError(
+              409,
+              "Đợt giao hoặc yêu cầu cung ứng nguồn đã bị hủy",
+            );
+          }
+          if (
+            row.arrivedAt !== null &&
+            ["ARRIVED", "PENDING_APPROVAL", "RECEIVED", "REJECTED"].includes(
+              row.status,
+            )
+          ) {
+            return inspectionDetailDTO(row, actor);
+          }
+          if (row.status !== "IN_TRANSIT" || row.arrivedAt !== null) {
+            throw new HttpError(
+              409,
+              "Trạng thái đợt giao không hợp lệ để xác nhận đến trường",
+            );
+          }
+          const updated = await inspections.markArrived(
+            tx,
+            id,
+            schoolId,
+            now(),
+          );
+          if (updated.count !== 1) {
+            throw new HttpError(
+              409,
+              "Trạng thái đợt giao đã thay đổi trước khi xác nhận đến trường",
+            );
+          }
+          const saved = (await inspections.detail(tx, schoolId, id))!;
+          return inspectionDetailDTO(saved, actor);
+        },
+      );
+    },
     async decide(
       id: string,
       input: DeliveryInspectionDecisionDTO,
@@ -397,8 +477,8 @@ export function createDeliveryInspectionService(
             return { ...inspectionDTO(row, actor), created: false };
           }
           if (
-            row.SupplyRequest.status === "CANCELLED" ||
-            (row.SupplyRequest._count?.deliveries ?? 0) > 2 ||
+            row.SupplyRequest?.status === "CANCELLED" ||
+            (row.SupplyRequest?._count?.deliveries ?? 0) > 2 ||
             !["ARRIVED", "PENDING_APPROVAL"].includes(row.status) ||
             row.deliveryApprovals.some(
               (approval) => approval.decision === "REJECT",
@@ -426,33 +506,68 @@ export function createDeliveryInspectionService(
                 lots.map((lot) => lot.id),
               );
               row = (await inspections.detail(tx, schoolId, id))!;
-              assertReceipt(row, schoolId, now());
-              for (const item of row.deliveryItems) {
-                const previous = await inspections.receivedItems(
-                  tx,
-                  item.supplyRequestItemId,
-                );
-                const received = previous.reduce(
-                  (total, value) =>
-                    total.add(
-                      convertQuantity(
-                        value.actualQuantity,
-                        value.unit,
-                        item.unit,
-                      ),
-                    ),
-                  new Prisma.Decimal(0),
-                );
-                const requested = convertQuantity(
-                  item.SupplyRequestItem.requestedQuantity,
-                  item.SupplyRequestItem.unit,
-                  item.unit,
-                );
-                if (received.add(item.actualQuantity).gt(requested))
-                  throw new HttpError(
-                    409,
-                    "Tổng lượng tiếp nhận vượt số lượng được yêu cầu cung ứng",
+              if (row.supplyRequestId === null) {
+                let attached = false;
+                for (const item of row.deliveryItems) {
+                  const entry = await inspections.findSchoolIngredientEntry(
+                    tx,
+                    schoolId,
+                    item.ingredientId,
                   );
+                  if (!entry || entry.status !== "ACTIVE") {
+                    throw new HttpError(
+                      409,
+                      "Chưa cấu hình danh mục nguyên liệu đang hoạt động của trường để tiếp nhận lô",
+                    );
+                  }
+                  if (item.ingredientEntryId !== entry.id) {
+                    await inspections.attachDeliveryItemEntry(
+                      tx,
+                      item.id,
+                      entry.id,
+                    );
+                    attached = true;
+                  }
+                }
+                if (attached) {
+                  row = (await inspections.detail(tx, schoolId, id))!;
+                }
+              }
+              assertReceipt(row, schoolId, now());
+              if (row.supplyRequestId !== null) {
+                for (const item of row.deliveryItems) {
+                  if (!item.supplyRequestItemId || !item.SupplyRequestItem) {
+                    throw new HttpError(
+                      409,
+                      "Thiếu dòng yêu cầu nguồn của phiếu giao",
+                    );
+                  }
+                  const previous = await inspections.receivedItems(
+                    tx,
+                    item.supplyRequestItemId,
+                  );
+                  const received = previous.reduce(
+                    (total, value) =>
+                      total.add(
+                        convertQuantity(
+                          value.actualQuantity,
+                          value.unit,
+                          item.unit,
+                        ),
+                      ),
+                    new Prisma.Decimal(0),
+                  );
+                  const requested = convertQuantity(
+                    item.SupplyRequestItem.requestedQuantity,
+                    item.SupplyRequestItem.unit,
+                    item.unit,
+                  );
+                  if (received.add(item.actualQuantity).gt(requested))
+                    throw new HttpError(
+                      409,
+                      "Tổng lượng tiếp nhận vượt số lượng được yêu cầu cung ứng",
+                    );
+                }
               }
               if (
                 await inspections.historyCount(
@@ -497,6 +612,7 @@ export function createDeliveryInspectionService(
           );
           if (
             input.decision === "REJECT" &&
+            row.supplyRequestId !== null &&
             (await inspections.rejectedCount(tx, row.supplyRequestId)) > 2
           )
             await inspections.cancelRemainder(tx, row.supplyRequestId);
@@ -550,31 +666,7 @@ export function createDeliveryInspectionService(
         const row = await inspections.detail(await connect(), schoolId, id);
         if (!row)
           throw new HttpError(404, "Không tìm thấy đợt giao trong trường");
-        return {
-          ...inspectionDTO(row, principal),
-          deliveryItems: row.deliveryItems.map((item) => ({
-            id: item.id,
-            ingredientName:
-              item.SupplyRequestItem.IngredientEntry.Ingredient.name,
-            category:
-              item.SupplyRequestItem.IngredientEntry.Ingredient
-                .ingredientCategory?.categoryName ?? null,
-            actualQuantity: item.actualQuantity.toString(),
-            unit: item.unit,
-            ingredientLots: item.ingredientLots.map((lot) => ({
-              id: lot.id,
-              lotCode: lot.lotCode,
-              qrToken: lot.qrToken,
-              sourceFacility: lot.SourceFacility?.name ?? null,
-              manufactureDate:
-                lot.manufactureDate?.toISOString().slice(0, 10) ?? null,
-              expiryDate: lot.expiryDate?.toISOString().slice(0, 10) ?? null,
-              receivedQuantity: lot.receivedQuantity.toString(),
-              unit: lot.unit,
-              status: lot.status,
-            })),
-          })),
-        };
+        return inspectionDetailDTO(row, principal);
       });
     },
   };

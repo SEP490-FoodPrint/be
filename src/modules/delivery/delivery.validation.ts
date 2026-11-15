@@ -43,3 +43,11 @@ export const deliveryInspectionDecisionSchema = z
   });
 export const validateDeliveryInspectionDecision = (value: unknown) =>
   parseRequest(deliveryInspectionDecisionSchema, value);
+
+export const deliveryArrivalBodySchema = z.strictObject({});
+export const deliveryArrivalQuerySchema = z.strictObject({});
+
+export const validateDeliveryArrivalBody = (value: unknown) =>
+  parseRequest(deliveryArrivalBodySchema, value === undefined ? {} : value);
+export const validateDeliveryArrivalQuery = (value: unknown) =>
+  parseRequest(deliveryArrivalQuerySchema, value);

@@ -271,8 +271,13 @@ model DailyMealPortion {
 model Delivery {
   id                        String                      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   deliveryNo                String                      @map("delivery_no") @db.VarChar(80)
-  supplyRequestId           String                      @map("supply_request_id") @db.Uuid
+  supplyRequestId           String?                     @map("supply_request_id") @db.Uuid
+  schoolId                  String                      @map("school_id") @db.Uuid
   supplierId                String                      @map("supplier_id") @db.Uuid
+  creationMode              DeliveryCreationMode?       @map("creation_mode")
+  creationKey               String?                     @map("creation_key") @db.Uuid
+  creationFingerprint       String?                     @map("creation_fingerprint") @db.VarChar(64)
+  traceabilityVersion       Int?                        @map("traceability_version")
   status                    DeliveryStatus              @default(CREATED)
   createdByUserId           String?                     @map("created_by_user_id") @db.Uuid
   expectedArrivalAt         DateTime?                   @map("expected_arrival_at") @db.Timestamptz(6)
@@ -283,7 +288,8 @@ model Delivery {
   note                      String?                     @db.Text
   createdAt                 DateTime                    @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                 DateTime                    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  SupplyRequest             SupplyRequest               @relation("deliveries_supply_request_id__supply_requests", fields: [supplyRequestId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  SupplyRequest             SupplyRequest?              @relation("deliveries_supply_request_id__supply_requests", fields: [supplyRequestId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  School                    School                      @relation("deliveries_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   Supplier                  Supplier                    @relation("deliveries_supplier_id__suppliers", fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   createdByUser             User?                       @relation("deliveries_created_by_user_id__users", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   receivedByUser            User?                       @relation("deliveries_received_by_user_id__users", fields: [receivedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
@@ -292,9 +298,13 @@ model Delivery {
   ingredientQualityFeedback IngredientQualityFeedback[] @relation("ingredient_quality_feedback_delivery_id__deliveries")
   traceabilityAnchors       TraceabilityAnchor[]        @relation("traceability_anchors_delivery_id__deliveries")
 
-  @@unique([deliveryNo])
+  @@unique([supplierId, deliveryNo], map: "uq_deliveries_supplier_no")
+  @@unique([supplyRequestId], map: "uq_deliveries_request_mode", where: raw("(creation_mode = 'REQUEST'::delivery_creation_mode)"))
+  @@unique([supplierId, createdByUserId, creationKey], map: "uq_deliveries_creation_idempotency", where: raw("creation_key IS NOT NULL"))
   @@index([createdByUserId], map: "idx_deliveries_created_by")
   @@index([supplyRequestId, status], map: "idx_deliveries_request_status")
+  @@index([schoolId, status], map: "idx_deliveries_school_status")
+  @@index([supplierId, createdAt, id], map: "idx_deliveries_supplier_created")
   @@map("deliveries")
   @@schema("foodprint")
 }
@@ -325,19 +335,34 @@ model DeliveryApproval {
 /// Actual ingredient lines in a Delivery. Each row references the corresponding SupplyRequestItem and can contain multiple IngredientLot rows.
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
 model DeliveryItem {
-  id                  String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  deliveryId          String            @map("delivery_id") @db.Uuid
-  supplyRequestItemId String            @map("supply_request_item_id") @db.Uuid
-  actualQuantity      Decimal           @map("actual_quantity") @db.Decimal(14, 3)
-  unit                String            @db.VarChar(30)
-  note                String?           @db.Text
-  Delivery            Delivery          @relation("delivery_items_delivery_id__deliveries", fields: [deliveryId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  SupplyRequestItem   SupplyRequestItem @relation("delivery_items_supply_request_item_id__supply_request_items", fields: [supplyRequestItemId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  ingredientLots      IngredientLot[]   @relation("ingredient_lots_delivery_item_id__delivery_items")
+  id                         String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  deliveryId                 String             @map("delivery_id") @db.Uuid
+  supplyRequestItemId        String?            @map("supply_request_item_id") @db.Uuid
+  ingredientId               String             @map("ingredient_id") @db.Uuid
+  ingredientEntryId          String?            @map("ingredient_entry_id") @db.Uuid
+  sourceFacilityId           String?            @map("source_facility_id") @db.Uuid
+  sourceFacilityNameSnapshot String?            @map("source_facility_name_snapshot") @db.VarChar(255)
+  sourceFacilityCodeSnapshot String?            @map("source_facility_code_snapshot") @db.VarChar(80)
+  ingredientNameSnapshot     String?            @map("ingredient_name_snapshot") @db.VarChar(255)
+  qrToken                    String?            @unique @map("qr_token") @db.VarChar(160)
+  qrUrl                      String?            @map("qr_url") @db.VarChar(2048)
+  actualQuantity             Decimal            @map("actual_quantity") @db.Decimal(14, 3)
+  unit                       String             @db.VarChar(30)
+  note                       String?            @db.Text
+  Delivery                   Delivery           @relation("delivery_items_delivery_id__deliveries", fields: [deliveryId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  SupplyRequestItem          SupplyRequestItem? @relation("delivery_items_supply_request_item_id__supply_request_items", fields: [supplyRequestItemId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  Ingredient                 Ingredient         @relation("delivery_items_ingredient_id__ingredients", fields: [ingredientId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  IngredientEntry            IngredientEntry?   @relation("delivery_items_ingredient_entry_id__ingredient_entries", fields: [ingredientEntryId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  SourceFacility             SourceFacility?    @relation("delivery_items_source_facility_id__source_facilities", fields: [sourceFacilityId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  ingredientLots             IngredientLot[]    @relation("ingredient_lots_delivery_item_id__delivery_items")
 
   @@unique([deliveryId, supplyRequestItemId])
+  @@unique([deliveryId, ingredientId])
   @@index([deliveryId], map: "idx_delivery_items_delivery")
   @@index([supplyRequestItemId], map: "idx_delivery_items_request_item")
+  @@index([ingredientId], map: "idx_delivery_items_ingredient")
+  @@index([ingredientEntryId], map: "idx_delivery_items_ingredient_entry")
+  @@index([sourceFacilityId], map: "idx_delivery_items_source_facility")
   @@map("delivery_items")
   @@schema("foodprint")
 }
@@ -591,6 +616,7 @@ model IngredientEntry {
   classAllergies         ClassAllergy[]                  @relation("class_allergies_ingredient_entry_id__ingredient_entries")
   supplyRequestItems     SupplyRequestItem[]             @relation("supply_request_items_ingredient_entry_id__ingredient_entries")
   dishIngredientEntries  DishIngredientEntry[]           @relation("dish_ingredient_entries_ingredient_entry_id__ingredient_entries")
+  deliveryItems          DeliveryItem[]                  @relation("delivery_items_ingredient_entry_id__ingredient_entries")
   menuMealSeasonings     MenuMealSeasoning[]
   portionGroupAvoidances MenuMealPortionGroupAvoidance[]
 
@@ -688,6 +714,7 @@ model Ingredient {
   Supplier            Supplier                @relation("ingredients_supplier_id__suppliers", fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   ingredientEntries   IngredientEntry[]       @relation("ingredient_entries_ingredient_id__ingredients")
   contractItems       SupplierContractItem[]
+  deliveryItems       DeliveryItem[]          @relation("delivery_items_ingredient_id__ingredients")
   menuDishIngredients MenuDayDishIngredient[]
 
   @@unique([supplierId, name])
@@ -1042,6 +1069,7 @@ model School {
   academicYears               SchoolAcademicYear[]         @relation("school_academic_years_school_id__schools")
   ingredientEntries           IngredientEntry[]            @relation("ingredient_entries_school_id__schools")
   supplyRequests              SupplyRequest[]              @relation("supply_requests_school_id__schools")
+  deliveries                  Delivery[]                   @relation("deliveries_school_id__schools")
   weeklyMenus                 WeeklyMenu[]                 @relation("weekly_menus_school_id__schools")
   dishes                      Dish[]                       @relation("dishes_school_id__schools")
   dishCategories              SchoolDishCategory[]
@@ -1117,6 +1145,7 @@ model SourceFacility {
   Supplier        Supplier        @relation("source_facilities_supplier_id__suppliers", fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   createdByUser   User?           @relation("source_facilities_created_by_user_id__users", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   updatedByUser   User?           @relation("source_facilities_updated_by_user_id__users", fields: [updatedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  deliveryItems   DeliveryItem[]  @relation("delivery_items_source_facility_id__source_facilities")
   ingredientLots  IngredientLot[] @relation("ingredient_lots_source_facility_id__source_facilities")
 
   @@unique([supplierId, name])
@@ -1592,6 +1621,14 @@ enum CookingMode {
   COMBINE_LOTS
 
   @@map("cooking_mode")
+  @@schema("foodprint")
+}
+
+enum DeliveryCreationMode {
+  REQUEST
+  STANDALONE
+
+  @@map("delivery_creation_mode")
   @@schema("foodprint")
 }
 

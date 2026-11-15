@@ -62,7 +62,9 @@ Tất cả đường dẫn bên dưới dùng phương thức **GET**.
 | `school-supplier`             | `/api/school-supplier-relationships` | `SchoolSupplierRelationship` | —                              |
 | `ingredient-entry`            | `/api/ingredient-entries`            | `IngredientEntry`            | —                              |
 | `allergy`                     | `/api/class-allergies`               | `ClassAllergy`               | —                              |
+| `supplier-order`              | `/api/deliveries/management`         | `Delivery`                   | DeliveryItem                   |
 | `delivery`                    | `/api/deliveries`                    | `Delivery`                   | DeliveryItem, DeliveryApproval |
+| `delivery-trace`              | `/api/public/delivery-items`         | `DeliveryItem`               | Delivery, Supplier             |
 | `dish`                        | `/api/dishes`                        | `Dish`                       | DishIngredientEntry            |
 | `inventory`                   | `/api/inventory-transactions`        | `InventoryTransaction`       | —                              |
 | `retained-sample`             | `/api/retained-food-samples`         | `RetainedFoodSample`         | —                              |
@@ -160,3 +162,11 @@ Module `supply-order` sở hữu GET `/api/supply-requests`, GET `/api/supply-re
 Danh sách supplier ẩn DRAFT, hỗ trợ status và phân trang, bổ sung tên trường/ngày giao/thời điểm gửi. Chi tiết có đủ dòng nguyên liệu, số lượng dạng chuỗi Decimal, đơn vị, ghi chú và receipt đầu tiên. GET phía SCHOOL/SYSTEM giữ hợp đồng cũ. Tiếp nhận kế thừa intake guard/transaction hiện có, nhận lại không ghi đè người hoặc thời điểm đầu tiên.
 
 POST tạo `/api/supply-requests`, POST gửi `/:id/send` và GET `/:id/contract-evidence` vẫn thuộc `supplier-onboarding` với mount trực tiếp dưới `/api`; không dùng tiền tố tên module trong URL. Xem [hợp đồng supplier intake](../../specs/supplier-order-intake/contracts/supply-requests.md).
+
+## Luồng tạo, tem QR và kiểm nhận đơn giao phía nhà cung cấp
+
+Module `supplier-order` tách đủ 7 file (`routes`, `controller`, `validation`, `request.dto`, `response.dto`, `service`, `repository`) và được mount tại `/api/deliveries/management` trước `/api/deliveries` trong `src/routes/index.ts`, phục vụ đủ **7 endpoint**: `GET /options/schools`, `GET /options/ingredients`, `GET /options/source-facilities`, `POST /` (đều cần `delivery.manage`, phục vụ cả `INGREDIENT_SUPPLIER_ADMIN` và `INGREDIENT_SUPPLIER_STAFF`), cùng `GET /`, `GET /:id` và `GET /:id/labels` (`delivery.view` hoặc `delivery.manage` hoặc `delivery.receive`). Payload tạo mới `v1` bắt buộc `expectedArrivalAt`, `vehiclePlate` và `sources` / `sourceFacilityId`; response thống nhất trường hiển thị `statusLabel` dùng chung (`src/utils/delivery-status.ts`) và giữ `null` hợp lệ cho bản ghi legacy.
+
+Module `delivery` bổ sung `POST /api/deliveries/:id/arrival` dành riêng cho trường (`delivery.view` và `delivery.inspect`, bốn vai trò kiểm nhận) để chuyển `IN_TRANSIT -> ARRIVED` cho đơn `traceabilityVersion = 1` trước khi ký nhận, và đối chiếu đồng bộ nguồn lô ở chữ ký thứ 4. Module công khai `delivery-trace` mount tại `/api/public/delivery-items` (`GET`/`HEAD /:token`) là ngoại lệ không yêu cầu đăng nhập, đàm phán HTML/JSON allowlist 8 trường, che token trên log và gắn đầy đủ header `no-store`/`no-referrer`/`CSP`/`noindex` dựa trên URL cố định từ `PUBLIC_TRACE_ORIGIN`. Khi triển khai, luôn áp dụng xong migration database trước khi bật payload/code `v1` và giữ ổn định hostname `PUBLIC_TRACE_ORIGIN` đã in trên nhãn, không cấp quyền hoặc seed ngầm.
+
+Schema `Delivery.schoolId` (bắt buộc), `DeliveryItem.ingredientId` / `ingredientEntryId` (`supplyRequestId` và `supplyRequestItemId` nullable), `Delivery.traceabilityVersion`, dãy `FP-DE-00001` riêng mỗi supplier và `DeliveryItem.qrToken`/`qrUrl` cùng snapshot nguồn hỗ trợ thống nhất cả đơn `REQUEST`, đơn `STANDALONE` và dữ liệu legacy `creationMode = null`. Xem [hợp đồng supplier-orders](../../specs/supplier-order-creation/contracts/supplier-orders.md) và [hợp đồng public-trace](../../specs/supplier-order-creation/contracts/public-trace.md).
