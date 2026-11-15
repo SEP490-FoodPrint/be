@@ -11,6 +11,7 @@ import { HttpError } from "../../utils/http-error";
 import { uuid } from "../../utils/auth-validation";
 import { listScopes } from "../../utils/resource-access";
 import {
+  activationDate,
   contractIssues,
   dayString,
   schoolToday,
@@ -73,7 +74,7 @@ export function assertContractManager(principal: AuthPrincipal) {
 }
 
 function contractDto(contract: ContractRow) {
-  const issues = currentContractIssues(contract, schoolToday());
+  const issues = currentContractIssues(contract, activationDate(contract));
   return {
     ...contract,
     items: contract.items.map((item) => {
@@ -674,7 +675,7 @@ export async function activateContract(
         409,
         "Hồ sơ đã đổi. Vui lòng tải lại trước khi xác nhận.",
       );
-    const issues = currentContractIssues(contract, schoolToday());
+    const issues = currentContractIssues(contract, activationDate(contract));
     if (issues.length) throw new HttpError(409, issues.join(" "));
     const supplier = await tx.supplier.findUniqueOrThrow({
       where: { id: contract.supplierId },
@@ -861,7 +862,8 @@ export async function changeRelationship(
         supplier.status !== "ACTIVE" ||
         !contracts.some(
           (contract) =>
-            currentContractIssues(contract, schoolToday()).length === 0,
+            currentContractIssues(contract, activationDate(contract)).length ===
+            0,
         )
       )
         throw new HttpError(

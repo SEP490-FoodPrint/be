@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { test } from "node:test";
 import type { Express } from "express";
@@ -12,6 +12,11 @@ import { bootstrapAuthorization } from "../src/utils/authorization-bootstrap";
 import { loadPrincipal } from "../src/utils/authorization";
 import { getPrisma } from "../src/utils/database";
 import { sendError } from "../src/utils/response";
+import {
+  documentFormat,
+  documentStorage,
+  type OnboardingDocument,
+} from "../src/utils/onboarding-documents";
 import { createLifecycleTestDatabase } from "./helpers/account-lifecycle-database";
 
 async function startHttp(app: Express) {
@@ -293,6 +298,41 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
 
   const systemAdmin = await createAccount("SYSTEM_ADMIN", "sys_admin", {});
 
+  // Keep HTTP, authorization and PostgreSQL real; replace only external photo storage.
+  const uploadedPhotos = new Map<string, OnboardingDocument>();
+  context.mock.method(
+    documentStorage,
+    "upload",
+    (userId: string, file: Express.Multer.File) => {
+      const id = randomUUID();
+      const format = documentFormat(file);
+      const photo: OnboardingDocument = {
+        id,
+        field: file.fieldname,
+        publicId: `foodprint/inspection/${userId}/${id}.${format}`,
+        format,
+        fileName: file.originalname,
+        bytes: file.size,
+      };
+      uploadedPhotos.set(photo.publicId, photo);
+      return Promise.resolve(photo);
+    },
+  );
+  context.mock.method(
+    documentStorage,
+    "remove",
+    (photo: OnboardingDocument) => {
+      uploadedPhotos.delete(photo.publicId);
+      return Promise.resolve();
+    },
+  );
+  context.mock.method(
+    documentStorage,
+    "download",
+    (photo: OnboardingDocument) =>
+      `https://photos.example.test/${photo.publicId}`,
+  );
+
   const app = createApp(
     createApiRateLimiter(new MemoryStore(), {
       windowMs: 60_000,
@@ -324,19 +364,34 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       body?: unknown;
     } = {},
   ) {
+    const body = options.body;
+    const isMultipart = body instanceof FormData;
     return http.request(path, {
       method: options.method ?? "GET",
       headers: {
         "X-Test-Principal": userId,
         Origin: "http://localhost:3001",
         "X-CSRF-Protection": "1",
-        "Content-Type": "application/json",
+        ...(!isMultipart ? { "Content-Type": "application/json" } : {}),
         ...options.headers,
       },
-      ...(options.body !== undefined
-        ? { body: JSON.stringify(options.body) }
+      ...(body !== undefined
+        ? { body: isMultipart ? body : JSON.stringify(body) }
         : {}),
     });
+  }
+
+  const photoBytes = new Uint8Array([255, 216, 255, 0, 1]);
+  function inspectionForm(decision: "APPROVE" | "REJECT", reason?: string) {
+    const form = new FormData();
+    form.set("decision", decision);
+    if (reason) form.set("reason", reason);
+    form.set(
+      "photo",
+      new Blob([photoBytes], { type: "image/jpeg" }),
+      "inspection.jpg",
+    );
+    return form;
   }
 
   const wheatB = await db.ingredient.create({
@@ -851,13 +906,31 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   assert.equal(standaloneOrder.supplyRequestId, null);
   assert.equal(standaloneOrder.items[0].ingredientEntryId, null);
 
-  // Pre-arrival inspection is rejected
-  const preArrivalInspect = await apiRequest(
+  // Missing photos fail before storage or writes; a valid photo reaches pre-arrival protection.
+  const missingPhotoInspect = await apiRequest(
     `/api/deliveries/${standaloneOrder.id}/inspection`,
     inspectorUsers[0].id,
     { method: "POST", body: { decision: "APPROVE" } },
   );
-  assert.equal(preArrivalInspect.status, 409);
+  assert.equal(missingPhotoInspect.status, 400);
+  assert.equal(uploadedPhotos.size, 0);
+  assert.equal(
+    await db.deliveryApproval.count({
+      where: { deliveryId: standaloneOrder.id },
+    }),
+    0,
+  );
+  const preArrivalInspect = await apiRequest(
+    `/api/deliveries/${standaloneOrder.id}/inspection`,
+    inspectorUsers[0].id,
+    { method: "POST", body: inspectionForm("APPROVE") },
+  );
+  assert.equal(
+    preArrivalInspect.status,
+    409,
+    JSON.stringify(preArrivalInspect.body),
+  );
+  assert.equal(uploadedPhotos.size, 0);
 
   // Supplier cannot confirm school arrival (403)
   assert.equal(
@@ -905,16 +978,24 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     const approveRes = await apiRequest(
       `/api/deliveries/${standaloneOrder.id}/inspection`,
       user.id,
-      { method: "POST", body: { decision: "APPROVE" } },
+      { method: "POST", body: inspectionForm("APPROVE") },
     );
-    assert.equal(approveRes.status, 200);
+    assert.equal(approveRes.status, 200, JSON.stringify(approveRes.body));
   }
+  assert.equal(uploadedPhotos.size, 3);
   const missingEntryApprove = await apiRequest(
     `/api/deliveries/${standaloneOrder.id}/inspection`,
     inspectorUsers[3].id,
-    { method: "POST", body: { decision: "APPROVE" } },
+    { method: "POST", body: inspectionForm("APPROVE") },
   );
   assert.equal(missingEntryApprove.status, 409);
+  assert.equal(uploadedPhotos.size, 3);
+  assert.equal(
+    await db.deliveryApproval.count({
+      where: { deliveryId: standaloneOrder.id },
+    }),
+    3,
+  );
 
   const chickenEntry = await db.ingredientEntry.create({
     data: {
@@ -927,9 +1008,23 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   const finalApprove = await apiRequest(
     `/api/deliveries/${standaloneOrder.id}/inspection`,
     inspectorUsers[3].id,
-    { method: "POST", body: { decision: "APPROVE" } },
+    { method: "POST", body: inspectionForm("APPROVE") },
   );
-  assert.equal(finalApprove.status, 200);
+  assert.equal(finalApprove.status, 200, JSON.stringify(finalApprove.body));
+  const savedApprovals = await db.deliveryApproval.findMany({
+    where: { deliveryId: standaloneOrder.id },
+  });
+  assert.equal(savedApprovals.length, 4);
+  assert.equal(uploadedPhotos.size, 4);
+  for (const approval of savedApprovals) {
+    assert(
+      approval.photoPublicId && uploadedPhotos.has(approval.photoPublicId),
+    );
+    assert.equal(
+      approval.photoHash,
+      createHash("sha256").update(photoBytes).digest("hex"),
+    );
+  }
   assert.equal(
     unwrap<{ status: string }>(finalApprove.body).status,
     "RECEIVED",
@@ -1039,9 +1134,13 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   const rejectedInspRes = await apiRequest(
     `/api/deliveries/${createdReq.id}/inspection`,
     inspectorUsers[0].id,
-    { method: "POST", body: { decision: "REJECT", reason: "Bao bì rách" } },
+    { method: "POST", body: inspectionForm("REJECT", "Bao bì rách") },
   );
-  assert.equal(rejectedInspRes.status, 200);
+  assert.equal(
+    rejectedInspRes.status,
+    200,
+    JSON.stringify(rejectedInspRes.body),
+  );
   assert.equal(
     unwrap<{ status: string }>(rejectedInspRes.body).status,
     "REJECTED",
@@ -1095,7 +1194,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
         await apiRequest(
           `/api/deliveries/${replacement.id}/inspection`,
           user.id,
-          { method: "POST", body: { decision: "APPROVE" } },
+          { method: "POST", body: inspectionForm("APPROVE") },
         )
       ).status,
       200,

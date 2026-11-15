@@ -715,6 +715,7 @@ export const INITIAL_ROLE_PERMISSIONS = [
   ["PARENTS_COMMITTEE", "meal_complaint.view"],
   ["PARENTS_COMMITTEE", "food_safety_incident.view"],
   ["INGREDIENT_MANAGEMENT_DEPARTMENT", "dashboard.view"],
+  ["INGREDIENT_MANAGEMENT_DEPARTMENT", "menu.view"],
   ["INGREDIENT_MANAGEMENT_DEPARTMENT", "ingredient.view"],
   ["INGREDIENT_MANAGEMENT_DEPARTMENT", "ingredient.manage"],
   ["INGREDIENT_MANAGEMENT_DEPARTMENT", "inventory.view"],

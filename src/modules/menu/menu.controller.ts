@@ -9,6 +9,8 @@ import {
   validateMenuStandards,
   validateMenuIngredientKind,
   validateMenuWrite,
+  validateMenuGradeBatch,
+  validateMenuSubmitGroup,
   validateMenuReview,
   validateMenuFilters,
   validateAllergyCheck,
@@ -19,6 +21,27 @@ import {
 
 export function createMenuController(service: MenuService = menuService) {
   return {
+    saveGradeBatch: asyncHandler(async (req, res) => {
+      sendSuccess(
+        res,
+        await service.saveGradeBatch(
+          validateMenuGradeBatch(req.body),
+          requirePrincipal(req),
+        ),
+        "Đã lưu thực đơn theo từng khối",
+        201,
+      );
+    }),
+    submitGroup: asyncHandler(async (req, res) => {
+      sendSuccess(
+        res,
+        await service.submitGroup(
+          validateMenuSubmitGroup(req.body),
+          requirePrincipal(req),
+        ),
+        "Đã gửi các thực đơn chờ duyệt",
+      );
+    }),
     getContext: asyncHandler(async (req, res) => {
       validateMenuAcademicCalendar(req.query);
       sendSuccess(res, await service.getContext(requirePrincipal(req)));

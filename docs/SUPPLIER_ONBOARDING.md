@@ -3,7 +3,8 @@
 ## Luồng và phạm vi
 
 BGH tìm NCC toàn hệ thống qua danh mục riêng, kiểm tra hồ sơ, lưu nháp hợp đồng,
-tải bản đã ký và hồ sơ pháp lý/ATTP, chọn phạm vi nguyên liệu rồi xác nhận.
+tải bản đã ký, chọn chứng nhận ATTP của NCC (hoặc ghi căn cứ miễn cấp kèm minh
+chứng), chọn phạm vi nguyên liệu rồi xác nhận.
 API `/suppliers` cũ vẫn giữ nguyên phạm vi để các module khác không đổi hành vi.
 Danh mục toàn hệ thống không trả hợp đồng hoặc giao dịch của trường khác.
 
@@ -14,10 +15,11 @@ Hồ sơ miễn cấp/áp dụng khác cần ghi căn cứ và tải minh chứn
 kiểm tra; upload không thay thế việc thẩm tra tính pháp lý hay xác thực chữ ký.
 
 Một nguyên liệu của cùng NCC/trường không được có hai hợp đồng ACTIVE chồng thời
-hạn. Các phạm vi khác nhau có thể cùng tồn tại. Gia hạn dùng số hợp đồng/phụ lục
-mới và tài liệu mới; không sửa bản đã kích hoạt. Hợp đồng bắt đầu trong tương lai
-được lưu nháp và chỉ xác nhận khi đến hiệu lực. Quan hệ đang tạm dừng có thể bổ
-sung hợp đồng mới nhưng không tự khôi phục đặt hàng.
+hạn. Các phạm vi khác nhau có thể cùng tồn tại. Gia hạn dùng số hợp đồng mới và
+tài liệu mới; không sửa bản đã kích hoạt. Hợp đồng bắt đầu trong tương lai được
+kích hoạt trước: điều kiện (kể cả chứng nhận) xét tại ngày bắt đầu hiệu lực; gửi
+đơn vẫn xét theo ngày giao hàng. Quan hệ đang tạm dừng có thể bổ sung hợp đồng
+mới nhưng không tự khôi phục đặt hàng.
 
 ## API
 
@@ -59,7 +61,8 @@ không trả bytes; endpoint download xác thực quyền cùng trường, trả
 nosniff và private/no-store. Có thể chuyển storage adapter sang object storage
 khi dung lượng tăng; vẫn phải giữ quyền truy cập và hash/version bất biến.
 
-Kích hoạt yêu cầu cả SIGNED_CONTRACT và COMPLIANCE. Tệp và metadata hợp đồng
+Kích hoạt luôn yêu cầu SIGNED_CONTRACT. COMPLIANCE (minh chứng miễn cấp/thẩm
+định cơ sở) chỉ bắt buộc khi không chọn chứng nhận ATTP của NCC. Tệp và metadata hợp đồng
 ACTIVE/CLOSED không được sửa/xóa qua API. Tạm dừng hoặc ngừng liên kết không tự
 hủy đơn đang thực hiện và không xóa lịch sử. Liên kết lại tạo quan hệ mới.
 

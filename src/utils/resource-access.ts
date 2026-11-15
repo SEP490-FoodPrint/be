@@ -105,7 +105,18 @@ export const listScopes = {
     assertPermission(p, ...RESOURCE_PERMISSIONS["ingredient"]);
     if (p.orgType === "SYSTEM") return {};
     if (p.orgType === "SCHOOL")
-      return { ingredientEntries: { some: { schoolId: school(p) } } };
+      return {
+        status: "ACTIVE",
+        Supplier: {
+          status: "ACTIVE",
+          schoolSupplierRelationships: {
+            some: {
+              schoolId: school(p),
+              status: "ACTIVE",
+            },
+          },
+        },
+      };
     if (p.orgType === "SUPPLIER") return { supplierId: supplier(p) };
     throw new HttpError(
       403,

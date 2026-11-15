@@ -341,6 +341,22 @@ export const menuWriteSchema = z
       });
   });
 
+export const menuGradeBatchSchema = menuWriteSchema.safeExtend({
+  gradeIds: z
+    .array(requestUuidSchema)
+    .min(1)
+    .max(100)
+    .superRefine((ids, context) => uniqueIssues(ids, context)),
+  submit: z.boolean().default(false),
+});
+export const menuSubmitGroupSchema = z.strictObject({
+  menuIds: z
+    .array(requestUuidSchema)
+    .min(1)
+    .max(100)
+    .superRefine((ids, context) => uniqueIssues(ids, context)),
+});
+
 export const menuReviewSchema = z
   .strictObject({
     menuDayId: requestUuidSchema.nullish().transform((value) => value ?? null),
@@ -410,6 +426,10 @@ export const validateMenuIngredientKind = (value: unknown) =>
   parseRequest(menuIngredientKindSchema, value);
 export const validateMenuWrite = (value: unknown) =>
   parseRequest(menuWriteSchema, value);
+export const validateMenuGradeBatch = (value: unknown) =>
+  parseRequest(menuGradeBatchSchema, value);
+export const validateMenuSubmitGroup = (value: unknown) =>
+  parseRequest(menuSubmitGroupSchema, value);
 export const validateMenuReview = (value: unknown) =>
   parseRequest(menuReviewSchema, value);
 export const validateMenuFilters = (value: unknown) =>
