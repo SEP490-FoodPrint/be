@@ -19,6 +19,8 @@ const id = "11111111-1111-4111-8111-111111111111";
 const row = (deliveryId = id) => ({
   id: deliveryId,
   deliveryNo: "D1",
+  schoolId: testStaff.schoolId,
+  creationMode: "REQUEST" as const,
   supplyRequestId: id,
   status: "ARRIVED",
   expectedArrivalAt: new Date("2026-11-13T01:00:00Z"),
@@ -45,11 +47,11 @@ void test("all four school inspection roles read scoped deliveries, filtered cou
           skip,
           take,
         }: {
-          where: { SupplyRequest: { schoolId: string }; AND: unknown[] };
+          where: { schoolId: string; AND: unknown[] };
           skip: number;
           take: number;
         }) => {
-          assert.equal(where.SupplyRequest.schoolId, principal.schoolId);
+          assert.equal(where.schoolId, principal.schoolId);
           assert.equal(where.AND.length, 2);
           assert.equal(skip, 10);
           assert.equal(take, 10);
@@ -78,7 +80,8 @@ void test("all four school inspection roles read scoped deliveries, filtered cou
     assert.equal(result.pagination.totalItems, 12);
     assert.equal(result.pagination.hasNext, false);
     assert.equal(result.stats.arrived, 12);
-    assert.equal("schoolId" in result.items[0], false);
+    assert.equal(result.items[0].schoolId, principal.schoolId);
+    assert.equal(result.items[0].sourceType, "REQUEST");
   }
 });
 
@@ -92,19 +95,25 @@ void test("inspection detail keeps separate delivery identities and serializes a
   const service = createDeliveryInspectionService(() =>
     Promise.resolve({
       delivery: {
-        findFirst: ({
-          where,
-        }: {
-          where: { id: string; SupplyRequest: { schoolId: string } };
-        }) => {
-          assert.equal(where.SupplyRequest.schoolId, principal.schoolId);
+        findFirst: ({ where }: { where: { id: string; schoolId: string } }) => {
+          assert.equal(where.schoolId, principal.schoolId);
           return Promise.resolve({
             ...row(where.id),
             deliveryItems: [
               {
                 id,
+                ingredientId: id,
+                ingredientEntryId: id,
                 actualQuantity: "6.125",
                 unit: "kg",
+                Ingredient: { name: "Rice", ingredientCategory: null },
+                IngredientEntry: {
+                  id,
+                  schoolId: principal.schoolId,
+                  ingredientId: id,
+                  status: "ACTIVE",
+                  handlingType: "DRY_STOCK",
+                },
                 SupplyRequestItem: {
                   IngredientEntry: {
                     Ingredient: { name: "Rice", ingredientCategory: null },
@@ -259,6 +268,7 @@ function decisionFixture() {
   let failReceipt = false;
   const snapshot = (delivery: Delivery) => ({
     ...row(delivery.id),
+    schoolId: delivery.wrongSchool ? uid(999) : uid(20),
     supplierId: uid(21),
     supplyRequestId: uid(22),
     status: delivery.status,
@@ -289,9 +299,24 @@ function decisionFixture() {
     deliveryItems: [
       {
         id: uid(23),
+        ingredientId: uid(25),
+        ingredientEntryId: uid(26),
         supplyRequestItemId: uid(24),
         actualQuantity: new Prisma.Decimal(delivery.actual),
         unit: "kg",
+        Ingredient: {
+          id: uid(25),
+          supplierId: delivery.wrongSupplier ? uid(999) : uid(21),
+          name: "Rice",
+          ingredientCategory: null,
+        },
+        IngredientEntry: {
+          id: uid(26),
+          schoolId: delivery.wrongSchool ? uid(999) : uid(20),
+          ingredientId: uid(25),
+          status: "ACTIVE",
+          handlingType: "DRY_STOCK",
+        },
         SupplyRequestItem: {
           supplyRequestId: uid(22),
           requestedQuantity: new Prisma.Decimal(data.requestedQuantity),
@@ -330,10 +355,10 @@ function decisionFixture() {
         where,
         select,
       }: {
-        where: { id: string; SupplyRequest: { schoolId: string } };
+        where: { id: string; schoolId: string };
         select: { supplyRequestId?: boolean; deliveryItems?: unknown };
       }) => {
-        assert.equal(where.SupplyRequest.schoolId, uid(20));
+        assert.equal(where.schoolId, uid(20));
         const found = data.deliveries.find((d) => d.id === where.id);
         return Promise.resolve(
           found
@@ -697,4 +722,388 @@ void test("pre-arrival and cancelled deliveries reject inspection and another us
     () => f.service.decide(f.data.deliveries[0].id, approve(), f.actors[0]),
     { statusCode: 409 },
   );
+});
+
+void test("standalone deliveries list, inspect, attach IngredientEntry on final approval and reject without cancelling SupplyRequest", async () => {
+  const uid = (n: number) =>
+    `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+  const schoolId = uid(20);
+  const supplierId = uid(21);
+  const deliveryId = uid(91);
+  const deliveryItemId = uid(92);
+  const ingredientId = uid(93);
+  const ingredientEntryId = uid(94);
+  const lotId = uid(95);
+  const principal = {
+    ...testStaff,
+    schoolId,
+    permissions: ["delivery.view"],
+  };
+  const standaloneRow = {
+    ...row(deliveryId),
+    deliveryNo: "DG-STANDALONE-1",
+    schoolId,
+    supplierId,
+    creationMode: "STANDALONE" as const,
+    supplyRequestId: null,
+    SupplyRequest: null,
+  };
+  const listAndDetailService = createDeliveryInspectionService(() =>
+    Promise.resolve({
+      delivery: {
+        groupBy: () =>
+          Promise.resolve([{ status: "ARRIVED", _count: { _all: 1 } }]),
+        findMany: () => Promise.resolve([standaloneRow]),
+        findFirst: () =>
+          Promise.resolve({
+            ...standaloneRow,
+            deliveryItems: [
+              {
+                id: deliveryItemId,
+                ingredientId,
+                ingredientEntryId: null,
+                actualQuantity: "6.125",
+                unit: "kg",
+                Ingredient: { name: "Thịt gà", ingredientCategory: null },
+                IngredientEntry: null,
+                SupplyRequestItem: null,
+                ingredientLots: [
+                  {
+                    id: lotId,
+                    lotCode: "LOT-STD-1",
+                    qrToken: "QR-STD-1",
+                    SourceFacility: null,
+                    manufactureDate: null,
+                    expiryDate: new Date("2026-11-20"),
+                    receivedQuantity: "6.125",
+                    unit: "kg",
+                    status: "BLOCKED",
+                  },
+                ],
+              },
+            ],
+          }),
+      },
+    } as never),
+  );
+
+  const listResult = await listAndDetailService.list(
+    { page: 1, limit: 20, period: "ALL" },
+    principal,
+  );
+  assert.equal(listResult.items[0].sourceType, "STANDALONE");
+  assert.equal(listResult.items[0].schoolId, schoolId);
+  assert.equal(listResult.items[0].supplyRequestId, null);
+  assert.equal(listResult.items[0].requestNo, null);
+  assert.equal(listResult.items[0].redeliveryRequiredCount, null);
+  assert.equal(listResult.items[0].redeliveryLimit, null);
+  assert.equal(listResult.items[0].cancellationNotice, null);
+
+  const detailResult = await listAndDetailService.detail(deliveryId, principal);
+  assert.equal(detailResult.sourceType, "STANDALONE");
+  assert.equal(detailResult.supplyRequestId, null);
+  assert.ok(detailResult.deliveryItems);
+  assert.equal(detailResult.deliveryItems[0].id, deliveryItemId);
+  assert.equal(detailResult.deliveryItems[0].ingredientName, "Thịt gà");
+
+  const setupStandaloneHarness = (activeEntry: boolean) => {
+    const ref = decisionFixture();
+    let status: "ARRIVED" | "PENDING_APPROVAL" | "RECEIVED" | "REJECTED" =
+      "ARRIVED";
+    let attachedEntryId: string | null = null;
+    let lotStatus: "BLOCKED" | "AVAILABLE" = "BLOCKED";
+    let lotAvailable = "0";
+    const approvals: Array<{
+      id: string;
+      deliveryId: string;
+      userId: string;
+      roleId: string;
+      decision: "APPROVE" | "REJECT";
+      reason: string | null;
+      decidedAt: Date;
+      Role: { code: string; name: string };
+      User: { fullName: string };
+    }> = [];
+    const receipts: Array<{ ingredientLotId: string; quantity: string }> = [];
+    let supplyRequestTouched = false;
+
+    const itemSnapshot = () => ({
+      id: deliveryItemId,
+      ingredientId,
+      ingredientEntryId: attachedEntryId,
+      supplyRequestItemId: null,
+      actualQuantity: new Prisma.Decimal("6.125"),
+      unit: "kg",
+      Ingredient: {
+        id: ingredientId,
+        supplierId,
+        name: "Thịt gà",
+        ingredientCategory: null,
+      },
+      IngredientEntry: attachedEntryId
+        ? {
+            id: attachedEntryId,
+            schoolId,
+            ingredientId,
+            status: "ACTIVE",
+            handlingType: "DRY_STOCK",
+          }
+        : null,
+      SupplyRequestItem: null,
+      ingredientLots: [
+        {
+          id: lotId,
+          lotCode: "LOT-STD-1",
+          qrToken: "QR-STD-1",
+          SourceFacility: null,
+          manufactureDate: null,
+          expiryDate: new Date("2026-11-20"),
+          receivedQuantity: new Prisma.Decimal("6.125"),
+          availableQuantity: new Prisma.Decimal(lotAvailable),
+          unit: "kg",
+          status: lotStatus,
+        },
+      ],
+    });
+
+    const tx = {
+      $queryRaw: () => Promise.resolve([]),
+      user: {
+        findUnique: ({ where }: { where: { id: string } }) =>
+          Promise.resolve(
+            ref.identities.find((identity) => identity.id === where.id) ?? null,
+          ),
+      },
+      school: {
+        findUnique: () => Promise.resolve({ status: "ACTIVE" }),
+      },
+      delivery: {
+        findFirst: ({
+          where,
+          select,
+        }: {
+          where: { id: string; schoolId: string };
+          select?: { deliveryItems?: unknown };
+        }) => {
+          if (where.id !== deliveryId || where.schoolId !== schoolId) {
+            return Promise.resolve(null);
+          }
+          if (!select?.deliveryItems) {
+            return Promise.resolve({ supplyRequestId: null });
+          }
+          return Promise.resolve({
+            ...standaloneRow,
+            status,
+            deliveryApprovals: approvals.map((entry) => ({ ...entry })),
+            deliveryItems: [itemSnapshot()],
+          });
+        },
+        count: () => {
+          supplyRequestTouched = true;
+          return Promise.resolve(0);
+        },
+        update: ({ data }: { data: { status: typeof status } }) => {
+          status = data.status;
+          return Promise.resolve({ id: deliveryId, status });
+        },
+        updateMany: () => {
+          supplyRequestTouched = true;
+          return Promise.resolve({ count: 0 });
+        },
+      },
+      deliveryApproval: {
+        create: ({
+          data,
+        }: {
+          data: {
+            deliveryId: string;
+            userId: string;
+            roleId: string;
+            decision: "APPROVE" | "REJECT";
+            reason: string | null;
+          };
+        }) => {
+          const identity = ref.identities.find(
+            (entry) => entry.id === data.userId,
+          )!;
+          const created = {
+            id: `apr-${approvals.length + 1}`,
+            ...data,
+            decidedAt: new Date("2026-11-13T01:00:00Z"),
+            Role: {
+              code: identity.Role.code,
+              name: identity.Role.code,
+            },
+            User: { fullName: identity.fullName },
+          };
+          approvals.push(created);
+          return Promise.resolve(created);
+        },
+      },
+      ingredientEntry: {
+        findUnique: ({
+          where,
+        }: {
+          where: {
+            schoolId_ingredientId?: { schoolId: string; ingredientId: string };
+          };
+        }) => {
+          if (
+            activeEntry &&
+            where.schoolId_ingredientId?.schoolId === schoolId &&
+            where.schoolId_ingredientId?.ingredientId === ingredientId
+          ) {
+            return Promise.resolve({ id: ingredientEntryId, status: "ACTIVE" });
+          }
+          return Promise.resolve(null);
+        },
+      },
+      deliveryItem: {
+        findMany: () => Promise.resolve([{ id: deliveryItemId }]),
+        update: ({
+          where,
+          data,
+        }: {
+          where: { id: string };
+          data: { ingredientEntryId: string };
+        }) => {
+          assert.equal(where.id, deliveryItemId);
+          attachedEntryId = data.ingredientEntryId;
+          return Promise.resolve({ id: where.id, ...data });
+        },
+      },
+      ingredientLot: {
+        updateMany: ({
+          where,
+          data,
+        }: {
+          where: { id?: string; status?: string };
+          data: {
+            status: typeof lotStatus;
+            availableQuantity?: Prisma.Decimal;
+          };
+        }) => {
+          if (
+            (where.id && where.id !== lotId) ||
+            (where.status && where.status !== lotStatus)
+          ) {
+            return Promise.resolve({ count: 0 });
+          }
+          lotStatus = data.status;
+          if (data.availableQuantity !== undefined) {
+            lotAvailable = data.availableQuantity.toString();
+          }
+          return Promise.resolve({ count: 1 });
+        },
+      },
+      inventoryTransaction: {
+        count: ({ where }: { where: { ingredientLotId?: string } }) =>
+          Promise.resolve(
+            receipts.filter((item) =>
+              where.ingredientLotId
+                ? item.ingredientLotId === where.ingredientLotId
+                : true,
+            ).length,
+          ),
+        create: ({
+          data,
+        }: {
+          data: { ingredientLotId: string; quantity: Prisma.Decimal };
+        }) => {
+          receipts.push({
+            ingredientLotId: data.ingredientLotId,
+            quantity: data.quantity.toString(),
+          });
+          return Promise.resolve({ id: `inv-${receipts.length}` });
+        },
+      },
+      supplyRequest: {
+        update: () => {
+          supplyRequestTouched = true;
+          return Promise.resolve({});
+        },
+      },
+    };
+
+    const service = createDeliveryInspectionService(
+      () =>
+        Promise.resolve({
+          $transaction: async <T>(fn: (client: typeof tx) => Promise<T>) =>
+            fn(tx),
+        } as never),
+      () => new Date("2026-11-13T01:00:00Z"),
+    );
+    return {
+      service,
+      actors: ref.actors,
+      getState: () => ({
+        status,
+        attachedEntryId,
+        lotStatus,
+        lotAvailable,
+        receipts: [...receipts],
+        supplyRequestTouched,
+      }),
+    };
+  };
+
+  const missingEntry = setupStandaloneHarness(false);
+  for (const actor of missingEntry.actors.slice(0, 3)) {
+    const step = await missingEntry.service.decide(
+      deliveryId,
+      approve(),
+      actor,
+    );
+    assert.equal(step.status, "PENDING_APPROVAL");
+  }
+  await assert.rejects(
+    () =>
+      missingEntry.service.decide(
+        deliveryId,
+        approve(),
+        missingEntry.actors[3],
+      ),
+    { statusCode: 409 },
+  );
+  assert.equal(missingEntry.getState().receipts.length, 0);
+
+  const activeEntryHarness = setupStandaloneHarness(true);
+  for (const actor of activeEntryHarness.actors.slice(0, 3)) {
+    await activeEntryHarness.service.decide(deliveryId, approve(), actor);
+  }
+  const finalApprove = await activeEntryHarness.service.decide(
+    deliveryId,
+    approve(),
+    activeEntryHarness.actors[3],
+  );
+  assert.equal(finalApprove.created, true);
+  assert.equal(finalApprove.status, "RECEIVED");
+  assert.equal(
+    activeEntryHarness.getState().attachedEntryId,
+    ingredientEntryId,
+  );
+  assert.equal(activeEntryHarness.getState().lotStatus, "AVAILABLE");
+  assert.equal(activeEntryHarness.getState().lotAvailable, "6.125");
+  assert.equal(activeEntryHarness.getState().receipts.length, 1);
+  assert.equal(activeEntryHarness.getState().supplyRequestTouched, false);
+
+  const replayApprove = await activeEntryHarness.service.decide(
+    deliveryId,
+    approve(),
+    activeEntryHarness.actors[3],
+  );
+  assert.equal(replayApprove.created, false);
+  assert.equal(activeEntryHarness.getState().receipts.length, 1);
+
+  const rejectHarness = setupStandaloneHarness(true);
+  const rejected = await rejectHarness.service.decide(
+    deliveryId,
+    reject(),
+    rejectHarness.actors[0],
+  );
+  assert.equal(rejected.status, "REJECTED");
+  assert.equal(rejected.redeliveryRequiredCount, null);
+  assert.equal(rejected.redeliveryLimit, null);
+  assert.equal(rejected.cancellationNotice, null);
+  assert.equal(rejectHarness.getState().supplyRequestTouched, false);
 });

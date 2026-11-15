@@ -62,6 +62,7 @@ Tất cả đường dẫn bên dưới dùng phương thức **GET**.
 | `school-supplier`             | `/api/school-supplier-relationships` | `SchoolSupplierRelationship` | —                              |
 | `ingredient-entry`            | `/api/ingredient-entries`            | `IngredientEntry`            | —                              |
 | `allergy`                     | `/api/class-allergies`               | `ClassAllergy`               | —                              |
+| `supplier-order`              | `/api/deliveries/management`         | `Delivery`                   | DeliveryItem                   |
 | `delivery`                    | `/api/deliveries`                    | `Delivery`                   | DeliveryItem, DeliveryApproval |
 | `dish`                        | `/api/dishes`                        | `Dish`                       | DishIngredientEntry            |
 | `inventory`                   | `/api/inventory-transactions`        | `InventoryTransaction`       | —                              |
@@ -160,3 +161,9 @@ Module `supply-order` sở hữu GET `/api/supply-requests`, GET `/api/supply-re
 Danh sách supplier ẩn DRAFT, hỗ trợ status và phân trang, bổ sung tên trường/ngày giao/thời điểm gửi. Chi tiết có đủ dòng nguyên liệu, số lượng dạng chuỗi Decimal, đơn vị, ghi chú và receipt đầu tiên. GET phía SCHOOL/SYSTEM giữ hợp đồng cũ. Tiếp nhận kế thừa intake guard/transaction hiện có, nhận lại không ghi đè người hoặc thời điểm đầu tiên.
 
 POST tạo `/api/supply-requests`, POST gửi `/:id/send` và GET `/:id/contract-evidence` vẫn thuộc `supplier-onboarding` với mount trực tiếp dưới `/api`; không dùng tiền tố tên module trong URL. Xem [hợp đồng supplier intake](../../specs/supplier-order-intake/contracts/supply-requests.md).
+
+## Luồng tạo và quản lý đơn giao phía nhà cung cấp
+
+Module `supplier-order` tách đủ 7 file (`routes`, `controller`, `validation`, `request.dto`, `response.dto`, `service`, `repository`) và được mount tại `/api/deliveries/management` trước `/api/deliveries` trong `src/routes/index.ts`. Hai vai trò `INGREDIENT_SUPPLIER_ADMIN` và `INGREDIENT_SUPPLIER_STAFF` sử dụng `GET /options/schools`, `GET /options/ingredients` và `POST /` với `delivery.manage` cùng `Idempotency-Key` UUID; `GET /` và `GET /:id` dùng phạm vi đọc supplier hiện hành (`delivery.view`, `delivery.manage`, `delivery.receive`).
+
+Schema `Delivery.schoolId` (bắt buộc) và `DeliveryItem.ingredientId` / `ingredientEntryId` (với `supplyRequestId` và `supplyRequestItemId` nullable) hỗ trợ thống nhất cả đơn theo yêu cầu (`REQUEST` và dữ liệu legacy `creationMode = null`) lẫn đơn độc lập (`STANDALONE`). Xem [hợp đồng supplier-order-creation](../../specs/supplier-order-creation/contracts/supplier-orders.md).

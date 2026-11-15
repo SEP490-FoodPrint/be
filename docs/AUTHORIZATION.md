@@ -365,3 +365,19 @@ Chi tiết trả đủ dòng kể cả nguyên liệu/entry đã ngừng hoạt 
 Nhận mới chỉ SENT -> ACCEPTED, ghi người/thời điểm cùng transaction. Supplier tạm dừng hoặc admin một bên DEACTIVATED ngăn nhận mới; school tạm dừng tạo đơn không ngăn nhận đơn đã gửi. ACCEPTED/IN_PROGRESS trả receipt bốn trường cũ sau kiểm tra quyền và scope, không ghi đè thông tin đầu tiên hoặc updatedAt, kể cả khi supplier đã tạm dừng. COMPLETED/CANCELLED trả 409. Quyền bị tắt cho từng người vẫn có hiệu lực, không bypass SYSTEM và không cache phân quyền.
 
 Thiết kế và hợp đồng: [supplier-order-intake](../specs/supplier-order-intake/contracts/supply-requests.md). Không thêm schema hoặc quyền mới; kết quả kiểm chứng thực tế được ghi tại [quickstart](../specs/supplier-order-intake/quickstart.md).
+
+## Tạo và quản lý đơn giao hàng phía nhà cung cấp
+
+| Endpoint                                             | Quyền và phạm vi                                                                                                                                                               |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| GET `/api/deliveries/management/options/schools`     | `delivery.manage`; chỉ `INGREDIENT_SUPPLIER_ADMIN` / `INGREDIENT_SUPPLIER_STAFF` thuộc SUPPLIER; lọc trường ACTIVE, `intakeState = ACTIVE`, admin hoạt động và quan hệ ACTIVE. |
+| GET `/api/deliveries/management/options/ingredients` | `delivery.manage`; hai vai trò supplier hiện hành; lọc nguyên liệu ACTIVE thuộc đúng `supplierId` từ membership.                                                               |
+| POST `/api/deliveries/management`                    | `delivery.manage` + header `Idempotency-Key` (UUID bắt buộc); hỗ trợ `sourceType = REQUEST` và `STANDALONE`.                                                                   |
+| GET `/api/deliveries/management`                     | `delivery.view` / `delivery.manage` / `delivery.receive`; hai vai trò supplier hiện hành, chỉ đọc delivery thuộc `supplierId` của tài khoản.                                   |
+| GET `/api/deliveries/management/:id`                 | `delivery.view` / `delivery.manage` / `delivery.receive`; hai vai trò supplier hiện hành; delivery ngoài supplier hoặc không tồn tại trả 404.                                  |
+
+Nhánh `REQUEST` yêu cầu đơn `SupplyRequest` thuộc supplier hiện hành ở trạng thái `ACCEPTED` hoặc `IN_PROGRESS` chưa có `Delivery` nào trước đó; sao chép toàn bộ `SupplyRequestItem` sang `DeliveryItem` với `Delivery.schoolId` chuẩn hóa và chuyển `ACCEPTED -> IN_PROGRESS` cùng Serializable transaction qua guard `START_ORDER_PROCESSING`. Nhánh `STANDALONE` kiểm tra `SUPPLIER_CREATE_STANDALONE_DELIVERY` (khóa supplier, trường, quan hệ `ACTIVE` và nguyên liệu), kiểm tra nguyên liệu `ACTIVE` thuộc supplier và khớp `defaultUnit`, chỉ liên kết `IngredientEntry` `ACTIVE` sẵn có tại trường (nếu chưa có giữ `null`, không tự tạo `SupplyRequest` hoặc `IngredientEntry`).
+
+Idempotency sử dụng khóa bền vững `(supplier_id, created_by_user_id, creation_key)` cùng SHA-256 `creationFingerprint` trên payload chuẩn hóa: trùng khóa và trùng nội dung xác minh lại tài khoản/quyền sống trước khi trả HTTP 200; khác nội dung trả 409; không bao giờ lộ `creationKey` hay `creationFingerprint`. Trên luồng tiếp nhận phía trường (`/api/deliveries...`, `/api/ingredient-lots`, kitchen và menu), scope trường dùng trực tiếp `Delivery.schoolId`; duyệt bước cuối của đơn `STANDALONE` tự gắn `IngredientEntry` `ACTIVE` tại trường (409 nếu chưa có) và `REJECT` không đếm hay hủy `SupplyRequest`.
+
+Thiết kế và hợp đồng: [supplier-orders](../specs/supplier-order-creation/contracts/supplier-orders.md). Kết quả kiểm chứng được ghi tại [quickstart](../specs/supplier-order-creation/quickstart.md).

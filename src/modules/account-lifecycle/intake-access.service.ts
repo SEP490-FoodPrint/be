@@ -27,6 +27,11 @@ export type IntakeOperation =
       operation: "CONTINUE_ACCEPTED_WORK";
       orderId: string;
       requiredPermission?: string;
+    }
+  | {
+      operation: "SUPPLIER_CREATE_STANDALONE_DELIVERY";
+      schoolId: string;
+      ingredientIds: readonly string[];
     };
 
 type PrincipalLoader = (
@@ -35,17 +40,16 @@ type PrincipalLoader = (
 ) => Promise<AuthPrincipal>;
 type MembershipScope = { kind: "SCHOOL" | "SUPPLIER"; id: string };
 
-function assertSupplierAcceptor(actor: AuthPrincipal) {
+function assertSupplierActor(actor: AuthPrincipal, message: string) {
   if (
     actor.orgType !== ORG_TYPES.SUPPLIER ||
     !actor.supplierId ||
+    Boolean(actor.schoolId) ||
+    Boolean(actor.communeFoodSafetyUnitId) ||
     (actor.role !== ROLES.INGREDIENT_SUPPLIER_ADMIN &&
       actor.role !== ROLES.INGREDIENT_SUPPLIER_STAFF)
   )
-    throw new HttpError(
-      403,
-      "Chỉ quản trị viên hoặc nhân viên nhà cung cấp được tiếp nhận đơn",
-    );
+    throw new HttpError(403, message);
 }
 
 function assertMembershipActor(actor: AuthPrincipal, scope: MembershipScope) {
@@ -274,12 +278,82 @@ export function createIntakeAccessService(
           "OFFICER_RECEIVE_REQUEST",
           "START_ORDER_PROCESSING",
           "CONTINUE_ACCEPTED_WORK",
+          "SUPPLIER_CREATE_STANDALONE_DELIVERY",
         ].includes(command.operation)
       ) {
         throw new HttpError(403, "Thao tác chưa hỗ trợ");
       }
       const actor = await loadActor(initial.id, tx);
       checkSameIdentity(actor, initial);
+      if (command.operation === "SUPPLIER_CREATE_STANDALONE_DELIVERY") {
+        assertSupplierActor(
+          actor,
+          "Chỉ quản trị viên hoặc nhân viên nhà cung cấp được tạo đơn độc lập",
+        );
+        assertPermission(actor, "delivery.manage");
+        const supplierId = actor.supplierId!;
+        await repo.lockParents(tx, {
+          schoolId: command.schoolId,
+          supplierId,
+          roleIds: [actor.roleId],
+          userIds: [actor.id],
+        });
+        await repo.lockSupplierSchoolPair(tx, command.schoolId, supplierId);
+        await repo.lockRelationship(tx, command.schoolId, supplierId);
+        if (command.ingredientIds.length > 0)
+          await repo.lockIngredients(tx, command.ingredientIds);
+        const current = await loadActor(actor.id, tx);
+        checkSameIdentity(current, actor);
+        assertSupplierActor(
+          current,
+          "Chỉ quản trị viên hoặc nhân viên nhà cung cấp được tạo đơn độc lập",
+        );
+        assertPermission(current, "delivery.manage");
+        const [school, supplier, schoolAdmin, supplierAdmin, relationship] =
+          await Promise.all([
+            repo.readSchool(tx, command.schoolId),
+            repo.readSupplier(tx, supplierId),
+            repo.readSchoolAdmin(tx, command.schoolId),
+            repo.readSupplierAdmin(tx, supplierId),
+            repo.readRelationship(tx, command.schoolId, supplierId),
+          ]);
+        if (!school || !relationship)
+          throw new HttpError(
+            404,
+            "Không tìm thấy trường học trong tập được phép",
+          );
+        if (!supplier)
+          throw new HttpError(409, "Không tìm thấy đơn vị cung cấp");
+        if (relationship.status !== "ACTIVE")
+          throw new HttpError(
+            409,
+            "Quan hệ cung ứng giữa trường và nhà cung cấp không ở trạng thái hoạt động",
+          );
+        if (school.status !== "ACTIVE" || supplier.status !== "ACTIVE")
+          throw new HttpError(
+            409,
+            "Đơn vị cung ứng không ở trạng thái hoạt động",
+          );
+        if (
+          schoolAdmin?.status === "DEACTIVATED" ||
+          supplierAdmin?.status === "DEACTIVATED"
+        )
+          throw new HttpError(
+            409,
+            "Tài khoản quản trị của đơn vị đã bị vô hiệu hóa",
+          );
+        if (school.intakeState !== "ACTIVE")
+          throw new HttpError(
+            409,
+            "Trường đang tạm dừng tiếp nhận cung ứng mới",
+          );
+        if (supplier.intakeState !== "ACTIVE")
+          throw new HttpError(
+            409,
+            "Nhà cung cấp đang tạm dừng tạo cung ứng mới",
+          );
+        return current;
+      }
       if (command.operation === "OFFICER_RECEIVE_REQUEST") {
         if (
           actor.orgType !== "AUTHORITY" ||
@@ -345,9 +419,20 @@ export function createIntakeAccessService(
             403,
             "Thao tác yêu cầu phạm vi trường hoặc nhà cung cấp",
           );
+        if (
+          command.operation === "START_ORDER_PROCESSING" &&
+          actor.orgType === "SUPPLIER"
+        )
+          assertSupplierActor(
+            actor,
+            "Chỉ quản trị viên hoặc nhân viên nhà cung cấp được xử lý đơn",
+          );
         requiredPermission = command.requiredPermission;
       } else if (isSupplier) {
-        assertSupplierAcceptor(actor);
+        assertSupplierActor(
+          actor,
+          "Chỉ quản trị viên hoặc nhân viên nhà cung cấp được tiếp nhận đơn",
+        );
         requiredPermission = "supply_request.accept";
       } else {
         if (actor.orgType !== "SCHOOL" || !actor.schoolId)
@@ -387,7 +472,18 @@ export function createIntakeAccessService(
       const current = await loadActor(actor.id, tx);
       checkSameIdentity(current, actor);
       if (command.operation === "SUPPLIER_ACCEPT_ORDER")
-        assertSupplierAcceptor(current);
+        assertSupplierActor(
+          current,
+          "Chỉ quản trị viên hoặc nhân viên nhà cung cấp được tiếp nhận đơn",
+        );
+      if (
+        command.operation === "START_ORDER_PROCESSING" &&
+        current.orgType === "SUPPLIER"
+      )
+        assertSupplierActor(
+          current,
+          "Chỉ quản trị viên hoặc nhân viên nhà cung cấp được xử lý đơn",
+        );
       assertPermission(current, requiredPermission);
       if (before) {
         const order = await repo.readOrder(tx, before.id);

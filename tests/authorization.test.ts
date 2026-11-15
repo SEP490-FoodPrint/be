@@ -16,7 +16,11 @@ import {
   assertOrganizationManager,
   databaseOperation,
 } from "../src/utils/authorization";
-import { listScopes } from "../src/utils/resource-access";
+import {
+  listScopes,
+  supplierOrderManagementScope,
+  supplierOrderReadScope,
+} from "../src/utils/resource-access";
 import { HttpError } from "../src/utils/http-error";
 import { signToken } from "../src/utils/jwt";
 import { validateLogin } from "../src/modules/auth/session.validation";
@@ -145,9 +149,98 @@ void test("organization scope follows trusted membership and nested ownership", 
   assert.deepEqual(listScopes.menu(p), { schoolId: p.schoolId });
   assert.deepEqual(listScopes["supply-order"](p), { schoolId: p.schoolId });
   assert.deepEqual(listScopes["ingredient-quality-feedback"](p), {
-    Delivery: { SupplyRequest: { schoolId: p.schoolId } },
+    Delivery: { schoolId: p.schoolId },
     submittedByUserId: p.id,
   });
+  const deliverySchool = {
+    ...testStaff,
+    permissions: [
+      "delivery.view",
+      "ingredient_lot.view",
+      "inventory.view",
+      "traceability.view",
+    ],
+  };
+  assert.deepEqual(listScopes.delivery(deliverySchool), {
+    schoolId: deliverySchool.schoolId,
+  });
+  assert.deepEqual(listScopes.warehouse(deliverySchool), {
+    DeliveryItem: { Delivery: { schoolId: deliverySchool.schoolId } },
+  });
+  assert.deepEqual(listScopes.inventory(deliverySchool), {
+    IngredientLot: {
+      DeliveryItem: { Delivery: { schoolId: deliverySchool.schoolId } },
+    },
+  });
+  assert.deepEqual(listScopes.traceability(deliverySchool), {
+    OR: [
+      { Delivery: { schoolId: deliverySchool.schoolId } },
+      {
+        IngredientLot: {
+          DeliveryItem: { Delivery: { schoolId: deliverySchool.schoolId } },
+        },
+      },
+      {
+        CookingBatch: {
+          MenuDay: { WeeklyMenu: { schoolId: deliverySchool.schoolId } },
+        },
+      },
+      {
+        MealAllocation: {
+          DailyMealPortion: { Class: { schoolId: deliverySchool.schoolId } },
+        },
+      },
+      { FoodSafetyIncident: { schoolId: deliverySchool.schoolId } },
+    ],
+  });
+  const supplierBase = {
+    ...testStaff,
+    orgType: "SUPPLIER" as const,
+    role: "INGREDIENT_SUPPLIER_STAFF",
+    schoolId: null,
+    supplierId: "00000000-0000-4000-8000-000000000055",
+  };
+  assert.deepEqual(
+    supplierOrderManagementScope({
+      ...supplierBase,
+      permissions: ["delivery.manage"],
+    }),
+    { supplierId: supplierBase.supplierId },
+  );
+  assert.deepEqual(
+    supplierOrderReadScope({
+      ...supplierBase,
+      role: "INGREDIENT_SUPPLIER_ADMIN",
+      permissions: ["delivery.receive"],
+    }),
+    { supplierId: supplierBase.supplierId },
+  );
+  assert.throws(
+    () =>
+      supplierOrderManagementScope({
+        ...supplierBase,
+        permissions: ["delivery.view"],
+      }),
+    status(403),
+  );
+  assert.throws(
+    () =>
+      supplierOrderManagementScope({
+        ...supplierBase,
+        role: "SYSTEM_ADMIN",
+        permissions: ["delivery.manage"],
+      }),
+    status(403),
+  );
+  assert.throws(
+    () =>
+      supplierOrderReadScope({
+        ...supplierBase,
+        role: "FUTURE_SUPPLIER_ROLE",
+        permissions: ["delivery.view"],
+      }),
+    status(403),
+  );
   const authority = {
     ...p,
     role: "COMMUNE_FOOD_SAFETY_OFFICER",

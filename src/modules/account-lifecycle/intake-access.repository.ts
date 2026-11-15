@@ -42,6 +42,29 @@ export function createIntakeAccessRepository() {
     async lockOrder(tx: Prisma.TransactionClient, id: string) {
       await tx.$queryRaw`SELECT id FROM foodprint.supply_requests WHERE id = ${id}::uuid FOR UPDATE`;
     },
+    async lockSupplierSchoolPair(
+      tx: Prisma.TransactionClient,
+      schoolId: string,
+      supplierId: string,
+    ) {
+      const pairKey = `${schoolId}:${supplierId}`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${pairKey}, 0))`;
+    },
+    async lockRelationship(
+      tx: Prisma.TransactionClient,
+      schoolId: string,
+      supplierId: string,
+    ) {
+      await tx.$queryRaw`SELECT id FROM foodprint.school_supplier_relationships WHERE school_id = ${schoolId}::uuid AND supplier_id = ${supplierId}::uuid FOR UPDATE`;
+    },
+    async lockIngredients(
+      tx: Prisma.TransactionClient,
+      ingredientIds: readonly string[],
+    ) {
+      for (const id of [...new Set(ingredientIds)].sort()) {
+        await tx.$queryRaw`SELECT id FROM foodprint.ingredients WHERE id = ${id}::uuid FOR UPDATE`;
+      }
+    },
     async lockForwarding(tx: Prisma.TransactionClient, id: string) {
       await tx.$queryRaw`SELECT id FROM foodprint.food_safety_report_forwardings WHERE id = ${id}::uuid FOR UPDATE`;
     },
@@ -76,6 +99,21 @@ export function createIntakeAccessRepository() {
       return await tx.user.findFirst({
         where: { supplierId, roleCode: "INGREDIENT_SUPPLIER_ADMIN" },
         select: { status: true },
+      });
+    },
+    async readRelationship(
+      tx: Prisma.TransactionClient,
+      schoolId: string,
+      supplierId: string,
+    ) {
+      return await tx.schoolSupplierRelationship.findFirst({
+        where: {
+          schoolId,
+          supplierId,
+          status: { in: ["ACTIVE", "SUSPENDED"] },
+        },
+        orderBy: [{ linkedAt: "desc" }, { id: "desc" }],
+        select: { id: true, status: true },
       });
     },
     async readOfficer(tx: Prisma.TransactionClient, id: string) {

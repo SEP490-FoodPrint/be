@@ -164,6 +164,24 @@ function fixture(actor: AuthPrincipal = schoolActor) {
       calls.push("order");
       return Promise.resolve();
     },
+    lockSupplierSchoolPair(actual: Prisma.TransactionClient) {
+      assert.equal(actual, tx);
+      calls.push("pair");
+      return Promise.resolve();
+    },
+    lockRelationship(actual: Prisma.TransactionClient) {
+      assert.equal(actual, tx);
+      calls.push("relationship");
+      return Promise.resolve();
+    },
+    lockIngredients(
+      actual: Prisma.TransactionClient,
+      ingredientIds: readonly string[],
+    ) {
+      assert.equal(actual, tx);
+      calls.push(`ingredients:${ingredientIds.join(",")}`);
+      return Promise.resolve();
+    },
     lockForwarding(actual: Prisma.TransactionClient) {
       assert.equal(actual, tx);
       calls.push("report");
@@ -198,6 +216,13 @@ function fixture(actor: AuthPrincipal = schoolActor) {
     readSupplierAdmin(actual: Prisma.TransactionClient) {
       assert.equal(actual, tx);
       return Promise.resolve({ status: "ACTIVE" as const });
+    },
+    readRelationship(actual: Prisma.TransactionClient) {
+      assert.equal(actual, tx);
+      return Promise.resolve({
+        id: "00000000-0000-4000-8000-000000000007",
+        status: "ACTIVE" as const,
+      });
     },
     readOfficer(actual: Prisma.TransactionClient) {
       assert.equal(actual, tx);
@@ -1002,4 +1027,249 @@ void test("supplier acceptance protects scope in both reads and keeps terminal s
     }),
     schoolActor,
   );
+});
+
+void test("supplier START_ORDER_PROCESSING restricts to the two supplier roles and delivery.manage", async () => {
+  const ingActor: AuthPrincipal = {
+    ...supplierActor,
+    permissions: ["delivery.manage"],
+  };
+  for (const role of [
+    ROLES.INGREDIENT_SUPPLIER_ADMIN,
+    ROLES.INGREDIENT_SUPPLIER_STAFF,
+  ]) {
+    const actor = { ...ingActor, role };
+    const f = fixture(actor);
+    f.setOrderStatus("ACCEPTED");
+    assert.equal(
+      await f.service.assertAccess(tx, actor, {
+        operation: "START_ORDER_PROCESSING",
+        orderId,
+        requiredPermission: "delivery.manage",
+      }),
+      actor,
+    );
+  }
+  for (const role of [
+    ROLES.SYSTEM_ADMIN,
+    ROLES.SCHOOL_ADMINISTRATION,
+    "FUTURE_SUPPLIER_ROLE",
+  ]) {
+    const actor = { ...ingActor, role };
+    const f = fixture(actor);
+    f.setOrderStatus("ACCEPTED");
+    await assert.rejects(
+      () =>
+        f.service.assertAccess(tx, actor, {
+          operation: "START_ORDER_PROCESSING",
+          orderId,
+          requiredPermission: "delivery.manage",
+        }),
+      (error: unknown) =>
+        error instanceof HttpError && error.statusCode === 403,
+    );
+    assert.deepEqual(f.calls, ["identity"]);
+  }
+});
+
+void test("SUPPLIER_CREATE_STANDALONE_DELIVERY checks roles, permissions, lock ordering, intake state, admin status, and active relationship", async () => {
+  const ingA = "00000000-0000-4000-8000-000000000012";
+  const ingB = "00000000-0000-4000-8000-000000000011";
+  const managerBase: AuthPrincipal = {
+    ...supplierActor,
+    permissions: ["delivery.manage"],
+  };
+
+  for (const role of [
+    ROLES.INGREDIENT_SUPPLIER_ADMIN,
+    ROLES.INGREDIENT_SUPPLIER_STAFF,
+  ]) {
+    const actor = { ...managerBase, role };
+    const f = fixture(actor);
+    assert.equal(
+      await f.service.assertAccess(tx, actor, {
+        operation: "SUPPLIER_CREATE_STANDALONE_DELIVERY",
+        schoolId,
+        ingredientIds: [ingA, ingB],
+      }),
+      actor,
+    );
+    assert.deepEqual(f.calls, [
+      "identity",
+      "parents",
+      "pair",
+      "relationship",
+      `ingredients:${ingA},${ingB}`,
+      "identity",
+    ]);
+  }
+
+  for (const badActor of [
+    { ...managerBase, role: ROLES.SYSTEM_ADMIN },
+    { ...managerBase, role: "FUTURE_SUPPLIER_ROLE" },
+    {
+      ...managerBase,
+      orgType: "SCHOOL" as const,
+      schoolId,
+      supplierId: null,
+    },
+    { ...managerBase, permissions: ["delivery.view"] },
+  ]) {
+    const f = fixture(badActor);
+    await assert.rejects(
+      () =>
+        f.service.assertAccess(tx, badActor, {
+          operation: "SUPPLIER_CREATE_STANDALONE_DELIVERY",
+          schoolId,
+          ingredientIds: [ingA],
+        }),
+      (error: unknown) =>
+        error instanceof HttpError && error.statusCode === 403,
+    );
+    assert.deepEqual(f.calls, ["identity"]);
+  }
+
+  // Permission revoked during locking -> fails closed after locks
+  {
+    const base = fixture(managerBase);
+    let locked = false;
+    const service = createIntakeAccessService(
+      {
+        ...base.repo,
+        lockParents: async (actual) => {
+          locked = true;
+          await base.repo.lockParents(actual);
+        },
+      },
+      () =>
+        Promise.resolve(
+          locked ? { ...managerBase, permissions: [] } : managerBase,
+        ),
+    );
+    await assert.rejects(
+      () =>
+        service.assertAccess(tx, managerBase, {
+          operation: "SUPPLIER_CREATE_STANDALONE_DELIVERY",
+          schoolId,
+          ingredientIds: [ingA],
+        }),
+      (error: unknown) =>
+        error instanceof HttpError && error.statusCode === 403,
+    );
+  }
+
+  // Missing or unlinked school -> 404
+  for (const missing of ["SCHOOL", "REL"] as const) {
+    const base = fixture(managerBase);
+    const service = createIntakeAccessService(
+      {
+        ...base.repo,
+        readSchool: () =>
+          Promise.resolve(
+            missing === "SCHOOL"
+              ? null
+              : { status: "ACTIVE", intakeState: "ACTIVE" },
+          ),
+        readRelationship: () =>
+          Promise.resolve(
+            missing === "REL" ? null : { id: "rel-1", status: "ACTIVE" },
+          ),
+      },
+      () => Promise.resolve(managerBase),
+    );
+    await assert.rejects(
+      () =>
+        service.assertAccess(tx, managerBase, {
+          operation: "SUPPLIER_CREATE_STANDALONE_DELIVERY",
+          schoolId,
+          ingredientIds: [ingA],
+        }),
+      (error: unknown) =>
+        error instanceof HttpError && error.statusCode === 404,
+    );
+  }
+
+  // PAUSED / INACTIVE / DEACTIVATED / SUSPENDED blockers -> 409
+  for (const blocker of [
+    "SCHOOL_PAUSED",
+    "SUPPLIER_PAUSED",
+    "SCHOOL_INACTIVE",
+    "SUPPLIER_INACTIVE",
+    "SCHOOL_ADMIN_DEACTIVATED",
+    "SUPPLIER_ADMIN_DEACTIVATED",
+    "REL_SUSPENDED",
+  ] as const) {
+    const base = fixture(managerBase);
+    const service = createIntakeAccessService(
+      {
+        ...base.repo,
+        readSchool: () =>
+          Promise.resolve({
+            status: blocker === "SCHOOL_INACTIVE" ? "INACTIVE" : "ACTIVE",
+            intakeState: blocker === "SCHOOL_PAUSED" ? "PAUSED" : "ACTIVE",
+          }),
+        readSupplier: () =>
+          Promise.resolve({
+            status: blocker === "SUPPLIER_INACTIVE" ? "INACTIVE" : "ACTIVE",
+            intakeState:
+              blocker === "SUPPLIER_PAUSED"
+                ? "PAUSED_FOR_FOOD_SAFETY_INSPECTION"
+                : "ACTIVE",
+          }),
+        readSchoolAdmin: () =>
+          Promise.resolve({
+            status:
+              blocker === "SCHOOL_ADMIN_DEACTIVATED" ? "DEACTIVATED" : "ACTIVE",
+          }),
+        readSupplierAdmin: () =>
+          Promise.resolve({
+            status:
+              blocker === "SUPPLIER_ADMIN_DEACTIVATED"
+                ? "DEACTIVATED"
+                : "ACTIVE",
+          }),
+        readRelationship: () =>
+          Promise.resolve({
+            id: "rel-1",
+            status: blocker === "REL_SUSPENDED" ? "SUSPENDED" : "ACTIVE",
+          }),
+      },
+      () => Promise.resolve(managerBase),
+    );
+    await assert.rejects(
+      () =>
+        service.assertAccess(tx, managerBase, {
+          operation: "SUPPLIER_CREATE_STANDALONE_DELIVERY",
+          schoolId,
+          ingredientIds: [ingA],
+        }),
+      (error: unknown) =>
+        error instanceof HttpError && error.statusCode === 409,
+    );
+  }
+
+  // Repository lock sorting check for standalone SQL locks
+  {
+    const log: string[] = [];
+    const client = {
+      $queryRaw: (strings: TemplateStringsArray, ...vals: unknown[]) => {
+        log.push(`${strings[0].trim()}::${String(vals[0])}`);
+        return Promise.resolve([]);
+      },
+      $executeRaw: (strings: TemplateStringsArray, ...vals: unknown[]) => {
+        log.push(`${strings[0].trim()}::${String(vals[0])}`);
+        return Promise.resolve(0);
+      },
+    } as unknown as Prisma.TransactionClient;
+    const repo = createIntakeAccessRepository();
+    await repo.lockSupplierSchoolPair(client, schoolId, supplierId);
+    await repo.lockRelationship(client, schoolId, supplierId);
+    await repo.lockIngredients(client, [ingA, ingB, ingA]);
+    assert.deepEqual(log, [
+      `SELECT pg_advisory_xact_lock(hashtextextended(::${schoolId}:${supplierId}`,
+      `SELECT id FROM foodprint.school_supplier_relationships WHERE school_id =::${schoolId}`,
+      `SELECT id FROM foodprint.ingredients WHERE id =::${ingB}`,
+      `SELECT id FROM foodprint.ingredients WHERE id =::${ingA}`,
+    ]);
+  }
 });

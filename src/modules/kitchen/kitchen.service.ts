@@ -341,8 +341,11 @@ export async function readPlanningStock(
     availableQuantity: { gt: 0 },
     OR: [{ expiryDate: null }, { expiryDate: { gte: menuDate } }],
     DeliveryItem: {
-      Delivery: { status: "RECEIVED", SupplyRequest: { schoolId } },
-      SupplyRequestItem: { ingredientEntryId: { in: [...entryIds] } },
+      Delivery: { status: "RECEIVED", schoolId },
+      OR: [
+        { ingredientEntryId: { in: [...entryIds] } },
+        { SupplyRequestItem: { ingredientEntryId: { in: [...entryIds] } } },
+      ],
     },
   };
   if (lock) {
@@ -364,6 +367,11 @@ export async function readPlanningStock(
       lotCode: true,
       DeliveryItem: {
         select: {
+          ingredientEntryId: true,
+          Ingredient: { select: { name: true } },
+          IngredientEntry: {
+            select: { Ingredient: { select: { name: true } } },
+          },
           SupplyRequestItem: {
             select: {
               ingredientEntryId: true,
@@ -382,16 +390,31 @@ export async function readPlanningStock(
     ],
   });
   const reserved = await reservedQuantities(tx, lots);
-  return lots.map((lot) => ({
-    id: lot.id,
-    lotCode: lot.lotCode,
-    ingredientName:
-      lot.DeliveryItem.SupplyRequestItem.IngredientEntry.Ingredient.name,
-    unit: lot.unit,
-    ingredientEntryId: lot.DeliveryItem.SupplyRequestItem.ingredientEntryId,
-    availableQuantity: lot.availableQuantity.toString(),
-    reservedQuantity: reserved.get(lot.id)!.toString(),
-  }));
+  return lots.map((lot) => {
+    const ingredientEntryId =
+      lot.DeliveryItem.ingredientEntryId ??
+      lot.DeliveryItem.SupplyRequestItem?.ingredientEntryId ??
+      null;
+    if (!ingredientEntryId) {
+      throw new HttpError(
+        409,
+        "Lô nguyên liệu thiếu liên kết danh mục của trường",
+      );
+    }
+    return {
+      id: lot.id,
+      lotCode: lot.lotCode,
+      ingredientName:
+        lot.DeliveryItem.Ingredient?.name ??
+        lot.DeliveryItem.IngredientEntry?.Ingredient?.name ??
+        lot.DeliveryItem.SupplyRequestItem?.IngredientEntry?.Ingredient?.name ??
+        "",
+      unit: lot.unit,
+      ingredientEntryId,
+      availableQuantity: lot.availableQuantity.toString(),
+      reservedQuantity: reserved.get(lot.id)!.toString(),
+    };
+  });
 }
 
 type Meal = { menuDayId: string; mealType: MealType };
@@ -784,7 +807,7 @@ export async function checkMealSeasoningStock(
       status: "AVAILABLE",
       OR: [{ expiryDate: null }, { expiryDate: { gte: day.menuDate } }],
       DeliveryItem: {
-        Delivery: { status: "RECEIVED", SupplyRequest: { schoolId } },
+        Delivery: { status: "RECEIVED", schoolId },
       },
     },
     select: { id: true, unit: true, availableQuantity: true },
@@ -910,8 +933,11 @@ function dto(batch: Detail): CookingBatchDetailDTO {
     unit: lot.unit,
     lotCode: lot.IngredientLot?.lotCode ?? null,
     ingredientName:
+      lot.IngredientLot?.DeliveryItem?.Ingredient?.name ??
+      lot.IngredientLot?.DeliveryItem?.IngredientEntry?.Ingredient?.name ??
       lot.IngredientLot?.DeliveryItem?.SupplyRequestItem?.IngredientEntry
-        ?.Ingredient?.name ?? null,
+        ?.Ingredient?.name ??
+      null,
     expiryDate:
       lot.IngredientLot?.expiryDate?.toISOString().slice(0, 10) ?? null,
   }));
@@ -1102,7 +1128,7 @@ export function createKitchenLifecycle(
         id: { in: batch.cookingBatchLots.map((lot) => lot.ingredientLotId) },
         OR: [{ expiryDate: null }, { expiryDate: { gte: day.menuDate } }],
         DeliveryItem: {
-          Delivery: { status: "RECEIVED", SupplyRequest: { schoolId } },
+          Delivery: { status: "RECEIVED", schoolId },
         },
       },
       select: { id: true, unit: true, availableQuantity: true, status: true },
