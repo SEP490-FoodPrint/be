@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import bcrypt from "bcryptjs";
+import { randomUUID } from "node:crypto";
 import express from "express";
 import { test } from "node:test";
 import { createLifecycleTestDatabase } from "./helpers/account-lifecycle-database";
@@ -14,6 +15,8 @@ import { createAccountLifecycleRepository } from "../src/modules/account-lifecyc
 import { createIntakeAccessService } from "../src/modules/account-lifecycle/intake-access.service";
 import { createIntakeAccessRepository } from "../src/modules/account-lifecycle/intake-access.repository";
 import { createSupplyOrderService } from "../src/modules/supply-order/supply-order.service";
+import { createSupplierOrderService } from "../src/modules/supplier-order/supplier-order.service";
+import { validateDispatchSupplierOrderBody } from "../src/modules/supplier-order/supplier-order.validation";
 import { createReportingService } from "../src/modules/reporting/reporting.service";
 import { HttpError } from "../src/utils/http-error";
 import { createSessionService } from "../src/modules/auth/session.service";
@@ -1935,6 +1938,276 @@ void test("account lifecycle respects scope and intake state on disposable Postg
           ),
         businessConflict,
       );
+    },
+  );
+
+  await context.test(
+    "T131: delivery dispatch ignores intake/relationship pauses, serializes against admin deactivation & permission denial, allows post-dispatch replay, and rolls back cleanly",
+    async () => {
+      const f = await schoolFixture("dispatch-race");
+      const sup = await db.supplier.create({
+        data: { name: "Dispatch race supplier" },
+      });
+      await account("INGREDIENT_SUPPLIER_ADMIN", "dispatch-sup-admin", {
+        supplierId: sup.id,
+      });
+      const supStaff = await account(
+        "INGREDIENT_SUPPLIER_STAFF",
+        "dispatch-sup-staff",
+        { supplierId: sup.id },
+      );
+      const staffActor = await loadPrincipal(supStaff.id, db);
+      await db.schoolSupplierRelationship.create({
+        data: {
+          schoolId: f.school.id,
+          supplierId: sup.id,
+          linkedByUserId: f.admin.id,
+          status: "ACTIVE",
+        },
+      });
+
+      // Pause school intake and suspend relationship after delivery creation
+      await lifecycle.setIntakeState(
+        { userId: f.admin.id },
+        { state: "PAUSED" },
+        principal,
+      );
+      await db.schoolSupplierRelationship.updateMany({
+        where: { schoolId: f.school.id, supplierId: sup.id },
+        data: {
+          status: "SUSPENDED",
+          suspendedAt: new Date(),
+          suspensionReason: "Paused after delivery creation",
+        },
+      });
+
+      const pausedOkDelivery = await db.delivery.create({
+        data: {
+          deliveryNo: "FP-DE-00001",
+          creationMode: "STANDALONE",
+          creationKey: randomUUID(),
+          creationFingerprint: "a".repeat(64),
+          schoolId: f.school.id,
+          supplierId: sup.id,
+          status: "PREPARING",
+          workflowVersion: 2,
+          traceabilityVersion: 1,
+          createdByUserId: supStaff.id,
+        },
+      });
+      const baseDispatchService = createSupplierOrderService(undefined, {
+        transaction: (fn) => authorizationTransaction(db, fn),
+      });
+      const pausedDispatched = await baseDispatchService.dispatch(
+        { id: pausedOkDelivery.id },
+        validateDispatchSupplierOrderBody({
+          expectedArrivalAt: "2026-11-18T08:00:00+07:00",
+          vehiclePlate: "29L-00001",
+        }),
+        staffActor,
+      );
+      assert.equal(pausedDispatched.status, "IN_TRANSIT");
+
+      // Rollback after dispatchDelivery write leaves PREPARING and null metadata untouched
+      const rollbackDelivery = await db.delivery.create({
+        data: {
+          deliveryNo: "FP-DE-00002",
+          creationMode: "STANDALONE",
+          creationKey: randomUUID(),
+          creationFingerprint: "b".repeat(64),
+          schoolId: f.school.id,
+          supplierId: sup.id,
+          status: "PREPARING",
+          workflowVersion: 2,
+          traceabilityVersion: 1,
+          createdByUserId: supStaff.id,
+        },
+      });
+      await assert.rejects(
+        () =>
+          authorizationTransaction(db, async (tx) => {
+            await tx.delivery.updateMany({
+              where: { id: rollbackDelivery.id, status: "PREPARING" },
+              data: {
+                status: "IN_TRANSIT",
+                expectedArrivalAt: new Date("2026-11-18T01:00:00.000Z"),
+                vehiclePlate: "29L-ROLLBACK",
+              },
+            });
+            throw new HttpError(500, "Simulated failure after dispatch write");
+          }),
+        { statusCode: 500 },
+      );
+      const afterRollback = await db.delivery.findUniqueOrThrow({
+        where: { id: rollbackDelivery.id },
+      });
+      assert.equal(afterRollback.status, "PREPARING");
+      assert.equal(afterRollback.expectedArrivalAt, null);
+      assert.equal(afterRollback.vehiclePlate, null);
+      assert.equal(
+        afterRollback.updatedAt.getTime(),
+        rollbackDelivery.updatedAt.getTime(),
+      );
+
+      // Concurrent barrier: deactivate schoolAdmin overlaps dispatch of PREPARING delivery -> dispatch rejects 409, zero commit
+      const raceDelivery = await db.delivery.create({
+        data: {
+          deliveryNo: "FP-DE-00003",
+          creationMode: "STANDALONE",
+          creationKey: randomUUID(),
+          creationFingerprint: "c".repeat(64),
+          schoolId: f.school.id,
+          supplierId: sup.id,
+          status: "PREPARING",
+          workflowVersion: 2,
+          traceabilityVersion: 1,
+          createdByUserId: supStaff.id,
+        },
+      });
+      const dispatchOutcomes = await overlap(
+        (hold) =>
+          lifecycleBarrier(hold).deactivate({ userId: f.admin.id }, principal),
+        (started) =>
+          createSupplierOrderService(undefined, {
+            guard: guardBarrier(started),
+            transaction: (fn) => authorizationTransaction(db, fn),
+          }).dispatch(
+            { id: raceDelivery.id },
+            validateDispatchSupplierOrderBody({
+              expectedArrivalAt: "2026-11-18T08:00:00+07:00",
+              vehiclePlate: "29L-00002",
+            }),
+            staffActor,
+          ),
+      );
+      assert.equal(dispatchOutcomes[0].status, "fulfilled");
+      assert.equal(dispatchOutcomes[1].status, "rejected");
+      assert(businessConflict(dispatchOutcomes[1].reason));
+      const raceCheck = await db.delivery.findUniqueOrThrow({
+        where: { id: raceDelivery.id },
+      });
+      assert.equal(raceCheck.status, "PREPARING");
+      assert.equal(raceCheck.expectedArrivalAt, null);
+      assert.equal(raceCheck.vehiclePlate, null);
+
+      // Post-dispatch canonical replay STILL succeeds after admin DEACTIVATED (preserving updatedAt),
+      // while diff body rejects 409 and delivery.manage denial rejects 403!
+      const replayWhileAdminDeactivated = await baseDispatchService.dispatch(
+        { id: pausedOkDelivery.id },
+        validateDispatchSupplierOrderBody({
+          expectedArrivalAt: "2026-11-18T01:00:00Z",
+          vehiclePlate: "29L-00001",
+        }),
+        staffActor,
+      );
+      assert.equal(replayWhileAdminDeactivated.status, "IN_TRANSIT");
+      assert.equal(
+        replayWhileAdminDeactivated.updatedAt,
+        pausedDispatched.updatedAt,
+      );
+
+      await assert.rejects(
+        () =>
+          baseDispatchService.dispatch(
+            { id: pausedOkDelivery.id },
+            validateDispatchSupplierOrderBody({
+              expectedArrivalAt: "2026-11-18T01:00:00Z",
+              vehiclePlate: "29L-OTHER",
+            }),
+            staffActor,
+          ),
+        businessConflict,
+      );
+
+      const managePerm = await db.permission.findUniqueOrThrow({
+        where: { code: "delivery.manage" },
+      });
+      await db.userPermissionDenial.create({
+        data: {
+          userId: supStaff.id,
+          permissionId: managePerm.id,
+          supplierId: sup.id,
+          disabledByUserId: system.id,
+        },
+      });
+      await assert.rejects(
+        () =>
+          baseDispatchService.dispatch(
+            { id: pausedOkDelivery.id },
+            validateDispatchSupplierOrderBody({
+              expectedArrivalAt: "2026-11-18T01:00:00Z",
+              vehiclePlate: "29L-00001",
+            }),
+            staffActor,
+          ),
+        (err: unknown) => err instanceof HttpError && err.statusCode === 403,
+      );
+
+      // Concurrent barrier: cascade deactivation of supplierAdmin also blocks dispatch (403/409) with zero commit
+      const f2 = await schoolFixture("dispatch-sup-deactivate");
+      const sup2 = await db.supplier.create({
+        data: { name: "Dispatch race supplier 2" },
+      });
+      const sup2Admin = await account(
+        "INGREDIENT_SUPPLIER_ADMIN",
+        "dispatch-sup2-admin",
+        { supplierId: sup2.id },
+      );
+      const sup2Staff = await account(
+        "INGREDIENT_SUPPLIER_STAFF",
+        "dispatch-sup2-staff",
+        { supplierId: sup2.id },
+      );
+      const staff2Actor = await loadPrincipal(sup2Staff.id, db);
+      await db.schoolSupplierRelationship.create({
+        data: {
+          schoolId: f2.school.id,
+          supplierId: sup2.id,
+          linkedByUserId: f2.admin.id,
+          status: "ACTIVE",
+        },
+      });
+      const supRaceDelivery = await db.delivery.create({
+        data: {
+          deliveryNo: "FP-DE-00004",
+          creationMode: "STANDALONE",
+          creationKey: randomUUID(),
+          creationFingerprint: "d".repeat(64),
+          schoolId: f2.school.id,
+          supplierId: sup2.id,
+          status: "PREPARING",
+          workflowVersion: 2,
+          traceabilityVersion: 1,
+          createdByUserId: sup2Staff.id,
+        },
+      });
+      const supDispatchOutcomes = await overlap(
+        (hold) =>
+          lifecycleBarrier(hold).deactivate(
+            { userId: sup2Admin.id },
+            principal,
+          ),
+        (started) =>
+          createSupplierOrderService(undefined, {
+            guard: guardBarrier(started),
+            transaction: (fn) => authorizationTransaction(db, fn),
+          }).dispatch(
+            { id: supRaceDelivery.id },
+            validateDispatchSupplierOrderBody({
+              expectedArrivalAt: "2026-11-18T08:00:00+07:00",
+              vehiclePlate: "29L-00003",
+            }),
+            staff2Actor,
+          ),
+      );
+      assert.equal(supDispatchOutcomes[0].status, "fulfilled");
+      assertBlocked(supDispatchOutcomes[1]);
+      const supRaceCheck = await db.delivery.findUniqueOrThrow({
+        where: { id: supRaceDelivery.id },
+      });
+      assert.equal(supRaceCheck.status, "PREPARING");
+      assert.equal(supRaceCheck.expectedArrivalAt, null);
+      assert.equal(supRaceCheck.vehiclePlate, null);
     },
   );
 });

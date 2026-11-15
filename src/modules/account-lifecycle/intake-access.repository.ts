@@ -1,4 +1,4 @@
-import type { Prisma } from "../../generated/prisma/client";
+import type { AccountStatus, Prisma } from "../../generated/prisma/client";
 
 export interface ParentLocks {
   schoolId?: string;
@@ -84,10 +84,41 @@ export function createIntakeAccessRepository() {
     async lockIncident(tx: Prisma.TransactionClient, id: string) {
       await tx.$queryRaw`SELECT id FROM foodprint.food_safety_incidents WHERE id = ${id}::uuid FOR UPDATE`;
     },
+    async lockDelivery(
+      tx: Prisma.TransactionClient,
+      id: string,
+      supplierId?: string,
+    ) {
+      if (supplierId) {
+        await tx.$queryRaw`SELECT id FROM foodprint.deliveries WHERE id = ${id}::uuid AND supplier_id = ${supplierId}::uuid FOR UPDATE`;
+      } else {
+        await tx.$queryRaw`SELECT id FROM foodprint.deliveries WHERE id = ${id}::uuid FOR UPDATE`;
+      }
+    },
     async readOrder(tx: Prisma.TransactionClient, id: string) {
       return await tx.supplyRequest.findUnique({
         where: { id },
         select: { id: true, schoolId: true, supplierId: true, status: true },
+      });
+    },
+    async readDelivery(
+      tx: Prisma.TransactionClient,
+      id: string,
+      supplierId: string,
+    ) {
+      return await tx.delivery.findFirst({
+        where: { id, supplierId },
+        select: {
+          id: true,
+          schoolId: true,
+          supplierId: true,
+          supplyRequestId: true,
+          status: true,
+          workflowVersion: true,
+          traceabilityVersion: true,
+          expectedArrivalAt: true,
+          vehiclePlate: true,
+        },
       });
     },
     async readSchool(tx: Prisma.TransactionClient, id: string) {
@@ -103,16 +134,26 @@ export function createIntakeAccessRepository() {
       });
     },
     async readSchoolAdmin(tx: Prisma.TransactionClient, schoolId: string) {
-      return await tx.user.findFirst({
-        where: { schoolId, roleCode: "SCHOOL_ADMINISTRATION" },
-        select: { status: true },
-      });
+      const rows = await tx.$queryRaw<{ status: AccountStatus }[]>`
+        SELECT status::text AS status
+        FROM foodprint.users
+        WHERE school_id = ${schoolId}::uuid
+          AND role_code = 'SCHOOL_ADMINISTRATION'
+        LIMIT 1
+        FOR SHARE
+      `;
+      return rows[0] ?? null;
     },
     async readSupplierAdmin(tx: Prisma.TransactionClient, supplierId: string) {
-      return await tx.user.findFirst({
-        where: { supplierId, roleCode: "INGREDIENT_SUPPLIER_ADMIN" },
-        select: { status: true },
-      });
+      const rows = await tx.$queryRaw<{ status: AccountStatus }[]>`
+        SELECT status::text AS status
+        FROM foodprint.users
+        WHERE supplier_id = ${supplierId}::uuid
+          AND role_code = 'INGREDIENT_SUPPLIER_ADMIN'
+        LIMIT 1
+        FOR SHARE
+      `;
+      return rows[0] ?? null;
     },
     async readRelationship(
       tx: Prisma.TransactionClient,

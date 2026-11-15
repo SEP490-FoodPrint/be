@@ -3,6 +3,7 @@ import type {
   createFromRequestBodySchema,
   createStandaloneBodySchema,
   createSupplierOrderBodySchema,
+  dispatchSupplierOrderBodySchema,
   requestSourceSelectionSchema,
   standaloneDeliveryItemSchema,
   supplierOrderDetailParamsSchema,
@@ -10,6 +11,7 @@ import type {
   supplierOrderLabelsQuerySchema,
   supplierOrderListQuerySchema,
   supplierOrderOptionsQuerySchema,
+  supplierSchoolOptionsQuerySchema,
 } from "./supplier-order.validation";
 
 export type RequestSourceSelectionDTO = z.infer<
@@ -41,6 +43,10 @@ export type SupplierOrderOptionsQueryDTO = z.infer<
   typeof supplierOrderOptionsQuerySchema
 >;
 
+export type SupplierSchoolOptionsQueryDTO = z.infer<
+  typeof supplierSchoolOptionsQuerySchema
+>;
+
 export type SupplierOrderLabelsQueryDTO = z.infer<
   typeof supplierOrderLabelsQuerySchema
 >;
@@ -55,4 +61,8 @@ export type SupplierOrderDetailParamsDTO = z.infer<
 
 export type SupplierOrderEmptyQueryDTO = z.infer<
   typeof supplierOrderEmptyQuerySchema
+>;
+
+export type DispatchSupplierOrderBodyDTO = z.infer<
+  typeof dispatchSupplierOrderBodySchema
 >;

@@ -279,6 +279,7 @@ model Delivery {
   creationKey               String?                     @map("creation_key") @db.Uuid
   creationFingerprint       String?                     @map("creation_fingerprint") @db.VarChar(64)
   traceabilityVersion       Int?                        @map("traceability_version")
+  workflowVersion           Int?                        @map("workflow_version")
   status                    DeliveryStatus              @default(CREATED)
   createdByUserId           String?                     @map("created_by_user_id") @db.Uuid
   expectedArrivalAt         DateTime?                   @map("expected_arrival_at") @db.Timestamptz(6)
@@ -358,8 +359,9 @@ model DeliveryItem {
   SourceFacility             SourceFacility?    @relation("delivery_items_source_facility_id__source_facilities", fields: [sourceFacilityId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   ingredientLots             IngredientLot[]    @relation("ingredient_lots_delivery_item_id__delivery_items")
 
-  @@unique([deliveryId, supplyRequestItemId])
-  @@unique([deliveryId, ingredientId])
+  @@unique([deliveryId, ingredientId, sourceFacilityId], map: "uq_delivery_items_ingredient_source", where: raw("source_facility_id IS NOT NULL"))
+  @@unique([deliveryId, ingredientId], map: "uq_delivery_items_legacy_ingredient", where: raw("source_facility_id IS NULL"))
+  @@unique([deliveryId, supplyRequestItemId], map: "uq_delivery_items_legacy_request_item", where: raw("source_facility_id IS NULL"))
   @@index([deliveryId], map: "idx_delivery_items_delivery")
   @@index([supplyRequestItemId], map: "idx_delivery_items_request_item")
   @@index([ingredientId], map: "idx_delivery_items_ingredient")
@@ -1767,6 +1769,7 @@ enum DeliveryStatus {
   CANCELLED_MEAL
   RECEIVED
   CANCELLED
+  PREPARING
 
   @@map("delivery_status")
   @@schema("foodprint")

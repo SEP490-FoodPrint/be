@@ -329,6 +329,8 @@ function listRow(): SupplierOrderListRow {
     requestedDeliveryDate: new Date("2026-11-20T00:00:00.000Z"),
     sentAt: timestamp,
     School: { id: testStaff.schoolId!, name: "Trường A" },
+    _count: { deliveries: 0 },
+    deliveries: [],
   };
 }
 function detailRow(): SupplierOrderDetailRow {
@@ -418,6 +420,7 @@ void test("supplier list uses trusted scope, filters and safe projections for bo
         schoolName: "Trường A",
         requestedDeliveryDate: "2026-11-20",
         sentAt: timestamp.toISOString(),
+        orderProgress: null,
       },
     ]);
     assert(!JSON.stringify(result).includes("hidden-quote"));
@@ -668,8 +671,10 @@ void test("repository supplier reads retain scope, hide drafts, use bounded pagi
   assert.deepEqual(many[0].orderBy, [{ id: "asc" }]);
   assert.deepEqual(Object.keys(many[0].select!).sort(), [
     "School",
+    "_count",
     "acceptedAt",
     "createdAt",
+    "deliveries",
     "id",
     "requestNo",
     "requestedDeliveryDate",
@@ -679,6 +684,13 @@ void test("repository supplier reads retain scope, hide drafts, use bounded pagi
     "supplierId",
     "updatedAt",
   ]);
+  assert.deepEqual(many[0].select!._count, { select: { deliveries: true } });
+  assert.deepEqual(many[0].select!.deliveries, {
+    where: { creationMode: "REQUEST" },
+    select: { id: true, status: true, workflowVersion: true },
+    orderBy: [{ id: "asc" }],
+    take: 2,
+  });
   await repository.listForSupplier({ page: 1, limit: 20 }, { supplierId });
   assert.deepEqual(many[1].where, {
     AND: [
@@ -874,4 +886,322 @@ void test("accept failure rolls back the transaction boundary and legacy receipt
     });
     assert.equal(existing.changed, 0);
   }
+});
+
+void test("T111 accept preserves 4-field receipt without creating delivery and projects orderProgress cleanly", async () => {
+  const f = setup();
+  const receipt = await f.service.accept({ id }, supplier);
+  assert.deepEqual(Object.keys(receipt).sort(), [
+    "acceptedAt",
+    "acceptedByUserId",
+    "id",
+    "status",
+  ]);
+  assert.equal(receipt.status, "ACCEPTED");
+  assert.equal("deliveryId" in receipt, false);
+  assert.equal("orderProgress" in receipt, false);
+
+  const deliveryId = "00000000-0000-4000-8000-000000000099";
+  const r = reads();
+  const canManageActor: AuthPrincipal = {
+    ...readActor,
+    permissions: ["supply_request.view", "delivery.manage"],
+  };
+  const canViewDeliveryActor: AuthPrincipal = {
+    ...readActor,
+    permissions: ["supply_request.view", "delivery.view"],
+  };
+  const viewOnlyRequestActor: AuthPrincipal = {
+    ...readActor,
+    permissions: ["supply_request.view"],
+  };
+
+  r.setRows([
+    { ...listRow(), id: "sr-sent", status: "SENT" },
+    { ...listRow(), id: "sr-accepted", status: "ACCEPTED" },
+    { ...listRow(), id: "sr-inprog-empty", status: "IN_PROGRESS" },
+    {
+      ...listRow(),
+      id: "sr-preparing-v2",
+      status: "IN_PROGRESS",
+      _count: { deliveries: 1 },
+      deliveries: [{ id: deliveryId, status: "PREPARING", workflowVersion: 2 }],
+    },
+    {
+      ...listRow(),
+      id: "sr-transit-v1",
+      status: "IN_PROGRESS",
+      _count: { deliveries: 1 },
+      deliveries: [
+        { id: deliveryId, status: "IN_TRANSIT", workflowVersion: null },
+      ],
+    },
+    {
+      ...listRow(),
+      id: "sr-received",
+      status: "COMPLETED",
+      _count: { deliveries: 1 },
+      deliveries: [{ id: deliveryId, status: "RECEIVED", workflowVersion: 2 }],
+    },
+    {
+      ...listRow(),
+      id: "sr-cancelled-stale-prep",
+      status: "CANCELLED",
+      _count: { deliveries: 1 },
+      deliveries: [{ id: deliveryId, status: "PREPARING", workflowVersion: 2 }],
+    },
+    {
+      ...listRow(),
+      id: "sr-legacy-multi",
+      status: "IN_PROGRESS",
+      _count: { deliveries: 2 },
+      deliveries: [
+        { id: deliveryId, status: "IN_TRANSIT", workflowVersion: null },
+        {
+          id: "00000000-0000-4000-8000-000000000098",
+          status: "IN_TRANSIT",
+          workflowVersion: null,
+        },
+      ],
+    },
+    {
+      ...listRow(),
+      id: "sr-cancelled-empty",
+      status: "CANCELLED",
+      _count: { deliveries: 0 },
+      deliveries: [],
+    },
+  ]);
+
+  const forManage = await r.service.getAll(
+    { page: 1, limit: 20 },
+    canManageActor,
+  );
+  assert.deepEqual(
+    forManage.items.map((item) => ({
+      id: item.id,
+      orderProgress: "orderProgress" in item ? item.orderProgress : null,
+    })),
+    [
+      { id: "sr-sent", orderProgress: null },
+      {
+        id: "sr-accepted",
+        orderProgress: {
+          stage: "CONFIRMED",
+          statusLabel: "Đã xác nhận",
+          deliveryId: null,
+          nextAction: "ADD_INGREDIENTS",
+        },
+      },
+      {
+        id: "sr-inprog-empty",
+        orderProgress: {
+          stage: "CONFIRMED",
+          statusLabel: "Đã xác nhận",
+          deliveryId: null,
+          nextAction: "ADD_INGREDIENTS",
+        },
+      },
+      {
+        id: "sr-preparing-v2",
+        orderProgress: {
+          stage: "PREPARING",
+          statusLabel: "Đang chuẩn bị hàng",
+          deliveryId,
+          nextAction: "ENTER_SHIPPING",
+        },
+      },
+      {
+        id: "sr-transit-v1",
+        orderProgress: {
+          stage: "IN_TRANSIT",
+          statusLabel: "Đang giao hàng",
+          deliveryId,
+          nextAction: "TRACK_DELIVERY",
+        },
+      },
+      {
+        id: "sr-received",
+        orderProgress: {
+          stage: "RECEIVED",
+          statusLabel: "Hoàn thành",
+          deliveryId,
+          nextAction: "VIEW_DELIVERY",
+        },
+      },
+      {
+        id: "sr-cancelled-stale-prep",
+        orderProgress: {
+          stage: "PREPARING",
+          statusLabel: "Đang chuẩn bị hàng",
+          deliveryId,
+          nextAction: "VIEW_DELIVERY",
+        },
+      },
+      { id: "sr-legacy-multi", orderProgress: null },
+      { id: "sr-cancelled-empty", orderProgress: null },
+    ],
+  );
+
+  const forViewOnly = await r.service.getAll(
+    { page: 1, limit: 20 },
+    canViewDeliveryActor,
+  );
+  const pickNextAction = (item: unknown): unknown => {
+    if (
+      item &&
+      typeof item === "object" &&
+      "orderProgress" in item &&
+      item.orderProgress &&
+      typeof item.orderProgress === "object" &&
+      "nextAction" in item.orderProgress
+    ) {
+      return item.orderProgress.nextAction;
+    }
+    return null;
+  };
+  assert.deepEqual(forViewOnly.items.slice(1, 6).map(pickNextAction), [
+    "NONE",
+    "NONE",
+    "VIEW_DELIVERY",
+    "TRACK_DELIVERY",
+    "VIEW_DELIVERY",
+  ]);
+
+  const withoutDeliveryPerm = await r.service.getAll(
+    { page: 1, limit: 20 },
+    viewOnlyRequestActor,
+  );
+  assert.deepEqual(withoutDeliveryPerm.items.slice(1, 6).map(pickNextAction), [
+    "NONE",
+    "NONE",
+    "NONE",
+    "NONE",
+    "NONE",
+  ]);
+
+  r.setDetail({
+    ...detailRow(),
+    status: "ACCEPTED",
+    acceptedAt: timestamp,
+    acceptedByUserId: supplier.id,
+  });
+  const detailConfirmed = await r.service.getDetail({ id }, canManageActor);
+  assert.deepEqual(detailConfirmed.orderProgress, {
+    stage: "CONFIRMED",
+    statusLabel: "Đã xác nhận",
+    deliveryId: null,
+    nextAction: "ADD_INGREDIENTS",
+  });
+
+  r.setDetail({
+    ...detailRow(),
+    status: "IN_PROGRESS",
+    acceptedAt: timestamp,
+    acceptedByUserId: supplier.id,
+    _count: { deliveries: 1 },
+    deliveries: [{ id: deliveryId, status: "PREPARING", workflowVersion: 2 }],
+  });
+  const detailPreparing = await r.service.getDetail({ id }, canManageActor);
+  assert.deepEqual(detailPreparing.orderProgress, {
+    stage: "PREPARING",
+    statusLabel: "Đang chuẩn bị hàng",
+    deliveryId,
+    nextAction: "ENTER_SHIPPING",
+  });
+
+  // School list contract remains unchanged without orderProgress
+  const schoolRepo: SupplyOrderRepository = {
+    ...r.repo,
+    list: () =>
+      Promise.resolve([
+        {
+          id,
+          requestNo: "REQ-001",
+          schoolId: testStaff.schoolId!,
+          supplierId,
+          status: "ACCEPTED",
+          acceptedAt: timestamp,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        },
+      ]),
+  };
+  const schoolService = createSupplyOrderService(schoolRepo);
+  const schoolList = await schoolService.getAll(
+    { page: 1, limit: 20 },
+    { ...testStaff, permissions: ["supply_request.view"] },
+  );
+  assert.equal("orderProgress" in schoolList.items[0], false);
+
+  // T146: Mixed legacy + REQUEST (_count=2, deliveries=1) and single legacy creationMode:null (_count=1, deliveries=0) project null,
+  // delivery.receive read OR tracks without manage actions, COMPLETED source blocks write actions, and list executes only 1 DB call (no N+1)
+  let supplierListCalls = 0;
+  const r2 = reads();
+  const auditRepo: SupplyOrderRepository = {
+    ...r2.repo,
+    listForSupplier: async (q, scope) => {
+      supplierListCalls += 1;
+      return r2.repo.listForSupplier(q, scope);
+    },
+  };
+  const auditService = createSupplyOrderService(auditRepo);
+  r2.setRows([
+    {
+      ...listRow(),
+      id: "sr-completed-prep",
+      status: "COMPLETED",
+      _count: { deliveries: 1 },
+      deliveries: [{ id: deliveryId, status: "PREPARING", workflowVersion: 2 }],
+    },
+    {
+      ...listRow(),
+      id: "sr-mixed-legacy-count",
+      status: "IN_PROGRESS",
+      _count: { deliveries: 2 },
+      deliveries: [{ id: deliveryId, status: "PREPARING", workflowVersion: 2 }],
+    },
+    {
+      ...listRow(),
+      id: "sr-legacy-null-mode",
+      status: "IN_PROGRESS",
+      _count: { deliveries: 1 },
+      deliveries: [],
+    },
+  ]);
+
+  const canReceiveActor: AuthPrincipal = {
+    ...readActor,
+    permissions: ["supply_request.view", "delivery.receive"],
+  };
+  const auditManage = await auditService.getAll(
+    { page: 1, limit: 20 },
+    canManageActor,
+  );
+  assert.equal(supplierListCalls, 1);
+  assert.deepEqual(
+    auditManage.items.map((item) => ({
+      id: item.id,
+      progress: "orderProgress" in item ? item.orderProgress : null,
+    })),
+    [
+      {
+        id: "sr-completed-prep",
+        progress: {
+          stage: "PREPARING",
+          statusLabel: "Đang chuẩn bị hàng",
+          deliveryId,
+          nextAction: "VIEW_DELIVERY",
+        },
+      },
+      { id: "sr-mixed-legacy-count", progress: null },
+      { id: "sr-legacy-null-mode", progress: null },
+    ],
+  );
+  const auditReceive = await auditService.getAll(
+    { page: 1, limit: 20 },
+    canReceiveActor,
+  );
+  assert.equal(supplierListCalls, 2);
+  assert.equal(pickNextAction(auditReceive.items[0]), "VIEW_DELIVERY");
 });

@@ -222,7 +222,7 @@ void test("US4 repository and service enforce point lookup, v1 allowlist, snapsh
     "unit",
   ]);
   assert.equal(validDto.actualQuantity, "12.5");
-  assert.equal(validDto.statusLabel, "Đang giao");
+  assert.equal(validDto.statusLabel, "Đang giao hàng");
   assert.deepEqual(validDto.sourceFacility, {
     name: "Cơ sở xay xát An Lành",
     facilityCode: "SF-001",
@@ -540,4 +540,117 @@ void test("US4 rate limiter throttles excessive public trace scans, fails closed
   assert.equal(logs.includes(VALID_TOKEN), false);
   assert.equal(logs.includes(UNKNOWN_TOKEN), false);
   assert.ok(logs.includes("/api/public/delivery-items/[REDACTED]"));
+});
+
+void test("US4 public trace exposes PREPARING multi-source 6A+4B tokens separately with 8-field allowlist (T133, T136)", async (context: TestContext) => {
+  const tokenA = "11111111".repeat(8);
+  const tokenB = "22222222".repeat(8);
+  let phase: "PREPARING" | "IN_TRANSIT" = "PREPARING";
+  const records = new Map<string, PublicDeliveryTraceRecord>([
+    [
+      tokenA,
+      makeTraceRecord({
+        ingredientNameSnapshot: "Thịt gà sạch",
+        actualQuantity: new Prisma.Decimal("6.000"),
+        unit: "kg",
+        sourceFacilityNameSnapshot: "Trang trại A",
+        sourceFacilityCodeSnapshot: "FA-01",
+        Delivery: {
+          deliveryNo: "FP-DE-00604",
+          status: phase,
+          traceabilityVersion: 1,
+          Supplier: { name: "Nhà cung cấp Thực phẩm Xanh" },
+        },
+      }),
+    ],
+    [
+      tokenB,
+      makeTraceRecord({
+        ingredientNameSnapshot: "Thịt gà sạch",
+        actualQuantity: new Prisma.Decimal("4.000"),
+        unit: "kg",
+        sourceFacilityNameSnapshot: "Trang trại B",
+        sourceFacilityCodeSnapshot: null,
+        Delivery: {
+          deliveryNo: "FP-DE-00604",
+          status: phase,
+          traceabilityVersion: 1,
+          Supplier: { name: "Nhà cung cấp Thực phẩm Xanh" },
+        },
+      }),
+    ],
+  ]);
+
+  const service = createDeliveryTraceService({
+    connect: () => Promise.resolve({} as never),
+    findByQrToken: (_db, qrToken) => {
+      const rec = records.get(qrToken);
+      if (!rec) return Promise.resolve(null);
+      return Promise.resolve({
+        ...rec,
+        Delivery: { ...rec.Delivery, status: phase },
+      });
+    },
+  });
+  const store = new MemoryStore();
+  const app = createApp(
+    createApiRateLimiter(store, { windowMs: 60_000, limit: 20 }),
+    authenticate,
+    undefined,
+    { deliveryTraceService: service },
+  );
+  const http = await startRawHttp(app);
+  context.after(async () => {
+    await http.close();
+    store.shutdown();
+  });
+
+  const prepARes = await http.request(`/api/public/delivery-items/${tokenA}`, {
+    headers: { Accept: "application/json" },
+  });
+  const prepBRes = await http.request(`/api/public/delivery-items/${tokenB}`, {
+    headers: { Accept: "application/json" },
+  });
+  assert.equal(prepARes.status, 200);
+  assert.equal(prepBRes.status, 200);
+  const dtoA = (prepARes.json() as { data: Record<string, unknown> }).data;
+  const dtoB = (prepBRes.json() as { data: Record<string, unknown> }).data;
+  for (const dto of [dtoA, dtoB]) {
+    assert.deepEqual(Object.keys(dto).sort(), [
+      "actualQuantity",
+      "deliveryNo",
+      "ingredientName",
+      "sourceFacility",
+      "status",
+      "statusLabel",
+      "supplierName",
+      "unit",
+    ]);
+    assert.equal(dto.deliveryNo, "FP-DE-00604");
+    assert.equal(dto.status, "PREPARING");
+    assert.equal(dto.statusLabel, "Đang chuẩn bị hàng");
+    assert.equal(dto.ingredientName, "Thịt gà sạch");
+  }
+  assert.equal(dtoA.actualQuantity, "6");
+  assert.deepEqual(dtoA.sourceFacility, {
+    name: "Trang trại A",
+    facilityCode: "FA-01",
+  });
+  assert.equal(dtoB.actualQuantity, "4");
+  assert.deepEqual(dtoB.sourceFacility, {
+    name: "Trang trại B",
+    facilityCode: null,
+  });
+
+  phase = "IN_TRANSIT";
+  const shippedARes = await http.request(
+    `/api/public/delivery-items/${tokenA}`,
+    { headers: { Accept: "application/json" } },
+  );
+  assert.equal(shippedARes.status, 200);
+  const shippedDto = (shippedARes.json() as { data: Record<string, unknown> })
+    .data;
+  assert.equal(shippedDto.status, "IN_TRANSIT");
+  assert.equal(shippedDto.statusLabel, "Đang giao hàng");
+  assert.equal(shippedDto.actualQuantity, "6");
 });
