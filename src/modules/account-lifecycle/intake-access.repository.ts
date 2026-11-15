@@ -65,6 +65,19 @@ export function createIntakeAccessRepository() {
         await tx.$queryRaw`SELECT id FROM foodprint.ingredients WHERE id = ${id}::uuid FOR UPDATE`;
       }
     },
+    async lockSourceFacilities(
+      tx: Prisma.TransactionClient,
+      sourceFacilityIds: readonly string[],
+      supplierId?: string,
+    ) {
+      for (const id of [...new Set(sourceFacilityIds)].sort()) {
+        if (supplierId) {
+          await tx.$queryRaw`SELECT id FROM foodprint.source_facilities WHERE id = ${id}::uuid AND supplier_id = ${supplierId}::uuid FOR UPDATE`;
+        } else {
+          await tx.$queryRaw`SELECT id FROM foodprint.source_facilities WHERE id = ${id}::uuid FOR UPDATE`;
+        }
+      }
+    },
     async lockForwarding(tx: Prisma.TransactionClient, id: string) {
       await tx.$queryRaw`SELECT id FROM foodprint.food_safety_report_forwardings WHERE id = ${id}::uuid FOR UPDATE`;
     },

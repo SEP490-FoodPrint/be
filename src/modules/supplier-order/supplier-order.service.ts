@@ -1,16 +1,22 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
+import { readPublicTraceOrigin } from "../../config/env";
 import { Prisma } from "../../generated/prisma/client";
 import type { AuthPrincipal } from "../../types/auth";
-import {
-  authorizationTransaction,
-  databaseOperation,
-  loadPrincipal,
-} from "../../utils/authorization";
+import { databaseOperation, loadPrincipal } from "../../utils/authorization";
+import { formatDeliveryCode } from "../../utils/delivery-code";
+import { getDeliveryStatusLabel } from "../../utils/delivery-status";
 import { HttpError } from "../../utils/http-error";
 import { listWindow, readListPage } from "../../utils/list-query";
 import {
+  buildDeliveryTraceUrl,
+  generateDeliveryQrToken,
+  renderDeliveryQrBatch,
+} from "../../utils/qr-code";
+import {
+  supplierOrderLabelScope,
   supplierOrderManagementScope,
   supplierOrderReadScope,
+  supplierOrderSourceOptionScope,
 } from "../../utils/resource-access";
 import { createIntakeAccessService } from "../account-lifecycle/intake-access.service";
 import {
@@ -20,6 +26,7 @@ import {
   type SupplierOrderIngredientOptionRecord,
   type SupplierOrderRepository,
   type SupplierOrderSchoolOptionRecord,
+  type SupplierOrderSourceFacilityOptionRecord,
   type SupplierOrderSummaryRecord,
 } from "./supplier-order.repository";
 import type {
@@ -28,10 +35,12 @@ import type {
   CreateSupplierOrderBodyDTO,
   CreateSupplierOrderRequestDTO,
   SupplierOrderDetailParamsDTO,
+  SupplierOrderLabelsQueryDTO,
   SupplierOrderListQueryDTO,
   SupplierOrderOptionsQueryDTO,
 } from "./supplier-order.request.dto";
 import type {
+  DeliveryLabelListResponseDTO,
   SupplierIngredientOptionDTO,
   SupplierIngredientOptionListResponseDTO,
   SupplierOrderCreateResultDTO,
@@ -42,6 +51,8 @@ import type {
   SupplierOrderSummaryDTO,
   SupplierSchoolOptionDTO,
   SupplierSchoolOptionListResponseDTO,
+  SupplierSourceFacilityOptionDTO,
+  SupplierSourceFacilityOptionListResponseDTO,
 } from "./supplier-order.response.dto";
 
 type Dependencies = {
@@ -53,7 +64,16 @@ type Dependencies = {
     db: SupplierOrderDb,
     principal: AuthPrincipal,
   ) => Promise<AuthPrincipal>;
+  publicTraceOrigin?: string;
+  readOrigin?: () => string;
+  generateToken?: () => string;
+  renderQrBatch?: (urls: readonly string[]) => Promise<string[]>;
 };
+
+interface PreparedQrCandidate {
+  qrToken: string;
+  qrUrl: string;
+}
 
 function resolveSourceType(
   creationMode: "REQUEST" | "STANDALONE" | null,
@@ -70,9 +90,18 @@ function mapSupplierOrderItem(
   return {
     id: item.id,
     ingredientId: item.ingredientId,
-    ingredientName: item.Ingredient.name,
+    ingredientName: item.ingredientNameSnapshot ?? item.Ingredient.name,
     ingredientEntryId: item.ingredientEntryId,
     supplyRequestItemId: item.supplyRequestItemId,
+    sourceFacility:
+      item.sourceFacilityId !== null && item.sourceFacilityNameSnapshot !== null
+        ? {
+            id: item.sourceFacilityId,
+            name: item.sourceFacilityNameSnapshot,
+            facilityCode: item.sourceFacilityCodeSnapshot,
+          }
+        : null,
+    traceUrl: item.qrUrl ?? null,
     actualQuantity: item.actualQuantity.toString(),
     unit: item.unit,
     note: item.note,
@@ -86,12 +115,14 @@ function mapSupplierOrderSummary(
     id: row.id,
     deliveryNo: row.deliveryNo,
     sourceType: resolveSourceType(row.creationMode, row.supplyRequestId),
+    traceabilityVersion: row.traceabilityVersion,
     schoolId: row.schoolId,
     schoolName: row.School.name,
     supplierId: row.supplierId,
     supplyRequestId: row.supplyRequestId,
     requestNo: row.SupplyRequest?.requestNo ?? null,
     status: row.status,
+    statusLabel: getDeliveryStatusLabel(row.status),
     expectedArrivalAt: row.expectedArrivalAt?.toISOString() ?? null,
     arrivedAt: row.arrivedAt?.toISOString() ?? null,
     receivedAt: row.receivedAt?.toISOString() ?? null,
@@ -134,31 +165,51 @@ function mapIngredientOption(
   };
 }
 
+function mapSourceFacilityOption(
+  facility: SupplierOrderSourceFacilityOptionRecord,
+): SupplierSourceFacilityOptionDTO {
+  return {
+    id: facility.id,
+    facilityCode: facility.facilityCode,
+    name: facility.name,
+  };
+}
+
 function canonicalArrivalIso(expectedArrivalAt: string | null): string | null {
   return expectedArrivalAt ? new Date(expectedArrivalAt).toISOString() : null;
 }
 
 function buildCreationFingerprint(body: CreateSupplierOrderBodyDTO): string {
-  const common = {
-    version: 1,
-    mode: body.sourceType,
-    expectedArrivalAt: canonicalArrivalIso(body.expectedArrivalAt),
-    vehiclePlate: body.vehiclePlate,
-    note: body.note,
-  };
   const payload =
     body.sourceType === "REQUEST"
       ? {
-          ...common,
+          version: 2,
+          mode: body.sourceType,
+          expectedArrivalAt: canonicalArrivalIso(body.expectedArrivalAt),
+          vehiclePlate: body.vehiclePlate,
+          note: body.note,
           supplyRequestId: body.supplyRequestId,
+          sources: [...body.sources]
+            .sort((a, b) =>
+              a.supplyRequestItemId.localeCompare(b.supplyRequestItemId),
+            )
+            .map((source) => ({
+              supplyRequestItemId: source.supplyRequestItemId,
+              sourceFacilityId: source.sourceFacilityId,
+            })),
         }
       : {
-          ...common,
+          version: 2,
+          mode: body.sourceType,
+          expectedArrivalAt: canonicalArrivalIso(body.expectedArrivalAt),
+          vehiclePlate: body.vehiclePlate,
+          note: body.note,
           schoolId: body.schoolId,
           items: [...body.items]
             .sort((a, b) => a.ingredientId.localeCompare(b.ingredientId))
             .map((item) => ({
               ingredientId: item.ingredientId,
+              sourceFacilityId: item.sourceFacilityId,
               actualQuantity: new Prisma.Decimal(
                 item.actualQuantity,
               ).toString(),
@@ -168,6 +219,43 @@ function buildCreationFingerprint(body: CreateSupplierOrderBodyDTO): string {
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
 }
 
+function getPrismaPgCause(error: unknown): Record<string, unknown> | null {
+  if (!error || typeof error !== "object") return null;
+  if ("meta" in error && error.meta && typeof error.meta === "object") {
+    const adapterError = (error.meta as { driverAdapterError?: unknown })
+      .driverAdapterError;
+    if (
+      adapterError &&
+      typeof adapterError === "object" &&
+      "cause" in adapterError &&
+      adapterError.cause &&
+      typeof adapterError.cause === "object"
+    ) {
+      return adapterError.cause as Record<string, unknown>;
+    }
+  }
+  if ("cause" in error && error.cause && typeof error.cause === "object") {
+    return error.cause as Record<string, unknown>;
+  }
+  return null;
+}
+
+function getUniqueConstraintName(error: unknown): string | null {
+  const cause = getPrismaPgCause(error);
+  if (typeof cause?.constraint === "string") return cause.constraint;
+  if (
+    error &&
+    typeof error === "object" &&
+    "meta" in error &&
+    error.meta &&
+    typeof error.meta === "object" &&
+    Array.isArray((error.meta as { target?: unknown }).target)
+  ) {
+    return (error.meta as { target: string[] }).target.join("_");
+  }
+  return null;
+}
+
 function isUniqueConstraintError(error: unknown): boolean {
   if (
     error instanceof Prisma.PrismaClientKnownRequestError &&
@@ -175,11 +263,20 @@ function isUniqueConstraintError(error: unknown): boolean {
   ) {
     return true;
   }
-  if (error && typeof error === "object" && "cause" in error) {
-    const cause = (error as { cause?: { originalCode?: string } }).cause;
-    if (cause?.originalCode === "23505") return true;
+  const cause = getPrismaPgCause(error);
+  return cause?.originalCode === "23505" || cause?.code === "23505";
+}
+
+function isTransientLockError(error: unknown): boolean {
+  if (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === "P2034"
+  ) {
+    return true;
   }
-  return false;
+  const cause = getPrismaPgCause(error);
+  const code = cause?.originalCode ?? cause?.code;
+  return code === "40001" || code === "40P01";
 }
 
 export function createSupplierOrderService(
@@ -188,11 +285,30 @@ export function createSupplierOrderService(
 ) {
   const transaction =
     dependencies?.transaction ??
-    (async <T>(fn: (tx: Prisma.TransactionClient) => Promise<T>) =>
-      authorizationTransaction(
-        await databaseOperation(() => repository.connect()),
-        fn,
-      ));
+    (async <T>(fn: (tx: Prisma.TransactionClient) => Promise<T>) => {
+      const db = await databaseOperation(() => repository.connect());
+      for (let attempt = 0; ; attempt++) {
+        try {
+          return await db.$transaction(fn, {
+            isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+            maxWait: 20_000,
+            timeout: 30_000,
+          });
+        } catch (error) {
+          if (error instanceof HttpError || isUniqueConstraintError(error)) {
+            throw error;
+          }
+          if (attempt < 2 && isTransientLockError(error)) {
+            continue;
+          }
+          console.error("Database operation failed");
+          throw new HttpError(
+            503,
+            "Không thể hoàn tất tạo đơn giao hàng. Vui lòng thử lại sau.",
+          );
+        }
+      }
+    });
   const guard = dependencies?.guard ?? createIntakeAccessService();
   const verifyActor =
     dependencies?.verifyActor ??
@@ -209,6 +325,79 @@ export function createSupplierOrderService(
       supplierOrderManagementScope(liveActor);
       return liveActor;
     });
+  const resolveOrigin = () =>
+    dependencies?.readOrigin
+      ? dependencies.readOrigin()
+      : (dependencies?.publicTraceOrigin ?? readPublicTraceOrigin());
+  const generateToken = dependencies?.generateToken ?? generateDeliveryQrToken;
+  const renderQrBatch =
+    dependencies?.renderQrBatch ??
+    ((urls: readonly string[]) => renderDeliveryQrBatch(urls));
+
+  async function prepareQrCandidates(
+    count: number,
+  ): Promise<PreparedQrCandidate[]> {
+    if (count <= 0) return [];
+    const origin = resolveOrigin();
+    const candidates = Array.from({ length: count }, () => {
+      const qrToken = generateToken();
+      return {
+        qrToken,
+        qrUrl: buildDeliveryTraceUrl(origin, qrToken),
+      };
+    });
+    try {
+      await renderQrBatch(candidates.map((candidate) => candidate.qrUrl));
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw new HttpError(
+        503,
+        "Không thể tạo ảnh mã QR cho đơn giao hàng. Vui lòng thử lại sau.",
+      );
+    }
+    return candidates;
+  }
+
+  async function resolveAndValidateSourceFacilities(
+    tx: Prisma.TransactionClient,
+    supplierId: string,
+    sourceFacilityIds: readonly string[],
+  ) {
+    const uniqueFacilityIds = [...new Set(sourceFacilityIds)];
+    await repository.lockSourceFacilities(tx, supplierId, uniqueFacilityIds);
+    const facilities = await repository.findSourceFacilitiesByIds(
+      tx,
+      uniqueFacilityIds,
+    );
+    const facilityById = new Map(
+      facilities.map((facility) => [facility.id, facility]),
+    );
+    for (const sourceFacilityId of sourceFacilityIds) {
+      const facility = facilityById.get(sourceFacilityId);
+      if (!facility || facility.supplierId !== supplierId) {
+        throw new HttpError(
+          404,
+          "Không tìm thấy cơ sở cung cấp thuộc nhà cung cấp",
+        );
+      }
+      if (facility.status !== "ACTIVE") {
+        throw new HttpError(409, "Cơ sở cung cấp đang ngừng hoạt động");
+      }
+    }
+    return facilityById;
+  }
+
+  async function reserveNextDeliveryNo(
+    tx: Prisma.TransactionClient,
+    supplierId: string,
+  ): Promise<string> {
+    await repository.lockSupplierForDeliveryNumber(tx, supplierId);
+    const highestSeq = await repository.findHighestCanonicalDeliverySequence(
+      tx,
+      supplierId,
+    );
+    return formatDeliveryCode(highestSeq + 1n);
+  }
 
   async function createFromRequest(
     tx: Prisma.TransactionClient,
@@ -216,11 +405,16 @@ export function createSupplierOrderService(
     idempotencyKey: string,
     fingerprint: string,
     body: CreateFromRequestBodyDTO,
+    candidates: readonly PreparedQrCandidate[],
   ): Promise<SupplierOrderCreateResultDTO> {
+    const sourceFacilityIds = body.sources.map(
+      (source) => source.sourceFacilityId,
+    );
     const actor = await guard.assertAccess(tx, principal, {
       operation: "START_ORDER_PROCESSING",
       orderId: body.supplyRequestId,
       requiredPermission: "delivery.manage",
+      sourceFacilityIds,
     });
     const liveScope = supplierOrderManagementScope(actor);
 
@@ -253,29 +447,64 @@ export function createSupplierOrderService(
       );
     }
 
+    const selectionByItemId = new Map(
+      body.sources.map((source) => [
+        source.supplyRequestItemId,
+        source.sourceFacilityId,
+      ]),
+    );
+    if (
+      selectionByItemId.size !== requestRow.supplyRequestItems.length ||
+      requestRow.supplyRequestItems.some(
+        (item) => !selectionByItemId.has(item.id),
+      )
+    ) {
+      throw new HttpError(
+        409,
+        "Danh sách nguồn cung ứng phải khớp chính xác toàn bộ dòng của yêu cầu cung ứng",
+      );
+    }
+
+    const facilityById = await resolveAndValidateSourceFacilities(
+      tx,
+      liveScope.supplierId,
+      sourceFacilityIds,
+    );
+    const deliveryNo = await reserveNextDeliveryNo(tx, liveScope.supplierId);
+
     const created = await repository.createDeliveryWithItems(tx, {
-      deliveryNo: `DG-${randomUUID()}`,
+      deliveryNo,
       creationMode: "REQUEST",
       creationKey: idempotencyKey,
       creationFingerprint: fingerprint,
+      traceabilityVersion: 1,
       schoolId: requestRow.schoolId,
       supplierId: liveScope.supplierId,
       supplyRequestId: requestRow.id,
       createdByUserId: actor.id,
-      expectedArrivalAt: body.expectedArrivalAt
-        ? new Date(body.expectedArrivalAt)
-        : null,
+      expectedArrivalAt: new Date(body.expectedArrivalAt),
       vehiclePlate: body.vehiclePlate,
       note: body.note,
-      status: "CREATED",
-      items: requestRow.supplyRequestItems.map((item) => ({
-        supplyRequestItemId: item.id,
-        ingredientId: item.IngredientEntry.ingredientId,
-        ingredientEntryId: item.ingredientEntryId,
-        actualQuantity: item.requestedQuantity,
-        unit: item.unit,
-        note: item.note,
-      })),
+      status: "IN_TRANSIT",
+      items: requestRow.supplyRequestItems.map((item, idx) => {
+        const sourceFacilityId = selectionByItemId.get(item.id)!;
+        const facility = facilityById.get(sourceFacilityId)!;
+        const candidate = candidates[idx];
+        return {
+          supplyRequestItemId: item.id,
+          ingredientId: item.IngredientEntry.ingredientId,
+          ingredientEntryId: item.ingredientEntryId,
+          sourceFacilityId: facility.id,
+          sourceFacilityNameSnapshot: facility.name,
+          sourceFacilityCodeSnapshot: facility.facilityCode,
+          ingredientNameSnapshot: item.IngredientEntry.Ingredient.name,
+          qrToken: candidate.qrToken,
+          qrUrl: candidate.qrUrl,
+          actualQuantity: item.requestedQuantity,
+          unit: item.unit,
+          note: item.note,
+        };
+      }),
     });
 
     if (requestRow.status === "ACCEPTED") {
@@ -300,12 +529,15 @@ export function createSupplierOrderService(
     idempotencyKey: string,
     fingerprint: string,
     body: CreateStandaloneBodyDTO,
+    candidates: readonly PreparedQrCandidate[],
   ): Promise<SupplierOrderCreateResultDTO> {
     const ingredientIds = body.items.map((item) => item.ingredientId);
+    const sourceFacilityIds = body.items.map((item) => item.sourceFacilityId);
     const actor = await guard.assertAccess(tx, principal, {
       operation: "SUPPLIER_CREATE_STANDALONE_DELIVERY",
       schoolId: body.schoolId,
       ingredientIds,
+      sourceFacilityIds,
     });
     const liveScope = supplierOrderManagementScope(actor);
 
@@ -335,6 +567,12 @@ export function createSupplierOrderService(
       }
     }
 
+    const facilityById = await resolveAndValidateSourceFacilities(
+      tx,
+      liveScope.supplierId,
+      sourceFacilityIds,
+    );
+
     const activeEntries = await repository.findIngredientEntriesForSchool(
       tx,
       body.schoolId,
@@ -343,30 +581,41 @@ export function createSupplierOrderService(
     const entryByIngredientId = new Map(
       activeEntries.map((entry) => [entry.ingredientId, entry.id]),
     );
+    const deliveryNo = await reserveNextDeliveryNo(tx, liveScope.supplierId);
 
     const created = await repository.createDeliveryWithItems(tx, {
-      deliveryNo: `DG-${randomUUID()}`,
+      deliveryNo,
       creationMode: "STANDALONE",
       creationKey: idempotencyKey,
       creationFingerprint: fingerprint,
+      traceabilityVersion: 1,
       schoolId: body.schoolId,
       supplierId: liveScope.supplierId,
       supplyRequestId: null,
       createdByUserId: actor.id,
-      expectedArrivalAt: body.expectedArrivalAt
-        ? new Date(body.expectedArrivalAt)
-        : null,
+      expectedArrivalAt: new Date(body.expectedArrivalAt),
       vehiclePlate: body.vehiclePlate,
       note: body.note,
-      status: "CREATED",
-      items: body.items.map((item) => ({
-        supplyRequestItemId: null,
-        ingredientId: item.ingredientId,
-        ingredientEntryId: entryByIngredientId.get(item.ingredientId) ?? null,
-        actualQuantity: new Prisma.Decimal(item.actualQuantity),
-        unit: item.unit,
-        note: null,
-      })),
+      status: "IN_TRANSIT",
+      items: body.items.map((item, idx) => {
+        const ingredient = ingredientById.get(item.ingredientId)!;
+        const facility = facilityById.get(item.sourceFacilityId)!;
+        const candidate = candidates[idx];
+        return {
+          supplyRequestItemId: null,
+          ingredientId: item.ingredientId,
+          ingredientEntryId: entryByIngredientId.get(item.ingredientId) ?? null,
+          sourceFacilityId: facility.id,
+          sourceFacilityNameSnapshot: facility.name,
+          sourceFacilityCodeSnapshot: facility.facilityCode,
+          ingredientNameSnapshot: ingredient.name,
+          qrToken: candidate.qrToken,
+          qrUrl: candidate.qrUrl,
+          actualQuantity: new Prisma.Decimal(item.actualQuantity),
+          unit: item.unit,
+          note: null,
+        };
+      }),
     });
 
     return { ...mapSupplierOrderDetail(created), created: true };
@@ -379,6 +628,11 @@ export function createSupplierOrderService(
     ): Promise<SupplierOrderCreateResultDTO> {
       const scope = supplierOrderManagementScope(principal);
       const fingerprint = buildCreationFingerprint(input.body);
+      const candidates = await prepareQrCandidates(
+        input.body.sourceType === "REQUEST"
+          ? input.body.sources.length
+          : input.body.items.length,
+      );
 
       try {
         return await transaction(async (tx) => {
@@ -406,6 +660,7 @@ export function createSupplierOrderService(
               input.idempotencyKey,
               fingerprint,
               input.body,
+              candidates,
             );
           }
 
@@ -415,6 +670,7 @@ export function createSupplierOrderService(
             input.idempotencyKey,
             fingerprint,
             input.body,
+            candidates,
           );
         });
       } catch (error) {
@@ -440,7 +696,17 @@ export function createSupplierOrderService(
           }
           return { ...mapSupplierOrderDetail(resolved), created: false };
         }
-        throw new HttpError(409, "Yêu cầu cung ứng này đã có đợt giao");
+        const constraint = getUniqueConstraintName(error);
+        if (
+          constraint === "uq_deliveries_request_mode" ||
+          (input.body.sourceType === "REQUEST" && !constraint)
+        ) {
+          throw new HttpError(409, "Yêu cầu cung ứng này đã có đợt giao");
+        }
+        throw new HttpError(
+          503,
+          "Không thể hoàn tất tạo đơn giao hàng do xung đột đồng thời. Vui lòng thử lại sau.",
+        );
       }
     },
 
@@ -484,6 +750,95 @@ export function createSupplierOrderService(
       );
       return {
         items: page.items.map(mapIngredientOption),
+        pagination: page.pagination,
+      };
+    },
+
+    async listSourceFacilityOptions(
+      query: SupplierOrderOptionsQueryDTO,
+      principal: AuthPrincipal,
+    ): Promise<SupplierSourceFacilityOptionListResponseDTO> {
+      const scope = supplierOrderSourceOptionScope(principal);
+      const db = await databaseOperation(() => repository.connect());
+      const window = listWindow(query);
+      const page = await readListPage(
+        () =>
+          repository.listSourceFacilityOptions(db, {
+            scope,
+            skip: window.skip,
+            take: window.take,
+          }),
+        query,
+      );
+      return {
+        items: page.items.map(mapSourceFacilityOption),
+        pagination: page.pagination,
+      };
+    },
+
+    async listLabels(
+      params: SupplierOrderDetailParamsDTO,
+      query: SupplierOrderLabelsQueryDTO,
+      principal: AuthPrincipal,
+    ): Promise<DeliveryLabelListResponseDTO> {
+      const scope = supplierOrderLabelScope(principal);
+      const db = await databaseOperation(() => repository.connect());
+      const delivery = await databaseOperation(() =>
+        repository.findDeliveryForLabels(db, scope, params.id),
+      );
+      if (!delivery) {
+        throw new HttpError(
+          404,
+          "Không tìm thấy đơn giao hàng thuộc nhà cung cấp",
+        );
+      }
+      if (delivery.traceabilityVersion !== 1) {
+        throw new HttpError(409, "Đơn lịch sử chưa có nhãn QR theo dòng");
+      }
+
+      const window = listWindow(query);
+      const page = await readListPage(
+        () =>
+          repository.listDeliveryLabelItems(db, {
+            deliveryId: delivery.id,
+            skip: window.skip,
+            take: window.take,
+          }),
+        query,
+      );
+
+      for (const item of page.items) {
+        if (!item.qrUrl || !item.sourceFacilityNameSnapshot) {
+          throw new HttpError(409, "Đơn lịch sử chưa có nhãn QR theo dòng");
+        }
+      }
+
+      const traceUrls = page.items.map((item) => item.qrUrl as string);
+      let qrImages: string[];
+      try {
+        qrImages = traceUrls.length > 0 ? await renderQrBatch(traceUrls) : [];
+      } catch {
+        throw new HttpError(503, "Không thể tạo ảnh mã QR cho nhãn giao hàng");
+      }
+      if (qrImages.length !== page.items.length) {
+        throw new HttpError(503, "Không thể tạo ảnh mã QR cho nhãn giao hàng");
+      }
+
+      return {
+        items: page.items.map((item, idx) => ({
+          deliveryItemId: item.id,
+          deliveryNo: delivery.deliveryNo,
+          supplierName: delivery.Supplier.name,
+          ingredientName: item.ingredientNameSnapshot ?? item.Ingredient.name,
+          actualQuantity: item.actualQuantity.toString(),
+          unit: item.unit,
+          sourceFacility: {
+            name: item.sourceFacilityNameSnapshot!,
+            facilityCode: item.sourceFacilityCodeSnapshot,
+          },
+          traceUrl: item.qrUrl!,
+          qrImageDataUrl: qrImages[idx],
+        })),
         pagination: page.pagination,
       };
     },

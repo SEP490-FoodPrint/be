@@ -1,3 +1,4 @@
+import { recordLocalTestDatabase } from "./local-test-database";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import path from "node:path";
@@ -28,6 +29,7 @@ export async function createLifecycleTestDatabase(connectionString: string) {
     await admin.connect();
     await admin.query(`CREATE DATABASE "${name}"`);
     created = true;
+    recordLocalTestDatabase(name);
     const isolated = new URL(target);
     isolated.pathname = `/${name}`;
     try {

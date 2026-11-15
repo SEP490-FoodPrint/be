@@ -1,3 +1,4 @@
+import { recordLocalTestDatabase } from "./helpers/local-test-database";
 import { createSupplyOrderService } from "../src/modules/supply-order/supply-order.service";
 import { createSupplyOrderRepository } from "../src/modules/supply-order/supply-order.repository";
 import { createIntakeAccessService } from "../src/modules/account-lifecycle/intake-access.service";
@@ -14,7 +15,10 @@ import {
 import { createSourceFacilityRepository } from "../src/modules/source-facility/source-facility.repository";
 import { validateSourceFacilityCreate } from "../src/modules/source-facility/source-facility.validation";
 import { createBarrier } from "./helpers/account-lifecycle-database";
-import { documentStorage } from "../src/utils/onboarding-documents";
+import {
+  documentFormat,
+  documentStorage,
+} from "../src/utils/onboarding-documents";
 import { withReadTransaction } from "../src/utils/read-transaction";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -131,6 +135,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   const name =
     "foodprint_authorization_test_" + randomUUID().replaceAll("-", "");
   await owner.query('CREATE DATABASE "' + name + '"');
+  recordLocalTestDatabase(name);
   await owner.end();
   const fresh = new URL(base);
   fresh.pathname = "/" + name;
@@ -373,11 +378,12 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           new HttpError(503, "Test file provider unavailable"),
         );
       const id = randomUUID();
+      const format = documentFormat(file);
       const document: OnboardingDocument = {
         id,
         field: file.fieldname,
-        publicId: `foodprint/onboarding/${userId}/${id}.pdf`,
-        format: "pdf",
+        publicId: `foodprint/onboarding/${userId}/${id}.${format}`,
+        format,
         fileName: file.originalname,
         bytes: file.size,
       };
@@ -6079,6 +6085,499 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
     },
   );
   await context.test(
+    "v1 supplier order HTTP lifecycle verifies arrival, four-role inspection rollback/receipt, reject recovery, and public allowlist",
+    async (t) => {
+      t.mock.method(
+        documentStorage,
+        "upload",
+        (userId: string, file: Express.Multer.File) =>
+          testDocumentStorage.upload(userId, file),
+      );
+      t.mock.method(documentStorage, "remove", (document: OnboardingDocument) =>
+        testDocumentStorage.remove(document),
+      );
+      const inspect = (
+        deliveryId: string,
+        reviewerId: string,
+        decision: "APPROVE" | "REJECT",
+        reason?: string,
+      ) => {
+        const form = new FormData();
+        form.set("decision", decision);
+        if (reason) form.set("reason", reason);
+        form.set(
+          "photo",
+          new Blob([new Uint8Array([255, 216, 255, 0, 1])], {
+            type: "image/jpeg",
+          }),
+          "inspection.jpg",
+        );
+        const requestHeaders = new Headers(headers(reviewerId));
+        requestHeaders.delete("Content-Type");
+        return http.request(`/api/deliveries/${deliveryId}/inspection`, {
+          method: "POST",
+          headers: requestHeaders,
+          body: form,
+        });
+      };
+      const previousOrigin = process.env.PUBLIC_TRACE_ORIGIN;
+      process.env.PUBLIC_TRACE_ORIGIN = "https://trace.example.test";
+      try {
+        const suffix = randomUUID().slice(0, 8);
+        const v1School = await db.school.create({
+          data: { name: `V1 Auth School ${suffix}` },
+        });
+        const v1OtherSchool = await db.school.create({
+          data: { name: `V1 Auth Other School ${suffix}` },
+        });
+        const v1Supplier = await db.supplier.create({
+          data: { name: `V1 Auth Supplier ${suffix}` },
+        });
+        const v1OtherSupplier = await db.supplier.create({
+          data: { name: `V1 Auth Other Supplier ${suffix}` },
+        });
+        const v1Category = await db.ingredientCategory.create({
+          data: { categoryName: `V1 Auth Cat ${suffix}` },
+        });
+        const v1Ingredient1 = await db.ingredient.create({
+          data: {
+            supplierId: v1Supplier.id,
+            categoryId: v1Category.id,
+            name: `Thit heo HTTP ${suffix}`,
+            defaultUnit: "kg",
+          },
+        });
+        const v1Ingredient2 = await db.ingredient.create({
+          data: {
+            supplierId: v1Supplier.id,
+            categoryId: v1Category.id,
+            name: `Cai xanh HTTP ${suffix}`,
+            defaultUnit: "kg",
+          },
+        });
+        await db.schoolSupplierRelationship.create({
+          data: {
+            schoolId: v1School.id,
+            supplierId: v1Supplier.id,
+            status: "ACTIVE",
+          },
+        });
+        const v1Source = await db.sourceFacility.create({
+          data: {
+            supplierId: v1Supplier.id,
+            name: `HTX Rau HTTP ${suffix}`,
+            facilityCode: `HTX-${suffix}`,
+            address: "Thon 1, Huyen X",
+            contactName: "Chu ho bi mat",
+            contactPhone: "0909123456",
+            contactEmail: `secret-${suffix}@farm.test`,
+            status: "ACTIVE",
+            isVisible: true,
+          },
+        });
+        const v1Entry1 = await db.ingredientEntry.create({
+          data: {
+            schoolId: v1School.id,
+            ingredientId: v1Ingredient1.id,
+            handlingType: "DIRECT_USE",
+            status: "ACTIVE",
+          },
+        });
+
+        const v1SupplierStaff = await user("INGREDIENT_SUPPLIER_STAFF", {
+          supplierId: v1Supplier.id,
+        });
+        const v1OtherSupplierStaff = await user("INGREDIENT_SUPPLIER_STAFF", {
+          supplierId: v1OtherSupplier.id,
+        });
+        const kitchenUser = await user("SCHOOL_KITCHEN_STAFF", {
+          schoolId: v1School.id,
+        });
+        const nutritionUser = await user("SCHOOL_NUTRITION_OFFICER", {
+          schoolId: v1School.id,
+        });
+        const parentUser = await user("PARENTS_COMMITTEE", {
+          schoolId: v1School.id,
+        });
+        const deptUser = await user("INGREDIENT_MANAGEMENT_DEPARTMENT", {
+          schoolId: v1School.id,
+        });
+        const otherDeptUser = await user("INGREDIENT_MANAGEMENT_DEPARTMENT", {
+          schoolId: v1OtherSchool.id,
+        });
+        for (const account of [
+          v1SupplierStaff,
+          v1OtherSupplierStaff,
+          kitchenUser,
+          nutritionUser,
+          parentUser,
+          deptUser,
+          otherDeptUser,
+        ]) {
+          const session = await authSessions.issue(account.id);
+          issued.set(account.id, session);
+          refreshTokens.push(session.refreshToken);
+        }
+
+        const v1Request = await db.supplyRequest.create({
+          data: {
+            requestNo: `SR-T090-${suffix}`,
+            schoolId: v1School.id,
+            supplierId: v1Supplier.id,
+            createdByUserId: deptUser.id,
+            status: "ACCEPTED",
+            requestedDeliveryDate: new Date("2026-11-20T00:00:00.000Z"),
+            supplyRequestItems: {
+              create: [
+                {
+                  ingredientEntryId: v1Entry1.id,
+                  requestedQuantity: 25,
+                  unit: "kg",
+                },
+              ],
+            },
+          },
+          include: { supplyRequestItems: true },
+        });
+
+        // 1. REQUEST creation -> supplier/wrong-school arrival denied -> school arrival -> REJECT
+        const createReqRes = await http.request("/api/deliveries/management", {
+          method: "POST",
+          headers: {
+            ...headers(v1SupplierStaff.id),
+            "Idempotency-Key": randomUUID(),
+          },
+          body: JSON.stringify({
+            sourceType: "REQUEST",
+            supplyRequestId: v1Request.id,
+            sources: [
+              {
+                supplyRequestItemId: v1Request.supplyRequestItems[0].id,
+                sourceFacilityId: v1Source.id,
+              },
+            ],
+            expectedArrivalAt: "2026-11-20T06:30:00.000Z",
+            vehiclePlate: "29C-11111",
+          }),
+        });
+        assert.equal(createReqRes.status, 201);
+        const reqDelivery = record(record(createReqRes.body).data);
+        const reqDeliveryId = String(reqDelivery.id);
+        assert.equal(reqDelivery.status, "IN_TRANSIT");
+        assert.equal(reqDelivery.statusLabel, "Đang giao");
+        assert.equal(reqDelivery.traceabilityVersion, 1);
+        const reqItems = reqDelivery.items as Array<Record<string, unknown>>;
+        assert.equal(reqItems.length, 1);
+        const reqQrUrl = String(reqItems[0].traceUrl);
+        assert(
+          reqQrUrl.startsWith(
+            "https://trace.example.test/api/public/delivery-items/",
+          ),
+        );
+
+        assert.equal(
+          (
+            await http.request(`/api/deliveries/${reqDeliveryId}/arrival`, {
+              method: "POST",
+              headers: headers(v1SupplierStaff.id),
+            })
+          ).status,
+          403,
+        );
+        assert.equal(
+          (
+            await http.request(`/api/deliveries/${reqDeliveryId}/arrival`, {
+              method: "POST",
+              headers: headers(otherDeptUser.id),
+            })
+          ).status,
+          404,
+        );
+
+        const reqArrival1 = await http.request(
+          `/api/deliveries/${reqDeliveryId}/arrival`,
+          {
+            method: "POST",
+            headers: headers(kitchenUser.id),
+          },
+        );
+        assert.equal(reqArrival1.status, 200);
+        const reqArrivalData = record(record(reqArrival1.body).data);
+        assert.equal(reqArrivalData.status, "ARRIVED");
+        assert.equal(reqArrivalData.statusLabel, "Đã đến nơi");
+        assert(typeof reqArrivalData.arrivedAt === "string");
+
+        const reqArrivalReplay = await http.request(
+          `/api/deliveries/${reqDeliveryId}/arrival`,
+          {
+            method: "POST",
+            headers: headers(nutritionUser.id),
+          },
+        );
+        assert.equal(reqArrivalReplay.status, 200);
+        assert.equal(
+          record(record(reqArrivalReplay.body).data).arrivedAt,
+          reqArrivalData.arrivedAt,
+        );
+
+        const uploadedBeforeMissingPhoto = uploadedFiles.size;
+        const missingPhotoRes = await http.request(
+          `/api/deliveries/${reqDeliveryId}/inspection`,
+          {
+            method: "POST",
+            headers: headers(kitchenUser.id),
+            body: JSON.stringify({
+              decision: "REJECT",
+              reason: "Nhiệt độ xe chưa đạt",
+            }),
+          },
+        );
+        assert.equal(missingPhotoRes.status, 400);
+        assert.equal(uploadedFiles.size, uploadedBeforeMissingPhoto);
+        assert.equal(
+          await db.deliveryApproval.count({
+            where: { deliveryId: reqDeliveryId },
+          }),
+          0,
+        );
+        assert.equal(
+          (
+            await db.delivery.findUniqueOrThrow({
+              where: { id: reqDeliveryId },
+            })
+          ).status,
+          "ARRIVED",
+        );
+        const rejectRes = await inspect(
+          reqDeliveryId,
+          kitchenUser.id,
+          "REJECT",
+          "Nhiệt độ xe chưa đạt",
+        );
+        assert.equal(rejectRes.status, 200, JSON.stringify(rejectRes.body));
+        const rejectedRow = await db.delivery.findUniqueOrThrow({
+          where: { id: reqDeliveryId },
+        });
+        assert.equal(rejectedRow.status, "REJECTED");
+        assert.equal(
+          await db.inventoryTransaction.count({
+            where: {
+              IngredientLot: {
+                DeliveryItem: { deliveryId: reqDeliveryId },
+              },
+            },
+          }),
+          0,
+        );
+        assert.equal(
+          (await inspect(reqDeliveryId, nutritionUser.id, "APPROVE")).status,
+          409,
+        );
+
+        // 2. Manual replacement via STANDALONE: fresh deliveryNo, fresh qrUrl, fresh approvals;
+        //    4th signature rolls back on missing IngredientEntry, then succeeds once attached.
+        const standaloneRes = await http.request("/api/deliveries/management", {
+          method: "POST",
+          headers: {
+            ...headers(v1SupplierStaff.id),
+            "Idempotency-Key": randomUUID(),
+          },
+          body: JSON.stringify({
+            sourceType: "STANDALONE",
+            schoolId: v1School.id,
+            expectedArrivalAt: "2026-11-20T08:00:00.000Z",
+            vehiclePlate: "29C-22222",
+            items: [
+              {
+                ingredientId: v1Ingredient2.id,
+                sourceFacilityId: v1Source.id,
+                actualQuantity: "15",
+                unit: "kg",
+              },
+            ],
+          }),
+        });
+        assert.equal(standaloneRes.status, 201);
+        const standaloneData = record(record(standaloneRes.body).data);
+        const standaloneId = String(standaloneData.id);
+        assert.notEqual(standaloneData.deliveryNo, reqDelivery.deliveryNo);
+        const standaloneItems = standaloneData.items as Array<
+          Record<string, unknown>
+        >;
+        const standaloneQrUrl = String(standaloneItems[0].traceUrl);
+        assert(
+          standaloneQrUrl.startsWith(
+            "https://trace.example.test/api/public/delivery-items/",
+          ),
+        );
+        assert.notEqual(standaloneQrUrl, reqQrUrl);
+
+        assert.equal(
+          (
+            await http.request(`/api/deliveries/${standaloneId}/arrival`, {
+              method: "POST",
+              headers: headers(deptUser.id),
+            })
+          ).status,
+          200,
+        );
+
+        for (const reviewer of [kitchenUser, nutritionUser, parentUser]) {
+          const ok = await inspect(standaloneId, reviewer.id, "APPROVE");
+          assert.equal(ok.status, 200, JSON.stringify(ok.body));
+        }
+        assert.equal(
+          (await db.delivery.findUniqueOrThrow({ where: { id: standaloneId } }))
+            .status,
+          "PENDING_APPROVAL",
+        );
+
+        // Missing IngredientEntry on 4th APPROVE -> 409 rollback (count stays 3, zero warehouse writes)
+        const uploadsBeforeRollback = uploadedFiles.size;
+        const rollbackRes = await inspect(standaloneId, deptUser.id, "APPROVE");
+        assert.equal(rollbackRes.status, 409);
+        assert.equal(uploadedFiles.size, uploadsBeforeRollback);
+        assert.equal(
+          await db.deliveryApproval.count({
+            where: { deliveryId: standaloneId },
+          }),
+          3,
+        );
+        assert.equal(
+          (await db.delivery.findUniqueOrThrow({ where: { id: standaloneId } }))
+            .status,
+          "PENDING_APPROVAL",
+        );
+        const plannedLotBeforeEntry = await db.ingredientLot.findFirstOrThrow({
+          where: {
+            DeliveryItem: { deliveryId: standaloneId },
+          },
+        });
+        assert.equal(plannedLotBeforeEntry.status, "BLOCKED");
+        assert.equal(plannedLotBeforeEntry.availableQuantity.toString(), "0");
+        assert.equal(
+          await db.inventoryTransaction.count({
+            where: {
+              IngredientLot: {
+                DeliveryItem: { deliveryId: standaloneId },
+              },
+            },
+          }),
+          0,
+        );
+
+        const v1Entry2 = await db.ingredientEntry.create({
+          data: {
+            schoolId: v1School.id,
+            ingredientId: v1Ingredient2.id,
+            handlingType: "DRY_STOCK",
+            status: "ACTIVE",
+          },
+        });
+        const receiveRes = await inspect(standaloneId, deptUser.id, "APPROVE");
+        assert.equal(receiveRes.status, 200, JSON.stringify(receiveRes.body));
+        const receivedDelivery = await db.delivery.findUniqueOrThrow({
+          where: { id: standaloneId },
+          include: {
+            deliveryItems: { include: { ingredientLots: true } },
+            deliveryApprovals: true,
+          },
+        });
+        assert.equal(receivedDelivery.status, "RECEIVED");
+        assert.equal(receivedDelivery.receivedByUserId, deptUser.id);
+        assert.equal(receivedDelivery.deliveryApprovals.length, 4);
+        for (const approval of receivedDelivery.deliveryApprovals) {
+          assert(approval.photoPublicId?.endsWith(".jpg"));
+          assert.match(approval.photoHash ?? "", /^[a-f0-9]{64}$/);
+        }
+        assert.equal(
+          receivedDelivery.deliveryItems[0].ingredientEntryId,
+          v1Entry2.id,
+        );
+        assert.equal(
+          receivedDelivery.deliveryItems[0].ingredientLots.length,
+          1,
+        );
+        assert.equal(
+          receivedDelivery.deliveryItems[0].ingredientLots[0].sourceFacilityId,
+          v1Source.id,
+        );
+        assert.equal(
+          await db.inventoryTransaction.count({
+            where: {
+              movementType: "RECEIPT",
+              ingredientLotId:
+                receivedDelivery.deliveryItems[0].ingredientLots[0].id,
+            },
+          }),
+          1,
+        );
+
+        // 3. School detail, cross-tenant isolation, and unauthenticated public trace allowlist
+        const schoolDetail = await http.request(
+          `/api/deliveries/${standaloneId}/inspection`,
+          { headers: headers(deptUser.id) },
+        );
+        assert.equal(schoolDetail.status, 200);
+        const detailData = record(record(schoolDetail.body).data);
+        assert.equal(detailData.statusLabel, "Hoàn thành");
+        assert.equal(
+          (
+            await http.request(`/api/deliveries/${standaloneId}/inspection`, {
+              headers: headers(otherDeptUser.id),
+            })
+          ).status,
+          404,
+        );
+        assert.equal(
+          (
+            await http.request(`/api/deliveries/management/${standaloneId}`, {
+              headers: headers(v1OtherSupplierStaff.id),
+            })
+          ).status,
+          404,
+        );
+
+        const tracePath = new URL(standaloneQrUrl).pathname;
+        const publicRes = await http.request(tracePath, {
+          headers: { Accept: "application/json" },
+        });
+        assert.equal(publicRes.status, 200);
+        const traceData = record(record(publicRes.body).data);
+        assert.deepEqual(Object.keys(traceData).sort(), [
+          "actualQuantity",
+          "deliveryNo",
+          "ingredientName",
+          "sourceFacility",
+          "status",
+          "statusLabel",
+          "supplierName",
+          "unit",
+        ]);
+        const traceFacility = record(traceData.sourceFacility);
+        assert.deepEqual(Object.keys(traceFacility).sort(), [
+          "facilityCode",
+          "name",
+        ]);
+        assert.equal(traceFacility.name, v1Source.name);
+        assert.equal(traceFacility.facilityCode, v1Source.facilityCode);
+        assert.equal(traceData.status, "RECEIVED");
+        assert.equal(traceData.statusLabel, "Hoàn thành");
+        const serializedTrace = JSON.stringify(traceData);
+        assert(!serializedTrace.includes("Chu ho bi mat"));
+        assert(!serializedTrace.includes("0909123456"));
+        assert(!serializedTrace.includes(`secret-${suffix}@farm.test`));
+        assert(!serializedTrace.includes("29C-22222"));
+      } finally {
+        if (previousOrigin === undefined) {
+          delete process.env.PUBLIC_TRACE_ORIGIN;
+        } else {
+          process.env.PUBLIC_TRACE_ORIGIN = previousOrigin;
+        }
+      }
+    },
+  );
+  await context.test(
     "migration refuses legacy duplicate admins without deleting or reassigning accounts",
     async () => {
       const owner = new Client({ connectionString: base });
@@ -6086,6 +6585,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       const legacy =
         "foodprint_authorization_legacy_" + randomUUID().replaceAll("-", "");
       await owner.query('CREATE DATABASE "' + legacy + '"');
+      recordLocalTestDatabase(legacy);
       await owner.end();
       const legacyUrl = new URL(base);
       legacyUrl.pathname = "/" + legacy;

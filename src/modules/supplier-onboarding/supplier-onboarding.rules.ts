@@ -29,7 +29,7 @@ type Evidence = {
 
 export function contractIssues(contract: Evidence, on: Date): string[] {
   const issues: string[] = [];
-  if (!contract.number) issues.push("Chưa có số hợp đồng/phụ lục.");
+  if (!contract.number) issues.push("Chưa có số hợp đồng.");
   if (!contract.signedOn || contract.signedOn > schoolToday())
     issues.push("Chưa có ngày ký hợp lệ.");
   if (!contract.startsOn || !contract.endsOn)
@@ -46,8 +46,6 @@ export function contractIssues(contract: Evidence, on: Date): string[] {
     issues.push("Chưa chọn nguyên liệu được phép cung cấp.");
   if (!contract.documents.some((file) => file.kind === "SIGNED_CONTRACT"))
     issues.push("Chưa tải bản hợp đồng đã ký.");
-  if (!contract.documents.some((file) => file.kind === "COMPLIANCE"))
-    issues.push("Chưa tải hồ sơ pháp lý/ATTP áp dụng.");
   if (contract.certification) {
     const cert = contract.certification;
     if (
@@ -57,8 +55,24 @@ export function contractIssues(contract: Evidence, on: Date): string[] {
     )
       issues.push("Chứng nhận không còn hiệu lực tại ngày áp dụng.");
   } else if (!contract.exemptionNote?.trim())
-    issues.push("Chọn chứng nhận hoặc ghi rõ căn cứ hồ sơ áp dụng/miễn cấp.");
+    issues.push("Chọn chứng nhận ATTP của NCC hoặc ghi căn cứ miễn cấp.");
+  else if (!contract.documents.some((file) => file.kind === "COMPLIANCE"))
+    issues.push("Chưa tải minh chứng miễn cấp/thẩm định cơ sở.");
   return issues;
+}
+
+/**
+ * Ngày dùng để xét điều kiện kích hoạt/hiển thị: hôm nay, hoặc ngày bắt đầu
+ * hiệu lực nếu hợp đồng bắt đầu trong tương lai (cho phép kích hoạt trước).
+ * Gửi đơn vẫn xét theo ngày giao hàng.
+ */
+export function activationDate(
+  contract: Pick<Evidence, "startsOn">,
+  today: Date = schoolToday(),
+) {
+  return contract.startsOn && contract.startsOn > today
+    ? contract.startsOn
+    : today;
 }
 
 export function validateDocument(buffer: Buffer, originalName: string) {

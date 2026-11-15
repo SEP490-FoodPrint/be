@@ -5,6 +5,8 @@ import type {
   menuStandardsSchema,
   menuPortionGroupsSchema,
   menuWriteSchema,
+  menuGradeBatchSchema,
+  menuSubmitGroupSchema,
   menuReviewSchema,
   menuFiltersSchema,
   menuAllergyCheckSchema,
@@ -20,6 +22,8 @@ export type MenuMeal = z.infer<typeof menuMealSchema>;
 export type MenuStandardsInput = z.infer<typeof menuStandardsSchema>;
 export type MenuPortionGroupsInput = z.infer<typeof menuPortionGroupsSchema>;
 export type MenuWrite = z.infer<typeof menuWriteSchema>;
+export type MenuGradeBatchInput = z.infer<typeof menuGradeBatchSchema>;
+export type MenuSubmitGroupInput = z.infer<typeof menuSubmitGroupSchema>;
 export type MenuReviewInput = z.infer<typeof menuReviewSchema>;
 export type MenuFilters = z.infer<typeof menuFiltersSchema>;
 export type MenuAllergyCheckInput = z.infer<typeof menuAllergyCheckSchema>;

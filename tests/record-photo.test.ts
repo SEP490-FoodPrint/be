@@ -48,7 +48,7 @@ void test("photo upload accepts image bytes, computes a stable hash and retains 
       recordPhotoUrl(result?.photo.photoPublicId ?? null),
       "signed-private-link",
     );
-    assert.equal(await uploadRecordPhoto(userId), null);
+    await assert.rejects(uploadRecordPhoto(userId), { statusCode: 400 });
     assert.equal(recordPhotoUrl(null), null);
   } finally {
     documentStorage.upload = previousUpload;
@@ -102,6 +102,7 @@ void test("multipart photos are attached to decisions and samples, and failed wr
     },
   } as never);
   const app = express();
+  app.use(express.json());
   app.use((req, _res, next) => {
     req.auth = testStaff;
     next();
@@ -126,6 +127,31 @@ void test("multipart photos are attached to decisions and samples, and failed wr
     );
     return data;
   };
+  for (const isSample of [false, true]) {
+    const missingPhoto = form(isSample);
+    missingPhoto.delete("photo");
+    assert.equal(
+      (
+        await http.request(`/${isSample ? "sample" : "delivery"}/${userId}`, {
+          method: "POST",
+          body: missingPhoto,
+        })
+      ).status,
+      400,
+    );
+  }
+  assert.equal(
+    (
+      await http.request(`/delivery/${userId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision: "APPROVE" }),
+      })
+    ).status,
+    400,
+  );
+  assert.equal(attached, "");
+  assert.equal(removed, 0);
   assert.equal(
     (
       await http.request(`/delivery/${userId}`, {

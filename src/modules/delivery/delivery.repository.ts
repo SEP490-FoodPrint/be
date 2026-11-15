@@ -121,6 +121,7 @@ const summarySelect = {
   deliveryNo: true,
   schoolId: true,
   creationMode: true,
+  traceabilityVersion: true,
   supplyRequestId: true,
   status: true,
   expectedArrivalAt: true,
@@ -170,8 +171,12 @@ const detailSelect = {
       id: true,
       ingredientId: true,
       ingredientEntryId: true,
-      actualQuantity: true,
       supplyRequestItemId: true,
+      sourceFacilityId: true,
+      sourceFacilityNameSnapshot: true,
+      sourceFacilityCodeSnapshot: true,
+      ingredientNameSnapshot: true,
+      actualQuantity: true,
       unit: true,
       Ingredient: {
         select: {
@@ -216,6 +221,7 @@ const detailSelect = {
           id: true,
           lotCode: true,
           qrToken: true,
+          sourceFacilityId: true,
           manufactureDate: true,
           expiryDate: true,
           receivedQuantity: true,
@@ -359,6 +365,21 @@ export const deliveryInspectionRepository = {
         ...(status === "RECEIVED"
           ? { receivedAt: now, receivedByUserId: actorId }
           : {}),
+      },
+    });
+  },
+  markArrived(tx: Tx, id: string, schoolId: string, now: Date) {
+    return tx.delivery.updateMany({
+      where: {
+        id,
+        schoolId,
+        traceabilityVersion: 1,
+        status: "IN_TRANSIT",
+        arrivedAt: null,
+      },
+      data: {
+        status: "ARRIVED",
+        arrivedAt: now,
       },
     });
   },

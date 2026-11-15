@@ -21,6 +21,18 @@ export function createMenuRouter(
   const router = Router();
   const controller = createMenuController(service);
   const approvalController = createMenuApprovalController(approvalService);
+  router.post(
+    "/grade-batch",
+    authHandler,
+    requirePermission("menu.create"),
+    controller.saveGradeBatch,
+  );
+  router.post(
+    "/submit-group",
+    authHandler,
+    requirePermission("menu.update"),
+    controller.submitGroup,
+  );
   router.get(
     "/",
     authHandler,
