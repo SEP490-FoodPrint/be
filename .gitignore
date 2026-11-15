@@ -25,3 +25,6 @@ build/
 Thumbs.db
 *.tmp
 *.swp
+
+# Contract deployment copied from the blockchain repo
+blockchain/*.json

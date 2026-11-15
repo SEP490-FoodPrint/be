@@ -193,7 +193,9 @@ void test("inspection detail hides other schools and sanitizes database failures
   );
 });
 
-function decisionFixture() {
+function decisionFixture(
+  proofs?: Parameters<typeof createDeliveryInspectionService>[2],
+) {
   const uid = (n: number) =>
     `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
   const identities = deliveryInspectionRoles.map((role, index) => ({
@@ -496,6 +498,7 @@ function decisionFixture() {
     service: createDeliveryInspectionService(
       () => Promise.resolve(db),
       () => new Date("2026-11-13T02:00:00Z"),
+      proofs,
     ),
     failReceipt: () => {
       failReceipt = true;
@@ -1106,4 +1109,32 @@ void test("standalone deliveries list, inspect, attach IngredientEntry on final 
   assert.equal(rejected.redeliveryLimit, null);
   assert.equal(rejected.cancellationNotice, null);
   assert.equal(rejectHarness.getState().supplyRequestTouched, false);
+});
+
+void test("blockchain proof is prepared only when an inspection ends, then scheduled after commit", async () => {
+  const prepared: string[] = [];
+  const scheduled: unknown[] = [];
+  const f = decisionFixture({
+    prepareDeliveryInspected: (_tx, deliveryId, actorId) => {
+      prepared.push(`${deliveryId}:${actorId}`);
+      return Promise.resolve({ kind: "deliveries", id: deliveryId });
+    },
+    scheduleAnchor: (ref) => {
+      scheduled.push(ref);
+    },
+  });
+  const [received, rejected] = f.data.deliveries;
+  for (const actor of f.actors.slice(0, 3))
+    await f.service.decide(received.id, approve(), actor);
+  assert.equal(prepared.length, 0, "PENDING_APPROVAL must not anchor");
+  assert.deepEqual(scheduled, [null, null, null]);
+  await f.service.decide(received.id, approve(), f.actors[3]);
+  assert.deepEqual(prepared, [`${received.id}:${f.actors[3].id}`]);
+  await f.service.decide(received.id, approve(), f.actors[3]);
+  assert.equal(prepared.length, 1, "replayed signature must not anchor again");
+  await f.service.decide(rejected.id, reject(), f.actors[0]);
+  assert.deepEqual(prepared[1], `${rejected.id}:${f.actors[0].id}`);
+  assert.deepEqual(scheduled.slice(-1), [
+    { kind: "deliveries", id: rejected.id },
+  ]);
 });

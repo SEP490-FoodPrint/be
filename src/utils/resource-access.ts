@@ -564,3 +564,14 @@ export function supplierOrderReadScope(
   const deliveryScope = listScopes["delivery"](principal);
   return { ...deliveryScope, supplierId };
 }
+
+/** School scope for blockchain proof versions; `null` means SYSTEM (unrestricted). */
+export function blockchainProofScope(principal: AuthPrincipal): string | null {
+  assertPermission(principal, ...RESOURCE_PERMISSIONS["traceability"]);
+  if (principal.orgType === "SYSTEM") return null;
+  if (principal.orgType === "SCHOOL") return school(principal);
+  throw new HttpError(
+    403,
+    "Loại tổ chức không có phạm vi truy cập tài nguyên này",
+  );
+}

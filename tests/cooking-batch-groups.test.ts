@@ -134,7 +134,11 @@ const meal = {
   mealType: "LUNCH" as const,
 };
 
-function fixture(mode: CookingMode, shared = false) {
+function fixture(
+  mode: CookingMode,
+  shared = false,
+  proofs?: Parameters<typeof createKitchenLifecycle>[1],
+) {
   type Lot = {
     id: string;
     unit: string;
@@ -435,8 +439,9 @@ function fixture(mode: CookingMode, shared = false) {
       Promise.resolve().then(() => operation(tx)),
   };
   return {
-    service: createKitchenLifecycle(() =>
-      Promise.resolve().then(() => db as never),
+    service: createKitchenLifecycle(
+      () => Promise.resolve().then(() => db as never),
+      proofs,
     ),
     db,
     tx,
@@ -710,4 +715,27 @@ void test("preview does not persist or consume stock; confirming starts cooking 
     created.batches.every((b) => b.status === "CONFIRMED" && b.confirmedAt),
   );
   await f.service.complete(f.children[0].id, principal);
+});
+
+void test("blockchain proof is prepared only on the first completion of a batch", async () => {
+  const prepared: string[] = [];
+  const scheduled: unknown[] = [];
+  const f = fixture("COMBINE_LOTS", false, {
+    prepareCookingCompleted: (_tx, batchId) => {
+      prepared.push(batchId);
+      return Promise.resolve({ kind: "cooking-batches", id: batchId });
+    },
+    scheduleAnchor: (ref) => {
+      scheduled.push(ref);
+    },
+  });
+  await f.service.plan(validateKitchenPlan(meal), principal);
+  await f.service.confirm(f.children[0].id, principal);
+  await f.service.complete(f.children[0].id, principal);
+  await f.service.complete(f.children[0].id, principal);
+  assert.deepEqual(prepared, [f.children[0].id]);
+  assert.deepEqual(scheduled, [
+    { kind: "cooking-batches", id: f.children[0].id },
+    null,
+  ]);
 });
