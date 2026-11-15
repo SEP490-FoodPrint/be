@@ -32,6 +32,10 @@ import { Prisma } from "../../generated/prisma/client";
 import { convertQuantity } from "../kitchen/kitchen.service";
 import { getPrisma } from "../../utils/database";
 import {
+  blockchainProofService,
+  type ProofRef,
+} from "../blockchain-proof/blockchain-proof.service";
+import {
   listWindow,
   readListPage,
   type ListQuery,
@@ -363,6 +367,10 @@ function assertReceipt(
 export function createDeliveryInspectionService(
   connect: () => Promise<PrismaClient> = getPrisma,
   now = () => new Date(),
+  proofs: Pick<
+    typeof blockchainProofService,
+    "prepareDeliveryInspected" | "scheduleAnchor"
+  > = blockchainProofService,
 ) {
   return {
     async arrive(
@@ -437,7 +445,8 @@ export function createDeliveryInspectionService(
       photo: RecordPhoto | null = null,
     ) {
       inspectionScope(principal);
-      return withSchoolTransaction(
+      let proof: ProofRef | null = null;
+      const result = await withSchoolTransaction(
         await connect(),
         principal,
         "delivery.inspect",
@@ -617,9 +626,15 @@ export function createDeliveryInspectionService(
           )
             await inspections.cancelRemainder(tx, row.supplyRequestId);
           const saved = (await inspections.detail(tx, schoolId, id))!;
+          proof =
+            saved.status === "RECEIVED" || saved.status === "REJECTED"
+              ? await proofs.prepareDeliveryInspected(tx, id, actor.id)
+              : null;
           return { ...inspectionDTO(saved, actor), created: true };
         },
       );
+      proofs.scheduleAnchor(proof);
+      return result;
     },
     async list(query: DeliveryInspectionQueryDTO, principal: AuthPrincipal) {
       const schoolId = inspectionScope(principal);
