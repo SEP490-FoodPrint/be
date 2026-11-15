@@ -145,3 +145,11 @@ Không có vi phạm Constitution cần miễn trừ. Thêm version/snapshots v�
 ## Phase 1 completion
 
 Đã cập nhật plan/research/data-model/contracts/quickstart và đánh giá gate sau thiết kế. Setup resolver trả FEATURE_SPEC/IMPL_PLAN/SPECS_DIR đúng thư mục đang chọn; trường BRANCH của resolver theo active feature slug, còn Git branch thực được đối chiếu là `feat/supplier-order-creation-traceability`. Không sửa scaffold `.specify/`; feature pointer giữ đúng thư mục và không commit. Không có extension hook trước/sau plan. Tasks cho amendment đã được sinh theo plan; bước tiếp theo là implement theo tasks.md, chưa có task mới được thực hiện.
+
+## Local testing setup — theo yêu cầu bổ sung 2026-11-15
+
+User xác nhận dùng PostgreSQL đang có trong DataGrip: 127.0.0.1:5433, user foodprint_admin; chỉ các database thử mới do từng lần chạy tạo được ghi/xóa. Instance được giữ cố định; không tạo container mới, không tác động database nghiệp vụ của user. `.env.test.local` chứa credential local và bị gitignore; `.env.test.example` là mẫu không có secret.
+
+Các lệnh `npm run test:local` / `test:local:<group>` dùng `tests/helpers/run-local-tests.ts` và `tests/helpers/local-test-database.ts` để chọn local target, tạo base database mới và ghi manifest tên database đã CREATE thành công. Migration/auth/lifecycle harness ghi thêm tên DB con vào manifest khi wrapper đang bật; ngoài wrapper là no-op, giữ CI cũ. Cleanup chỉ theo tên đã ghi, guard identifier và đúng owner, không scan prefix hoặc reset database có sẵn. Tên ASCII dài của fixture được chuẩn hóa theo giới hạn63 byte PostgreSQL để cleanup đúng DB đã được server tạo.
+
+Đây là setup hỗ trợ kiểm chứng được user yêu cầu riêng; không phải triển khai US1–US5 hoặc thay đổi schema feature. Migration SQL vẫn cần replay trong mỗi bài test dùng DB trống; setup không loại bỏ kiểm thử schema hoặc dùng lại dữ liệu member để tăng tốc. Bằng chứng thực tế của setup được ghi trong quickstart, không tính là pass của bản sửa đổi QR/nguồn cung chưa implement.

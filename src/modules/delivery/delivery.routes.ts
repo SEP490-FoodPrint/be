@@ -25,6 +25,13 @@ export function createDeliveryRouter(
   const controller = createDeliveryController(service);
   const inspectionController = createDeliveryInspectionController(inspections);
   router.post(
+    "/:id/arrival",
+    authHandler,
+    requirePermission("delivery.view"),
+    requirePermission("delivery.inspect"),
+    inspectionController.arrive,
+  );
+  router.post(
     "/:id/inspection",
     authHandler,
     requirePermission("delivery.inspect"),

@@ -3,7 +3,7 @@ import { authenticate } from "./middlewares/auth.middleware";
 import cors from "cors";
 import morgan from "morgan";
 import "./config/env";
-import { createApiRouter } from "./routes";
+import { createApiRouter, type ApiRouterServices } from "./routes";
 import {
   notFoundHandler,
   globalErrorHandler,
@@ -13,10 +13,17 @@ import { readAuthConfig } from "./config/auth";
 import { createCsrfProtection } from "./middlewares/csrf.middleware";
 import type { AuthServices } from "./modules/auth/auth.routes";
 
+export function redactPublicTraceUrl(url: string): string {
+  return url.replace(/(\/public\/delivery-items\/)([^?#]+)/gi, "$1[REDACTED]");
+}
+
 export function createApp(
   apiRateLimiter: RateLimitRequestHandler,
   authHandler: RequestHandler = authenticate,
   authServices?: AuthServices,
+  apiServices?: ApiRouterServices & {
+    accessLogStream?: { write(line: string): void };
+  },
 ) {
   const app = express();
 
@@ -34,11 +41,25 @@ export function createApp(
   app.use(express.urlencoded({ extended: true }));
 
   if (process.env.NODE_ENV === "development") {
-    app.use(morgan("dev"));
+    app.use(
+      morgan(
+        (tokens, req, res) => {
+          const method = tokens.method(req, res) ?? "-";
+          const url = redactPublicTraceUrl(tokens.url(req, res) ?? "/");
+          const status = tokens.status(req, res) ?? "-";
+          const length = tokens.res(req, res, "content-length") ?? "-";
+          const duration = tokens["response-time"](req, res) ?? "0";
+          return `${method} ${url} ${status} ${length} - ${duration} ms`;
+        },
+        apiServices?.accessLogStream
+          ? { stream: apiServices.accessLogStream }
+          : undefined,
+      ),
+    );
   }
 
   // 2. Central API Routes
-  app.use("/api", createApiRouter(authHandler, authServices));
+  app.use("/api", createApiRouter(authHandler, authServices, apiServices));
 
   // 3. Error Handling
   app.use(notFoundHandler);

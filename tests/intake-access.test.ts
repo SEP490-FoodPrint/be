@@ -182,6 +182,14 @@ function fixture(actor: AuthPrincipal = schoolActor) {
       calls.push(`ingredients:${ingredientIds.join(",")}`);
       return Promise.resolve();
     },
+    lockSourceFacilities(
+      actual: Prisma.TransactionClient,
+      sourceFacilityIds: readonly string[],
+    ) {
+      assert.equal(actual, tx);
+      calls.push(`sourceFacilities:${sourceFacilityIds.join(",")}`);
+      return Promise.resolve();
+    },
     lockForwarding(actual: Prisma.TransactionClient) {
       assert.equal(actual, tx);
       calls.push("report");
@@ -1080,6 +1088,9 @@ void test("SUPPLIER_CREATE_STANDALONE_DELIVERY checks roles, permissions, lock o
     permissions: ["delivery.manage"],
   };
 
+  const sfA = "00000000-0000-4000-8000-000000000021";
+  const sfB = "00000000-0000-4000-8000-000000000022";
+
   for (const role of [
     ROLES.INGREDIENT_SUPPLIER_ADMIN,
     ROLES.INGREDIENT_SUPPLIER_STAFF,
@@ -1091,6 +1102,7 @@ void test("SUPPLIER_CREATE_STANDALONE_DELIVERY checks roles, permissions, lock o
         operation: "SUPPLIER_CREATE_STANDALONE_DELIVERY",
         schoolId,
         ingredientIds: [ingA, ingB],
+        sourceFacilityIds: [sfA, sfB],
       }),
       actor,
     );
@@ -1100,6 +1112,7 @@ void test("SUPPLIER_CREATE_STANDALONE_DELIVERY checks roles, permissions, lock o
       "pair",
       "relationship",
       `ingredients:${ingA},${ingB}`,
+      `sourceFacilities:${sfA},${sfB}`,
       "identity",
     ]);
   }
