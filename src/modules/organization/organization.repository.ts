@@ -213,11 +213,31 @@ export interface OrganizationRepository {
   findWeeklyMenu(
     schoolId: string,
     targetWeekMonday?: Date,
+    gradeId?: string,
   ): Promise<PublicWeeklyMenuDbRow | null>;
   findLatestApprovedWeeklyMenu(
     schoolId: string,
   ): Promise<PublicWeeklyMenuDbRow | null>;
   findAvailableWeeklyMenuWeeks(schoolId: string): Promise<AvailableWeekDbRow[]>;
+  findCurrentAcademicYear(
+    schoolId: string,
+    targetDate?: Date,
+  ): Promise<{
+    id: string;
+    academicYear: string;
+    startDate: Date;
+    endDate: Date;
+    holidays: Prisma.JsonValue;
+  } | null>;
+  findApprovedWeekStartDates(
+    schoolId: string,
+    startRange?: Date,
+    endRange?: Date,
+  ): Promise<string[]>;
+  findWeekGrades(
+    schoolId: string,
+    targetWeekMonday: Date,
+  ): Promise<{ id: string; name: string }[]>;
   findPortionGroupsRaw(dayIds: string[]): Promise<RawPortionGroup[]>;
 }
 
@@ -436,17 +456,99 @@ export function createOrganizationRepository(
       });
     },
 
-    async findWeeklyMenu(schoolId: string, targetWeekMonday?: Date) {
+    async findWeeklyMenu(
+      schoolId: string,
+      targetWeekMonday?: Date,
+      gradeId?: string,
+    ) {
       const prisma = await getClient();
+      const where: Prisma.WeeklyMenuWhereInput = {
+        schoolId,
+        status: { in: ["APPROVED", "PENDING_APPROVAL"] },
+        ...(targetWeekMonday ? { weekStartDate: targetWeekMonday } : {}),
+        ...(gradeId && gradeId !== "all"
+          ? {
+              OR: [{ isSchoolWide: true }, { grades: { some: { gradeId } } }],
+            }
+          : {}),
+      };
       return prisma.weeklyMenu.findFirst({
+        where,
+        orderBy: [{ isSchoolWide: "desc" }, { createdAt: "asc" }],
+        include: publicWeeklyMenuInclude,
+      });
+    },
+
+    async findCurrentAcademicYear(schoolId: string, targetDate?: Date) {
+      const prisma = await getClient();
+      if (targetDate) {
+        const year = await prisma.schoolAcademicYear.findFirst({
+          where: {
+            schoolId,
+            startDate: { lte: targetDate },
+            endDate: { gte: targetDate },
+          },
+        });
+        if (year) return year;
+      }
+      const now = new Date();
+      const current = await prisma.schoolAcademicYear.findFirst({
+        where: {
+          schoolId,
+          startDate: { lte: now },
+          endDate: { gte: now },
+        },
+      });
+      if (current) return current;
+
+      return prisma.schoolAcademicYear.findFirst({
+        where: { schoolId },
+        orderBy: { startDate: "desc" },
+      });
+    },
+
+    async findApprovedWeekStartDates(
+      schoolId: string,
+      startRange?: Date,
+      endRange?: Date,
+    ) {
+      const prisma = await getClient();
+      const menus = await prisma.weeklyMenu.findMany({
         where: {
           schoolId,
           status: { in: ["APPROVED", "PENDING_APPROVAL"] },
-          ...(targetWeekMonday ? { weekStartDate: targetWeekMonday } : {}),
+          ...(startRange && endRange
+            ? { weekStartDate: { gte: startRange, lte: endRange } }
+            : {}),
         },
-        orderBy: { weekStartDate: "desc" },
-        include: publicWeeklyMenuInclude,
+        select: { weekStartDate: true },
+        distinct: ["weekStartDate"],
       });
+      return menus.map((m) => m.weekStartDate.toISOString().slice(0, 10));
+    },
+
+    async findWeekGrades(schoolId: string, targetWeekMonday: Date) {
+      const prisma = await getClient();
+      const menuGrades = await prisma.weeklyMenuGrade.findMany({
+        where: {
+          schoolId,
+          weekStartDate: targetWeekMonday,
+          weeklyMenu: { status: { in: ["APPROVED", "PENDING_APPROVAL"] } },
+        },
+        select: {
+          gradeId: true,
+          grade: { select: { id: true, name: true } },
+        },
+      });
+      const seen = new Set<string>();
+      const result: { id: string; name: string }[] = [];
+      for (const mg of menuGrades) {
+        if (mg.grade && !seen.has(mg.grade.id)) {
+          seen.add(mg.grade.id);
+          result.push({ id: mg.grade.id, name: mg.grade.name });
+        }
+      }
+      return result;
     },
 
     async findLatestApprovedWeeklyMenu(schoolId: string) {

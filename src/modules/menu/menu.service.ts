@@ -923,80 +923,22 @@ function createIngredientOperations(
 /* ========================================================
 
    CÁC HÀM TIỆN ÍCH XỬ LÝ TUẦN & THỨ BÁN TRÚ (T2 - T6)
+   Được chuẩn hóa tại src/utils/date-time.ts và re-export tại đây
 
    ======================================================== */
 
-export const SCHOOL_DAY_LABELS = [
-  "Chủ Nhật",
-
-  "Thứ Hai",
-
-  "Thứ Ba",
-
-  "Thứ Tư",
-
-  "Thứ Năm",
-
-  "Thứ Sáu",
-
-  "Thứ Bảy",
-] as const;
-
-export function getSchoolMonday(d: Date): Date {
-  const date = new Date(
-    Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()),
-  );
-
-  const day = date.getUTCDay() || 7;
-
-  date.setUTCDate(date.getUTCDate() - day + 1);
-
-  return date;
-}
-
-export function getSchoolWeekSchedule(targetDate: Date) {
-  const monday = getSchoolMonday(targetDate);
-
-  const schoolDays: {
-    date: string;
-
-    dayOfWeek: number;
-
-    dayLabel: string;
-
-    isSchoolDay: boolean;
-  }[] = [];
-
-  for (let i = 0; i < 5; i++) {
-    const d = new Date(monday);
-
-    d.setUTCDate(monday.getUTCDate() + i);
-
-    const dateStr = d.toISOString().slice(0, 10);
-
-    schoolDays.push({
-      date: dateStr,
-
-      dayOfWeek: i + 1, // 1: T2, 2: T3, 3: T4, 4: T5, 5: T6
-
-      dayLabel: SCHOOL_DAY_LABELS[i + 1],
-
-      isSchoolDay: true,
-    });
-  }
-
-  const friday = new Date(monday);
-
-  friday.setUTCDate(monday.getUTCDate() + 4);
-
-  return {
-    weekStartDate: monday.toISOString().slice(0, 10),
-
-    weekEndDate: friday.toISOString().slice(0, 10),
-
-    schoolDays,
-  };
-}
+export {
+  getSchoolMonday,
+  getSchoolWeekSchedule,
+  calculateAcademicWeekNumber,
+  SCHOOL_DAY_LABELS,
+} from "../../utils/date-time";
+import {
+  getSchoolMonday,
+  getSchoolWeekSchedule,
+  calculateAcademicWeekNumber,
+  SCHOOL_DAY_LABELS,
+} from "../../utils/date-time";
 
 // School weeks are elapsed Monday-based weeks from the configured start date.
 // Holidays do not renumber weeks, and the number is never persisted.
@@ -2021,12 +1963,10 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
     );
     if (!year)
       throw new HttpError(422, "Tuần đã chọn chưa thuộc năm học của trường");
-    const weekNumber =
-      Math.floor(
-        (input.weekStartDate.getTime() -
-          getSchoolMonday(year.startDate).getTime()) /
-          (7 * 86400000),
-      ) + 1;
+    const weekNumber = calculateAcademicWeekNumber(
+      input.weekStartDate,
+      year.startDate,
+    );
     const menu = await repository.createWeeklyMenu(
       tx,
       schoolId,
@@ -2460,11 +2400,7 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
             getSchoolMonday(year.endDate).getTime() + 7 * 86400000,
       );
       const weekNumber = academicYear
-        ? Math.floor(
-            (getSchoolMonday(date).getTime() -
-              getSchoolMonday(academicYear.startDate).getTime()) /
-              (7 * 86400000),
-          ) + 1
+        ? calculateAcademicWeekNumber(date, academicYear.startDate)
         : null;
 
       const existingDays = weeklyMenu?.menuDays ?? [];
