@@ -15,7 +15,10 @@ import {
 import { createSourceFacilityRepository } from "../src/modules/source-facility/source-facility.repository";
 import { validateSourceFacilityCreate } from "../src/modules/source-facility/source-facility.validation";
 import { createBarrier } from "./helpers/account-lifecycle-database";
-import { documentStorage } from "../src/utils/onboarding-documents";
+import {
+  documentFormat,
+  documentStorage,
+} from "../src/utils/onboarding-documents";
 import { withReadTransaction } from "../src/utils/read-transaction";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
@@ -375,11 +378,12 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           new HttpError(503, "Test file provider unavailable"),
         );
       const id = randomUUID();
+      const format = documentFormat(file);
       const document: OnboardingDocument = {
         id,
         field: file.fieldname,
-        publicId: `foodprint/onboarding/${userId}/${id}.pdf`,
-        format: "pdf",
+        publicId: `foodprint/onboarding/${userId}/${id}.${format}`,
+        format,
         fileName: file.originalname,
         bytes: file.size,
       };
@@ -6082,7 +6086,40 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   );
   await context.test(
     "v1 supplier order HTTP lifecycle verifies arrival, four-role inspection rollback/receipt, reject recovery, and public allowlist",
-    async () => {
+    async (t) => {
+      t.mock.method(
+        documentStorage,
+        "upload",
+        (userId: string, file: Express.Multer.File) =>
+          testDocumentStorage.upload(userId, file),
+      );
+      t.mock.method(documentStorage, "remove", (document: OnboardingDocument) =>
+        testDocumentStorage.remove(document),
+      );
+      const inspect = (
+        deliveryId: string,
+        reviewerId: string,
+        decision: "APPROVE" | "REJECT",
+        reason?: string,
+      ) => {
+        const form = new FormData();
+        form.set("decision", decision);
+        if (reason) form.set("reason", reason);
+        form.set(
+          "photo",
+          new Blob([new Uint8Array([255, 216, 255, 0, 1])], {
+            type: "image/jpeg",
+          }),
+          "inspection.jpg",
+        );
+        const requestHeaders = new Headers(headers(reviewerId));
+        requestHeaders.delete("Content-Type");
+        return http.request(`/api/deliveries/${deliveryId}/inspection`, {
+          method: "POST",
+          headers: requestHeaders,
+          body: form,
+        });
+      };
       const previousOrigin = process.env.PUBLIC_TRACE_ORIGIN;
       process.env.PUBLIC_TRACE_ORIGIN = "https://trace.example.test";
       try {
@@ -6283,7 +6320,8 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           reqArrivalData.arrivedAt,
         );
 
-        const rejectRes = await http.request(
+        const uploadedBeforeMissingPhoto = uploadedFiles.size;
+        const missingPhotoRes = await http.request(
           `/api/deliveries/${reqDeliveryId}/inspection`,
           {
             method: "POST",
@@ -6294,7 +6332,29 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             }),
           },
         );
-        assert.equal(rejectRes.status, 200);
+        assert.equal(missingPhotoRes.status, 400);
+        assert.equal(uploadedFiles.size, uploadedBeforeMissingPhoto);
+        assert.equal(
+          await db.deliveryApproval.count({
+            where: { deliveryId: reqDeliveryId },
+          }),
+          0,
+        );
+        assert.equal(
+          (
+            await db.delivery.findUniqueOrThrow({
+              where: { id: reqDeliveryId },
+            })
+          ).status,
+          "ARRIVED",
+        );
+        const rejectRes = await inspect(
+          reqDeliveryId,
+          kitchenUser.id,
+          "REJECT",
+          "Nhiệt độ xe chưa đạt",
+        );
+        assert.equal(rejectRes.status, 200, JSON.stringify(rejectRes.body));
         const rejectedRow = await db.delivery.findUniqueOrThrow({
           where: { id: reqDeliveryId },
         });
@@ -6310,13 +6370,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           0,
         );
         assert.equal(
-          (
-            await http.request(`/api/deliveries/${reqDeliveryId}/inspection`, {
-              method: "POST",
-              headers: headers(nutritionUser.id),
-              body: JSON.stringify({ decision: "APPROVE" }),
-            })
-          ).status,
+          (await inspect(reqDeliveryId, nutritionUser.id, "APPROVE")).status,
           409,
         );
 
@@ -6369,15 +6423,8 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         );
 
         for (const reviewer of [kitchenUser, nutritionUser, parentUser]) {
-          const ok = await http.request(
-            `/api/deliveries/${standaloneId}/inspection`,
-            {
-              method: "POST",
-              headers: headers(reviewer.id),
-              body: JSON.stringify({ decision: "APPROVE" }),
-            },
-          );
-          assert.equal(ok.status, 200);
+          const ok = await inspect(standaloneId, reviewer.id, "APPROVE");
+          assert.equal(ok.status, 200, JSON.stringify(ok.body));
         }
         assert.equal(
           (await db.delivery.findUniqueOrThrow({ where: { id: standaloneId } }))
@@ -6386,15 +6433,10 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         );
 
         // Missing IngredientEntry on 4th APPROVE -> 409 rollback (count stays 3, zero warehouse writes)
-        const rollbackRes = await http.request(
-          `/api/deliveries/${standaloneId}/inspection`,
-          {
-            method: "POST",
-            headers: headers(deptUser.id),
-            body: JSON.stringify({ decision: "APPROVE" }),
-          },
-        );
+        const uploadsBeforeRollback = uploadedFiles.size;
+        const rollbackRes = await inspect(standaloneId, deptUser.id, "APPROVE");
         assert.equal(rollbackRes.status, 409);
+        assert.equal(uploadedFiles.size, uploadsBeforeRollback);
         assert.equal(
           await db.deliveryApproval.count({
             where: { deliveryId: standaloneId },
@@ -6432,15 +6474,8 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             status: "ACTIVE",
           },
         });
-        const receiveRes = await http.request(
-          `/api/deliveries/${standaloneId}/inspection`,
-          {
-            method: "POST",
-            headers: headers(deptUser.id),
-            body: JSON.stringify({ decision: "APPROVE" }),
-          },
-        );
-        assert.equal(receiveRes.status, 200);
+        const receiveRes = await inspect(standaloneId, deptUser.id, "APPROVE");
+        assert.equal(receiveRes.status, 200, JSON.stringify(receiveRes.body));
         const receivedDelivery = await db.delivery.findUniqueOrThrow({
           where: { id: standaloneId },
           include: {
@@ -6451,6 +6486,10 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         assert.equal(receivedDelivery.status, "RECEIVED");
         assert.equal(receivedDelivery.receivedByUserId, deptUser.id);
         assert.equal(receivedDelivery.deliveryApprovals.length, 4);
+        for (const approval of receivedDelivery.deliveryApprovals) {
+          assert(approval.photoPublicId?.endsWith(".jpg"));
+          assert.match(approval.photoHash ?? "", /^[a-f0-9]{64}$/);
+        }
         assert.equal(
           receivedDelivery.deliveryItems[0].ingredientEntryId,
           v1Entry2.id,

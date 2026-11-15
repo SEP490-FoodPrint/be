@@ -645,6 +645,18 @@ void test("decision bodies reject forged actors and require a rejection reason; 
 });
 
 void test("HTTP inspection endpoints validate actors, expose the shared four-role contract and keep immutable decisions", async (t) => {
+  t.mock.method(documentStorage, "upload", () =>
+    Promise.resolve({
+      id,
+      field: "photo",
+      publicId: "private/inspection.jpg",
+      format: "jpg" as const,
+      fileName: "inspection.jpg",
+      bytes: 3,
+    }),
+  );
+  t.mock.method(documentStorage, "download", () => "signed-photo-link");
+  t.mock.method(documentStorage, "remove", () => Promise.resolve());
   const f = decisionFixture();
   let principal: AuthPrincipal | undefined = f.actors[0];
   const authenticate: RequestHandler = (req, _res, next) => {
@@ -661,12 +673,17 @@ void test("HTTP inspection endpoints validate actors, expose the shared four-rol
   const http = await startHttp(app);
   t.after(() => http.close());
   const path = `/deliveries/${f.data.deliveries[0].id}/inspection`;
-  const post = (body: unknown) =>
-    http.request(path, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+  const post = (body: unknown) => {
+    const data = new FormData();
+    for (const [key, value] of Object.entries(body as Record<string, string>))
+      data.set(key, value);
+    data.set(
+      "photo",
+      new Blob([new Uint8Array([255, 216, 255])], { type: "image/jpeg" }),
+      "inspection.jpg",
+    );
+    return http.request(path, { method: "POST", body: data });
+  };
   assert.equal(
     (await post({ decision: "APPROVE", roleId: f.actors[1].roleId })).status,
     400,
@@ -1884,6 +1901,20 @@ function v1InspectionFixture() {
 }
 
 void test("v1 arrival validation, RBAC scope, replay, and pre-arrival protection work via HTTP and service (T076)", async (t) => {
+  const photo: OnboardingDocument = {
+    id,
+    field: "photo",
+    publicId: "private/pre-arrival-inspection.jpg",
+    format: "jpg",
+    fileName: "inspection.jpg",
+    bytes: 3,
+  };
+  t.mock.method(documentStorage, "upload", () => Promise.resolve(photo));
+  const removedPhotos: OnboardingDocument[] = [];
+  t.mock.method(documentStorage, "remove", (document: OnboardingDocument) => {
+    removedPhotos.push(document);
+    return Promise.resolve();
+  });
   assert.deepEqual(validateDeliveryArrivalBody(undefined), {});
   assert.deepEqual(validateDeliveryArrivalBody({}), {});
   assert.deepEqual(validateDeliveryArrivalQuery({}), {});
@@ -1961,16 +1992,24 @@ void test("v1 arrival validation, RBAC scope, replay, and pre-arrival protection
 
   // Pre-arrival IN_TRANSIT cannot be inspected
   currentPrincipal = f.actors[0];
+  const inspectionForm = new FormData();
+  inspectionForm.set("decision", "APPROVE");
+  inspectionForm.set(
+    "photo",
+    new Blob([new Uint8Array([255, 216, 255])], { type: "image/jpeg" }),
+    "inspection.jpg",
+  );
   assert.equal(
     (
       await http.request(`/deliveries/${d1.id}/inspection`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ decision: "APPROVE" }),
+        body: inspectionForm,
       })
     ).status,
     409,
   );
+  assert.deepEqual(removedPhotos, [photo]);
+  assert.equal(f.state.decisions.length, 0);
 
   // Non-empty body / query -> 400
   assert.equal(
