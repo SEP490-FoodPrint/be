@@ -1,63 +1,77 @@
-# Research: Supplier order creation
+# Research: Đơn giao hàng có nguồn cung và QR
 
-**Date**: 2026-11-15
+**Date**: 2026-11-15 | **Branch**: `feat/supplier-order-creation-traceability`
 
-## 1. Dùng Delivery hiện có với nguồn tùy chọn
+Bản này thay thế thiết kế baseline về mã DG-UUID, metadata giao tùy chọn và trạng thái CREATED của đơn mới. Chỉ nghiên cứu source/tài liệu; không kết nối database hoặc chạy thử phần mềm.
 
-**Decision**: Mở rộng Delivery/DeliveryItem, không tạo đối tượng đơn thương mại mới. Thêm Delivery.schoolId bắt buộc và DeliveryItem.ingredientId bắt buộc làm định danh tổ chức/nguyên liệu chuẩn; supplyRequestId và supplyRequestItemId được nullable. Thêm ingredientEntryId tùy chọn để lưu ánh xạ danh mục trường cho nhận kho. Tất cả phiếu vẫn có trường nhận; độc lập nghĩa là không có yêu cầu nguồn.
+## R1. Phạm vi và quyền
 
-**Rationale**: Schema hiện bắt buộc hai FK nguồn; sửa thành nullable đơn thuần làm mất school scope và thông tin nguyên liệu. Đối tượng người dùng yêu cầu phục vụ giao hàng, có trạng thái CREATED đã có. Không tạo SupplyRequest giả hoặc tự tạo IngredientEntry vì entry yêu cầu handlingType do trường quyết định.
+**Decision**: Giữ module `supplier-order`, hai cách REQUEST/STANDALONE, UUID làm PK. Tạo/options/nhãn cần hai role supplier và `delivery.manage`; management list/detail giữ policy hiện hành `delivery.view` hoặc `delivery.manage` hoặc `delivery.receive`. Options nguồn là operation mới trong module supplier-order, không nới quyền router quản trị source-facility. Public trace là một point lookup riêng được FR-017 cho phép, không mở list hoặc inspection ra công khai.
 
-**Alternatives considered**: Bảng đơn mới tạo một tầng nghiệp vụ chưa được yêu cầu; nguồn giả trái FR-004; chỉ nullable FK làm hỏng đọc/kiểm nhận/kho.
+**Rationale**: `src/modules/supplier-order/*`, `src/utils/resource-access.ts`, `src/modules/source-facility/*` đã phân biệt supplier staff tạo đơn với chỉ admin quản trị cơ sở. `traceability` hiện là danh sách anchor có auth, không phải trang QR.
 
-## 2. Bảo toàn lịch sử và một đơn từ yêu cầu
+**Alternatives considered**: Quyền mới/seed, dùng role-only, bỏ auth trên traceability hiện có hoặc dùng router admin để staff chọn nguồn đều sai phạm vi.
 
-**Decision**: Thêm creationMode nullable (REQUEST/STANDALONE; null chỉ cho lịch sử) và partial unique supplyRequestId WHERE creation_mode='REQUEST'. Service còn từ chối tạo từ yêu cầu nếu đã có bất kỳ Delivery liên quan, gồm lịch sử. Không đặt unique toàn cục supplyRequestId hoặc xóa/deduplicate lịch sử.
+## R2. Dãy mã theo nhà cung cấp
 
-**Rationale**: Các fixture và nghiệp vụ hiện có nhiều Delivery cho một yêu cầu; global unique phá lịch sử. Null legacy giữ các phiếu cũ không bị gán thành các đơn tạo mới tuân theo quy tắc một đơn. Public sourceType của lịch sử nguồn có thể trình bày REQUEST, chỉ marker nội bộ phục vụ tương thích migration.
+**Decision**: Đổi unique toàn cục `deliveryNo` thành unique `(supplierId, deliveryNo)` tên `uq_deliveries_supplier_no`; giữ UUID cho mọi lookup. Repository khóa supplier `FOR UPDATE`, đọc MAX phần số canonical của `FP-DE-…` trong supplier; service cộng BigInt và pad tối thiểu 5 chữ số. Lookup replay trước cấp số. Không thêm bảng counter.
 
-**Alternatives considered**: Backfill mọi lịch sử thành REQUEST rồi unique không thể áp dụng khi có nhiều phiếu; đánh số lại/xóa phiếu là sai phạm vi.
+**Rationale**: Source facility đã dùng đúng mẫu supplier lock + MAX guarded numeric trong `source-facility.repository.ts` và `utils/source-facility-code.ts`. Đơn không có chức năng xóa, mã không sửa khi hủy/từ chối nên MAX không giải phóng mã. Không thấy writer dùng deliveryNo làm unique lookup. Regex canonical là `^FP-DE-([0-9]{5}|[1-9][0-9]{5,73})$`, guard trước cast; bỏ zero, mã DG/legacy không tham gia. Tối đa 74 chữ số phù hợp varchar(80); vượt dung lượng báo xung đột, không cắt số. Các writer tạo đơn tương lai cũng phải theo supplier lock.
 
-## 3. Quyền hiện hành
+**Alternatives considered**: Dãy chung hoặc mã UUID trái Q1/FR-015; MAX không khóa gây race; bảng counter riêng chưa cần cho dãy ít trạng thái này. Nếu tương lai có xóa cứng phải đổi thiết kế trước, không tiếp tục dựa MAX.
 
-**Decision**: Tạo/options yêu cầu đúng hai role supplier và delivery.manage. List/detail management chấp nhận delivery.view HOẶC delivery.manage HOẶC delivery.receive như resource delivery hiện hành, đồng thời role supplier/membership hợp lệ. Dùng listScopes cho mọi list và supplierId tin cậy; schoolId body chỉ là target phải xác minh quan hệ ACTIVE, không phải scope do client quyết định.
+**Concurrency limit**: `authorizationTransaction` hiện thử tối đa3 lần. Khi nhiều transaction Serializable cạnh tranh, vẫn có thể hết retry và trả503; không suy ra 20 request đồng thời sẽ cùng thành công chỉ từ unique constraint. Bài kiểm chứng phải ghi số thành công/lỗi/retry và dùng lại đúng idempotency key khi thử lại, không đổi retry policy toàn hệ thống chỉ để báo bài test đạt.
 
-**Rationale**: Cả hai role supplier đã có delivery.manage nhưng không có delivery.view. Bắt view đơn lẻ sẽ khóa người dùng hợp lệ. School inspections giữ quyền view/inspect và bốn role hiện hành.
+## R3. Nguồn dòng và tương thích lịch sử
 
-**Alternatives considered**: Quyền mới/seed grants không cần thiết; role-only hoặc SYSTEM bypass không được phép.
+**Decision**: `Delivery.traceabilityVersion = 1` đánh dấu đơn mới; null là baseline cũ, kể cả creationMode REQUEST/STANDALONE đã có. Dòng mới có FK sourceFacilityId, snapshot tên/mã cơ sở, snapshot tên nguyên liệu, token và URL QR. Không nhận snapshot từ client. Source phải ACTIVE/đúng supplier lúc tạo, khóa các source theo ID; không check ACTIVE hồi tố lúc nhận hàng. Source mã null từ baseline vẫn được chọn, snapshot code null và nhãn dùng tên, không tự cấp mã cơ sở ở feature này.
 
-## 4. Idempotency bền vững
+**Rationale**: SourceFacility.facilityCode hiện nullable; legacy một dòng có nhiều lot/nguồn không thể suy ra một nguồn duy nhất an toàn. Snapshot server giữ truy xuất sau đổi tên/dừng. Các lô mới phải copy đúng source của dòng; final receipt cần bổ sung equality chứ không chỉ kiểm source thuộc supplier như `delivery.service.ts` hiện nay.
 
-**Decision**: Idempotency-Key UUID bắt buộc cho POST. Lưu creationKey và creationFingerprint (SHA-256 payload đã chuẩn hóa, gồm sourceType, nguồn/target/items và metadata) trên Delivery. Unique supplierId + createdByUserId + creationKey khi key khác null. Cùng actor/key/hash trả phiếu cũ, khác hash 409; key khác là ý định khác nhưng nguồn REQUEST vẫn chịu giới hạn một phiếu. Không dùng Redis để quyết định tạo trùng. Mã deliveryNo do hệ thống sinh DG-<UUID>, không có số tuần tự.
+**Alternatives considered**: Backfill đoán nguồn/QR hay ép metadata NOT NULL toàn bộ làm sai lịch sử; lấy tên nguồn hiện tại làm mất thông tin lúc giao. Không cần cột source bắt buộc trên danh mục Ingredient: nguồn là lựa chọn của từng đơn.
 
-**Rationale**: Cần phân biệt retry với hai đơn độc lập trùng nội dung có chủ ý, kể cả sau restart hoặc nhiều process. Unique và Serializable xử lý race; helper transaction retry đọc lại kết quả đã commit.
+## R4. QR dòng, nhãn và truy xuất công khai
 
-**Alternatives considered**: Cache bộ nhớ/Redis không bảo đảm cùng transaction với ghi; dùng hash nội dung làm unique cấm các đơn độc lập riêng biệt hợp lệ.
+**Decision**: Mỗi DeliveryItem mới có một token random 32 bytes hex (64 ký tự) và URL tuyệt đối lưu ổn định; khác với `IngredientLot.qrToken` hiện có. Public module `delivery-trace` chỉ đọc theo token dòng, select allowlist. URL trỏ `GET /api/public/delivery-items/:token`; trình duyệt nhận HTML tối thiểu, client gửi Accept application/json nhận envelope DTO cùng dữ liệu. Nhãn qua protected endpoint trả PNG data URL và text labels, không PDF/máy in/Cloudinary.
 
-## 5. Giao dịch và quan hệ ACTIVE
+**Rationale**: Một dòng có thể có nhiều lot nhưng user muốn một QR cho dòng. Lưu URL tránh thay đổi QR khi cấu hình origin đổi; hostname cũ phải được operator duy trì cho nhãn đã in. `PUBLIC_TRACE_ORIGIN` cấu hình rõ, không ghép từ Host header; production HTTPS, local HTTP chỉ localhost. QR không hết hạn như JWT. Trang không có script, HTML escape, CSP chặt, no-store, no-referrer và noindex; JSON chỉ map trường được công khai, không dùng DTO management. Che token trong access log và lỗi.
 
-**Decision**: Dùng authorizationTransaction Serializable hiện có. Khóa School -> Supplier -> User actor -> Role actor FOR SHARE -> cặp trường/supplier theo advisory lock hiện có -> quan hệ -> nguồn SupplyRequest nếu có -> Ingredient theo ID tăng dần. Nạp lại actor/quyền/membership; REQUEST dùng guard START_ORDER_PROCESSING + delivery.manage, đối chiếu đầy đủ dòng nguồn và nguồn chưa có phiếu. STANDALONE kiểm tra ACTIVE school/supplier/admin, intake hai đơn vị ACTIVE, quan hệ ACTIVE và Ingredient ACTIVE thuộc supplier, unit đúng defaultUnit; không tự tạo entry trường. Supplier pause hoặc school pause chặn standalone mới; retry đã tạo chỉ kiểm tra quyền và scope, không tạo ghi mới.
+**Alternatives considered**: Dùng lot token, mã FP-DE hoặc JWT ngắn hạn không đáp ứng định danh dòng/khả năng in lại. Trang JSON đơn thuần bất tiện khi quét bằng camera; xây frontend hoặc dùng dịch vụ QR bên ngoài vượt yêu cầu.
 
-**Rationale**: REQUEST thực hiện công việc đã nhận, không được áp hồi tố điều kiện tạo độc lập. Standalone là cung ứng mới nên không được vượt chính sách pause. Guard hiện có không có operation source-less; thêm operation SUPPLIER_CREATE_STANDALONE_DELIVERY theo cùng protocol, không dùng source giả. Các writer liên kết/nguyên liệu có liên quan phải được rà soát và đồng bộ thứ tự khóa/retry để cùng bảo vệ việc recheck.
+**Primary source**: Chọn `qrcode` 1.5.4 CJS theo [package chính thức](https://github.com/soldair/node-qrcode/blob/master/package.json). [Tài liệu tác giả](https://github.com/soldair/node-qrcode#server-api) hỗ trợ server-side PNG data URL và SVG; thiết kế chọn PNG. Thêm type package tương ứng và lockfile khi implement, chưa cài ở bước plan. Điều này không khẳng định package đã kiểm thử trên runtime repo.
 
-**Alternatives considered**: Kiểm tra một lần ở controller hoặc khóa chỉ Delivery không bảo vệ đổi quyền/quan hệ; gọi guard nhận yêu cầu sai operation và sai pause semantics.
+## R5. Toàn vẹn tạo đơn, fingerprint và nhãn
 
-## 6. Kiểm nhận và đường đọc không có nguồn
+**Decision**: REQUEST thêm `sources:[{supplyRequestItemId,sourceFacilityId}]` với exact set của nguồn, không cho quantity/ingredient override. STANDALONE thêm sourceFacilityId cho mỗi item và tiếp tục actualQuantity chuỗi Decimal. Plate trim 1..40, ETA ISO offset bắt buộc. Fingerprint canonical phiên bản 2 gồm selections đã sort, target/source và toàn bộ metadata chuẩn hóa. Reordering tương đương, đổi source/ETA/plate là khác nội dung.
 
-**Decision**: Dùng schoolId/ingredientId/ingredientEntryId chuẩn trên Delivery/Item. Cập nhật resource-access, delivery reads/inspections, warehouse, kitchen và menu để không bắt buộc đi qua nguồn. Với standalone, bốn role kiểm nhận vẫn áp dụng, nhưng không dùng request count/cancel/quantity budget; REJECT chỉ đóng phiếu đó, không gom mọi supplyRequestId null thành một nhóm. Đơn có nguồn giữ trọn giới hạn ba lần từ chối và ngân sách nhận theo dòng nguồn. Request number/budget có thể null và DTO thể hiện rõ sourceType.
+**Rationale**: Replay phải bảo toàn mã/token/nguồn. Reuse Serializable helper và thứ tự locks; callback retry không phát sinh upload/network side effect. Tạo trước các token/URL/PNG có giới hạn song song ở service sau kiểm quyền ban đầu, rồi dùng candidate cố định trong transaction; lỗi render trước commit không lưu đơn. Transaction rechecks actor/source/ingredients/facilities, lookup replay, cấp mã, ghi header/items/lô dự kiến/request update. Replay render từ token/URL đã lưu, không lấy candidate mới. Rendering lỗi trên replay/GET nhãn chỉ trả503, không nói database write bị rollback.
 
-**Rationale**: Source scan thấy resource-access.ts dùng request để scope warehouse/delivery/inventory/quality-feedback/traceability; kitchen/menu dùng source item -> IngredientEntry để chọn lô. Trước khi standalone lot được RECEIVED/AVAILABLE, phải có IngredientEntry của đúng trường/nguyên liệu để xác định handlingType; lookup entry đã có và gắn ingredientEntryId trong receipt transaction. Nếu chưa cấu hình, trả 409 rõ lý do, không tự tạo entry hay nhập kho. Tạo CREATED vẫn thành công khi entry chưa tồn tại. Không mở action giao vận/lập lô mới trong feature này.
+**Alternatives considered**: Tạo QR bằng dịch vụ bên ngoài trong transaction hoặc hash bỏ source/metadata làm replay sai. Payload baseline thiếu trường mới trả400; không âm thầm tạo bản v1 thiếu nguồn. Key của bản cũ dùng cho payload mới trả409 nếu không khớp, không nâng cấp record cũ.
 
-**Alternatives considered**: Giữ đường join cũ làm mất đơn độc lập; bỏ tất cả kiểm nhận trái nguyên tắc; tự mặc định handlingType suy diễn nghiệp vụ. Gom đơn độc lập với yêu cầu cũ sẽ đổi quyết định người dùng đã chốt.
+## R6. Lấp khoảng trống đến nơi và lô
 
-## 7. Phạm vi refactor và kiểm chứng
+**Decision**: Khi tạo một dòng v1, đồng thời tạo một lô dự kiến BLOCKED, source copy từ dòng, receivedQuantity bằng actualQuantity, availableQuantity=0, unit bằng dòng, lotCode `PLAN-01` (unique theo item), manufactureDate/expiryDate null. Đây là lượng dự kiến giao, không phải receipt hay xác nhận nguồn lô sản xuất. Giữ QR lot nội bộ tách khỏi QR dòng. Trường có bốn role kiểm nhận + view/inspect được dùng `POST /api/deliveries/:id/arrival` body rỗng để xác nhận hàng thực tế đến nơi: IN_TRANSIT -> ARRIVED, server arrivedAt. Tạo đơn không tự xác nhận đến nơi; supplier/public QR không được làm arrival.
 
-**Decision**: Module supplier-order mới chứa management API, layering đủ bảy file, persistence vẫn Delivery. Delivery legacy/inspection refactor tối thiểu: chuyển query đang nằm trong delivery.service.ts về delivery.repository.ts khi chạm vào nhánh đó. Không sửa toàn bộ module ngoài phần ảnh hưởng. Backfill schema bằng migration mới được review; thử trên disposable local, không deploy DB thành viên/Azure trong bước plan.
+**Rationale**: Toàn `src/modules` hiện không có writer tạo lot hoặc arrival. `assertReceipt` yêu cầu có lot trước final APPROVE. Lô dự kiến tận dụng dữ liệu đã nhập, không phát sinh form hoặc giả ngày sản xuất. Bốn bên kiểm nhận phải đối chiếu hàng thực tế trước APPROVE; khác lượng/nguyên liệu/nguồn phải REJECT. Một lot mỗi dòng mới là mặc định đủ dùng, không thay đổi mô hình nhiều lot lịch sử.
 
-**Rationale**: Delivery.service hiện chứa select và Prisma args, repository inspection còn import Request DTO; các đường chạm sửa phải tuân AGENTS. Cô lập management giúp bảo toàn API GET/inspection cũ và giảm file trùng khi chia việc. Không thêm client hoặc framework.
+**Alternatives considered**: Chỉ đổi IN_TRANSIT mà không tạo đường arrival/lot khiến E2E bế tắc. Supplier khai báo arrival kèm form nhiều lot tăng input ngoài yêu cầu; để trường xác nhận arrival đáng tin cậy hơn. Tự nhập kho lúc create hoặc suy đoán SX/HSD là không được phép. Tách/chỉnh nhiều lô thực tế sau tạo không nằm trong amendment này; cần feature riêng nếu muốn quản lý chi tiết lô sản xuất.
 
-**Alternatives considered**: Nhồi toàn bộ vào service hiện có duy trì vi phạm phân lớp; refactor toàn repository không liên quan làm tăng scope.
+## R7. Hoàn thành, reject và cap3
 
-## Kết quả
+**Decision**: Không thêm enum lifecycle; IN_TRANSIT là đang giao, RECEIVED là hoàn thành, REJECTED là yêu cầu giao lại. Thêm statusLabel nhất quán, giữ raw status để tương thích. Reuse bốn role và immutable decisions/photos. Final APPROVE rechecks nguồn lô, quantities/date/history/entry và posts receipt + RECEIVED trong cùng tx; chưa đủ4 chỉ PENDING_APPROVAL. Arrival replay sau trạng thái tiến triển không downgrade, không đổi arrivedAt.
 
-Các quyết định kỹ thuật đã chốt theo source và spec, không còn câu hỏi bắt buộc trước thiết kế. Thay đổi schema được mô tả trong data-model; không có DDL/migration/code sản xuất nào được chạy ở bước plan. Các hành vi sau CREATED cần dữ liệu lô/đến nơi hợp lệ qua luồng riêng, không tự sinh trạng thái để vượt kiểm nhận.
+**Rationale**: `delivery.service.ts`, `delivery.repository.ts` đã có exactly-once RECEIPT, budget theo source và reject count. Standalone thiếu school entry vẫn tạo được, nhưng final nhận phải attach entry ACTIVE hiện hữu hoặc409; không tự chọn handlingType. Source dừng sau tạo không chặn nhận vì danh tính nguồn không đổi. SupplyRequest không tự COMPLETED chỉ vì Delivery RECEIVED; không thêm thay đổi vòng đời nguồn chưa yêu cầu.
+
+**Alternatives considered**: Dùng APPROVED làm hoàn thành trước receipt tạo sai trạng thái; copy chữ ký cũ hoặc cho QR approve vượt quyền. Đơn thủ công giữ nguồn null: không gom cap theo nhóm null, không tăng hoặc reset cap của yêu cầu cũ. Cap3 vẫn kiểm chứng trên chuỗi legacy nhiều đợt/request, không hứa đơn thủ công độc lập tiếp nối chuỗi đó.
+
+## R8. Migration, rollout và kiểm chứng
+
+**Decision**: Migration mới sau history hiện có, thêm cột nullable/version marker, composite unique trước drop global unique, CHECK từng hàng. Không sửa migration đã applied, không backfill source/token/version hoặc đổi codes/status/timestamps của lịch sử. Service bảo vệ liên bảng; không function/trigger. Schema deploy trước app mới; app cũ phải ngừng writer trước bật create v1. Không khôi phục global unique sau khi hai supplier có cùng mã.
+
+**Rationale**: Đã tồn tại dữ liệu nhiều loại legacy và fixture. Prisma partial indexes source/idempotency và receipt-only uniqueness phải giữ. Một CHECK không thể ép tính đầy đủ mọi child của parent: kiểm tra đó ở service transaction và integration tests. Nguồn đối chiếu SQL nền: [PostgreSQL INSERT](https://www.postgresql.org/docs/current/sql-insert.html), không suy luận isolation/uniqueness chỉ từ kiểm tra ở client.
+
+**Alternatives considered**: Reset/seed để qua migration, chỉnh migration cũ hoặc migration bắt null thành dữ liệu đoán đều bị loại.
+
+## Kết quả Phase 0
+
+Các quyết định Q1=B/Q2=B/Q3=A đã được chuyển thành thiết kế cụ thể. Hai research agent chỉ đọc schema/source về dữ liệu và lifecycle; chưa có test/runtime evidence cho amendment. Không còn unknown chặn Phase1. Không có extension hooks trước/sau plan.

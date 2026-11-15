@@ -1,102 +1,91 @@
-# Quickstart: Supplier order creation
+# Quickstart: Kiểm chứng đơn giao có nguồn cung / QR
 
-## Trạng thái
+## Trạng thái và điều kiện trước chạy
 
-Đây là thiết kế và hướng dẫn kiểm chứng sau triển khai, chưa phải báo cáo tính năng đã hoạt động. Bước plan chỉ tạo tài liệu; chưa sửa src/prisma, tạo migration, kết nối DB, chạy nghiệp vụ hoặc kiểm thử phần mềm. Xem [plan](plan.md), [data-model](data-model.md), [hợp đồng HTTP](contracts/supplier-orders.md).
+Đây là hướng dẫn chạy SAU khi implement amendment 2026-11-15; chưa phải bằng chứng feature đã chạy. Các pass của baseline lưu cuối tài liệu không áp dụng cho QR/mã/arrival mới. Không chạy DDL/seed vào DB thành viên/Azure để làm theo guide này.
 
-## Prerequisites
+- Hoàn tất tasks mới sau plan, Node/npm theo repo, dependencies cài bằng npm ci; PUBLIC_TRACE_ORIGIN cấu hình đúng origin phục vụ public route. Giữ .env untracked, không ghi URL có credentials/token vào report.
+- Unit/HTTP dùng dependency injection và không cần DB/Redis; public tests inject MemoryStore tường minh như test hiện hành, runtime vẫn Redis.
+- Integration phải chọn instance PostgreSQL disposable local riêng, có ủy quyền tạo/ghi/xóa DB thử bên trong. Set MIGRATION_TEST_DATABASE_URL với schema=foodprint, REDIS_URL local, namespace test riêng. Không dùng Azure hoặc database đang có dữ liệu của thành viên. Nếu chưa có ủy quyền/hạ tầng, báo BLOCKED cho các check đó.
+- Fixture trên instance thử: hai supplier/admin/staff đủ delivery.manage, linked ACTIVE school; bốn school inspection role đủ view/inspect; active school entries, ít nhất hai source facilities mỗi supplier; một facility ACTIVE legacy có code null; nguồn ACCEPTED chưa có delivery, thêm fixture legacy nhiều deliveries/request cho cap3.
 
-- Node/npm đúng .nvmrc/package.json, dependencies hiện có; npm ci khi môi trường chưa cài, không thêm dependency cho feature.
-- Sau khi implementation đã viết schema/migration được review: PostgreSQL disposable local được chọn và ủy quyền rõ ràng. Không dùng database thành viên/Azure hoặc tự áp migration vào dữ liệu thật.
-- .env riêng không commit; URL dùng schema=foodprint theo README. Prisma generate không triển khai migration và không thay cho kiểm chứng SQL.
-- Fixture riêng: supplier A/B, admin/staff A, trường liên kết ACTIVE với A, trường chưa liên kết, nguyên liệu ACTIVE/INACTIVE của từng supplier; yêu cầu đã tiếp nhận có nhiều dòng, nguồn đã có Delivery lịch sử và nguồn chưa có phiếu. Fixture không đưa vào migration như seed.
-- Để chạy HTTP thật cần Redis local cho auth/rate limit; có thể dùng injection unit/HTTP không DB. Không flush Redis hoặc dọn key ngoài namespace thử.
+## Kiểm tra tĩnh và unit sau implement
 
-## Kiểm tra sau triển khai
-
-Từ repository root:
-
-```sh
+```bash
 npm run prisma:validate
 npm run prisma:generate
-npm run validate
+npm run typecheck
+npm run build
+npm run lint
+npm run format:check
 npm run test:unit
 ```
 
-Đăng ký tests/supplier-order-creation.test.ts vào test:unit khi viết file; kiểm chứng cả validation, service/HTTP và repository query. Không đánh dấu PASS khi chưa chạy hoặc dùng file-level test runner output thay số assertion/test thực tế.
+Các file unit mới delivery-code/qr-code/delivery-trace phải có trong test:unit. Chạy riêng khi cần khoanh vùng:
 
-Khi MIGRATION_TEST_DATABASE_URL đã trỏ instance disposable được phép:
+```bash
+npm exec --no -- tsx --test tests/supplier-order-creation.test.ts tests/delivery-inspections.test.ts tests/delivery-code.test.ts tests/qr-code.test.ts tests/delivery-trace.test.ts
+```
 
-```sh
+Các test mới chỉ được gọi sau khi tồn tại. Unit kiểm DTO/strict validation/source set, canonical fingerprint, no raw Prisma in service mới, render failure before commit, headers/HTML escaping/public allowlist. Không tự thêm coverage threshold/framework.
+
+## Migration và concurrency trên instance disposable đã cho phép
+
+Sau khi operator tự set đúng MIGRATION_TEST_DATABASE_URL/REDIS_URL cho instance thử:
+
+```bash
 npm run test:migrations
 npm run test:authorization
 npm run test:account-lifecycle:integration
-npm exec --no -- tsx --test tests/supplier-order-creation.integration.test.ts
 ```
 
-File integration mới phải dùng harness tạo database mới, triển khai migrations hiện hành và dọn đúng DB của lần chạy; không chỉ đổi tên biến DATABASE_URL rồi dùng database thành viên. Kiểm thử quan hệ/permission/pause race cần barrier xác định, không dùng sleep ngẫu nhiên.
+Suite migration phải tạo legacy fixtures gồm source/code/metadata null, nhiều lot nguồn khác nhau và nhiều legacy deliveries/request trước migration mới. So sánh IDs/codes/status/created_at/updated_at/approvals/lots/history trước/sau; không có snapshot/token/version giả. Kiểm composite supplier/code cho phép00001 trùng giữa suppliers, unique cùng supplier và giữ các source/idempotency/receipt partial uniques.
 
-## POST REQUEST
+Chạy ít nhất20 ý định tạo riêng biệt đồng thời ở mỗi supplier: mã không trùng trong supplier, cả hai có00001 khi dãy rỗng, QR không nhầm dòng, không cast lỗi DG/legacy. Kiểm99999->100000, số0/bad padding, mã sát trần80. Replay/response timeout giữ cùng id/mã/QR/URL/timestamps; lỗi giữa transaction rollback header/items/lots/source state, không thêm receipt. Không dùng chạy tuần tự thay kiểm concurrency thật.
 
-Chuẩn bị API_BASE, SUPPLIER_TOKEN, REQUEST_ID và CREATE_KEY (UUID mới), không ghi token vào repo. Chỉ chạy POST trên dữ liệu thử được phép:
+Helper hiện retry tối đa3 lần, nên phải ghi cả số thành công/thất bại và số retry khi có contention503. Nếu thử lại ở client/harness, giữ nguyên key/body và dùng deadline tường minh, không tạo ý định mới. Chỉ kết luận hoàn tất bài20 đơn khi đủ20 kết quả đã commit ở mỗi supplier và không có bản sao; hết deadline mà còn thiếu phải ghi FAIL/BLOCKED phù hợp, không coi không trùng trên vài đơn thành công là đủ chứng minh tải.
 
-```sh
-curl -sS -X POST "$API_BASE/api/deliveries/management" \
-  -H "Authorization: Bearer $SUPPLIER_TOKEN" \
-  -H "Idempotency-Key: $CREATE_KEY" \
+## Hành trình tạo đơn và QR
+
+Chuẩn bị API_BASE/SUPPLIER_TOKEN/INSPECTOR_TOKEN trong shell riêng, không commit. Dùng [contract](contracts/supplier-orders.md) để lấy chính xác body REQUEST/STANDALONE và các IDs từ fixture; không dùng các UUID ví dụ làm dữ liệu thật.
+
+1. GET options schools/ingredients/source-facilities bằng admin rồi staff; kiểm tenant/permission/page và active nguồn. Staff vẫn không được quản trị source-facility. Source legacy code null được chọn và hiển thị tên, không tự cấp code.
+2. POST REQUEST cùng Idempotency-Key UUID, đủ nguồn từng source item, plate/ETA bắt buộc. Expected201 IN_TRANSIT, FP-DE theo supplier, đủ lượng nguồn, snapshot/traceUrl từng dòng, nguồn IN_PROGRESS. GET detail xác nhận. Không gửi quantity override hoặc sources thiếu/thừa.
+3. POST STANDALONE với linked school, 1..100 own ingredients/positive actualQuantity/unit/source. Expected201 IN_TRANSIT, source request null; không cần lịch sử reject. Không có school entry vẫn create được nhưng kiểm receipt ở phần sau phải409 cho tới khi trường cấu hình entry hợp lệ bằng nghiệp vụ/fixture đã cho phép.
+4. Gửi thiếu/rỗng plate, ETA thiếu/sai timezone, source INACTIVE/foreign hoặc source bị dừng cạnh tranh trước commit: lỗi400/404/409 theo contract, không lưu đơn một phần. Rename/deactivate source SAU create không đổi snapshot hoặc làm mất QR.
+5. GET labels với page/limit, tải đủ N ảnh cho N dòng. In/mở ảnh PNG bằng QR reader độc lập hoặc camera; scan phải tới đúng stored URL. Quét trên điện thoại cần origin mạng/HTTPS truy cập được, localhost trên máy dev không thay thế được điều này. In lại/replay cùng dòng phải giữ QR, hai đơn cùng ingredient/code khác supplier phải phân biệt.
+6. QR public không login: Accept text/html đọc được, Accept application/json có đúng allowlist. Không có school/xe/lịch giao/account/contract/photo/approval details trong body/HTML/metadata/error. Test text nguồn có HTML đặc biệt được escape; invalid token404, unsupported Accept406, no-store/no-referrer/CSP/noindex. QR không approve/arrival; token không xuất hiện trong log. `/api/traceability-anchors` và protected management vẫn cần auth.
+
+## Arrival, kiểm nhận và kho
+
+Sau create v1, xác nhận N lô dự kiến BLOCKED/available0/no inventory receipt. Ngày SX/HSD null thật; không mô tả lô dự kiến là batch nhà sản xuất.
+
+```bash
+curl -X POST "$API_BASE/api/deliveries/$DELIVERY_ID/arrival" \
+  -H "Authorization: Bearer $INSPECTOR_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d "{\"sourceType\":\"REQUEST\",\"supplyRequestId\":\"$REQUEST_ID\"}"
+  --data '{}'
 ```
 
-Kỳ vọng201, CREATED, đủ toàn bộ dòng/Decimal/unit nguồn, trường đúng và nguồn IN_PROGRESS. Replay cùng key/body ->200 cùng id/time, không đổi updatedAt. Key mới cùng nguồn ->409; cùng key body khác ->409. Override items/schoolId ->400.
+Expected200 ARRIVED và server arrivedAt. Supplier/public/sai trường/thiếu inspect bị403/404; nguồn đã hủy409. Replay arrival không đổi arrivedAt và không hạ trạng thái tiến triển. Không có receipt ở bước arrival.
 
-## STANDALONE và options
+Dùng bốn token vai trò kiểm nhận của đúng trường và POST inspection hiện có (giữ contract ảnh multipart):
 
-GET `/api/deliveries/management/options/schools` và `/options/ingredients` lấy target/dòng hợp lệ bằng role admin hoặc staff có delivery.manage. Không dùng endpoint ingredient quản trị admin-only làm dependency cho staff.
+- 1..3 APPROVE: PENDING_APPROVAL, chưa có receipt. Vai trò đã ký không sửa quyết định, không đổi actor/photo/reason để ký lại.
+- APPROVE cuối đủ4: RECEIVED/statusLabel Hoàn thành, available=received mỗi lot, đúng một RECEIPT/lot. Hai thao tác cuối đồng thời/replay không nhận kho hai lần.
+- Tiêm fixture test sai source lot/null source v1, expiry/date/quantity/history sai hoặc standalone thiếu entry: final APPROVE409, final decision/status/lot/kho rollback cùng nhau. Không làm fixture lỗi bằng sửa dữ liệu member/Azure.
+- REJECT kèm reason: REJECTED/statusLabel Yêu cầu giao hàng lại; chặn APPROVE đến sau, lot vẫn BLOCKED/available0. Lập standalone mới đủ source/plate/ETA, có mã/QR mới và cần bốn quyết định mới; không đổi/copy chữ ký đơn cũ.
+- Cap3 dùng fixture legacy chung supplyRequest: lần thứ3 hủy yêu cầu và các đợt chưa nhận, giữ RECEIVED/history. Standalone mới vẫn không liên kết/tăng/reset cap nguồn cũ; null counters không được gom thành một nhóm.
 
-Tạo JSON theo [contract](contracts/supplier-orders.md) với sourceType STANDALONE, schoolId của trường đã liên kết ACTIVE và items từ nguyên liệu supplier A; gửi POST với key mới. Kỳ vọng201, CREATED, schoolId bắt buộc, supplyRequestId/requestNo null, không cần lịch sử yêu cầu/giao bị từ chối. Dùng hai key khác cho hai đơn độc lập cùng nội dung -> hai id; replay từng key -> phiếu tương ứng, không tạo thêm.
+## Rollout và báo cáo
 
-GET `/api/deliveries/management` và `/:id` cho cả hai role, kiểm tra sourceType, schoolName, nullable source, items ở detail, phân trang và không có key/hash/credential. Các đơn supplier B không xuất hiện; ID B ->404.
+Chỉ review migration/schema trong PR, không sửa applied SQL để qua check. Sau kiểm thử disposable đạt, triển khai reviewed migration qua CD hoặc ủy quyền riêng; ngừng writer cũ trước bật create v1, cấu hình public origin ổn định. Không khôi phục unique global nếu đã có code trùng giữa supplier. Cập nhật docs AUTHORIZATION/module endpoints và client payload để nguồn/plate/ETA bắt buộc.
 
-## Ma trận xác nhận
+Ghi rõ branch/commit, từng check PASS/FAIL/BLOCKED, instance disposable được chọn, scan evidence, số creates cạnh tranh, số lần receipt và snapshot preservation. Không đưa token/credentials vào report. Bước plan hiện chỉ kiểm định dạng/liên kết tài liệu, chưa cài dependencies/chạy tests/DDL/mutation DB.
 
-| Nhóm                  | Kỳ vọng cần chứng minh                                                                                                                                                     |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Quyền                 | Hai role manage đều tạo/options/read; thiếu manage không tạo; quyền đọc theo resource OR hiện hành; SYSTEM/role/org sai không bypass.                                      |
-| REQUEST               | Copy đủ dòng/đúng lượng/unit; strict override; source quota, ACCEPTED->IN_PROGRESS nguyên tử; nguồn DRAFT/SENT/CANCELLED/COMPLETED hoặc ngoài scope không tạo.             |
-| STANDALONE            | Không nguồn vẫn tạo được; bắt buộc linked ACTIVE school, own ACTIVE ingredients, Decimal dương/unit hợp lệ; không tự tạo request hoặc IngredientEntry.                     |
-| Race                  | Hai actor cùng nguồn chỉ một Delivery; cùng actor/key giữ một kết quả; đổi relationship/role/denial/intake trong lúc tạo bị recheck đúng.                                  |
-| Rollback              | Lỗi sau header/item/source update không để phiếu dở dang hoặc nguồn đổi trạng thái.                                                                                        |
-| Lịch sử               | Migration giữ nhiều Delivery cũ/request, backfill school/ingredient/entry chính xác, giữ số lượng/mã/trạng thái/chữ ký/timestamps.                                         |
-| Tenant scopes         | School A/B không đọc lots/deliveries/inventory/feedback/traceability của nhau dù nguồn null; supplier cũng đúng owner.                                                     |
-| Entry mapping         | Standalone CREATED được tạo khi trường chưa có entry; receipt thiếu entry409, không AVAILABLE/RECEIPT; sau cấu hình entry hợp lệ có thể nhận theo điều kiện chuẩn.         |
-| Inspection có nguồn   | Bốn chữ ký, cap nhận từng source item, reject count/cancel phần chưa nhận và receipt một lần giữ hành vi cũ.                                                               |
-| Inspection standalone | Chuẩn bị ARRIVED/lots bằng fixture riêng; bốn chữ ký và kiểm tra lots/date/unit/owner vẫn có; REJECT chỉ phiếu hiện tại, không query/cancel nhóm null hoặc sửa yêu cầu cũ. |
-| Kho/bếp/menu          | Lot standalone RECEIVED có mapping entry đúng trường, được chọn đúng theo entry/handlingType, không mất tên hoặc available quantity khi không có source item.              |
-| Serialization         | Date ISO UTC, Decimal chuỗi, nullable source rõ ràng; không leak record/key/hash/secret; old source-based DTO giữ giá trị cũ.                                              |
+## Lịch sử kiểm chứng baseline — không phải kết quả amendment
 
-Không mở action ARRIVED hoặc tự sinh lots trong feature; fixture chỉ để chứng minh consumer hiện có tương thích, không phải thao tác production mới.
-
-## Bằng chứng và giới hạn cần ghi
-
-Sau implementation ghi từng lệnh thực sự chạy, test pass/fail/skipped, version code, DB disposable đã dùng và dữ liệu đã dọn. Nếu chưa được cấp instance local, ghi integration/migration chưa chạy; không chuyển sang DB khác. Việc thiết kế migration không phải cho phép deploy remote hoặc seed.
-
-Đặc biệt phải báo nếu còn consumer dereference nguồn bắt buộc hoặc chưa chuyển school scope: đó là lỗi chặn hoàn tất, không xem là tối ưu sau này. CREATED chưa có lô hoặc entry không có nghĩa đã sẵn sàng nhập kho. Các hành trình sau CREATED vẫn phụ thuộc dữ liệu và transition hợp lệ theo workflow đã có.
-
-## Kết quả bước plan — 2026-11-15
-
-Đã tạo plan/research/data-model/contracts/quickstart, đối chiếu hiến chương I–VI trước/sau thiết kế. Hai research agent chỉ đọc code/schema. Không có extension hooks. Chỉ kiểm tra cấu trúc, liên kết tài liệu và định dạng; chưa chạy tests phần mềm, tạo migration hoặc thay DB. tasks.md sẽ được tạo bằng speckit-tasks.
-
-## Setup Baseline & Prerequisites (T001–T002)
-
-- **Nhánh làm việc**: `feat/supplier-order-creation` (chỉ có thư mục spec `specs/supplier-order-creation/` trước khi implement).
-- **Tài liệu đã đối chiếu**: `AGENTS.md`, `.specify/memory/constitution.md`, `specs/supplier-order-creation/{spec,plan,data-model,quickstart}.md` và `specs/supplier-order-creation/contracts/supplier-orders.md`.
-- **Router mount & quyền**:
-  - `src/routes/index.ts` dòng 137 hiện mount `router.use("/deliveries", ...)`; router mới `/deliveries/management` phải đăng ký **trước** dòng này.
-  - `src/constants/permission-catalog.ts` đã cấp sẵn `delivery.manage`, `delivery.view`, `delivery.receive` cho `INGREDIENT_SUPPLIER_ADMIN` và `INGREDIENT_SUPPLIER_STAFF`.
-- **Điều kiện PostgreSQL disposable**:
-  - `npm run test:migrations` và các test tích hợp yêu cầu `MIGRATION_TEST_DATABASE_URL` trỏ tới database disposable local (pattern `/foodprint_migration_test(?:_[a-z0-9_]+)?$`); tuyệt đối không dùng `.env` thành viên hoặc Azure DB.
-  - Mọi kiểm thử chỉ chạy sau khi xác nhận biến môi trường hợp lệ; nếu không có instance disposable được cấp phép, phần chạy PostgreSQL thực tế được giữ nguyên trạng thái chưa chạy và ghi rõ trong báo cáo.
+Các ghi nhận dưới đây thuộc bản triển khai trước nguồn/QR/mã mới; giữ để review lịch sử, không tái sử dụng làm kết quả của kế hoạch này.
 
 ## Verification Evidence (Implementation Run — 2026-11-15)
 
