@@ -12,6 +12,10 @@ import {
   withSchoolTransaction,
 } from "../../utils/authorization";
 import { getPrisma } from "../../utils/database";
+import {
+  blockchainProofService,
+  type ProofRef,
+} from "../blockchain-proof/blockchain-proof.service";
 import { HttpError } from "../../utils/http-error";
 import { listScopes } from "../../utils/resource-access";
 import {
@@ -1065,6 +1069,10 @@ export async function readSchoolContext(
 /** All kitchen writes lock the trusted school first, then batch/lots by UUID. */
 export function createKitchenLifecycle(
   connect: () => Promise<PrismaClient> = getPrisma,
+  proofs: Pick<
+    typeof blockchainProofService,
+    "prepareCookingCompleted" | "scheduleAnchor"
+  > = blockchainProofService,
 ) {
   async function write<T>(
     principal: AuthPrincipal,
@@ -1599,8 +1607,13 @@ export function createKitchenLifecycle(
       );
     },
 
-    complete(id: string, principal: AuthPrincipal, input?: KitchenInspection) {
-      return write(
+    async complete(
+      id: string,
+      principal: AuthPrincipal,
+      input?: KitchenInspection,
+    ) {
+      let proof: ProofRef | null = null;
+      const result = await write(
         principal,
         "cooking_batch.complete",
         async (tx, actor, schoolId) => {
@@ -1683,9 +1696,12 @@ export function createKitchenLifecycle(
             select: detailSelect,
           });
           await consumeMealSeasonings(tx, batch, schoolId, actor.id);
+          proof = await proofs.prepareCookingCompleted(tx, id, actor.id);
           return completionResult(tx, completed);
         },
       );
+      proofs.scheduleAnchor(proof);
+      return result;
     },
   };
 }

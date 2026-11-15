@@ -413,6 +413,14 @@ export const INITIAL_PERMISSIONS = [
       "Tra cứu chuỗi Delivery - IngredientLot - CookingBatch - MealAllocation - Class.",
   },
   {
+    code: "traceability.verify",
+    name: "Xác minh bằng chứng blockchain",
+    module: "traceability",
+    action: "verify",
+    description:
+      "Đối chiếu dữ liệu kiểm nhận, mẻ nấu, mẫu lưu với hash trên blockchain và gửi lại bằng chứng chưa ghi được.",
+  },
+  {
     code: "ingredient_quality_feedback.submit",
     name: "Gửi phản hồi chất lượng nguyên liệu",
     module: "ingredient_quality_feedback",
@@ -650,6 +658,7 @@ export const INITIAL_ROLE_PERMISSIONS = [
   ["SCHOOL_MANAGEMENT_BOARD", "food_safety_incident.forward"],
   ["SCHOOL_MANAGEMENT_BOARD", "food_safety_incident.alert_schools"],
   ["SCHOOL_MANAGEMENT_BOARD", "traceability.view"],
+  ["SCHOOL_MANAGEMENT_BOARD", "traceability.verify"],
   ["SCHOOL_MANAGEMENT_BOARD", "class.view"],
   ["SCHOOL_MANAGEMENT_BOARD", "class_assignment.manage"],
   ["SCHOOL_MANAGEMENT_BOARD", "class.manage"],
@@ -691,6 +700,7 @@ export const INITIAL_ROLE_PERMISSIONS = [
   ["SCHOOL_NUTRITION_OFFICER", "ingredient_quality_feedback.view_own"],
   ["SCHOOL_NUTRITION_OFFICER", "ingredient_quality_feedback.view_details"],
   ["SCHOOL_NUTRITION_OFFICER", "traceability.view"],
+  ["SCHOOL_NUTRITION_OFFICER", "traceability.verify"],
   ["HOMEROOM_TEACHER", "dashboard.view"],
   ["HOMEROOM_TEACHER", "menu.view"],
   ["HOMEROOM_TEACHER", "meal_complaint.submit"],
