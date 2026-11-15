@@ -1,4 +1,4 @@
-﻿import dotenv from "dotenv";
+import dotenv from "dotenv";
 import path from "node:path";
 
 dotenv.config({ path: path.resolve(__dirname, "../../.env") });
@@ -33,6 +33,57 @@ export function readRateLimitConfig(
     ),
     limit: positiveInteger("RATE_LIMIT_MAX", source.RATE_LIMIT_MAX, 300),
   };
+}
+
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+export function readPublicTraceOrigin(
+  source: NodeJS.ProcessEnv = process.env,
+): string {
+  const raw = source.PUBLIC_TRACE_ORIGIN?.trim();
+  if (!raw) {
+    throw new Error("Thieu PUBLIC_TRACE_ORIGIN hop le");
+  }
+
+  let target: URL;
+  try {
+    target = new URL(raw);
+  } catch {
+    throw new Error("PUBLIC_TRACE_ORIGIN phai la origin URL hop le");
+  }
+
+  if (
+    target.username !== "" ||
+    target.password !== "" ||
+    raw.includes("?") ||
+    raw.includes("#") ||
+    target.search !== "" ||
+    target.hash !== "" ||
+    target.pathname !== "/"
+  ) {
+    throw new Error(
+      "PUBLIC_TRACE_ORIGIN chi duoc chua scheme, host va port; khong credentials, path, query hoac hash",
+    );
+  }
+
+  const isProduction = source.NODE_ENV?.trim() === "production";
+  if (isProduction) {
+    if (target.protocol !== "https:") {
+      throw new Error("PUBLIC_TRACE_ORIGIN bat buoc HTTPS trong production");
+    }
+    return target.origin;
+  }
+
+  if (target.protocol === "https:") {
+    return target.origin;
+  }
+  if (target.protocol === "http:" && LOOPBACK_HOSTS.has(target.hostname)) {
+    return target.origin;
+  }
+
+  throw new Error(
+    "PUBLIC_TRACE_ORIGIN chi cho phep HTTPS hoac HTTP loopback trong moi truong dev",
+  );
 }
 
 export function requireRedisUrl(): string {

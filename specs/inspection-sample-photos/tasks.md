@@ -8,4 +8,5 @@
 - [x] Expose photos only through authorized school-scoped reads.
 - [x] Integrate image capture, selection, preview and removal in the existing forms.
 - [x] Test and build the application without connecting to a remote database.
+- [x] Align the supplier-order HTTP lifecycle test with required multipart photos, including missing-photo rejection and failed-inspection upload cleanup; consolidate the storage import after merging dev.
 - [ ] Deploy and verify the reviewed migration through the approved dev workflow.

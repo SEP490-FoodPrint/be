@@ -113,6 +113,16 @@ export function createSourceFacilityRepository(connect = getPrisma) {
     async lockTarget(scope: SourceFacilityManagementScope, id: string, tx: Tx) {
       await tx.$queryRaw`SELECT id FROM foodprint.source_facilities WHERE id = ${id}::uuid AND supplier_id = ${scope.supplierId}::uuid FOR UPDATE`;
     },
+    async lockTargets(
+      scope: SourceFacilityManagementScope,
+      ids: readonly string[],
+      tx: Tx,
+    ) {
+      // Acquire child source-facility locks in deterministic ID order after parent Supplier lock.
+      for (const id of [...new Set(ids)].sort()) {
+        await tx.$queryRaw`SELECT id FROM foodprint.source_facilities WHERE id = ${id}::uuid AND supplier_id = ${scope.supplierId}::uuid FOR UPDATE`;
+      }
+    },
     async list(
       scope: SourceFacilityManagementScope,
       query: ListQuery,

@@ -723,6 +723,7 @@ export const menuRepository = {
           select: {
             DeliveryItem: {
               select: {
+                ingredientEntryId: true,
                 SupplyRequestItem: {
                   select: { ingredientEntryId: true },
                 },

@@ -1839,4 +1839,102 @@ void test("account lifecycle respects scope and intake state on disposable Postg
       );
     },
   );
+
+  await context.test(
+    "SUPPLIER_CREATE_STANDALONE_DELIVERY checks intake state, admin status, relationship and serializes against pause",
+    async () => {
+      const f = await schoolFixture("standalone-intake");
+      const sup = await db.supplier.create({
+        data: { name: "Standalone intake supplier" },
+      });
+      const supAdmin = await account(
+        "INGREDIENT_SUPPLIER_ADMIN",
+        "standalone-sup-admin",
+        { supplierId: sup.id },
+      );
+      const supStaff = await account(
+        "INGREDIENT_SUPPLIER_STAFF",
+        "standalone-sup-staff",
+        { supplierId: sup.id },
+      );
+      const staffActor = await loadPrincipal(supStaff.id, db);
+      await db.schoolSupplierRelationship.create({
+        data: {
+          schoolId: f.school.id,
+          supplierId: sup.id,
+          linkedByUserId: f.admin.id,
+          status: "ACTIVE",
+        },
+      });
+      const ingredient = await db.ingredient.create({
+        data: {
+          supplierId: sup.id,
+          name: "Standalone rice",
+          defaultUnit: "kg",
+        },
+      });
+
+      const ok = await authorizationTransaction(db, (tx) =>
+        guard.assertAccess(tx, staffActor, {
+          operation: "SUPPLIER_CREATE_STANDALONE_DELIVERY",
+          schoolId: f.school.id,
+          ingredientIds: [ingredient.id],
+        }),
+      );
+      assert.equal(ok.id, supStaff.id);
+
+      const outcomes = await overlap(
+        (hold) =>
+          authorizationTransaction(db, async (tx) => {
+            await guardBarrier(() => undefined).assertAccess(tx, staffActor, {
+              operation: "SUPPLIER_CREATE_STANDALONE_DELIVERY",
+              schoolId: f.school.id,
+              ingredientIds: [ingredient.id],
+            });
+            await hold();
+          }),
+        (started) =>
+          lifecycleBarrier(() => Promise.resolve(), started).setIntakeState(
+            { userId: f.admin.id },
+            { state: "PAUSED" },
+            principal,
+          ),
+      );
+      assert.equal(outcomes[0].status, "fulfilled");
+      assert.equal(outcomes[1].status, "fulfilled");
+
+      await assert.rejects(
+        () =>
+          authorizationTransaction(db, (tx) =>
+            guard.assertAccess(tx, staffActor, {
+              operation: "SUPPLIER_CREATE_STANDALONE_DELIVERY",
+              schoolId: f.school.id,
+              ingredientIds: [ingredient.id],
+            }),
+          ),
+        businessConflict,
+      );
+
+      await lifecycle.setIntakeState(
+        { userId: f.admin.id },
+        { state: "ACTIVE" },
+        principal,
+      );
+      await db.user.update({
+        where: { id: supAdmin.id },
+        data: { status: "DEACTIVATED" },
+      });
+      await assert.rejects(
+        () =>
+          authorizationTransaction(db, (tx) =>
+            guard.assertAccess(tx, staffActor, {
+              operation: "SUPPLIER_CREATE_STANDALONE_DELIVERY",
+              schoolId: f.school.id,
+              ingredientIds: [ingredient.id],
+            }),
+          ),
+        businessConflict,
+      );
+    },
+  );
 });

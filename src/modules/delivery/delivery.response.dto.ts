@@ -7,10 +7,14 @@ import type {
 export interface DeliveryInspectionDTO {
   id: string;
   deliveryNo: string;
-  supplyRequestId: string;
-  requestNo: string;
+  schoolId: string;
+  sourceType: "REQUEST" | "STANDALONE";
+  traceabilityVersion: number | null;
+  supplyRequestId: string | null;
+  requestNo: string | null;
   supplierName: string;
   status: DeliveryStatus;
+  statusLabel: string;
   expectedArrivalAt: string | null;
   arrivedAt: string | null;
   receivedAt: string | null;
@@ -18,8 +22,8 @@ export interface DeliveryInspectionDTO {
   note: string | null;
   currentRole: string;
   canInspect: boolean;
-  redeliveryRequiredCount: number;
-  redeliveryLimit: number;
+  redeliveryRequiredCount: number | null;
+  redeliveryLimit: number | null;
   cancellationNotice: string | null;
   requiredRoles: { code: string; name: string }[];
   deliveryApprovals: {
@@ -38,6 +42,11 @@ export interface DeliveryInspectionDTO {
     category: string | null;
     actualQuantity: string;
     unit: string;
+    sourceFacility: {
+      id: string | null;
+      name: string;
+      facilityCode: string | null;
+    } | null;
     ingredientLots: {
       id: string;
       lotCode: string;
@@ -77,7 +86,7 @@ export interface DeliveryItemSummaryDTO {
 export interface DeliveryListItemDTO {
   id: string;
   deliveryNo: string;
-  supplyRequestId: string;
+  supplyRequestId: string | null;
   orderNo: string | null;
   requestNo: string | null;
   supplierId: string;

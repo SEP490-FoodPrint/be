@@ -132,6 +132,15 @@ function fixture(initialRows: FixtureRow[] = []) {
       calls.push({ operation: "lockTarget", scope });
       return Promise.resolve();
     },
+    lockTargets: (
+      scope: { supplierId: string },
+      _ids: readonly string[],
+      client: Prisma.TransactionClient,
+    ) => {
+      inTransaction(client);
+      calls.push({ operation: "lockTargets", scope });
+      return Promise.resolve();
+    },
     list: (
       scope: { supplierId: string },
       query: { page: number; limit: number },

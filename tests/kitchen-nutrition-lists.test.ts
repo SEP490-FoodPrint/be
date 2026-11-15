@@ -14,7 +14,10 @@ import {
   validateAllergyCheck,
 } from "../src/modules/menu/menu.validation";
 import { menuRepository } from "../src/modules/menu/menu.repository";
-import { createKitchenService } from "../src/modules/kitchen/kitchen.service";
+import {
+  createKitchenService,
+  readPlanningStock,
+} from "../src/modules/kitchen/kitchen.service";
 import { createKitchenRouter } from "../src/modules/kitchen/kitchen.routes";
 import { validateKitchenFilters } from "../src/modules/kitchen/kitchen.validation";
 import { createRetainedSampleService } from "../src/modules/retained-sample/retained-sample.service";
@@ -678,4 +681,116 @@ void test("removed batch editing and export/print routes remain unavailable with
       `${method} ${route}`,
     );
   assert.equal(connections, 0);
+});
+
+void test("kitchen planning stock and detail support received standalone lots without SupplyRequestItem", async () => {
+  let capturedWhere: Record<string, unknown> | undefined;
+  const lotRow = {
+    id: "lot-std-1",
+    lotCode: "LOT-STD-1",
+    unit: "kg",
+    availableQuantity: new Prisma.Decimal("10.000"),
+    DeliveryItem: {
+      ingredientEntryId: "entry-std-1",
+      Ingredient: { name: "Thịt bò" },
+      IngredientEntry: { Ingredient: { name: "Thịt bò" } },
+      SupplyRequestItem: null,
+    },
+  };
+  const stockTx = {
+    ingredientLot: {
+      findMany: (args: { where: Record<string, unknown> }) => {
+        capturedWhere = args.where;
+        return Promise.resolve([lotRow]);
+      },
+    },
+    cookingBatchLot: {
+      findMany: () => Promise.resolve([]),
+    },
+    menuMealSeasoningLot: {
+      findMany: () => Promise.resolve([]),
+    },
+  } as unknown as Prisma.TransactionClient;
+  const available = await readPlanningStock(
+    stockTx,
+    testStaff.schoolId!,
+    new Date("2026-11-15"),
+    ["entry-std-1"],
+  );
+  assert.deepEqual(
+    (capturedWhere as { DeliveryItem: { Delivery: unknown } }).DeliveryItem
+      .Delivery,
+    { status: "RECEIVED", schoolId: testStaff.schoolId },
+  );
+  assert.deepEqual(available, [
+    {
+      id: "lot-std-1",
+      lotCode: "LOT-STD-1",
+      ingredientName: "Thịt bò",
+      unit: "kg",
+      ingredientEntryId: "entry-std-1",
+      availableQuantity: "10",
+      reservedQuantity: "0",
+    },
+  ]);
+
+  const batchTx = {
+    cookingBatch: {
+      findFirst: () =>
+        Promise.resolve({
+          id: "batch-1",
+          batchCode: "CB-1",
+          batchGroupId: "group-1",
+          BatchGroup: { id: "group-1", batchCode: "CBG-1" },
+          menuDayId: "day-1",
+          mealType: "LUNCH",
+          dishId: "dish-1",
+          cookingModeApplied: "SEPARATE_BY_LOT",
+          status: "CONFIRMED",
+          plannedPortions: 50,
+          note: null,
+          confirmedAt: new Date("2026-11-15T01:00:00Z"),
+          completedAt: null,
+          createdAt: new Date("2026-11-15T01:00:00Z"),
+          updatedAt: new Date("2026-11-15T01:00:00Z"),
+          Dish: { name: "Bò xào" },
+          MenuDay: { menuDate: new Date("2026-11-15") },
+          dishes: [
+            {
+              dishId: "dish-1",
+              plannedPortions: 50,
+              Dish: { name: "Bò xào" },
+            },
+          ],
+          cookingBatchLots: [
+            {
+              dishId: "dish-1",
+              ingredientLotId: "lot-std-1",
+              quantityUsed: new Prisma.Decimal("5.000"),
+              unit: "kg",
+              IngredientLot: {
+                lotCode: "LOT-STD-1",
+                expiryDate: null,
+                DeliveryItem: {
+                  Ingredient: { name: "Thịt bò" },
+                  IngredientEntry: null,
+                  SupplyRequestItem: null,
+                },
+              },
+            },
+          ],
+        }),
+    },
+    menuMealSeasoningLot: {
+      findMany: () => Promise.resolve([]),
+    },
+  };
+  const service = createKitchenService(undefined, () =>
+    Promise.resolve(batchTx as never),
+  );
+  const detail = await service.getOne("batch-1", {
+    ...principal,
+    permissions: ["cooking_batch.view"],
+  });
+  assert.equal(detail.cookingBatchLots[0].ingredientName, "Thịt bò");
 });

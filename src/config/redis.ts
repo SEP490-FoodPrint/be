@@ -1,5 +1,6 @@
 import { createClient } from "redis";
 import { RedisStore, type RedisReply } from "rate-limit-redis";
+import { HttpError } from "../utils/http-error";
 import { requireRedisUrl } from "./env";
 
 export const redis = createClient({
@@ -16,11 +17,9 @@ redis.on("error", () => {
   console.error("Redis local không sẵn sàng.");
 });
 
-export class RedisUnavailableError extends Error {
-  readonly statusCode = 503;
-
+export class RedisUnavailableError extends HttpError {
   constructor() {
-    super("Dịch vụ giới hạn yêu cầu tạm thời không khả dụng.");
+    super(503, "Dịch vụ giới hạn yêu cầu tạm thời không khả dụng.");
     this.name = "RedisUnavailableError";
   }
 }
