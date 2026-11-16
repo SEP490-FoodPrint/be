@@ -8,7 +8,8 @@ import {
 
 void describe("delivery-status", () => {
   void it("maps operational and legacy delivery statuses consistently", () => {
-    assert.equal(getDeliveryStatusLabel("IN_TRANSIT"), "Đang giao");
+    assert.equal(getDeliveryStatusLabel("PREPARING"), "Đang chuẩn bị hàng");
+    assert.equal(getDeliveryStatusLabel("IN_TRANSIT"), "Đang giao hàng");
     assert.equal(getDeliveryStatusLabel("RECEIVED"), "Hoàn thành");
     assert.equal(getDeliveryStatusLabel("REJECTED"), "Yêu cầu giao hàng lại");
     assert.equal(getDeliveryStatusLabel("ARRIVED"), "Đã đến nơi");

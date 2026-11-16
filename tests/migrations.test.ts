@@ -2427,4 +2427,701 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
       }
     },
   );
+
+  await context.test(
+    "supplier order stages migrations commit PREPARING enum before workflow_version checks, preserve legacy/v1 history, replace item uniques with three partial indexes, and enforce v2 constraints",
+    async () => {
+      const name = `foodprint_migration_test_stages_${randomUUID().replaceAll("-", "")}`;
+      await db.query(`CREATE DATABASE "${name}"`);
+      recordLocalTestDatabase(name);
+      const isolated = new URL(url);
+      isolated.pathname = `/${name}`;
+      const temporary = await mkdtemp(
+        path.join(tmpdir(), "foodprint-supplier-stages-"),
+      );
+      const directory = path.join(temporary, "migrations");
+      const config = path.join(temporary, "prisma.config.ts");
+      const stageEnumMigration = "20261118000200_delivery_preparing_status";
+      const stageSchemaMigration = "20261118000300_supplier_order_stages";
+      const legacy = new Client({ connectionString: isolated.toString() });
+      const hex64 = () =>
+        `${randomUUID().replaceAll("-", "")}${randomUUID().replaceAll("-", "")}`;
+      try {
+        await mkdir(directory);
+        await copyFile(
+          path.join(root, "prisma/migrations/migration_lock.toml"),
+          path.join(directory, "migration_lock.toml"),
+        );
+        const copyMigration = async (migration: string) => {
+          await mkdir(path.join(directory, migration));
+          await copyFile(
+            path.join(root, "prisma/migrations", migration, "migration.sql"),
+            path.join(directory, migration, "migration.sql"),
+          );
+        };
+        for (const previous of migrationNames.filter(
+          (item) => item < stageEnumMigration,
+        )) {
+          await copyMigration(previous);
+        }
+        await writeFile(
+          config,
+          `import { defineConfig } from ${JSON.stringify(path.join(root, "node_modules/prisma/config.js"))};\nexport default defineConfig({ schema: ${JSON.stringify(path.join(root, "prisma/schema.prisma"))}, migrations: { path: ${JSON.stringify(directory)} }, datasource: { url: process.env.DATABASE_URL } });\n`,
+        );
+
+        await runPrisma(isolated.toString(), [
+          "migrate",
+          "deploy",
+          "--config",
+          config,
+        ]);
+        await legacy.connect();
+
+        const supRole = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.roles(code,name,type) VALUES ('INGREDIENT_SUPPLIER_ADMIN','Supplier Admin','SUPPLIER') RETURNING id",
+          )
+        ).rows[0].id;
+        const schRole = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.roles(code,name,type) VALUES ('SCHOOL_ADMINISTRATION','School Admin','SCHOOL') RETURNING id",
+          )
+        ).rows[0].id;
+        const school = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.schools(name) VALUES ('Stages Migration School') RETURNING id",
+          )
+        ).rows[0].id;
+        const supplier = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.suppliers(name) VALUES ('Stages Migration Supplier') RETURNING id",
+          )
+        ).rows[0].id;
+        const supUser = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.users(role_id,role_code,supplier_id,username,email,password_hash,full_name,status) VALUES ($1,'INGREDIENT_SUPPLIER_ADMIN',$2,'stages-sup','stages-sup@example.test','hash','Stages Sup','ACTIVE') RETURNING id",
+            [supRole, supplier],
+          )
+        ).rows[0].id;
+        const schUser = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.users(role_id,role_code,school_id,username,email,password_hash,full_name,status) VALUES ($1,'SCHOOL_ADMINISTRATION',$2,'stages-sch','stages-sch@example.test','hash','Stages Sch','ACTIVE') RETURNING id",
+            [schRole, school],
+          )
+        ).rows[0].id;
+        const facA = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.source_facilities(supplier_id,facility_code,name,status) VALUES ($1,'SF-S1','Trang trại S1','ACTIVE') RETURNING id",
+            [supplier],
+          )
+        ).rows[0].id;
+        const facB = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.source_facilities(supplier_id,facility_code,name,status) VALUES ($1,'SF-S2','Trang trại S2','ACTIVE') RETURNING id",
+            [supplier],
+          )
+        ).rows[0].id;
+        const ing1 = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.ingredients(supplier_id,name,default_unit) VALUES ($1,'Gạo ST25 Stage','kg') RETURNING id",
+            [supplier],
+          )
+        ).rows[0].id;
+        const ing2 = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.ingredients(supplier_id,name,default_unit) VALUES ($1,'Cà rốt Stage','kg') RETURNING id",
+            [supplier],
+          )
+        ).rows[0].id;
+        const entry1 = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.ingredient_entries(school_id,ingredient_id,handling_type) VALUES ($1,$2,'DRY_STOCK') RETURNING id",
+            [school, ing1],
+          )
+        ).rows[0].id;
+        const entry2 = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.ingredient_entries(school_id,ingredient_id,handling_type) VALUES ($1,$2,'DIRECT_USE') RETURNING id",
+            [school, ing2],
+          )
+        ).rows[0].id;
+        const srLegacy = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.supply_requests(request_no,school_id,supplier_id,created_by_user_id,status) VALUES ('SR-STG-LEG',$1,$2,$3,'COMPLETED') RETURNING id",
+            [school, supplier, schUser],
+          )
+        ).rows[0].id;
+        const srV1 = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.supply_requests(request_no,school_id,supplier_id,created_by_user_id,status) VALUES ('SR-STG-V1',$1,$2,$3,'IN_PROGRESS') RETURNING id",
+            [school, supplier, schUser],
+          )
+        ).rows[0].id;
+        const srV2 = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.supply_requests(request_no,school_id,supplier_id,created_by_user_id,status) VALUES ('SR-STG-V2',$1,$2,$3,'IN_PROGRESS') RETURNING id",
+            [school, supplier, schUser],
+          )
+        ).rows[0].id;
+        const sriLegacy = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.supply_request_items(supply_request_id,ingredient_entry_id,requested_quantity,unit) VALUES ($1,$2,12.000,'kg') RETURNING id",
+            [srLegacy, entry1],
+          )
+        ).rows[0].id;
+        const sriV1 = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.supply_request_items(supply_request_id,ingredient_entry_id,requested_quantity,unit) VALUES ($1,$2,8.000,'kg') RETURNING id",
+            [srV1, entry1],
+          )
+        ).rows[0].id;
+        const sriV2a = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.supply_request_items(supply_request_id,ingredient_entry_id,requested_quantity,unit) VALUES ($1,$2,10.000,'kg') RETURNING id",
+            [srV2, entry1],
+          )
+        ).rows[0].id;
+        const sriV2b = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.supply_request_items(supply_request_id,ingredient_entry_id,requested_quantity,unit) VALUES ($1,$2,5.000,'kg') RETURNING id",
+            [srV2, entry2],
+          )
+        ).rows[0].id;
+
+        const preservedTs = "2025-06-15T08:09:10.000Z";
+        const legacyDel = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.deliveries(delivery_no,supply_request_id,school_id,supplier_id,creation_mode,status,created_by_user_id,received_by_user_id,received_at,created_at,updated_at) VALUES ('DG-STG-LEG-1',$1,$2,$3,NULL,'RECEIVED',$4,$5,$6,$6,$6) RETURNING id",
+            [srLegacy, school, supplier, supUser, schUser, preservedTs],
+          )
+        ).rows[0].id;
+        const legacyItem = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.delivery_items(delivery_id,supply_request_item_id,ingredient_id,ingredient_entry_id,actual_quantity,unit) VALUES ($1,$2,$3,$4,12.000,'kg') RETURNING id",
+            [legacyDel, sriLegacy, ing1, entry1],
+          )
+        ).rows[0].id;
+        await legacy.query(
+          "INSERT INTO foodprint.delivery_approvals(delivery_id,user_id,role_id,decision,reason) VALUES ($1,$2,$3,'APPROVE','Đạt chuẩn')",
+          [legacyDel, schUser, schRole],
+        );
+        const legacyLot = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.ingredient_lots(delivery_item_id,source_facility_id,lot_code,received_quantity,available_quantity,unit,status) VALUES ($1,$2,'STG-OLD-01',12.000,12.000,'kg','AVAILABLE') RETURNING id",
+            [legacyItem, facA],
+          )
+        ).rows[0].id;
+        await legacy.query(
+          "INSERT INTO foodprint.inventory_transactions(ingredient_lot_id,movement_type,quantity,unit,created_by_user_id) VALUES ($1,'RECEIPT',12.000,'kg',$2)",
+          [legacyLot, schUser],
+        );
+
+        const v1Arrival = "2026-11-20T09:00:00.000Z";
+        const v1QrToken = hex64();
+        const v1Del = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.deliveries(delivery_no,supply_request_id,school_id,supplier_id,creation_mode,creation_key,creation_fingerprint,traceability_version,status,created_by_user_id,expected_arrival_at,vehicle_plate,created_at,updated_at) VALUES ('FP-DE-00001',$1,$2,$3,'REQUEST',$4,$5,1,'IN_TRANSIT',$6,$7,'51C-88888',$8,$8) RETURNING id",
+            [
+              srV1,
+              school,
+              supplier,
+              randomUUID(),
+              hex64(),
+              supUser,
+              v1Arrival,
+              preservedTs,
+            ],
+          )
+        ).rows[0].id;
+        const v1Item = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.delivery_items(delivery_id,supply_request_item_id,ingredient_id,ingredient_entry_id,source_facility_id,source_facility_name_snapshot,source_facility_code_snapshot,ingredient_name_snapshot,qr_token,qr_url,actual_quantity,unit) VALUES ($1,$2,$3,$4,$5,'Trang trại S1','SF-S1','Gạo ST25 Stage',$6,$7,8.000,'kg') RETURNING id",
+            [
+              v1Del,
+              sriV1,
+              ing1,
+              entry1,
+              facA,
+              v1QrToken,
+              `https://trace.example.test/public/trace/${v1QrToken}`,
+            ],
+          )
+        ).rows[0].id;
+
+        const readBaselineSnapshot = async () =>
+          (
+            await legacy.query<{
+              id: string;
+              delivery_no: string;
+              status: string;
+              traceability_version: number | null;
+              creation_mode: string | null;
+              expected_arrival_at: Date | null;
+              vehicle_plate: string | null;
+              created_at: Date;
+              updated_at: Date;
+              item_id: string;
+              qr_token: string | null;
+              qr_url: string | null;
+              approval_count: number;
+              lots_summary: string | null;
+              inv_tx_count: number;
+            }>(
+              `SELECT
+                 d.id,
+                 d.delivery_no,
+                 d.status::text AS status,
+                 d.traceability_version,
+                 d.creation_mode,
+                 d.expected_arrival_at,
+                 d.vehicle_plate,
+                 d.created_at,
+                 d.updated_at,
+                 di.id AS item_id,
+                 di.qr_token,
+                 di.qr_url,
+                 (SELECT count(*)::int FROM foodprint.delivery_approvals da WHERE da.delivery_id = d.id) AS approval_count,
+                 (SELECT string_agg(il.lot_code || ':' || il.available_quantity::text, ',') FROM foodprint.ingredient_lots il WHERE il.delivery_item_id = di.id) AS lots_summary,
+                 (SELECT count(*)::int FROM foodprint.inventory_transactions it JOIN foodprint.ingredient_lots il ON il.id = it.ingredient_lot_id WHERE il.delivery_item_id = di.id) AS inv_tx_count
+               FROM foodprint.deliveries d
+               JOIN foodprint.delivery_items di ON di.delivery_id = d.id
+               WHERE d.id IN ($1, $2)
+               ORDER BY d.delivery_no`,
+              [legacyDel, v1Del],
+            )
+          ).rows;
+        const beforeUpgrade = await readBaselineSnapshot();
+
+        // Step 1: deploy enum-only migration first so PREPARING is committed separately
+        await copyMigration(stageEnumMigration);
+        await runPrisma(isolated.toString(), [
+          "migrate",
+          "deploy",
+          "--config",
+          config,
+        ]);
+        const enumValues = (
+          await legacy.query<{ enumlabel: string }>(
+            `SELECT e.enumlabel
+             FROM pg_enum e
+             JOIN pg_type t ON t.oid = e.enumtypid
+             JOIN pg_namespace n ON n.oid = t.typnamespace
+             WHERE n.nspname = 'foodprint' AND t.typname = 'delivery_status'
+             ORDER BY e.enumsortorder`,
+          )
+        ).rows.map((row) => row.enumlabel);
+        assert.ok(enumValues.includes("PREPARING"));
+
+        // Verify preflight fails fast cleanly if a premature PREPARING row exists before workflow_version migration
+        const prematureDel = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.deliveries(delivery_no,supply_request_id,school_id,supplier_id,creation_mode,creation_key,creation_fingerprint,traceability_version,status,created_by_user_id) VALUES ('DG-PREMATURE',NULL,$1,$2,'STANDALONE',$3,$4,NULL,'PREPARING',$5) RETURNING id",
+            [school, supplier, randomUUID(), hex64(), supUser],
+          )
+        ).rows[0].id;
+        const stageSql = await readFile(
+          path.join(
+            root,
+            "prisma/migrations",
+            stageSchemaMigration,
+            "migration.sql",
+          ),
+          "utf8",
+        );
+        await assert.rejects(legacy.query(stageSql), (error) =>
+          sqlState(error, "P0001"),
+        );
+        await legacy.query("ROLLBACK");
+        await legacy.query("DELETE FROM foodprint.deliveries WHERE id = $1", [
+          prematureDel,
+        ]);
+
+        // Step 2: verify supplier_order_stages at its own migration boundary.
+        await copyMigration(stageSchemaMigration);
+        await runPrisma(isolated.toString(), [
+          "migrate",
+          "deploy",
+          "--config",
+          config,
+        ]);
+        // Marker null preservation and complete baseline immutability
+        const afterUpgrade = await readBaselineSnapshot();
+        assert.deepEqual(afterUpgrade, beforeUpgrade);
+        assert.deepEqual(
+          afterUpgrade.map((row: Record<string, unknown>) => [
+            row.id,
+            row.item_id,
+          ]),
+          [
+            [legacyDel, legacyItem],
+            [v1Del, v1Item],
+          ],
+        );
+        const markerRows = (
+          await legacy.query<{ id: string; workflow_version: number | null }>(
+            "SELECT id, workflow_version FROM foodprint.deliveries WHERE id IN ($1, $2)",
+            [legacyDel, v1Del],
+          )
+        ).rows;
+        assert.deepEqual(
+          markerRows.map((row) => row.workflow_version),
+          [null, null],
+        );
+
+        // Catalog checks: nullable column, CHECKs, 3 partial uniques, legacy uniques removed, FKs/nonuniques/QRs/header uniques kept
+        const wfCol = (
+          await legacy.query<{
+            is_nullable: string;
+            data_type: string;
+            column_default: string | null;
+          }>(
+            `SELECT is_nullable, data_type, column_default
+             FROM information_schema.columns
+             WHERE table_schema = 'foodprint' AND table_name = 'deliveries' AND column_name = 'workflow_version'`,
+          )
+        ).rows[0];
+        assert.deepEqual(wfCol, {
+          is_nullable: "YES",
+          data_type: "integer",
+          column_default: null,
+        });
+
+        const checks = (
+          await legacy.query<{ conname: string; convalidated: boolean }>(
+            `SELECT conname, convalidated
+             FROM pg_constraint
+             WHERE conrelid = 'foodprint.deliveries'::regclass
+               AND conname IN ('chk_delivery_traceability_version', 'chk_delivery_workflow_version')
+             ORDER BY conname`,
+          )
+        ).rows;
+        assert.deepEqual(checks, [
+          { conname: "chk_delivery_traceability_version", convalidated: true },
+          { conname: "chk_delivery_workflow_version", convalidated: true },
+        ]);
+
+        const partialIndexes = (
+          await legacy.query<{ indexname: string; indexdef: string }>(
+            `SELECT indexname, indexdef
+             FROM pg_indexes
+             WHERE schemaname = 'foodprint'
+               AND tablename = 'delivery_items'
+               AND indexname IN (
+                 'uq_delivery_items_ingredient_source',
+                 'uq_delivery_items_legacy_ingredient',
+                 'uq_delivery_items_legacy_request_item'
+               )
+             ORDER BY indexname`,
+          )
+        ).rows;
+        assert.equal(partialIndexes.length, 3);
+        const byIndexName = Object.fromEntries(
+          partialIndexes.map((row) => [row.indexname, row.indexdef]),
+        );
+        assert.match(
+          byIndexName.uq_delivery_items_ingredient_source,
+          /CREATE UNIQUE INDEX/i,
+        );
+        assert.match(
+          byIndexName.uq_delivery_items_ingredient_source,
+          /\(delivery_id, ingredient_id, source_facility_id\) WHERE \(?source_facility_id IS NOT NULL\)?/i,
+        );
+        assert.match(
+          byIndexName.uq_delivery_items_legacy_ingredient,
+          /CREATE UNIQUE INDEX/i,
+        );
+        assert.match(
+          byIndexName.uq_delivery_items_legacy_ingredient,
+          /\(delivery_id, ingredient_id\) WHERE \(?source_facility_id IS NULL\)?/i,
+        );
+        assert.match(
+          byIndexName.uq_delivery_items_legacy_request_item,
+          /CREATE UNIQUE INDEX/i,
+        );
+        assert.match(
+          byIndexName.uq_delivery_items_legacy_request_item,
+          /\(delivery_id, supply_request_item_id\) WHERE \(?source_facility_id IS NULL\)?/i,
+        );
+
+        const droppedFullUniques = (
+          await legacy.query<{ name: string }>(
+            `SELECT indexname AS name FROM pg_indexes
+             WHERE schemaname = 'foodprint' AND indexname IN (
+               'delivery_items_delivery_id_ingredient_id_key',
+               'delivery_items_delivery_id_supply_request_item_id_key'
+             )
+             UNION ALL
+             SELECT conname AS name FROM pg_constraint
+             WHERE conrelid = 'foodprint.delivery_items'::regclass AND conname IN (
+               'delivery_items_delivery_id_ingredient_id_key',
+               'delivery_items_delivery_id_supply_request_item_id_key'
+             )`,
+          )
+        ).rows;
+        assert.deepEqual(droppedFullUniques, []);
+
+        const retainedItemIndexes = (
+          await legacy.query<{ indexname: string }>(
+            `SELECT indexname
+             FROM pg_indexes
+             WHERE schemaname = 'foodprint'
+               AND tablename = 'delivery_items'
+               AND indexname IN (
+                 'delivery_items_qr_token_key',
+                 'idx_delivery_items_delivery',
+                 'idx_delivery_items_request_item',
+                 'idx_delivery_items_ingredient',
+                 'idx_delivery_items_ingredient_entry',
+                 'idx_delivery_items_source_facility'
+               )
+             ORDER BY indexname`,
+          )
+        ).rows.map((row) => row.indexname);
+        assert.deepEqual(retainedItemIndexes, [
+          "delivery_items_qr_token_key",
+          "idx_delivery_items_delivery",
+          "idx_delivery_items_ingredient",
+          "idx_delivery_items_ingredient_entry",
+          "idx_delivery_items_request_item",
+          "idx_delivery_items_source_facility",
+        ]);
+
+        const itemForeignKeys = (
+          await legacy.query<{ count: number; validated: boolean }>(
+            `SELECT count(*)::int AS count, bool_and(convalidated) AS validated
+             FROM pg_constraint
+             WHERE conrelid = 'foodprint.delivery_items'::regclass AND contype = 'f'`,
+          )
+        ).rows[0];
+        assert.deepEqual(itemForeignKeys, { count: 5, validated: true });
+
+        const headerIndexes = (
+          await legacy.query<{ indexname: string }>(
+            `SELECT indexname
+             FROM pg_indexes
+             WHERE schemaname = 'foodprint'
+               AND tablename = 'deliveries'
+               AND indexname IN (
+                 'uq_deliveries_supplier_no',
+                 'uq_deliveries_request_mode',
+                 'uq_deliveries_creation_idempotency'
+               )
+             ORDER BY indexname`,
+          )
+        ).rows.map((row) => row.indexname);
+        assert.deepEqual(headerIndexes, [
+          "uq_deliveries_creation_idempotency",
+          "uq_deliveries_request_mode",
+          "uq_deliveries_supplier_no",
+        ]);
+
+        // Status / metadata / marker CHECKs
+        const badDeliveries: Array<[string, string, unknown[], string]> = [
+          [
+            "workflow_version = 2 missing traceability_version",
+            "INSERT INTO foodprint.deliveries(delivery_no,supply_request_id,school_id,supplier_id,creation_mode,creation_key,creation_fingerprint,traceability_version,workflow_version,status,created_by_user_id) VALUES ('FP-DE-00002',NULL,$1,$2,'STANDALONE',$3,$4,NULL,2,'PREPARING',$5)",
+            [school, supplier, randomUUID(), hex64(), supUser],
+            "chk_delivery_traceability_version",
+          ],
+          [
+            "workflow_version = NULL with PREPARING",
+            "INSERT INTO foodprint.deliveries(delivery_no,supply_request_id,school_id,supplier_id,creation_mode,creation_key,creation_fingerprint,traceability_version,workflow_version,status,created_by_user_id,expected_arrival_at,vehicle_plate) VALUES ('FP-DE-00002',NULL,$1,$2,'STANDALONE',$3,$4,1,NULL,'PREPARING',$5,$6,'51A-10001')",
+            [school, supplier, randomUUID(), hex64(), supUser, v1Arrival],
+            "chk_delivery_traceability_version",
+          ],
+          [
+            "workflow_version = 1 rejected",
+            "INSERT INTO foodprint.deliveries(delivery_no,supply_request_id,school_id,supplier_id,creation_mode,creation_key,creation_fingerprint,traceability_version,workflow_version,status,created_by_user_id) VALUES ('FP-DE-00002',NULL,$1,$2,'STANDALONE',$3,$4,1,1,'PREPARING',$5)",
+            [school, supplier, randomUUID(), hex64(), supUser],
+            "chk_delivery_traceability_version",
+          ],
+          [
+            "PREPARING with expected_arrival_at set rejected",
+            "INSERT INTO foodprint.deliveries(delivery_no,supply_request_id,school_id,supplier_id,creation_mode,creation_key,creation_fingerprint,traceability_version,workflow_version,status,created_by_user_id,expected_arrival_at,vehicle_plate) VALUES ('FP-DE-00002',NULL,$1,$2,'STANDALONE',$3,$4,1,2,'PREPARING',$5,$6,NULL)",
+            [school, supplier, randomUUID(), hex64(), supUser, v1Arrival],
+            "chk_delivery_traceability_version",
+          ],
+          [
+            "PREPARING with vehicle_plate set rejected",
+            "INSERT INTO foodprint.deliveries(delivery_no,supply_request_id,school_id,supplier_id,creation_mode,creation_key,creation_fingerprint,traceability_version,workflow_version,status,created_by_user_id,expected_arrival_at,vehicle_plate) VALUES ('FP-DE-00002',NULL,$1,$2,'STANDALONE',$3,$4,1,2,'PREPARING',$5,NULL,'51A-10002')",
+            [school, supplier, randomUUID(), hex64(), supUser],
+            "chk_delivery_traceability_version",
+          ],
+          [
+            "workflow_version = 2 IN_TRANSIT missing shipping metadata rejected",
+            "INSERT INTO foodprint.deliveries(delivery_no,supply_request_id,school_id,supplier_id,creation_mode,creation_key,creation_fingerprint,traceability_version,workflow_version,status,created_by_user_id) VALUES ('FP-DE-00002',NULL,$1,$2,'STANDALONE',$3,$4,1,2,'IN_TRANSIT',$5)",
+            [school, supplier, randomUUID(), hex64(), supUser],
+            "chk_delivery_traceability_version",
+          ],
+          [
+            "workflow_version = 2 CANCELLED half-populated metadata rejected",
+            "INSERT INTO foodprint.deliveries(delivery_no,supply_request_id,school_id,supplier_id,creation_mode,creation_key,creation_fingerprint,traceability_version,workflow_version,status,created_by_user_id,expected_arrival_at,vehicle_plate) VALUES ('FP-DE-00002',NULL,$1,$2,'STANDALONE',$3,$4,1,2,'CANCELLED',$5,$6,NULL)",
+            [school, supplier, randomUUID(), hex64(), supUser, v1Arrival],
+            "chk_delivery_traceability_version",
+          ],
+        ];
+        for (const [label, badSql, badParams, constraint] of badDeliveries) {
+          await assert.rejects(
+            legacy.query(badSql, badParams),
+            (error) => sqlState(error, "23514", constraint),
+            label,
+          );
+        }
+
+        // Valid v2 PREPARING -> dispatch IN_TRANSIT, pre-dispatch CANCELLED, post-dispatch CANCELLED_MEAL
+        const v2ReqDel = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.deliveries(delivery_no,supply_request_id,school_id,supplier_id,creation_mode,creation_key,creation_fingerprint,traceability_version,workflow_version,status,created_by_user_id) VALUES ('FP-DE-00002',$1,$2,$3,'REQUEST',$4,$5,1,2,'PREPARING',$6) RETURNING id",
+            [srV2, school, supplier, randomUUID(), hex64(), supUser],
+          )
+        ).rows[0].id;
+        await legacy.query(
+          "UPDATE foodprint.deliveries SET status = 'IN_TRANSIT', expected_arrival_at = $2, vehicle_plate = '51D-20002' WHERE id = $1",
+          [v2ReqDel, v1Arrival],
+        );
+        await legacy.query(
+          "INSERT INTO foodprint.deliveries(delivery_no,supply_request_id,school_id,supplier_id,creation_mode,creation_key,creation_fingerprint,traceability_version,workflow_version,status,created_by_user_id) VALUES ('FP-DE-00003',NULL,$1,$2,'STANDALONE',$3,$4,1,2,'CANCELLED',$5)",
+          [school, supplier, randomUUID(), hex64(), supUser],
+        );
+        await legacy.query(
+          "INSERT INTO foodprint.deliveries(delivery_no,supply_request_id,school_id,supplier_id,creation_mode,creation_key,creation_fingerprint,traceability_version,workflow_version,status,created_by_user_id,expected_arrival_at,vehicle_plate) VALUES ('FP-DE-00004',NULL,$1,$2,'STANDALONE',$3,$4,1,2,'CANCELLED_MEAL',$5,$6,'51D-30003')",
+          [school, supplier, randomUUID(), hex64(), supUser, v1Arrival],
+        );
+
+        // Partial unique invariants on delivery_items
+        // Non-null source_facility_id: same (delivery, sri, ingredient) across facA + facB allowed; same facility + another ingredient allowed; duplicate (delivery, ingredient, facA) rejected
+        for (const [
+          sriId,
+          ingId,
+          entryId,
+          facId,
+          facCode,
+          facName,
+          ingName,
+          qty,
+        ] of [
+          [
+            sriV2a,
+            ing1,
+            entry1,
+            facA,
+            "SF-S1",
+            "Trang trại S1",
+            "Gạo ST25 Stage",
+            "6.000",
+          ],
+          [
+            sriV2a,
+            ing1,
+            entry1,
+            facB,
+            "SF-S2",
+            "Trang trại S2",
+            "Gạo ST25 Stage",
+            "4.000",
+          ],
+          [
+            sriV2b,
+            ing2,
+            entry2,
+            facA,
+            "SF-S1",
+            "Trang trại S1",
+            "Cà rốt Stage",
+            "5.000",
+          ],
+        ] as const) {
+          const qr = hex64();
+          await legacy.query(
+            "INSERT INTO foodprint.delivery_items(delivery_id,supply_request_item_id,ingredient_id,ingredient_entry_id,source_facility_id,source_facility_name_snapshot,source_facility_code_snapshot,ingredient_name_snapshot,qr_token,qr_url,actual_quantity,unit) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'kg')",
+            [
+              v2ReqDel,
+              sriId,
+              ingId,
+              entryId,
+              facId,
+              facName,
+              facCode,
+              ingName,
+              qr,
+              `https://trace.example.test/public/trace/${qr}`,
+              qty,
+            ],
+          );
+        }
+        const dupQr = hex64();
+        await assert.rejects(
+          legacy.query(
+            "INSERT INTO foodprint.delivery_items(delivery_id,supply_request_item_id,ingredient_id,ingredient_entry_id,source_facility_id,source_facility_name_snapshot,source_facility_code_snapshot,ingredient_name_snapshot,qr_token,qr_url,actual_quantity,unit) VALUES ($1,$2,$3,$4,$5,'Trang trại S1','SF-S1','Gạo ST25 Stage',$6,$7,1.000,'kg')",
+            [
+              v2ReqDel,
+              sriV2a,
+              ing1,
+              entry1,
+              facA,
+              dupQr,
+              `https://trace.example.test/public/trace/${dupQr}`,
+            ],
+          ),
+          (error) =>
+            sqlState(error, "23505", "uq_delivery_items_ingredient_source"),
+        );
+
+        // Null source_facility_id: legacy two invariants stay enforced independently
+        await assert.rejects(
+          legacy.query(
+            "INSERT INTO foodprint.delivery_items(delivery_id,supply_request_item_id,ingredient_id,ingredient_entry_id,actual_quantity,unit) VALUES ($1,$2,$3,$4,1.000,'kg')",
+            [legacyDel, sriV1, ing1, entry1],
+          ),
+          (error) =>
+            sqlState(error, "23505", "uq_delivery_items_legacy_ingredient"),
+        );
+        await assert.rejects(
+          legacy.query(
+            "INSERT INTO foodprint.delivery_items(delivery_id,supply_request_item_id,ingredient_id,ingredient_entry_id,actual_quantity,unit) VALUES ($1,$2,$3,$4,1.000,'kg')",
+            [legacyDel, sriLegacy, ing2, entry2],
+          ),
+          (error) =>
+            sqlState(error, "23505", "uq_delivery_items_legacy_request_item"),
+        );
+
+        // The current schema also includes migrations added after these stages.
+        // Check parity only after rolling this isolated database forward to head.
+        for (const subsequent of migrationNames.filter(
+          (item) => item > stageSchemaMigration,
+        )) {
+          await copyMigration(subsequent);
+        }
+        await runPrisma(isolated.toString(), [
+          "migrate",
+          "deploy",
+          "--config",
+          config,
+        ]);
+        const completedMigrations = (
+          await legacy.query<{ migration_name: string }>(
+            `SELECT migration_name FROM foodprint._prisma_migrations
+             WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL
+             ORDER BY migration_name`,
+          )
+        ).rows.map((row) => row.migration_name);
+        assert.deepEqual(completedMigrations, migrationNames);
+        assert.deepEqual(await readBaselineSnapshot(), beforeUpgrade);
+        await runPrisma(isolated.toString(), [
+          "migrate",
+          "diff",
+          "--from-config-datasource",
+          "--to-schema",
+          path.join(root, "prisma/schema.prisma"),
+          "--exit-code",
+          "--config",
+          config,
+        ]);
+      } finally {
+        await legacy.end();
+        await rm(temporary, { recursive: true, force: true });
+        await db.query(`DROP DATABASE "${name}"`);
+      }
+    },
+  );
 });

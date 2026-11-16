@@ -1,88 +1,111 @@
-# Data Model: Nguồn cung và QR của đơn giao
+# Data Model: Đơn giao theo bước và nhiều nguồn nguyên liệu
 
-**Date**: 2026-11-15 | Áp dụng cho bản sửa đổi của [spec](spec.md).
+**Date**: 2026-11-15 | **Spec**: [spec.md](spec.md)35 FR/14 SC | **Research**: [research.md](research.md)
 
-## 1. Delivery
+Thiết kế mục tiêu sau clarification; chưa thay schema/database. Giữ mô hình Delivery/DeliveryItem/SupplyRequestItem/Lot, không thêm business entity hoặc bảng allocation.
 
-Giữ UUID PK, schoolId, supplierId, nguồn nullable, creationMode REQUEST/STANDALONE hoặc null legacy, creationKey/fingerprint và các timestamps hiện hữu.
+## 1. Hai cách tạo và bước xác nhận
 
-| Trường                      | Thiết kế hiện hành sau amendment                                                                                                                                 |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| deliveryNo                  | Giữ varchar(80), bỏ unique toàn cục, thêm unique `(supplierId,deliveryNo)` tên `uq_deliveries_supplier_no`. Mã cũ nguyên vẹn; v1 sinh FP-DE-00001 theo supplier. |
-| traceabilityVersion         | Thêm Int nullable, SQL `traceability_version`; null là baseline, 1 là luồng mới. Không mặc định 1 cho record cũ hoặc writer legacy.                              |
-| expectedArrivalAt           | Giữ nullable để đọc legacy; v1 bắt buộc thời điểm có timezone hợp lệ, lưu UTC.                                                                                   |
-| vehiclePlate                | Giữ nullable varchar(40); v1 bắt buộc trim 1..40. Không áp regex biển số quốc gia chưa được yêu cầu.                                                             |
-| status                      | Giữ DeliveryStatus; service tạo v1 explicit IN_TRANSIT, không đổi default CREATED phục vụ legacy.                                                                |
-| arrivedAt                   | Server ghi một lần khi trường xác nhận arrival; không cho client tự nhập.                                                                                        |
-| receivedAt/receivedByUserId | Chỉ ghi cùng final receipt thành công như hiện hành.                                                                                                             |
+REQUEST: SupplyRequest.SENT → ACCEPTED khi tiếp nhận, giữ người/thời điểm đầu tiên; ACCEPTED/IN_PROGRESS chưa có Delivery có projection CONFIRMED. Chưa lưu Delivery rỗng. Hoàn tất nguyên liệu/allocations tạo Delivery PREPARING và chuyển ACCEPTED → IN_PROGRESS cùng transaction; không đổi raw IN_PROGRESS về ACCEPTED.
 
-CHECK mới: version chỉ null hoặc1; khi1 phải có creationMode/key/fingerprint/actor, plate không trắng, ETA không null và deliveryNo canonical positive; v1 không dùng CREATED/APPROVED làm trạng thái vận hành. Regex phải chặn zero và dạng padding sai; độ dài mã tối đa80. Không dùng CHECK liên bảng để thay kiểm tra scope hoặc số dòng. Giữ `chk_delivery_creation_mode_source`, fingerprint SHA256, mã không trắng và CHECK receipt hiện hữu.
+STANDALONE: tìm/chọn trường linked → nhập nguyên liệu; không có CONFIRMED/Đã xác nhận ở form context, projection hoặc trạng thái. Chưa lưu nguyên liệu thì chưa có Delivery/ID/mã/QR. Lưu đủ nguyên liệu lần đầu tạo PREPARING, sau đó dispatch mới IN_TRANSIT. Không cần trường xác nhận trước lập đơn, không tạo SupplyRequest giả hoặc lưu draft. Bốn bên kiểm nhận sau arrival vẫn bắt buộc.
 
-Giữ nguyên partial unique `uq_deliveries_request_mode` và `uq_deliveries_creation_idempotency`, các index school/status và supplier/created. Một source đã có bất cứ Delivery legacy/new nào vẫn không được tạo thêm REQUEST mới.
+## 2. Delivery header và CHECK
 
-## 2. DeliveryItem
+| Thành phần                      | Thiết kế                                                                                                                  |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| DeliveryStatus                  | Thêm PREPARING, giữ enum/default CREATED legacy; CONFIRMED không là trạng thái Delivery, APPROVED giữ nghĩa kiểm nhận cũ. |
+| workflowVersion                 | Int? mapped workflow_version: null lịch sử,2 writer từng bước mới; không default/backfill.                                |
+| traceabilityVersion             | Giữ1 cho workflow2 và v1 cũ, null legacy; không đổi format QR.                                                            |
+| expectedArrivalAt/vehiclePlate  | PREPARING cả-null; dispatch ghi thời gian offset→UTC và plate trim1..40. Không thêm future-date rule/regex quốc gia.      |
+| creationKey/creationFingerprint | Giữ unique supplier+actor+key; canonical v3 gồm từng allocation theo phần5, không gồm metadata giao.                      |
+| deliveryNo                      | UUID là PK; mã FP-DE riêng supplier cấp một lần ở hoàn tất nguyên liệu, giữ composite unique và dãy hiện có.              |
+| timestamps                      | createdAt/updatedAt hiện có; không thêm dispatchedAt, replay không ghi lại thời gian.                                     |
 
-Giữ ingredientId bắt buộc, ingredientEntryId nullable, supplyRequestItemId nullable, Decimal(14,3)>0, unit/note; giữ unique `(deliveryId,ingredientId)` và `(deliveryId,supplyRequestItemId)`.
+Giữ schoolId bắt buộc, supplierId, creationMode/source nullable của STANDALONE, các FK và unique/partial index của header. CHECK marker chỉ null/2, PREPARING phải workflow2; workflow2 bắt buộc traceabilityVersion IS NOT NULL và bằng1. Nhánh traceability1 vẫn đòi creationMode/key/fingerprint/actor và mã canonical dương. Nhánh workflow null giữ predicate v1 cũ (đủ ETA/plate, không CREATED/APPROVED); legacy traceability null giữ baseline.
 
-| Trường thêm                | Kiểu / quy tắc                                                                                                    |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| sourceFacilityId           | UUID nullable legacy, FK RESTRICT/NO ACTION tới SourceFacility; v1 bắt buộc, cùng supplier và ACTIVE khi tạo.     |
-| sourceFacilityNameSnapshot | varchar(255) nullable legacy, v1 nonblank lấy server từ nguồn lúc tạo.                                            |
-| sourceFacilityCodeSnapshot | varchar(80) nullable, mã cơ sở tại lúc tạo; null hợp lệ với cơ sở legacy chưa có mã.                              |
-| ingredientNameSnapshot     | varchar(255) nullable legacy, v1 lấy server để nhãn không đổi tên khi in lại.                                     |
-| qrToken                    | varchar(160) nullable legacy, unique `delivery_items_qr_token_key`; v1 random hex64, không dùng mã đơn/lot token. |
-| qrUrl                      | varchar(2048) nullable legacy, URL tuyệt đối từ PUBLIC_TRACE_ORIGIN + public token path; lưu để in lại đúng QR.   |
+| Status workflow2                                      | Metadata giao                                                        |
+| ----------------------------------------------------- | -------------------------------------------------------------------- |
+| PREPARING                                             | Cả ETA và plate null.                                                |
+| IN_TRANSIT/ARRIVED/PENDING_APPROVAL/RECEIVED/REJECTED | Cả hai đầy đủ, plate trim1..40.                                      |
+| CANCELLED/CANCELLED_MEAL                              | Cả-null nếu chưa dispatch hoặc cả-đủ nếu đã dispatch; không một nửa. |
 
-Index `idx_delivery_items_source_facility`. CHECK nhóm dữ liệu hoặc toàn bộ source/name/ingredientName/token/url null (code cũng null), hoặc đủ bộ với chuỗi không trắng; code có thể null. Token có dạng hex64 khi có, URL không rỗng. Service bảo đảm mọi item của parent v1 có đủ bộ và parent legacy không tự được nâng cấp qua các route mới; không tuyên bố DB CHECK bảo vệ được toàn bộ child collection.
+Dùng IS NULL/IS NOT NULL tường minh để SQL NULL không làm CHECK vô tình pass. Không dùng CHECK liên bảng thay actor/scope/child validation. Giữ nguyên tên chk_delivery_traceability_version khi thay định nghĩa bằng migration mới.
 
-Source snapshots, token, URL và nội dung dòng bất biến qua luồng công khai/nhãn/arrival/inspection. SourceCode không phải định danh toàn hệ thống; public lookup bằng token, protected lookup bằng UUID + trusted scope. Source null/khác chủ lúc tạo bị từ chối; source INACTIVE sau tạo không làm mất nguồn hoặc ngăn receipt hợp lệ.
+## 3. DeliveryItem và phân bổ nguồn
 
-## 3. IngredientLot và receipt
+Giữ UUID `id` là định danh dòng, mọi cột/FK/Date/Decimal/snapshot/QR hiện có. Không thêm cột allocation. Mỗi allocation là một DeliveryItem: ingredientId, lượng Decimal14,3 dương, unit, đúng một sourceFacility, source name/code snapshots (code null hợp lệ), ingredientNameSnapshot, qrToken/qrUrl riêng. Source ACTIVE và đúng supplier kiểm lúc lưu nguyên liệu; không reselect ACTIVE sau đó. Sau lưu, nội dung/nguồn/QR bất biến.
 
-Không thêm/bỏ cột lot. `IngredientLot.qrToken` hiện hữu vẫn có unique riêng, không dùng làm QR dòng.
+REQUEST: nhiều DeliveryItem được cùng supplyRequestItemId; ingredientId/ingredientEntryId/unit/note của từng item lấy từ dòng nguồn, actualQuantity từ allocation đã validate. Toàn bộ source items phải xuất hiện; tổng Decimal từng group bằng requestedQuantity, không cross-group bù lượng. Cùng một nguyên liệu thực tế không được lặp facility trong cùng Delivery, kể cả dữ liệu nguồn bất thường có hai source IDs trỏ cùng ingredient.
 
-Với mỗi item v1 mới, service lập đúng một lô dự kiến: lotCode `PLAN-01`, sourceFacilityId copy từ item, receivedQuantity bằng actualQuantity, unit bằng item, status BLOCKED, availableQuantity0, manufactureDate/expiryDate null. UUID/token lot do server sinh. Đây là lô dự kiến để kiểm nhận lượng giao, chưa xác nhận nhập kho hoặc khai số lô/ngày của nhà sản xuất. Không sinh InventoryTransaction ở create hoặc arrival. Nếu cần phân lô sản xuất và nhập ngày thực tế, đó là mở rộng riêng; không tạo ngày giả.
+STANDALONE: items1..100 tính theo số dòng allocation, không theo số nguyên liệu phân biệt; cùng ingredient được nhiều nguồn khác nhau. Unit bằng defaultUnit, school IngredientEntry ACTIVE sẵn có thì liên kết, chưa có giữ null; không tạo entry giả. REQUEST không tự đặt trần100 mới, vẫn giới hạn body HTTP và xử lý collections theo batch.
 
-Receipt cho v1 kiểm mỗi lot có sourceFacilityId bằng item.sourceFacilityId và supplier nguồn đúng đơn; không bắt nguồn ACTIVE lại. Giữ kiểm trường/nguyên liệu/entry, lot BLOCKED/chưa tồn, tổng lượng bằng item, ngày hợp lệ theo ngày VN, budget nguồn và không có history. Final APPROVE + attach school entry nếu standalone + receive lot + RECEIPT + RECEIVED dùng cùng transaction. Bất kỳ lỗi nào rollback cả quyết định cuối và kho.
+### Unique/index mục tiêu
 
-Giữ legacy lot/source nullable, nhiều lot trên một item, QR lot, receipt-only unique và quan hệ inventoryTransactions dạng list. Không backfill item source từ một lot bất kỳ. Không thay quantity/history của lot cũ.
+Bỏ hai unique toàn bộ hiện có: delivery_items_delivery_id_ingredient_id_key (index từ migration supplier_order_creation) và delivery_items_delivery_id_supply_request_item_id_key (constraint baseline). Thay bằng:
 
-## 4. Đầu vào và fingerprint
+| Tên index                             | Fields                                   | Predicate                      |
+| ------------------------------------- | ---------------------------------------- | ------------------------------ |
+| uq_delivery_items_ingredient_source   | deliveryId,ingredientId,sourceFacilityId | source_facility_id IS NOT NULL |
+| uq_delivery_items_legacy_ingredient   | deliveryId,ingredientId                  | source_facility_id IS NULL     |
+| uq_delivery_items_legacy_request_item | deliveryId,supplyRequestItemId           | source_facility_id IS NULL     |
 
-- REQUEST: nguồn ACCEPTED/IN_PROGRESS còn thực hiện được, chưa có Delivery; `sources` là exact set SupplyRequestItem của nguồn, mỗi source item đúng một facility. Không nhận ingredient/quantity/unit/school/supplier override. Không áp trần100 mới cho yêu cầu cũ nhiều dòng; collection bị giới hạn bởi kích thước body HTTP hiện hành, xử lý batch.
-- STANDALONE: 1..100 items, nguyên liệu ACTIVE đúng supplier, actualQuantity chuỗi Decimal dương, unit bằng defaultUnit, source hợp lệ; trường đã liên kết ACTIVE và đủ điều kiện intake hiện hành. Không bắt có entry trường lúc create.
-- Cả hai: plate/ETA bắt buộc, note optional; trim/normalize như contract. New record traceabilityVersion1.
-- Fingerprint canonical v2 thêm version, source selections sort theo sourceItemId; standalone sort ingredientId gồm actualQuantity canonical/unit/sourceFacilityId; metadata ISO UTC/trim/null. Cùng key cùng payload -> cùng record; key khác body ->409. Key baseline không được dùng để nâng record thành v1.
+Prisma dùng @@unique với map/where raw tương ứng qua partialIndexes hiện có; không coi partial key là khóa unique operation, luôn dùng UUID. Hai nhánh source-null giữ độc lập cả hai invariant legacy; source-nonnull cấm trùng cặp nguyên liệu–cơ sở trong một đơn nhưng cho các cơ sở khác. Giữ mọi nonunique source/delivery/ingredient/entry index, FK, QR token unique và nhóm metadata CHECK hiện có. Không tham chiếu parent version trong predicate, không thêm child version.
 
-## 5. Dãy mã và locks
+Tạo cả ba index trước drop các unique cũ, kiểm đúng object/index/constraint names từ migration và catalog trong test upgrade được phép. Không sửa/xóa/gộp item/lot/history; dữ liệu cũ vốn tuân unique mạnh hơn nên vẫn hợp lệ, preflight thất bại phải dừng thay vì dọn dữ liệu.
 
-Không thêm bảng counter hoặc PostgreSQL function/trigger. Supplier lock bảo vệ MAX canonical +1; numeric SQL guarded trước cast, service format BigInt. Đơn hủy/reject giữ mã, replay không cấp số. Legacy DG-* không ảnh hưởng dãy; mã FP-DE canonical đã có được tính vào MAX, không đánh lại. Ranh giới99999 ->100000 và trần74chữ số phải được kiểm chứng.
+## 4. IngredientLot và receipt aggregate
 
-Create giữ Serializable `authorizationTransaction` và protocol khóa hiện có: School -> Supplier -> actor User/Role -> pair/relationship nếu standalone -> SupplyRequest nếu REQUEST -> Ingredients theo ID -> SourceFacilities theo ID. Xác minh writer source-facility/relationship dùng cùng parent protocol; source lock chặn đổi trạng thái giữa kiểm và ghi. Đọc replay sau reload quyền/scope và trước ghi/cấp mã; transaction retry dùng cùng candidates QR đã render, không upload/network side effect.
+Mỗi item mới vẫn một PLAN-01 BLOCKED/availableQuantity0, receivedQuantity bằng actualQuantity, unit/source từ item, ngày SX/HSD null thật. Nhiều PLAN-01 trên các item khác nhau không xung đột vì unique theo deliveryItemId+lotCode. Không InventoryTransaction ở create/dispatch/arrival. Legacy item có nhiều lot và inventoryTransactions dạng list giữ nguyên.
 
-Arrival/inspection: khóa school/actor theo shared helper, SupplyRequest nếu có trước Delivery, rồi item/lot IDs tăng dần khi cần; recheck actor/quyền và target trong cùng tx. Không áp lại ACTIVE relationship/intake của cung ứng mới để chặn công việc đã tạo. Không khóa theo deliveryNo đơn lẻ.
+Final receipt trên REQUEST:
 
-## 6. State machine
+1. Giữ source request lock trước Delivery, khóa lot IDs theo thứ tự, đọc lại target và actor trong cùng tx. School inspection header/detail select thêm workflowVersion cho service chọn nhánh, không tự thêm marker vào HTTP inspection/public DTO. Repository operation-specific đọc đủ mọi source item (ID/ingredientEntryId/ingredientId/unit/requestedQuantity) của đúng request/school/supplier; chỉ đọc các current rows không đủ phát hiện thiếu group.
+2. Service giữ kiểm nguồn/lượng/ngày/lịch sử/lot BLOCKED hiện hành, source cùng supplier và lot source bằng item.sourceFacilityId đối với traceability1. Riêng workflow2 kiểm current item trỏ đúng source item, ingredient/entry/unit đúng chính xác nguồn; legacy giữ các quan hệ và chuyển đổi đơn vị tương thích hiện hành, không bị ép unit equality mới. Không yêu cầu facility ACTIVE lại sau bước nguyên liệu.
+3. Group current rows theo supplyRequestItemId, cộng Decimal sau chuyển đổi theo source unit. Repository batch previous RECEIVED theo tập source item IDs, có scope ownership; service cộng previous đúng một lần mỗi group và kiểm previous+currentGroup<=requested. Không vòng lặp budget riêng từng sibling.
+4. Riêng workflow2 REQUEST: tái kiểm đủ tập source, mỗi currentGroup=requested, pair ingredient+facility không trùng, unit đúng như lúc lập đơn. Không áp equality/full coverage này lên legacy/v1 từng nhận từng phần; budget aggregate vẫn áp cho mọi nguồn để không vượt lượng. Equality current không xóa budget previous.
+5. Chỉ sau toàn bộ kiểm tra, đủ4vai trò đạt và chưa có receipt/history mới ghi quyết định cuối, AVAILABLE/quantity/RECEIPT/RECEIVED cùng tx. Lỗi bất kỳ rollback cả quyết định cuối và mọi lot write. Mỗi lot đúng một receipt; quyết định bốn vai trò ở cấp Delivery, không nhân theo số dòng phân bổ.
 
-| Sự kiện                      | Trạng thái lưu                           | Nhãn nghiệp vụ / tác động                                         |
-| ---------------------------- | ---------------------------------------- | ----------------------------------------------------------------- |
-| Tạo v1 thành công            | IN_TRANSIT                               | Đang giao hàng; BLOCKED lots, chưa có tồn/receipt.                |
-| Trường xác nhận arrival      | ARRIVED                                  | Đã đến trường; arrivedAt server một lần, không nhập kho.          |
-| Có 1..3 vai trò đạt          | PENDING_APPROVAL                         | Đang kiểm nhận, chưa hoàn thành.                                  |
-| Đủ4 đạt + receipt hợp lệ     | RECEIVED                                 | Hoàn thành, đúng một receipt/lot.                                 |
-| Bất kỳ role hợp lệ không đạt | REJECTED                                 | Yêu cầu giao hàng lại; quyết định/lý do bất biến, không nhận kho. |
-| Cap3 cùng nguồn              | CANCELLED cho yêu cầu và các đợt còn chờ | Hủy nguồn và các đợt chưa nhận; không đảo RECEIVED.               |
-| Đơn thủ công mới             | IN_TRANSIT                               | Mã/QR/quyết định mới; source null, không đổi chuỗi cũ.            |
+STANDALONE giữ kiểm entry trường ACTIVE ở receipt; nhiều item cùng ingredient có thể cùng entry trường nhưng lots/nguồn riêng. Có thể batch lookup entry theo unique ingredient IDs để tránh lặp query, không gom mất dòng/lot. Không làm thay đổi policy legacy về active source entries ngoài yêu cầu hiện có.
 
-Raw status giữ tương thích. statusLabel mới dùng chung cho supplier/inspection/QR; CREATED/APPROVED của legacy không bị đổi hoặc coi là RECEIVED. Arrival chỉ chuyển IN_TRANSIT có traceabilityVersion1; replay khi arrivedAt đã có và trạng thái tiến triển trả cùng kết quả, không downgrade; terminal bị hủy/nguồn hủy không cho lần arrival mới. Không tự chuyển SupplyRequest COMPLETED ngoài chính sách hiện có.
+## 5. Validation, canonical fingerprint và replay
 
-## 7. Migration và rollout
+REQUEST sources: mỗi `{supplyRequestItemId,sourceFacilityId,actualQuantity}` strict; actualQuantity chuỗi dương tối đa11 chữ số nguyên/3 thập phân, canonical, không float Number. Cho lặp requestItemId nhưng cấm cặp requestItemId+facility lặp ở validation400; service còn kiểm cặp ingredient thực tế+facility409 và tổng/coverage409 theo DB. Không nhận ingredient/unit override.
 
-1. Viết một migration mới theo history hiện có, không chỉnh migration supplier_order_creation đã applied.
-2. Thêm nullable fields, FK/index/CHECK; preflight không sửa dữ liệu khi cấu trúc lịch sử không như dự kiến.
-3. Tạo composite unique trước khi bỏ `deliveries_delivery_no_key`; schema Prisma dùng đúng tên map. Không có FK handwritten trỏ vào delivery_no trong source đã rà soát; migration vẫn kiểm catalog/dependency trên disposable trước rollout.
-4. Không cập nhật code/status/timestamp/mode/snapshot/token/version của dữ liệu cũ; giữ mọi source/item/lot/approval/history và predicates cũ.
-5. Deploy schema trước rồi app mới, ngừng writer app cũ khi mở v1. Config PUBLIC_TRACE_ORIGIN hợp lệ trước tạo nhãn; duy trì origin đã in. Payload cũ thiếu nguồn/plate/ETA trở thành400 ở POST mới, nhưng legacy GET còn đọc được với nguồn/QR null và labels unavailable.
-6. Không tự downgrade global unique sau khi có mã trùng giữa suppliers. Rollback app cần reviewed compatibility plan, không reset/renumber để phục hồi unique.
+STANDALONE items: giữ shape có ingredientId/sourceFacilityId/actualQuantity/unit; cấm trùng cặp ingredientId+facility400 thay cho cấm ingredient. Các nguyên liệu khác nhau được dùng chung facility. Missing/null source hoặc quantity không hợp lệ400 theo nested path.
 
-Bước plan không tạo/applied SQL hoặc cập nhật database. Tất cả kiểm thử mutation sau này cần disposable local được chỉ định và ủy quyền riêng.
+Canonical v3 (chưa implement trong checkout, thay thiết kế v3 cũ trước triển khai): REQUEST sort tuple requestItemId,facilityId và ghi quantity canonical; STANDALONE sort ingredientId,facilityId và ghi quantity/unit canonical; giữ mode/source-or-school/note. Chuẩn hóa/sort trước QR candidate assignment/persistence. Reorder6+4 không đổi hash; đổi5+5 hoặc nguồn thì hash đổi dù tổng bằng nhau. Same key khác body409, same body200 current result; key record workflow null409, không nâng cấp. Mọi replay cần live auth/scope và không render QR/lấy origin lại chỉ để trả kết quả cũ.
+
+DISPATCH giữ UUID+workflow2+cặp metadata bất biến làm bằng chứng thành công, không thêm key/hash/timestamp; canonical ETA UTC/plate trim cùng nhau trả200 trạng thái hiện tại sau đến/nhận/từ chối/hủy, khác body409, hủy trước dispatch/null marker409. Replay không ghi updatedAt hoặc áp lại điều kiện nghiệp vụ first dispatch.
+
+## 6. Progress projection và school search
+
+Supply-order list/detail SUPPLIER thêm orderProgress `{stage,statusLabel,deliveryId,nextAction}` hoặc null; CONFIRMED chỉ cho REQUEST ACCEPTED/IN_PROGRESS chưa bất kỳ Delivery. REQUEST Delivery duy nhất dùng trạng thái thực; legacy nhiều đợt không có REQUEST duy nhất giữ null. Raw source status và accept receipt4trường giữ nguyên, SCHOOL/SYSTEM không đổi.
+
+NextAction: ADD_INGREDIENTS khi nguồn còn thực hiện được/chưa delivery và có manage; ENTER_SHIPPING khi workflow2/PREPARING, nguồn chưa terminal và có manage; TRACK_DELIVERY khi IN_TRANSIT và có quyền đọc, VIEW_DELIVERY/NONE theo quyền/trạng thái. Supplier summary/detail thêm workflowVersion/nextAction, null legacy hợp lệ. STANDALONE không được gán CONFIRMED ở bất kỳ output/context; sau chọn trường chưa có record/state. Public QR không thêm marker/action/IDs/xe/ETA.
+
+School search không thay schema. GET options/schools nhận search riêng: string trim max100, blank→undefined; tìm literal một phần name OR code insensitive. Không unaccent/full-text/index/extension mới. Repository giữ AND eligibility (school ACTIVE/intake ACTIVE/admin không DEACTIVATED/relationship ACTIVE đúng supplier) với OR search; escape backslash/percent/underscore bằng pattern repository hiện có. Code null vẫn match name, không fabricate code. Order id asc, page1/limit20/max100, limit+1, safe `{id,code,name}`. Query không nhận supplierId/schoolId override; POST vẫn recheck target/relationship khi ghi. School-specific schema/DTO để ingredients/source/labels không nhận search.
+
+## 7. Transactions và state machine
+
+CREATE: giữ ReadCommitted/maxWait20s/timeout30s/retry lock tối đa2 lần. Parent school→supplier→actor user→role SHARE, source request nếu REQUEST hoặc pair/relationship/ingredient nếu STANDALONE, rồi facilities theo ID. Verify actor/role/quyền/scope, validate allocations/nguồn dưới lock, ghi mã/header PREPARING+marker2/items/QR/lot/source IN_PROGRESS cùng tx. Không side effects mạng trong callback; candidates dùng lại khi retry, replay đọc trước render/cấp mã.
+
+DISPATCH: scoped hint lookup → parent locks → source request nếu có → Delivery, reload principal/target, recognize replay rồi mới first-dispatch continuation. CAS đúng UUID+supplier+workflow2+PREPARING+cả-null ghi metadata+IN_TRANSIT. Không áp lại intake/relationship/ingredient/source ACTIVE của cung ứng mới, vẫn chặn source terminal/admin DEACTIVATED cho lần đầu. Hủy/arrival/receipt dùng cùng source→Delivery protocol, không khóa theo deliveryNo đơn lẻ. Repository không mở tx độc lập, service không Prisma query args.
+
+| Hành động                  | Trước                                    | Sau                                                                      |
+| -------------------------- | ---------------------------------------- | ------------------------------------------------------------------------ |
+| Tiếp nhận REQUEST          | SENT                                     | SupplyRequest.ACCEPTED, projection CONFIRMED; chưa Delivery.             |
+| Chọn trường STANDALONE     | Bắt đầu tạo                              | Nhập nguyên liệu, chưa state/record; không CONFIRMED.                    |
+| Lưu nguyên liệu REQUEST    | CONFIRMED hoặc IN_PROGRESS chưa Delivery | Delivery.PREPARING, đủ allocations/tổng/QR/lô, source IN_PROGRESS.       |
+| Lưu nguyên liệu STANDALONE | Đã chọn trường, nhập nội dung            | Delivery.PREPARING; không qua CONFIRMED.                                 |
+| Dispatch cả hai            | PREPARING                                | IN_TRANSIT, đủ metadata giao.                                            |
+| Arrival/kiểm nhận          | IN_TRANSIT→ARRIVED/PENDING_APPROVAL      | REJECTED hoặc RECEIVED chỉ sau điều kiện hiện hành và receipt aggregate. |
+| Hủy phần chưa nhận         | Gồm PREPARING                            | CANCELLED; giữ metadata cả-null/cả-đủ và mọi history.                    |
+
+## 8. Migration và rollout
+
+1. Chuẩn bị hai migration mới sau history lớn nhất (hiện20261118000100): `20261118000200_delivery_preparing_status/migration.sql` enum-only; `20261118000300_supplier_order_stages/migration.sql` marker/CHECK và ba partial child uniques thay hai unique cũ. Các file mới này hiện chưa tồn tại, được chốt lại thứ tự nếu history thay đổi trước implement; không sửa SQL đã có.
+2. Commit enum migration trước khi migration sau dùng PREPARING; không gộp vào transaction chứa enum chưa commit. Tạo partial indexes trước drop unique cũ, giữ dữ liệu/timestamps/predicates khác. Không viết/applied SQL ở bước plan.
+3. Tests fresh Prisma deploy + upgrade baseline/v1, catalog partial predicates, null semantics, duplicate-pair/legacy cardinality, child identity/receipt aggregate, IDs/mã/QR/lot/quyết định/kho nguyên vẹn. Chạy chỉ trên local disposable có chọn/ủy quyền, không introspect hoặc backfill member/Azure.
+4. Schema trước app/client; dừng writer cũ tạo thẳng IN_TRANSIT trước mở workflow2/multi-source payload. GET/QR/arrival/inspection v1 cũ tiếp tục hợp lệ; không gắn marker2/downgrade record. REQUEST payload cũ thiếu actualQuantity400; ETA/plate tại create400.
+5. Rollback app cũ sau nhiều dòng hoặc PREPARING cần compatibility review, không tự restore unique cũ/xóa dòng/gộp QR/điền xe-ngày giả. `database/SCHEMA_BASELINE.md` ghi artifact/deployment thật khi implement/deploy được phép; plan không cấp phép chạy migration/seed/deploy.

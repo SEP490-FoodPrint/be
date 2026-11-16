@@ -14,6 +14,7 @@ export const supplierOrderSummarySelect = {
   deliveryNo: true,
   creationMode: true,
   traceabilityVersion: true,
+  workflowVersion: true,
   schoolId: true,
   supplierId: true,
   supplyRequestId: true,
@@ -27,7 +28,7 @@ export const supplierOrderSummarySelect = {
   createdAt: true,
   updatedAt: true,
   School: { select: { name: true } },
-  SupplyRequest: { select: { requestNo: true } },
+  SupplyRequest: { select: { requestNo: true, status: true } },
 } satisfies Prisma.DeliverySelect;
 
 export const supplierOrderDetailSelect = {
@@ -190,6 +191,7 @@ export interface SupplierOrderIngredientEntryMatch {
 }
 
 export interface SupplierOrderCreateDeliveryItemInput {
+  id?: string;
   supplyRequestItemId: string | null;
   ingredientId: string;
   ingredientEntryId: string | null;
@@ -210,6 +212,7 @@ export interface SupplierOrderCreateDeliveryInput {
   creationKey: string;
   creationFingerprint: string;
   traceabilityVersion: number | null;
+  workflowVersion?: number | null;
   schoolId: string;
   supplierId: string;
   supplyRequestId: string | null;
@@ -227,6 +230,13 @@ export interface SupplierOrderOptionsCommand {
   take: number;
 }
 
+export interface SupplierOrderSchoolOptionsCommand {
+  supplierId: string;
+  skip: number;
+  take: number;
+  search?: string;
+}
+
 export interface SupplierOrderSourceFacilityOptionsCommand {
   scope: SupplierOrderScope & Prisma.SourceFacilityWhereInput;
   skip: number;
@@ -237,6 +247,13 @@ export interface SupplierOrderLabelListCommand {
   deliveryId: string;
   skip: number;
   take: number;
+}
+
+export interface DispatchSupplierOrderCommand {
+  scope: SupplierOrderScope & Prisma.DeliveryWhereInput;
+  deliveryId: string;
+  expectedArrivalAt: Date;
+  vehiclePlate: string;
 }
 
 export interface SupplierOrderListCommand {
@@ -290,7 +307,7 @@ export interface SupplierOrderRepository {
   ): Promise<number>;
   listSchoolOptions(
     db: SupplierOrderDb,
-    command: SupplierOrderOptionsCommand,
+    command: SupplierOrderSchoolOptionsCommand,
   ): Promise<SupplierOrderSchoolOptionRecord[]>;
   listIngredientOptions(
     db: SupplierOrderDb,
@@ -327,6 +344,10 @@ export interface SupplierOrderRepository {
     db: SupplierOrderDb,
     command: SupplierOrderLabelListCommand,
   ): Promise<SupplierOrderLabelItemRecord[]>;
+  dispatchDelivery(
+    db: SupplierOrderDb,
+    command: DispatchSupplierOrderCommand,
+  ): Promise<number>;
 }
 
 export const supplierOrderRepository: SupplierOrderRepository = {
@@ -394,6 +415,7 @@ export const supplierOrderRepository: SupplierOrderRepository = {
         creationKey: input.creationKey,
         creationFingerprint: input.creationFingerprint,
         traceabilityVersion: input.traceabilityVersion,
+        workflowVersion: input.workflowVersion ?? null,
         schoolId: input.schoolId,
         supplierId: input.supplierId,
         supplyRequestId: input.supplyRequestId,
@@ -404,6 +426,7 @@ export const supplierOrderRepository: SupplierOrderRepository = {
         status: input.status,
         deliveryItems: {
           create: input.items.map((item) => ({
+            ...(item.id ? { id: item.id } : {}),
             supplyRequestItemId: item.supplyRequestItemId,
             ingredientId: item.ingredientId,
             ingredientEntryId: item.ingredientEntryId,
@@ -450,23 +473,39 @@ export const supplierOrderRepository: SupplierOrderRepository = {
   },
 
   listSchoolOptions(db, command) {
-    return db.school.findMany({
-      where: {
-        status: "ACTIVE",
-        intakeState: "ACTIVE",
-        users: {
-          none: {
-            roleCode: "SCHOOL_ADMINISTRATION",
-            status: "DEACTIVATED",
-          },
-        },
-        schoolSupplierRelationships: {
-          some: {
-            supplierId: command.supplierId,
-            status: "ACTIVE",
-          },
+    const eligibilityWhere: Prisma.SchoolWhereInput = {
+      status: "ACTIVE",
+      intakeState: "ACTIVE",
+      users: {
+        none: {
+          roleCode: "SCHOOL_ADMINISTRATION",
+          status: "DEACTIVATED",
         },
       },
+      schoolSupplierRelationships: {
+        some: {
+          supplierId: command.supplierId,
+          status: "ACTIVE",
+        },
+      },
+    };
+    const escapedSearch = command.search?.replace(/[\\%_]/g, "\\$&");
+    const where: Prisma.SchoolWhereInput = escapedSearch
+      ? {
+          AND: [
+            eligibilityWhere,
+            {
+              OR: [
+                { name: { contains: escapedSearch, mode: "insensitive" } },
+                { code: { contains: escapedSearch, mode: "insensitive" } },
+              ],
+            },
+          ],
+        }
+      : eligibilityWhere;
+
+    return db.school.findMany({
+      where,
       select: supplierOrderSchoolOptionSelect,
       orderBy: [{ id: "asc" }],
       skip: command.skip,
@@ -562,5 +601,29 @@ export const supplierOrderRepository: SupplierOrderRepository = {
       skip: command.skip,
       take: command.take,
     });
+  },
+
+  async dispatchDelivery(db, command) {
+    const result = await db.delivery.updateMany({
+      where: {
+        AND: [
+          command.scope,
+          {
+            id: command.deliveryId,
+            workflowVersion: 2,
+            traceabilityVersion: 1,
+            status: "PREPARING",
+            expectedArrivalAt: null,
+            vehiclePlate: null,
+          },
+        ],
+      },
+      data: {
+        status: "IN_TRANSIT",
+        expectedArrivalAt: command.expectedArrivalAt,
+        vehiclePlate: command.vehiclePlate,
+      },
+    });
+    return result.count;
   },
 };

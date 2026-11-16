@@ -6240,7 +6240,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           include: { supplyRequestItems: true },
         });
 
-        // 1. REQUEST creation -> supplier/wrong-school arrival denied -> school arrival -> REJECT
+        // 1. REQUEST two-stage creation (PREPARING -> dispatch -> IN_TRANSIT) -> supplier/wrong-school arrival denied -> school arrival -> REJECT
         const createReqRes = await http.request("/api/deliveries/management", {
           method: "POST",
           headers: {
@@ -6254,17 +6254,33 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
               {
                 supplyRequestItemId: v1Request.supplyRequestItems[0].id,
                 sourceFacilityId: v1Source.id,
+                actualQuantity: "25",
               },
             ],
-            expectedArrivalAt: "2026-11-20T06:30:00.000Z",
-            vehiclePlate: "29C-11111",
           }),
         });
         assert.equal(createReqRes.status, 201);
-        const reqDelivery = record(record(createReqRes.body).data);
-        const reqDeliveryId = String(reqDelivery.id);
+        const createdReqDelivery = record(record(createReqRes.body).data);
+        const reqDeliveryId = String(createdReqDelivery.id);
+        assert.equal(createdReqDelivery.status, "PREPARING");
+        assert.equal(createdReqDelivery.statusLabel, "Đang chuẩn bị hàng");
+        assert.equal(createdReqDelivery.traceabilityVersion, 1);
+
+        const dispatchReqRes = await http.request(
+          `/api/deliveries/management/${reqDeliveryId}/dispatch`,
+          {
+            method: "POST",
+            headers: headers(v1SupplierStaff.id),
+            body: JSON.stringify({
+              expectedArrivalAt: "2026-11-20T06:30:00.000Z",
+              vehiclePlate: "29C-11111",
+            }),
+          },
+        );
+        assert.equal(dispatchReqRes.status, 200);
+        const reqDelivery = record(record(dispatchReqRes.body).data);
         assert.equal(reqDelivery.status, "IN_TRANSIT");
-        assert.equal(reqDelivery.statusLabel, "Đang giao");
+        assert.equal(reqDelivery.statusLabel, "Đang giao hàng");
         assert.equal(reqDelivery.traceabilityVersion, 1);
         const reqItems = reqDelivery.items as Array<Record<string, unknown>>;
         assert.equal(reqItems.length, 1);
@@ -6374,7 +6390,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           409,
         );
 
-        // 2. Manual replacement via STANDALONE: fresh deliveryNo, fresh qrUrl, fresh approvals;
+        // 2. Manual replacement via STANDALONE: two-stage creation -> dispatch -> fresh deliveryNo, fresh qrUrl, fresh approvals;
         //    4th signature rolls back on missing IngredientEntry, then succeeds once attached.
         const standaloneRes = await http.request("/api/deliveries/management", {
           method: "POST",
@@ -6385,8 +6401,6 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           body: JSON.stringify({
             sourceType: "STANDALONE",
             schoolId: v1School.id,
-            expectedArrivalAt: "2026-11-20T08:00:00.000Z",
-            vehiclePlate: "29C-22222",
             items: [
               {
                 ingredientId: v1Ingredient2.id,
@@ -6398,8 +6412,25 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           }),
         });
         assert.equal(standaloneRes.status, 201);
-        const standaloneData = record(record(standaloneRes.body).data);
-        const standaloneId = String(standaloneData.id);
+        const createdStandaloneData = record(record(standaloneRes.body).data);
+        const standaloneId = String(createdStandaloneData.id);
+        assert.equal(createdStandaloneData.status, "PREPARING");
+        assert.equal(createdStandaloneData.statusLabel, "Đang chuẩn bị hàng");
+        const dispatchStandaloneRes = await http.request(
+          `/api/deliveries/management/${standaloneId}/dispatch`,
+          {
+            method: "POST",
+            headers: headers(v1SupplierStaff.id),
+            body: JSON.stringify({
+              expectedArrivalAt: "2026-11-20T08:00:00.000Z",
+              vehiclePlate: "29C-22222",
+            }),
+          },
+        );
+        assert.equal(dispatchStandaloneRes.status, 200);
+        const standaloneData = record(record(dispatchStandaloneRes.body).data);
+        assert.equal(standaloneData.status, "IN_TRANSIT");
+        assert.equal(standaloneData.statusLabel, "Đang giao hàng");
         assert.notEqual(standaloneData.deliveryNo, reqDelivery.deliveryNo);
         const standaloneItems = standaloneData.items as Array<
           Record<string, unknown>

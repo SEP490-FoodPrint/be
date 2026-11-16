@@ -80,6 +80,7 @@ export const supplierOrderIdempotencyHeaderSchema = z.strictObject({
 export const requestSourceSelectionSchema = z.strictObject({
   supplyRequestItemId: requestUuidSchema,
   sourceFacilityId: requestUuidSchema,
+  actualQuantity: positiveDecimalQuantitySchema,
 });
 
 export const createFromRequestBodySchema = z.strictObject({
@@ -95,20 +96,19 @@ export const createFromRequestBodySchema = z.strictObject({
     .superRefine((sources, ctx) => {
       const seen = new Set<string>();
       for (let i = 0; i < sources.length; i += 1) {
-        const itemId = sources[i].supplyRequestItemId;
-        if (seen.has(itemId)) {
+        const pairKey = `${sources[i].supplyRequestItemId}:${sources[i].sourceFacilityId}`;
+        if (seen.has(pairKey)) {
           ctx.addIssue({
             code: "custom",
-            path: [i, "supplyRequestItemId"],
-            message: "Dòng yêu cầu cung ứng bị trùng lặp nguồn cung",
+            path: [i, "sourceFacilityId"],
+            message:
+              "Nguồn cung ứng cho dòng yêu cầu bị trùng lặp cơ sở cung cấp",
           });
         } else {
-          seen.add(itemId);
+          seen.add(pairKey);
         }
       }
     }),
-  expectedArrivalAt: requiredIsoDateTimeSchema,
-  vehiclePlate: requiredVehiclePlateSchema,
   note: optionalTrimmedText(2000, "Ghi chú"),
 });
 
@@ -124,8 +124,6 @@ export const createStandaloneBodySchema = z.strictObject({
     error: "sourceType phải là REQUEST hoặc STANDALONE",
   }),
   schoolId: requestUuidSchema,
-  expectedArrivalAt: requiredIsoDateTimeSchema,
-  vehiclePlate: requiredVehiclePlateSchema,
   note: optionalTrimmedText(2000, "Ghi chú"),
   items: z
     .array(standaloneDeliveryItemSchema, {
@@ -136,15 +134,16 @@ export const createStandaloneBodySchema = z.strictObject({
     .superRefine((items, ctx) => {
       const seen = new Set<string>();
       for (let i = 0; i < items.length; i += 1) {
-        const ingredientId = items[i].ingredientId;
-        if (seen.has(ingredientId)) {
+        const pairKey = `${items[i].ingredientId}:${items[i].sourceFacilityId}`;
+        if (seen.has(pairKey)) {
           ctx.addIssue({
             code: "custom",
-            path: [i, "ingredientId"],
-            message: "Nguyên liệu bị trùng lặp trong cùng đơn giao",
+            path: [i, "sourceFacilityId"],
+            message:
+              "Nguyên liệu và cơ sở cung cấp bị trùng lặp trong cùng đơn giao",
           });
         } else {
-          seen.add(ingredientId);
+          seen.add(pairKey);
         }
       }
     }),
@@ -167,6 +166,33 @@ export const supplierOrderOptionsQuerySchema = z
     error: "page vượt giới hạn phân trang",
   });
 
+export const supplierSchoolOptionsQuerySchema = z
+  .strictObject({
+    page: positiveInteger(1),
+    limit: positiveInteger(20).refine((value) => value <= 100, {
+      error: "limit tối đa 100",
+    }),
+    search: z
+      .string({ error: "Từ khóa tìm kiếm phải là chuỗi văn bản" })
+      .trim()
+      .max(100, { error: "Từ khóa tìm kiếm tối đa 100 ký tự" })
+      .optional(),
+  })
+  .refine((value) => (value.page - 1) * value.limit <= 2147483647, {
+    path: ["page"],
+    error: "page vượt giới hạn phân trang",
+  })
+  .transform(
+    ({
+      search,
+      ...rest
+    }): {
+      page: number;
+      limit: number;
+      search?: string;
+    } => (search && search.length > 0 ? { ...rest, search } : rest),
+  );
+
 export const supplierOrderLabelsQuerySchema = supplierOrderOptionsQuerySchema;
 
 export const supplierOrderListQuerySchema = z
@@ -184,6 +210,7 @@ export const supplierOrderListQuerySchema = z
       .enum(
         [
           "CREATED",
+          "PREPARING",
           "IN_TRANSIT",
           "ARRIVED",
           "PENDING_APPROVAL",
@@ -208,6 +235,11 @@ export const supplierOrderDetailParamsSchema = z.strictObject({
 
 export const supplierOrderEmptyQuerySchema = z.strictObject({});
 
+export const dispatchSupplierOrderBodySchema = z.strictObject({
+  expectedArrivalAt: requiredIsoDateTimeSchema,
+  vehiclePlate: requiredVehiclePlateSchema,
+});
+
 export function validateSupplierOrderIdempotencyKey(value: unknown): string {
   return parseRequest(supplierOrderIdempotencyHeaderSchema, {
     "Idempotency-Key": value,
@@ -220,6 +252,10 @@ export function validateCreateSupplierOrderBody(value: unknown) {
 
 export function validateSupplierOrderOptionsQuery(value: unknown) {
   return parseRequest(supplierOrderOptionsQuerySchema, value);
+}
+
+export function validateSupplierSchoolOptionsQuery(value: unknown) {
+  return parseRequest(supplierSchoolOptionsQuerySchema, value);
 }
 
 export function validateSupplierOrderLabelsQuery(value: unknown) {
@@ -236,4 +272,8 @@ export function validateSupplierOrderDetailParams(value: unknown) {
 
 export function validateSupplierOrderEmptyQuery(value: unknown) {
   return parseRequest(supplierOrderEmptyQuerySchema, value);
+}
+
+export function validateDispatchSupplierOrderBody(value: unknown) {
+  return parseRequest(dispatchSupplierOrderBodySchema, value);
 }

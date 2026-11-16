@@ -199,9 +199,28 @@ function fixture(actor: AuthPrincipal = schoolActor) {
       assert.equal(actual, tx);
       return Promise.resolve();
     },
+    lockDelivery(actual: Prisma.TransactionClient) {
+      assert.equal(actual, tx);
+      calls.push("delivery");
+      return Promise.resolve();
+    },
     readOrder(actual: Prisma.TransactionClient) {
       assert.equal(actual, tx);
       return Promise.resolve(order);
+    },
+    readDelivery(actual: Prisma.TransactionClient) {
+      assert.equal(actual, tx);
+      return Promise.resolve({
+        id: "00000000-0000-4000-8000-000000000010",
+        schoolId,
+        supplierId,
+        supplyRequestId: orderId,
+        status: "PREPARING" as const,
+        workflowVersion: 2,
+        traceabilityVersion: 1,
+        expectedArrivalAt: null,
+        vehiclePlate: null,
+      });
     },
     readSchool(actual: Prisma.TransactionClient) {
       assert.equal(actual, tx);
@@ -1284,5 +1303,274 @@ void test("SUPPLIER_CREATE_STANDALONE_DELIVERY checks roles, permissions, lock o
       `SELECT id FROM foodprint.ingredients WHERE id =::${ingB}`,
       `SELECT id FROM foodprint.ingredients WHERE id =::${ingA}`,
     ]);
+  }
+});
+
+void test("delivery continuation guard separates live auth/scope from first-dispatch policy, keeps canonical lock order, and ignores intake/relationship pauses", async () => {
+  const deliveryId = "00000000-0000-4000-8000-000000000010";
+  const staffActor: AuthPrincipal = {
+    ...supplierActor,
+    permissions: ["delivery.manage"],
+  };
+  const adminSupplierActor: AuthPrincipal = {
+    ...supplierActor,
+    id: "00000000-0000-4000-8000-000000000099",
+    role: ROLES.INGREDIENT_SUPPLIER_ADMIN,
+    permissions: ["delivery.manage"],
+  };
+
+  // Both supplier roles pass and canonical lock order includes source order only for REQUEST deliveries
+  for (const actor of [staffActor, adminSupplierActor]) {
+    for (const supplyRequestId of [orderId, null] as const) {
+      const f = fixture(actor);
+      const calls: string[] = [];
+      let readOrderCalled = false;
+      const service = createIntakeAccessService(
+        {
+          ...f.repo,
+          lockParents: (_tx, scope) => {
+            calls.push(`parents:${scope.schoolId}:${scope.supplierId}`);
+            return Promise.resolve();
+          },
+          lockOrder: () => {
+            calls.push("order");
+            return Promise.resolve();
+          },
+          lockDelivery: () => {
+            calls.push("delivery");
+            return Promise.resolve();
+          },
+          readOrder: () => {
+            readOrderCalled = true;
+            return Promise.resolve({
+              id: orderId,
+              schoolId,
+              supplierId,
+              status: "IN_PROGRESS",
+            });
+          },
+          readDelivery: () =>
+            Promise.resolve({
+              id: deliveryId,
+              schoolId,
+              supplierId,
+              supplyRequestId,
+              status: "PREPARING",
+              workflowVersion: 2,
+              traceabilityVersion: 1,
+              expectedArrivalAt: null,
+              vehiclePlate: null,
+            }),
+          // Continuation succeeds even when school/supplier intake paused or relationship suspended/missing
+          readSchool: () =>
+            Promise.resolve({ status: "ACTIVE", intakeState: "PAUSED" }),
+          readSupplier: () =>
+            Promise.resolve({
+              status: "ACTIVE",
+              intakeState: "PAUSED_FOR_FOOD_SAFETY_INSPECTION",
+            }),
+          readRelationship: () =>
+            Promise.reject(
+              new Error("Continuation must not inspect relationship"),
+            ),
+        },
+        () => Promise.resolve(actor),
+      );
+      const res = await service.assertDeliveryContinuation(tx, actor, {
+        deliveryId,
+      });
+      assert.equal(res.actor.id, actor.id);
+      assert.equal(res.replayed, false);
+      assert.deepEqual(
+        calls,
+        supplyRequestId
+          ? [`parents:${schoolId}:${supplierId}`, "order", "delivery"]
+          : [`parents:${schoolId}:${supplierId}`, "delivery"],
+      );
+      assert.equal(readOrderCalled, supplyRequestId !== null);
+    }
+  }
+
+  // Foreign / non-existent delivery -> 404; non-supplier role -> 403
+  {
+    const f = fixture(staffActor);
+    const service = createIntakeAccessService(
+      {
+        ...f.repo,
+        readDelivery: () => Promise.resolve(null),
+      },
+      () => Promise.resolve(staffActor),
+    );
+    await assert.rejects(
+      () => service.assertDeliveryContinuation(tx, staffActor, { deliveryId }),
+      (error: unknown) =>
+        error instanceof HttpError && error.statusCode === 404,
+    );
+    await assert.rejects(
+      () =>
+        service.assertDeliveryContinuation(
+          tx,
+          { ...schoolActor, permissions: ["delivery.manage"] },
+          { deliveryId },
+        ),
+      (error: unknown) =>
+        error instanceof HttpError && error.statusCode === 403,
+    );
+  }
+
+  // Live auth/scope recheck under lock: revoked permission, membership swap, or deactivated actor fails even on replay
+  for (const mode of [
+    "REVOKED_PERM",
+    "MEMBERSHIP_CHANGED",
+    "INACTIVE",
+  ] as const) {
+    const f = fixture(staffActor);
+    let locked = false;
+    const service = createIntakeAccessService(
+      {
+        ...f.repo,
+        lockDelivery: () => {
+          locked = true;
+          return Promise.resolve();
+        },
+        readDelivery: () =>
+          Promise.resolve({
+            id: deliveryId,
+            schoolId,
+            supplierId,
+            supplyRequestId: orderId,
+            status: "IN_TRANSIT",
+            workflowVersion: 2,
+            traceabilityVersion: 1,
+            expectedArrivalAt: new Date("2026-11-20T08:00:00.000Z"),
+            vehiclePlate: "51C-12345",
+          }),
+      },
+      () => {
+        if (!locked) return Promise.resolve(staffActor);
+        if (mode === "INACTIVE") {
+          return Promise.reject(
+            new HttpError(403, "Tài khoản không còn hoạt động"),
+          );
+        }
+        if (mode === "MEMBERSHIP_CHANGED") {
+          return Promise.resolve({
+            ...staffActor,
+            supplierId: "00000000-0000-4000-8000-000000000999",
+          });
+        }
+        return Promise.resolve({ ...staffActor, permissions: [] });
+      },
+    );
+    await assert.rejects(
+      () =>
+        service.assertDeliveryContinuation(tx, staffActor, {
+          deliveryId,
+          isReplay: () => true,
+        }),
+      (error: unknown) =>
+        error instanceof HttpError && error.statusCode === 403,
+    );
+  }
+
+  // First dispatch rejects CANCELLED/COMPLETED source request and DEACTIVATED org admins, while replay allows them when live auth passes
+  for (const scenario of [
+    "ORDER_CANCELLED",
+    "ORDER_COMPLETED",
+    "SCHOOL_ADMIN_DEACTIVATED",
+    "SUPPLIER_ADMIN_DEACTIVATED",
+  ] as const) {
+    const f = fixture(staffActor);
+    let deliveryStatus: "PREPARING" | "IN_TRANSIT" = "PREPARING";
+    const service = createIntakeAccessService(
+      {
+        ...f.repo,
+        readDelivery: () =>
+          Promise.resolve({
+            id: deliveryId,
+            schoolId,
+            supplierId,
+            supplyRequestId: orderId,
+            status: deliveryStatus,
+            workflowVersion: 2,
+            traceabilityVersion: 1,
+            expectedArrivalAt:
+              deliveryStatus === "IN_TRANSIT"
+                ? new Date("2026-11-20T08:00:00.000Z")
+                : null,
+            vehiclePlate: deliveryStatus === "IN_TRANSIT" ? "51C-12345" : null,
+          }),
+        readOrder: () =>
+          Promise.resolve({
+            id: orderId,
+            schoolId,
+            supplierId,
+            status:
+              scenario === "ORDER_CANCELLED"
+                ? "CANCELLED"
+                : scenario === "ORDER_COMPLETED"
+                  ? "COMPLETED"
+                  : "ACCEPTED",
+          }),
+        readSchoolAdmin: () =>
+          Promise.resolve({
+            status:
+              scenario === "SCHOOL_ADMIN_DEACTIVATED"
+                ? "DEACTIVATED"
+                : "ACTIVE",
+          }),
+        readSupplierAdmin: () =>
+          Promise.resolve({
+            status:
+              scenario === "SUPPLIER_ADMIN_DEACTIVATED"
+                ? "DEACTIVATED"
+                : "ACTIVE",
+          }),
+      },
+      () => Promise.resolve(staffActor),
+    );
+    await assert.rejects(
+      () => service.assertDeliveryContinuation(tx, staffActor, { deliveryId }),
+      (error: unknown) =>
+        error instanceof HttpError && error.statusCode === 409,
+      `${scenario} must block first dispatch`,
+    );
+
+    deliveryStatus = "IN_TRANSIT";
+    const replayResult = await service.assertDeliveryContinuation(
+      tx,
+      staffActor,
+      {
+        deliveryId,
+        isReplay: (d) => d.status === "IN_TRANSIT",
+      },
+    );
+    assert.equal(replayResult.replayed, true);
+  }
+
+  // Repository lockDelivery and readDelivery enforce supplier scoping
+  {
+    const calls: string[] = [];
+    let findFirstQuery: unknown = null;
+    const client = {
+      $queryRaw: (strings: TemplateStringsArray, ...vals: unknown[]) => {
+        calls.push(`${strings.join("?").trim()}::${vals.join(",")}`);
+        return Promise.resolve([]);
+      },
+      delivery: {
+        findFirst: (arg: unknown) => {
+          findFirstQuery = arg;
+          return Promise.resolve(null);
+        },
+      },
+    } as unknown as Prisma.TransactionClient;
+    const repo = createIntakeAccessRepository();
+    await repo.lockDelivery(client, deliveryId, supplierId);
+    await repo.readDelivery(client, deliveryId, supplierId);
+    assert.match(calls[0] ?? "", /supplier_id = \?::uuid FOR UPDATE/);
+    assert.deepEqual((findFirstQuery as { where: unknown }).where, {
+      id: deliveryId,
+      supplierId,
+    });
   }
 });

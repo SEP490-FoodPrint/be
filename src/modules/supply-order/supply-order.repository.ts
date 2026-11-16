@@ -30,6 +30,17 @@ const supplierListSelect = {
   requestedDeliveryDate: true,
   sentAt: true,
   School: { select: { id: true, name: true } },
+  _count: { select: { deliveries: true } },
+  deliveries: {
+    where: { creationMode: "REQUEST" as const },
+    select: {
+      id: true,
+      status: true,
+      workflowVersion: true,
+    },
+    orderBy: [{ id: "asc" as const }],
+    take: 2,
+  },
 } as const satisfies Prisma.SupplyRequestSelect;
 const supplierDetailSelect = {
   ...supplierListSelect,
