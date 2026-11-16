@@ -23,6 +23,7 @@ import {
   type SupplyOrderRepository,
   type AcceptedOrderRow,
   type SupplierOrderListRow,
+  type SupplierOrderDetailRow,
 } from "./supply-order.repository";
 import type {
   SupplyOrderAcceptParamsRequestDTO,
@@ -195,25 +196,36 @@ export function createSupplyOrderService(
       principal: AuthPrincipal,
     ): Promise<SupplierOrderDetailResponseDTO> {
       assertPermission(principal, "supply_request.view");
-      const order = await databaseOperation(async () => {
-        if (principal.orgType === ORG_TYPES.SUPPLIER && principal.supplierId) {
-          return repository.findDetailForSupplier(params.id, principal.supplierId);
-        }
-        if (principal.orgType === ORG_TYPES.SCHOOL && principal.schoolId) {
-          return repository.findDetailForSchool(params.id, principal.schoolId);
-        }
-        return repository.findDetailById(params.id);
-      });
-      if (!order)
-        throw new HttpError(404, "Không tìm thấy đơn đặt hàng");
+      const order = await databaseOperation<SupplierOrderDetailRow | null>(
+        async () => {
+          if (
+            principal.orgType === ORG_TYPES.SUPPLIER &&
+            principal.supplierId
+          ) {
+            return repository.findDetailForSupplier(
+              params.id,
+              principal.supplierId,
+            );
+          }
+          if (principal.orgType === ORG_TYPES.SCHOOL && principal.schoolId) {
+            return repository.findDetailForSchool(
+              params.id,
+              principal.schoolId,
+            );
+          }
+          return repository.findDetailById(params.id);
+        },
+      );
+      if (!order) throw new HttpError(404, "Không tìm thấy đơn đặt hàng");
       return {
         ...mapSupplierList(order, principal),
         note: order.note,
         acceptedByUserId: order.acceptedByUserId,
-        items: (order.supplyRequestItems || []).map((item: any) => ({
+        items: (order.supplyRequestItems ?? []).map((item) => ({
           id: item.id,
           ingredientEntryId: item.ingredientEntryId,
-          ingredientName: item.IngredientEntry?.Ingredient?.name ?? "Nguyên liệu",
+          ingredientName:
+            item.IngredientEntry?.Ingredient?.name ?? "Nguyên liệu",
           name: item.IngredientEntry?.Ingredient?.name ?? "Nguyên liệu",
           quantity: Number(item.requestedQuantity),
           requestedQuantity: item.requestedQuantity.toString(),
