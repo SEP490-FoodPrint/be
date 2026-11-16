@@ -71,18 +71,17 @@ function decisionWeek(
     id: menuId,
     schoolId,
     status,
+    weekStartDate: new Date("2026-11-02"),
     menuDays: ready
-      ? [
-          {
-            approvalStatus: "APPROVED",
-            menuDayDishes: [
-              {
-                Dish: { status: "ACTIVE" },
-                ingredients: [{}],
-              },
-            ],
-          },
-        ]
+      ? Array.from({ length: 5 }, (_, index) => ({
+          menuDate: new Date(Date.UTC(2026, 10, 2 + index)),
+          approvalStatus: "PENDING_APPROVAL",
+          menuDayDishes: ["LUNCH", "AFTERNOON"].map((mealType) => ({
+            mealType,
+            Dish: { status: "ACTIVE" },
+            ingredients: [{}],
+          })),
+        }))
       : [],
   } as unknown as ApprovalDecisionRow;
 }
@@ -90,6 +89,7 @@ function decisionWeek(
 function decisionHarness(options?: {
   actor?: AuthPrincipal;
   week?: ApprovalDecisionRow;
+  years?: Awaited<ReturnType<MenuApprovalRepository["academicYears"]>>;
 }) {
   const actor = options?.actor ?? board;
   const writes = {
@@ -103,6 +103,10 @@ function decisionHarness(options?: {
   };
   const repository: MenuApprovalRepository = {
     connect: () => Promise.resolve(transactionDatabase(actor)),
+    academicYears: (_tx, requestedSchoolId) => {
+      assert.equal(requestedSchoolId, actor.schoolId);
+      return Promise.resolve(options?.years ?? []);
+    },
     findDetail: () => Promise.resolve(null),
     findFinalizedPortions: () => Promise.resolve([]),
     findForDecision: () => Promise.resolve(options?.week ?? decisionWeek()),
@@ -225,6 +229,66 @@ void test("approval refuses an incomplete week before writing", async () => {
   assert.equal(writes.weeks.length, 0);
 });
 
+void test("approval rejects one saved day and a full week missing afternoon meals without recording a review", async () => {
+  for (const mode of ["one-day", "lunch-only"]) {
+    const week = decisionWeek();
+    if (mode === "one-day") week.menuDays = week.menuDays.slice(0, 1);
+    else
+      week.menuDays.forEach((day) => {
+        day.menuDayDishes = day.menuDayDishes.filter(
+          (dish) => dish.mealType === "LUNCH",
+        );
+      });
+    const { service, writes } = decisionHarness({ week });
+    await assert.rejects(
+      service.decide(menuId, { decision: "APPROVED", feedback: null }, board),
+      { statusCode: 422 },
+    );
+    assert.deepEqual(writes, { reviews: [], days: [], weeks: [] });
+  }
+});
+
+void test("school holidays exempt missing weekdays but not a missing meal on an open day", async () => {
+  const week = decisionWeek();
+  week.menuDays = week.menuDays.slice(0, 1);
+  const years = [
+    {
+      startDate: new Date("2026-09-01"),
+      endDate: new Date("2027-06-01"),
+      holidays: [
+        {
+          startDate: "2026-11-03",
+          endDate: "2026-11-06",
+          reason: "School closure",
+        },
+      ],
+    },
+  ];
+  const { service, writes } = decisionHarness({ week, years });
+  assert.equal(
+    (
+      await service.decide(
+        menuId,
+        { decision: "APPROVED", feedback: null },
+        board,
+      )
+    ).weeklyStatus,
+    "APPROVED",
+  );
+  assert.equal(writes.reviews.length, 1);
+  week.menuDays[0].menuDayDishes = week.menuDays[0].menuDayDishes.slice(0, 1);
+  const invalid = decisionHarness({ week, years });
+  await assert.rejects(
+    invalid.service.decide(
+      menuId,
+      { decision: "APPROVED", feedback: null },
+      board,
+    ),
+    { statusCode: 422 },
+  );
+  assert.equal(invalid.writes.reviews.length, 0);
+});
+
 void test("only a pending week can be decided", async () => {
   const { service, writes } = decisionHarness({
     week: decisionWeek("APPROVED"),
@@ -307,6 +371,7 @@ void test("approval detail stays in school scope and uses finalized class demand
         },
       ]),
     findForDecision: () => Promise.resolve(null),
+    academicYears: () => Promise.resolve([]),
     createReview: () => Promise.reject(new Error("not used")),
     updateAllDays: () => Promise.reject(new Error("not used")),
     updateWeek: () => Promise.reject(new Error("not used")),
@@ -375,6 +440,7 @@ void test("approval detail is restricted to the school management board", async 
     },
     findFinalizedPortions: () => Promise.resolve([]),
     findForDecision: () => Promise.resolve(null),
+    academicYears: () => Promise.resolve([]),
     createReview: () => Promise.reject(new Error("not used")),
     updateAllDays: () => Promise.reject(new Error("not used")),
     updateWeek: () => Promise.reject(new Error("not used")),

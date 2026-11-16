@@ -47,6 +47,14 @@ Nhân viên dinh dưỡng chọn các khối và lập lịch món chung; mỗi 
 
 ## Requirements
 
+### Reopening and approval safeguards (2026-11-16)
+
+- A menu with no grade links is school-wide only when `isSchoolWide` is true. An unassigned legacy record must not participate in authoring or filtering for a selected grade, and must display “Chưa gán khối”.
+- Reopening matching grade drafts restores their own snapshots; genuinely different schedules or approval states remain protected with an actionable message identifying the affected grades.
+- Saving a day keeps the week in draft. Submission and either approval endpoint require every non-holiday weekday to contain both lunch and afternoon dishes. Calendar holidays remain exempt.
+- Weekly and daily status must remain separate in the frontend. Missing days display “Chưa tạo”, even for inconsistent historical records already marked approved; approved content stays locked.
+- Inspection of Azure is read-only for this fix. Existing inconsistent records are reported, never automatically repaired or deleted.
+
 ### Functional Requirements
 
 - **FR-001**: Tạo lịch món chung và xem định lượng theo từng khối từ công thức đã cấu hình.

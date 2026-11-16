@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient } from "../../generated/prisma/client";
 import { getPrisma } from "../../utils/database";
+import type { MenuCalendarYear } from "../../utils/menu-week";
 
 export const approvalDetailInclude = {
   grades: { select: { gradeId: true, grade: { select: { name: true } } } },
@@ -78,6 +79,10 @@ type TransactionClient = Prisma.TransactionClient;
 
 export interface MenuApprovalRepository {
   connect(): Promise<PrismaClient>;
+  academicYears(
+    tx: TransactionClient,
+    schoolId: string,
+  ): Promise<MenuCalendarYear[]>;
   findDetail(id: string, schoolId: string): Promise<ApprovalDetailRow | null>;
   findFinalizedPortions(
     dates: Date[],
@@ -119,6 +124,13 @@ export function createMenuApprovalRepository(
 ): MenuApprovalRepository {
   return {
     connect: getClient,
+
+    academicYears(tx, schoolId) {
+      return tx.schoolAcademicYear.findMany({
+        where: { schoolId },
+        select: { startDate: true, endDate: true, holidays: true },
+      });
+    },
 
     async findDetail(id, schoolId) {
       const prisma = await getClient();

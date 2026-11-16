@@ -101,6 +101,10 @@ void test("week schedule keeps grade menus separate and selects only an exact gr
   });
   assert.equal(selected.days[0].menuDayId, "day-two");
   assert.equal(selected.targetScope, "Khối 5");
+  assert.equal(selected.completedDays, 0);
+  assert.equal(selected.days[0].isComplete, false);
+  assert.equal(selected.isWeekComplete, false);
+  assert.equal(selected.missingDays.length, 5);
   const exact = await service.getWeekSchedule("2026-11-09", principal, {
     gradeIds: [testAdmin.id],
   });
@@ -114,6 +118,31 @@ void test("week schedule keeps grade menus separate and selects only an exact gr
       menuId: "foreign-menu",
     }),
     (error: unknown) => error instanceof HttpError && error.statusCode === 404,
+  );
+});
+
+void test("a grade-less record is not reported as school-wide unless the stored flag is true", async () => {
+  const { db } = academicCalendarDatabase();
+  const row = {
+    id: testStaff.id,
+    title: "Legacy",
+    status: "DRAFT",
+    isSchoolWide: false,
+    grades: [],
+    menuDays: [],
+  };
+  db.weeklyMenu.findMany = (() => Promise.resolve([row])) as never;
+  const service = createMenuService(undefined, () =>
+    Promise.resolve(db as never),
+  );
+  const schedule = await service.getWeekSchedule("2026-11-09", principal);
+  assert.equal(schedule.targetScope, "Chưa gán khối");
+  assert.equal(schedule.isSchoolWide, false);
+  assert.equal(schedule.availableMenus[0].isSchoolWide, false);
+  row.isSchoolWide = true;
+  assert.equal(
+    (await service.getWeekSchedule("2026-11-09", principal)).targetScope,
+    "Toàn trường",
   );
 });
 

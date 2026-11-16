@@ -27,4 +27,8 @@ VI. Spec/branch: spec cùng slug với nhánh; không thay scaffold; PR BE vào 
 
 ## Validation Strategy
 
+### Reopening fix
+
+Share pure holiday/week completeness checks between menu submission and both approval services, using school-scoped calendar reads inside the existing transaction. Preserve `isSchoolWide` through the week API and frontend adapters. Exclude unassigned records from selected-grade authoring, retain status guards and grade snapshots, and render daily progress from actual daily data. Test a one-day draft, a five-day lunch-only week, calendar holidays, reopening with an unassigned legacy record, and mixed daily/weekly states. No migration or Azure writes.
+
 Unit phải chứng minh recipe khác định lượng, shared selection, khối ngoại trường, thiếu recipe, dị ứng một khối, khóa đã duyệt, submit rollback và gửi đúng API. Chạy npm run validate, npm run test:unit và FE test/build. Test PostgreSQL thật chỉ dùng DB local disposable cấu hình rõ; không dùng Azure để chạy test.

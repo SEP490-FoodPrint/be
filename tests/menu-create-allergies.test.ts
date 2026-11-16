@@ -236,9 +236,10 @@ function fixture(
         assert.deepEqual(
           new Set(args.where.IngredientEntry.ingredientId.in),
           new Set([
-            id(7),
+            ...menu.menuDays[0].menuDayDishes.flatMap((dish) =>
+              dish.ingredients.map((line) => line.ingredientId),
+            ),
             id(9),
-            ...(menu.menuDays[0].menuDayDishes.length > 1 ? [id(22)] : []),
           ]),
         );
         return failRead
@@ -747,6 +748,14 @@ void test("explicit draft save updates the same pending week and clears its subm
 
 void test("save and resubmit preserves the menu identity, checks every weekday and advances submission version", async (t) => {
   const f = pendingRevision(t);
+  f.menu.menuDays[0].menuDayDishes.push({
+    ...f.menu.menuDays[0].menuDayDishes[0],
+    mealType: "AFTERNOON",
+  });
+  f.menu.menuDays[0].mealSeasonings.push({
+    ...f.menu.menuDays[0].mealSeasonings[0],
+    mealType: "AFTERNOON",
+  });
   const previous = f.menu.submittedAt!;
   for (let offset = 1; offset < 5; offset++)
     f.menu.menuDays.push({
@@ -783,6 +792,39 @@ void test("incomplete resubmission rolls back writes rather than committing a dr
   assert.equal(f.counts().committedWrites, 0);
   assert.equal(f.menu.status, "PENDING_APPROVAL");
   assert.equal(f.menu.submittedAt?.toISOString(), "2026-11-09T01:00:00.000Z");
+  assert.equal(f.submission.mock.callCount(), 0);
+});
+
+void test("five saved weekdays with lunch only cannot be submitted or approved", async (t) => {
+  const f = pendingRevision(t);
+  f.allergyRows.splice(0);
+  f.menu.menuDays = Array.from({ length: 5 }, (_, index) => ({
+    ...structuredClone(f.menu.menuDays[0]),
+    id: id(40 + index),
+    menuDate: new Date(Date.UTC(2026, 10, 9 + index)),
+  }));
+  f.menu.status = "DRAFT";
+  await assert.rejects(f.service.submit(f.menu.id, f.principal), {
+    statusCode: 422,
+  });
+  f.menu.status = "PENDING_APPROVAL";
+  const identity = await f.tx.user.findUnique();
+  assert(identity);
+  identity.Role.rolePermissions.push({
+    permission: { code: "menu.approve", isActive: true },
+  });
+  const reviewer = {
+    ...f.principal,
+    permissions: [...f.principal.permissions, "menu.approve"],
+  };
+  await assert.rejects(
+    f.service.review(
+      f.menu.id,
+      { decision: "APPROVED", feedback: null, menuDayId: null },
+      reviewer,
+    ),
+    /chưa đầy đủ/,
+  );
   assert.equal(f.submission.mock.callCount(), 0);
 });
 
@@ -960,6 +1002,10 @@ void test("grade batch writes separate per-serving snapshots from one menu selec
     ["Khối 1–3", "Khối 4–5"],
   );
   assert.equal(result.submitted, false);
+  assert.deepEqual(
+    result.menus.map((menu) => menu.status),
+    ["DRAFT", "DRAFT"],
+  );
   assert.equal(result.hasUnresolvedAllergies, false);
   assert.equal(f.counts().committedWrites, 2);
   assert.equal(
@@ -1057,6 +1103,14 @@ void test("combined submission keeps every grade in draft when only one grade ha
 
 void test("group submission checks ownership first and rolls back a successful first submission if a later menu is incomplete", async (t) => {
   const f = fixture(t);
+  f.menu.menuDays[0].menuDayDishes.push({
+    ...f.menu.menuDays[0].menuDayDishes[0],
+    mealType: "AFTERNOON",
+  });
+  f.menu.menuDays[0].mealSeasonings.push({
+    ...f.menu.menuDays[0].mealSeasonings[0],
+    mealType: "AFTERNOON",
+  });
   f.allergyRows.length = 0;
   f.menu.grades = [];
   const before = structuredClone(f.menu);
@@ -1133,6 +1187,14 @@ void test("reopening an unchanged per-grade draft keeps frozen norms rather than
 
 void test("a complete grade batch submits all grade snapshots together", async (t) => {
   const f = gradeFixture(t);
+  f.menu.menuDays[0].menuDayDishes.push({
+    ...f.menu.menuDays[0].menuDayDishes[0],
+    mealType: "AFTERNOON",
+  });
+  f.menu.menuDays[0].mealSeasonings.push({
+    ...f.menu.menuDays[0].mealSeasonings[0],
+    mealType: "AFTERNOON",
+  });
   const stored = new Map<string, typeof f.menu>();
   f.menu.menuDays = Array.from({ length: 5 }, (_, index) => ({
     ...structuredClone(f.menu.menuDays[0]),

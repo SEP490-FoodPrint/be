@@ -23,3 +23,11 @@ No disposable local PostgreSQL test URL is configured in this session. Real Post
 - Frontend service/SSR suite: 67 passed; production build passed.
 - Frontend UI edits occurring in another session are retained. Only feature logic and the new per-grade preview component are included in the feature commit.
 - Spec gate passed for feat/multi-grade-menu-authoring against origin/dev.
+
+## Reopening correction (2026-11-16)
+
+- Read-only Azure inspection found two 16/11 menus already marked APPROVED with one lunch day each, identical create/submit/approval timestamps and no review records. One contains both grade links; the other has no links and isSchoolWide=false. The 23/11 single-grade menu is DRAFT with one day. No Azure writes were performed.
+- Unassigned records are now labelled “Chưa gán khối” and excluded from selected-grade authoring/filtering. Matching drafts retain each grade's snapshot; real dish or parent/day status differences still block common editing with a clearer message.
+- Both approval paths and submission require both meals on every non-holiday weekday. Week schedule completeness uses both meals; frontend cards retain parent status independently and missing days remain “Chưa tạo”. The list uses unfiltered rows for completeness even while filtering a meal.
+- Backend: 605/605 unit tests; lint, typecheck, build and modified-file Prettier passed after regenerating the current Prisma client. Frontend: 78/78 API/SSR tests and Vite production build passed (`--configLoader runner` avoids restricted parent-directory reads during configuration bundling).
+- Generated Prisma code, build output, local logs/backups and the pre-existing package-lock.json change are excluded from commits. Real PostgreSQL integration and browser interaction were not run; no disposable local test URL is configured.

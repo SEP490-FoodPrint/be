@@ -29,6 +29,10 @@ import {
 import { getPrisma } from "../../utils/database";
 
 import { HttpError } from "../../utils/http-error";
+import {
+  assertCompleteMenuWeek,
+  expandMenuHolidays,
+} from "../../utils/menu-week";
 
 import { listScopes } from "../../utils/resource-access";
 
@@ -986,46 +990,7 @@ function schoolToday() {
   return new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
-export function expandMenuHolidays(
-  value: Prisma.JsonValue,
-  firstDate: string,
-  lastDate: string,
-): MenuAcademicYearDTO["holidays"] {
-  if (!Array.isArray(value))
-    throw new HttpError(409, "Cấu hình ngày nghỉ không hợp lệ");
-  const days = new Map<string, string | null>();
-  const valid = (date: unknown): date is string => {
-    if (typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date))
-      return false;
-    const parsed = new Date(`${date}T00:00:00Z`);
-    return (
-      Number.isFinite(+parsed) && parsed.toISOString().slice(0, 10) === date
-    );
-  };
-  for (const item of value) {
-    if (!item || typeof item !== "object" || Array.isArray(item))
-      throw new HttpError(409, "Cấu hình ngày nghỉ không hợp lệ");
-    const start = item.date ?? item.startDate;
-    const end = item.date ?? item.endDate;
-    if (!valid(start) || !valid(end) || start > end)
-      throw new HttpError(409, "Khoảng ngày nghỉ không hợp lệ");
-    const from = start < firstDate ? firstDate : start;
-    const to = end > lastDate ? lastDate : end;
-    for (
-      const day = new Date(`${from}T00:00:00Z`);
-      day.toISOString().slice(0, 10) <= to;
-      day.setUTCDate(day.getUTCDate() + 1)
-    ) {
-      days.set(
-        day.toISOString().slice(0, 10),
-        typeof item.reason === "string" ? item.reason : null,
-      );
-    }
-  }
-  return [...days]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, reason]) => ({ date, reason }));
-}
+export { expandMenuHolidays } from "../../utils/menu-week";
 
 export function canEditMenuDay(dayStatus: string, weekStatus: string) {
   return (
@@ -1725,32 +1690,7 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
     previousSubmittedAt: Date | null = null,
   ) {
     await ready(tx, menu, schoolId);
-    const week = getSchoolWeekSchedule(menu.weekStartDate);
-    const existingDates = new Set(
-      menu.menuDays.map((day) => day.menuDate.toISOString().slice(0, 10)),
-    );
-    const years = await repository.academicYears(tx, schoolId);
-    const holidays = new Set(
-      years.flatMap((year) =>
-        expandMenuHolidays(
-          year.holidays,
-          year.startDate.toISOString().slice(0, 10) > week.weekStartDate
-            ? year.startDate.toISOString().slice(0, 10)
-            : week.weekStartDate,
-          year.endDate.toISOString().slice(0, 10) < week.weekEndDate
-            ? year.endDate.toISOString().slice(0, 10)
-            : week.weekEndDate,
-        ).map((day) => day.date),
-      ),
-    );
-    const missing = week.schoolDays.filter(
-      (day) => !existingDates.has(day.date) && !holidays.has(day.date),
-    );
-    if (missing.length)
-      throw new HttpError(
-        422,
-        `Thực đơn từ ${week.weekStartDate} đến ${week.weekEndDate} chưa đầy đủ các ngày phục vụ ăn. Còn thiếu: ${missing.map((day) => `${day.dayLabel} (${day.date.slice(8, 10)}/${day.date.slice(5, 7)})`).join(", ")}. Vui lòng bổ sung các ngày học không nghỉ trước khi gửi duyệt.`,
-      );
+    assertCompleteMenuWeek(menu, await repository.academicYears(tx, schoolId));
     await repository.submitDraftDays(tx, menu.id);
     await repository.submitWeeklyMenu(
       tx,
@@ -2275,8 +2215,13 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
           if (days.some((d) => d.approvalStatus !== "PENDING_APPROVAL"))
             throw new HttpError(409, "Ngày không chờ duyệt");
 
-          if (input.decision === "APPROVED")
+          if (input.decision === "APPROVED") {
+            assertCompleteMenuWeek(
+              menu,
+              await repository.academicYears(tx, schoolId),
+            );
             await ready(tx, { ...menu, menuDays: days }, schoolId);
+          }
 
           const status =
             input.decision === "APPROVED" ? "APPROVED" : "REVISION_REQUIRED";
@@ -2431,16 +2376,19 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
           status: found?.approvalStatus ?? "MISSING",
 
           dishCount: found?.menuDayDishes?.length ?? 0,
+          isComplete: ["LUNCH", "AFTERNOON"].every((mealType) =>
+            found?.menuDayDishes.some((dish) => dish.mealType === mealType),
+          ),
         };
       });
 
       const completedDays = days.filter(
-        (d) => d.isSchoolDay && d.hasMenu,
+        (d) => d.isSchoolDay && d.isComplete,
       ).length;
       const totalSchoolDays = days.filter((d) => d.isSchoolDay).length;
 
       const missingDays = days
-        .filter((d) => d.isSchoolDay && !d.hasMenu)
+        .filter((d) => d.isSchoolDay && !d.isComplete)
         .map((d) => d.date);
 
       const targetDayNum = date.getUTCDay();
@@ -2468,10 +2416,11 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
         weekEndDate: weekInfo.weekEndDate,
 
         availableMenus,
+        isSchoolWide: weeklyMenu?.isSchoolWide ?? false,
         gradeIds: weeklyMenu?.grades.map((g) => g.gradeId) ?? [],
         targetScope: weeklyMenu
           ? weeklyMenu.grades.map((g) => g.grade.name).join(", ") ||
-            "Toàn trường"
+            (weeklyMenu.isSchoolWide ? "Toàn trường" : "Chưa gán khối")
           : "",
         weeklyMenuId: weeklyMenu?.id ?? null,
 
@@ -2487,7 +2436,8 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
 
         missingDays,
 
-        isWeekComplete: completedDays === totalSchoolDays,
+        isWeekComplete:
+          totalSchoolDays > 0 && completedDays === totalSchoolDays,
       };
     },
 

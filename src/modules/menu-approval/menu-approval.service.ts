@@ -5,6 +5,7 @@ import {
   withSchoolTransaction,
 } from "../../utils/authorization";
 import { HttpError } from "../../utils/http-error";
+import { assertCompleteMenuWeek } from "../../utils/menu-week";
 import type { MenuApprovalDecisionRequestDTO } from "./menu-approval.request.dto";
 import type {
   MenuApprovalDecisionResponseDTO,
@@ -236,7 +237,13 @@ export function createMenuApprovalService(
               "Thực đơn đã được chỉnh sửa và gửi lại. Vui lòng tải lại trước khi duyệt.",
             );
           }
-          if (input.decision === "APPROVED") assertReady(menu);
+          if (input.decision === "APPROVED") {
+            assertCompleteMenuWeek(
+              menu,
+              await repository.academicYears(tx, schoolId),
+            );
+            assertReady(menu);
+          }
 
           const status =
             input.decision === "APPROVED" ? "APPROVED" : "REVISION_REQUIRED";
