@@ -257,6 +257,10 @@ function removedDishWhere(
     NOT: { OR: desired },
   };
 }
+const assignedMenuScope = {
+  OR: [{ isSchoolWide: true }, { grades: { some: {} } }],
+} satisfies Prisma.WeeklyMenuWhereInput;
+
 function menuFilterWhere(
   scope: Prisma.WeeklyMenuWhereInput,
   query: MenuFilterValues,
@@ -264,7 +268,6 @@ function menuFilterWhere(
   return {
     AND: [
       scope,
-
       {
         status: query.status,
 
@@ -300,6 +303,7 @@ function menuFilterWhere(
             }
           : {}),
       },
+      assignedMenuScope,
     ],
   };
 }
@@ -1099,6 +1103,7 @@ export const menuRepository = {
           {
             weekStartDate,
           },
+          assignedMenuScope,
         ],
       },
 
@@ -1222,7 +1227,7 @@ export function createMenuSummaryRepository(
     list(query: Pagination, scope: Prisma.WeeklyMenuWhereInput) {
       return read({
         ...listWindow(query),
-        where: scope,
+        where: { AND: [scope, assignedMenuScope] },
         select,
         orderBy: [{ id: "asc" }],
       });

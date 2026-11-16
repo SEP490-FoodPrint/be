@@ -31,3 +31,9 @@ No disposable local PostgreSQL test URL is configured in this session. Real Post
 - Both approval paths and submission require both meals on every non-holiday weekday. Week schedule completeness uses both meals; frontend cards retain parent status independently and missing days remain “Chưa tạo”. The list uses unfiltered rows for completeness even while filtering a meal.
 - Backend: 605/605 unit tests; lint, typecheck, build and modified-file Prettier passed after regenerating the current Prisma client. Frontend: 78/78 API/SSR tests and Vite production build passed (`--configLoader runner` avoids restricted parent-directory reads during configuration bundling).
 - Generated Prisma code, build output, local logs/backups and the pre-existing package-lock.json change are excluded from commits. Real PostgreSQL integration and browser interaction were not run; no disposable local test URL is configured.
+
+## Hide unassigned records (2026-11-16 follow-up)
+
+- Per user clarification, unassigned records are hidden entirely from internal menu lists and weekly choices. The scope predicate is applied before pagination and counts; it retains explicit school-wide menus and menus with grade links. Historical records are not deleted or updated.
+- Frontend cards, all-grade lists, kitchen schedules, grade choices and stored-recipe comparisons also filter unassigned records, including older/cached API responses. School grades without menus remain available in the grade filter without being mapped to an unassigned record.
+- Frontend API/SSR tests: 79 passed; production build passed. Backend unit tests: 606 passed; build/typecheck and modified-file lint passed. No schema changes or Azure writes.

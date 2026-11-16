@@ -29,5 +29,6 @@
 - [x] T013 Correct explicit grade scope and reopening safeguards in FE/BE.
 - [x] T014 Share complete-week checks for submission and both approval paths; keep holiday exemptions.
 - [x] T015 Separate week/day presentation and add regressions, then run checks and commit.
+- [x] T016 Hide unassigned menus before pagination/counts and from all frontend choices; verify and commit without deleting database records.
 
 T003 -> T004/T005 -> T006; T007 -> T008 -> T009 -> T010; T011/T012 sau tất cả. Có thể kiểm tra FE và BE độc lập; không yêu cầu phân công agent.

@@ -49,7 +49,7 @@ Nhân viên dinh dưỡng chọn các khối và lập lịch món chung; mỗi 
 
 ### Reopening and approval safeguards (2026-11-16)
 
-- A menu with no grade links is school-wide only when `isSchoolWide` is true. An unassigned legacy record must not participate in authoring or filtering for a selected grade, and must display “Chưa gán khối”.
+- A menu with no grade links is school-wide only when `isSchoolWide` is true. Unassigned legacy records are excluded from menu lists, weekly choices, grade comparison and authoring, including the all-grades view. Filter before pagination/counting. Do not display an extra “Chưa gán khối” item or delete its stored history.
 - Reopening matching grade drafts restores their own snapshots; genuinely different schedules or approval states remain protected with an actionable message identifying the affected grades.
 - Saving a day keeps the week in draft. Submission and either approval endpoint require every non-holiday weekday to contain both lunch and afternoon dishes. Calendar holidays remain exempt.
 - Weekly and daily status must remain separate in the frontend. Missing days display “Chưa tạo”, even for inconsistent historical records already marked approved; approved content stays locked.
