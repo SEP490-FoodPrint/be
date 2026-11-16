@@ -1,4 +1,7 @@
-import type { SupplyRequestStatus } from "../../generated/prisma/client";
+import type {
+  DeliveryStatus,
+  SupplyRequestStatus,
+} from "../../generated/prisma/client";
 export interface SupplyOrderListResponseDTO {
   items: {
     id: string;
@@ -19,6 +22,20 @@ export interface SupplyOrderAcceptResponseDTO {
   acceptedAt: string | null;
 }
 
+export type SupplyOrderNextAction =
+  | "ADD_INGREDIENTS"
+  | "ENTER_SHIPPING"
+  | "TRACK_DELIVERY"
+  | "VIEW_DELIVERY"
+  | "NONE";
+
+export interface SupplyOrderProgressResponseDTO {
+  stage: DeliveryStatus | "CONFIRMED";
+  statusLabel: string;
+  deliveryId: string | null;
+  nextAction: SupplyOrderNextAction;
+}
+
 export interface SupplierOrderListItemResponseDTO {
   id: string;
   requestNo: string;
@@ -26,6 +43,7 @@ export interface SupplierOrderListItemResponseDTO {
   supplierId: string;
   schoolName: string;
   status: SupplyRequestStatus;
+  orderProgress: SupplyOrderProgressResponseDTO | null;
   requestedDeliveryDate: string | null;
   sentAt: string | null;
   acceptedAt: string | null;

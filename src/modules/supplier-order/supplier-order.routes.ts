@@ -28,6 +28,7 @@ export function createSupplierOrderRouter(
   router.get("/", authHandler, controller.list);
   router.get("/:id/labels", authHandler, controller.listLabels);
   router.get("/:id", authHandler, controller.detail);
+  router.post("/:id/dispatch", authHandler, controller.dispatch);
   router.post("/", authHandler, controller.create);
 
   return router;

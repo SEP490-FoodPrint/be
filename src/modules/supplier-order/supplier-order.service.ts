@@ -1,10 +1,13 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readPublicTraceOrigin } from "../../config/env";
 import { Prisma } from "../../generated/prisma/client";
 import type { AuthPrincipal } from "../../types/auth";
 import { databaseOperation, loadPrincipal } from "../../utils/authorization";
 import { formatDeliveryCode } from "../../utils/delivery-code";
-import { getDeliveryStatusLabel } from "../../utils/delivery-status";
+import {
+  getDeliveryStatusLabel,
+  resolveSupplierDeliveryNextAction,
+} from "../../utils/delivery-status";
 import { HttpError } from "../../utils/http-error";
 import { listWindow, readListPage } from "../../utils/list-query";
 import {
@@ -13,6 +16,8 @@ import {
   renderDeliveryQrBatch,
 } from "../../utils/qr-code";
 import {
+  hasSupplierOrderManagePermission,
+  hasSupplierOrderReadPermission,
   supplierOrderLabelScope,
   supplierOrderManagementScope,
   supplierOrderReadScope,
@@ -34,10 +39,12 @@ import type {
   CreateStandaloneBodyDTO,
   CreateSupplierOrderBodyDTO,
   CreateSupplierOrderRequestDTO,
+  DispatchSupplierOrderBodyDTO,
   SupplierOrderDetailParamsDTO,
   SupplierOrderLabelsQueryDTO,
   SupplierOrderListQueryDTO,
   SupplierOrderOptionsQueryDTO,
+  SupplierSchoolOptionsQueryDTO,
 } from "./supplier-order.request.dto";
 import type {
   DeliveryLabelListResponseDTO,
@@ -59,7 +66,13 @@ type Dependencies = {
   transaction?: <T>(
     fn: (tx: Prisma.TransactionClient) => Promise<T>,
   ) => Promise<T>;
-  guard?: Pick<ReturnType<typeof createIntakeAccessService>, "assertAccess">;
+  guard?: Pick<ReturnType<typeof createIntakeAccessService>, "assertAccess"> &
+    Partial<
+      Pick<
+        ReturnType<typeof createIntakeAccessService>,
+        "assertDeliveryContinuation"
+      >
+    >;
   verifyActor?: (
     db: SupplierOrderDb,
     principal: AuthPrincipal,
@@ -110,12 +123,21 @@ function mapSupplierOrderItem(
 
 function mapSupplierOrderSummary(
   row: SupplierOrderSummaryRecord,
+  principal: AuthPrincipal,
 ): SupplierOrderSummaryDTO {
   return {
     id: row.id,
     deliveryNo: row.deliveryNo,
     sourceType: resolveSourceType(row.creationMode, row.supplyRequestId),
     traceabilityVersion: row.traceabilityVersion,
+    workflowVersion: row.workflowVersion,
+    nextAction: resolveSupplierDeliveryNextAction({
+      workflowVersion: row.workflowVersion,
+      status: row.status,
+      supplyRequestStatus: row.SupplyRequest?.status ?? null,
+      canManage: hasSupplierOrderManagePermission(principal),
+      canRead: hasSupplierOrderReadPermission(principal),
+    }),
     schoolId: row.schoolId,
     schoolName: row.School.name,
     supplierId: row.supplierId,
@@ -136,9 +158,10 @@ function mapSupplierOrderSummary(
 
 function mapSupplierOrderDetail(
   row: SupplierOrderDetailRecord,
+  principal: AuthPrincipal,
 ): SupplierOrderDetailDTO {
   return {
-    ...mapSupplierOrderSummary(row),
+    ...mapSupplierOrderSummary(row, principal),
     items: row.deliveryItems.map(mapSupplierOrderItem),
   };
 }
@@ -175,48 +198,90 @@ function mapSourceFacilityOption(
   };
 }
 
-function canonicalArrivalIso(expectedArrivalAt: string | null): string | null {
-  return expectedArrivalAt ? new Date(expectedArrivalAt).toISOString() : null;
+function canonicalDecimalString(value: string): string {
+  return new Prisma.Decimal(value).toString();
+}
+
+function canonicalizeCreateBody(
+  body: CreateSupplierOrderBodyDTO,
+): CreateSupplierOrderBodyDTO {
+  if (body.sourceType === "REQUEST") {
+    return {
+      ...body,
+      sources: [...body.sources]
+        .map((source) => ({
+          ...source,
+          actualQuantity: canonicalDecimalString(source.actualQuantity),
+        }))
+        .sort(
+          (a, b) =>
+            a.supplyRequestItemId.localeCompare(b.supplyRequestItemId) ||
+            a.sourceFacilityId.localeCompare(b.sourceFacilityId),
+        ),
+    };
+  }
+  return {
+    ...body,
+    items: [...body.items]
+      .map((item) => ({
+        ...item,
+        actualQuantity: canonicalDecimalString(item.actualQuantity),
+      }))
+      .sort(
+        (a, b) =>
+          a.ingredientId.localeCompare(b.ingredientId) ||
+          a.sourceFacilityId.localeCompare(b.sourceFacilityId),
+      ),
+  };
 }
 
 function buildCreationFingerprint(body: CreateSupplierOrderBodyDTO): string {
   const payload =
     body.sourceType === "REQUEST"
       ? {
-          version: 2,
+          version: 3,
           mode: body.sourceType,
-          expectedArrivalAt: canonicalArrivalIso(body.expectedArrivalAt),
-          vehiclePlate: body.vehiclePlate,
           note: body.note,
           supplyRequestId: body.supplyRequestId,
-          sources: [...body.sources]
-            .sort((a, b) =>
-              a.supplyRequestItemId.localeCompare(b.supplyRequestItemId),
-            )
-            .map((source) => ({
-              supplyRequestItemId: source.supplyRequestItemId,
-              sourceFacilityId: source.sourceFacilityId,
-            })),
+          sources: body.sources.map((source) => ({
+            supplyRequestItemId: source.supplyRequestItemId,
+            sourceFacilityId: source.sourceFacilityId,
+            actualQuantity: canonicalDecimalString(source.actualQuantity),
+          })),
         }
       : {
-          version: 2,
+          version: 3,
           mode: body.sourceType,
-          expectedArrivalAt: canonicalArrivalIso(body.expectedArrivalAt),
-          vehiclePlate: body.vehiclePlate,
           note: body.note,
           schoolId: body.schoolId,
-          items: [...body.items]
-            .sort((a, b) => a.ingredientId.localeCompare(b.ingredientId))
-            .map((item) => ({
-              ingredientId: item.ingredientId,
-              sourceFacilityId: item.sourceFacilityId,
-              actualQuantity: new Prisma.Decimal(
-                item.actualQuantity,
-              ).toString(),
-              unit: item.unit,
-            })),
+          items: body.items.map((item) => ({
+            ingredientId: item.ingredientId,
+            sourceFacilityId: item.sourceFacilityId,
+            actualQuantity: canonicalDecimalString(item.actualQuantity),
+            unit: item.unit,
+          })),
         };
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+}
+
+function buildCreateReplayResult(
+  existing: SupplierOrderDetailRecord,
+  actor: AuthPrincipal,
+  fingerprint: string,
+): SupplierOrderCreateResultDTO {
+  if (existing.workflowVersion === null) {
+    throw new HttpError(
+      409,
+      "Idempotency-Key đã thuộc phiên bản đơn giao hàng cũ và không thể nâng cấp",
+    );
+  }
+  if (existing.creationFingerprint !== fingerprint) {
+    throw new HttpError(
+      409,
+      "Idempotency-Key đã được sử dụng cho nội dung đơn giao khác",
+    );
+  }
+  return { ...mapSupplierOrderDetail(existing, actor), created: false };
 }
 
 function getPrismaPgCause(error: unknown): Record<string, unknown> | null {
@@ -310,15 +375,32 @@ export function createSupplierOrderService(
       }
     });
   const guard = dependencies?.guard ?? createIntakeAccessService();
+  const fallbackGuard = dependencies?.guard?.assertDeliveryContinuation
+    ? null
+    : createIntakeAccessService();
+  const assertDeliveryContinuation = (
+    tx: Prisma.TransactionClient,
+    principal: AuthPrincipal,
+    command: Parameters<
+      ReturnType<typeof createIntakeAccessService>["assertDeliveryContinuation"]
+    >[2],
+  ) =>
+    guard.assertDeliveryContinuation
+      ? guard.assertDeliveryContinuation(tx, principal, command)
+      : fallbackGuard!.assertDeliveryContinuation(tx, principal, command);
   const verifyActor =
     dependencies?.verifyActor ??
     (async (db: SupplierOrderDb, principal: AuthPrincipal) => {
       const liveActor = await loadPrincipal(principal.id, db);
       if (
         !liveActor ||
+        liveActor.id !== principal.id ||
         liveActor.orgType !== principal.orgType ||
         liveActor.supplierId !== principal.supplierId ||
-        liveActor.role !== principal.role
+        liveActor.role !== principal.role ||
+        liveActor.roleId !== principal.roleId ||
+        liveActor.schoolId !== principal.schoolId ||
+        liveActor.communeFoodSafetyUnitId !== principal.communeFoodSafetyUnitId
       ) {
         throw new HttpError(403, "Phạm vi tài khoản đã thay đổi");
       }
@@ -447,22 +529,61 @@ export function createSupplierOrderService(
       );
     }
 
-    const selectionByItemId = new Map(
-      body.sources.map((source) => [
-        source.supplyRequestItemId,
-        source.sourceFacilityId,
-      ]),
+    const requestItemById = new Map(
+      requestRow.supplyRequestItems.map((item) => [item.id, item]),
     );
+    const groupedByRequestItem = new Map<
+      string,
+      CreateFromRequestBodyDTO["sources"]
+    >();
+    const seenIngredientFacilityPairs = new Set<string>();
+    for (const allocation of body.sources) {
+      const requestItem = requestItemById.get(allocation.supplyRequestItemId);
+      if (!requestItem) {
+        throw new HttpError(
+          409,
+          "Danh sách nguồn cung ứng phải khớp chính xác toàn bộ dòng của yêu cầu cung ứng",
+        );
+      }
+      const group = groupedByRequestItem.get(requestItem.id) ?? [];
+      group.push(allocation);
+      groupedByRequestItem.set(requestItem.id, group);
+
+      const ingredientFacilityKey = `${requestItem.IngredientEntry.ingredientId}:${allocation.sourceFacilityId}`;
+      if (seenIngredientFacilityPairs.has(ingredientFacilityKey)) {
+        throw new HttpError(
+          409,
+          "Không thể phân bổ trùng cặp nguyên liệu và cơ sở cung cấp trong cùng đơn giao",
+        );
+      }
+      seenIngredientFacilityPairs.add(ingredientFacilityKey);
+    }
+
     if (
-      selectionByItemId.size !== requestRow.supplyRequestItems.length ||
+      groupedByRequestItem.size !== requestRow.supplyRequestItems.length ||
       requestRow.supplyRequestItems.some(
-        (item) => !selectionByItemId.has(item.id),
+        (item) => !groupedByRequestItem.has(item.id),
       )
     ) {
       throw new HttpError(
         409,
         "Danh sách nguồn cung ứng phải khớp chính xác toàn bộ dòng của yêu cầu cung ứng",
       );
+    }
+
+    for (const requestItem of requestRow.supplyRequestItems) {
+      const allocations = groupedByRequestItem.get(requestItem.id)!;
+      const totalAllocated = allocations.reduce(
+        (sum, allocation) =>
+          sum.add(new Prisma.Decimal(allocation.actualQuantity)),
+        new Prisma.Decimal(0),
+      );
+      if (!totalAllocated.eq(requestItem.requestedQuantity)) {
+        throw new HttpError(
+          409,
+          "Tổng số lượng phân bổ theo từng dòng yêu cầu phải bằng đúng số lượng yêu cầu",
+        );
+      }
     }
 
     const facilityById = await resolveAndValidateSourceFacilities(
@@ -478,31 +599,35 @@ export function createSupplierOrderService(
       creationKey: idempotencyKey,
       creationFingerprint: fingerprint,
       traceabilityVersion: 1,
+      workflowVersion: 2,
       schoolId: requestRow.schoolId,
       supplierId: liveScope.supplierId,
       supplyRequestId: requestRow.id,
       createdByUserId: actor.id,
-      expectedArrivalAt: new Date(body.expectedArrivalAt),
-      vehiclePlate: body.vehiclePlate,
+      expectedArrivalAt: null,
+      vehiclePlate: null,
       note: body.note,
-      status: "IN_TRANSIT",
-      items: requestRow.supplyRequestItems.map((item, idx) => {
-        const sourceFacilityId = selectionByItemId.get(item.id)!;
-        const facility = facilityById.get(sourceFacilityId)!;
+      status: "PREPARING",
+      items: body.sources.map((allocation, idx) => {
+        const requestItem = requestItemById.get(
+          allocation.supplyRequestItemId,
+        )!;
+        const facility = facilityById.get(allocation.sourceFacilityId)!;
         const candidate = candidates[idx];
         return {
-          supplyRequestItemId: item.id,
-          ingredientId: item.IngredientEntry.ingredientId,
-          ingredientEntryId: item.ingredientEntryId,
+          id: randomUUID(),
+          supplyRequestItemId: requestItem.id,
+          ingredientId: requestItem.IngredientEntry.ingredientId,
+          ingredientEntryId: requestItem.ingredientEntryId,
           sourceFacilityId: facility.id,
           sourceFacilityNameSnapshot: facility.name,
           sourceFacilityCodeSnapshot: facility.facilityCode,
-          ingredientNameSnapshot: item.IngredientEntry.Ingredient.name,
+          ingredientNameSnapshot: requestItem.IngredientEntry.Ingredient.name,
           qrToken: candidate.qrToken,
           qrUrl: candidate.qrUrl,
-          actualQuantity: item.requestedQuantity,
-          unit: item.unit,
-          note: item.note,
+          actualQuantity: new Prisma.Decimal(allocation.actualQuantity),
+          unit: requestItem.unit,
+          note: requestItem.note,
         };
       }),
     });
@@ -520,7 +645,7 @@ export function createSupplierOrderService(
       }
     }
 
-    return { ...mapSupplierOrderDetail(created), created: true };
+    return { ...mapSupplierOrderDetail(created, actor), created: true };
   }
 
   async function createStandalone(
@@ -531,7 +656,9 @@ export function createSupplierOrderService(
     body: CreateStandaloneBodyDTO,
     candidates: readonly PreparedQrCandidate[],
   ): Promise<SupplierOrderCreateResultDTO> {
-    const ingredientIds = body.items.map((item) => item.ingredientId);
+    const ingredientIds = [
+      ...new Set(body.items.map((item) => item.ingredientId)),
+    ];
     const sourceFacilityIds = body.items.map((item) => item.sourceFacilityId);
     const actor = await guard.assertAccess(tx, principal, {
       operation: "SUPPLIER_CREATE_STANDALONE_DELIVERY",
@@ -540,6 +667,18 @@ export function createSupplierOrderService(
       sourceFacilityIds,
     });
     const liveScope = supplierOrderManagementScope(actor);
+
+    const seenPairs = new Set<string>();
+    for (const item of body.items) {
+      const pairKey = `${item.ingredientId}:${item.sourceFacilityId}`;
+      if (seenPairs.has(pairKey)) {
+        throw new HttpError(
+          409,
+          "Không thể phân bổ trùng cặp nguyên liệu và cơ sở cung cấp trong cùng đơn giao",
+        );
+      }
+      seenPairs.add(pairKey);
+    }
 
     const ingredients = await repository.findIngredientsByIds(
       tx,
@@ -589,19 +728,21 @@ export function createSupplierOrderService(
       creationKey: idempotencyKey,
       creationFingerprint: fingerprint,
       traceabilityVersion: 1,
+      workflowVersion: 2,
       schoolId: body.schoolId,
       supplierId: liveScope.supplierId,
       supplyRequestId: null,
       createdByUserId: actor.id,
-      expectedArrivalAt: new Date(body.expectedArrivalAt),
-      vehiclePlate: body.vehiclePlate,
+      expectedArrivalAt: null,
+      vehiclePlate: null,
       note: body.note,
-      status: "IN_TRANSIT",
+      status: "PREPARING",
       items: body.items.map((item, idx) => {
         const ingredient = ingredientById.get(item.ingredientId)!;
         const facility = facilityById.get(item.sourceFacilityId)!;
         const candidate = candidates[idx];
         return {
+          id: randomUUID(),
           supplyRequestItemId: null,
           ingredientId: item.ingredientId,
           ingredientEntryId: entryByIngredientId.get(item.ingredientId) ?? null,
@@ -618,7 +759,7 @@ export function createSupplierOrderService(
       }),
     });
 
-    return { ...mapSupplierOrderDetail(created), created: true };
+    return { ...mapSupplierOrderDetail(created, actor), created: true };
   }
 
   return {
@@ -627,11 +768,27 @@ export function createSupplierOrderService(
       principal: AuthPrincipal,
     ): Promise<SupplierOrderCreateResultDTO> {
       const scope = supplierOrderManagementScope(principal);
-      const fingerprint = buildCreationFingerprint(input.body);
+      const canonicalBody = canonicalizeCreateBody(input.body);
+      const fingerprint = buildCreationFingerprint(canonicalBody);
+
+      const db = await databaseOperation(() => repository.connect());
+      const liveActor = await verifyActor(db, principal);
+      const preExisting = await databaseOperation(() =>
+        repository.findByCreationKey(
+          db,
+          scope.supplierId,
+          liveActor.id,
+          input.idempotencyKey,
+        ),
+      );
+      if (preExisting) {
+        return buildCreateReplayResult(preExisting, liveActor, fingerprint);
+      }
+
       const candidates = await prepareQrCandidates(
-        input.body.sourceType === "REQUEST"
-          ? input.body.sources.length
-          : input.body.items.length,
+        canonicalBody.sourceType === "REQUEST"
+          ? canonicalBody.sources.length
+          : canonicalBody.items.length,
       );
 
       try {
@@ -639,27 +796,21 @@ export function createSupplierOrderService(
           const existing = await repository.findByCreationKey(
             tx,
             scope.supplierId,
-            principal.id,
+            liveActor.id,
             input.idempotencyKey,
           );
           if (existing) {
-            await verifyActor(tx, principal);
-            if (existing.creationFingerprint !== fingerprint) {
-              throw new HttpError(
-                409,
-                "Idempotency-Key đã được sử dụng cho nội dung đơn giao khác",
-              );
-            }
-            return { ...mapSupplierOrderDetail(existing), created: false };
+            const actorInTx = await verifyActor(tx, principal);
+            return buildCreateReplayResult(existing, actorInTx, fingerprint);
           }
 
-          if (input.body.sourceType === "REQUEST") {
+          if (canonicalBody.sourceType === "REQUEST") {
             return createFromRequest(
               tx,
               principal,
               input.idempotencyKey,
               fingerprint,
-              input.body,
+              canonicalBody,
               candidates,
             );
           }
@@ -669,37 +820,34 @@ export function createSupplierOrderService(
             principal,
             input.idempotencyKey,
             fingerprint,
-            input.body,
+            canonicalBody,
             candidates,
           );
         });
       } catch (error) {
         if (!isUniqueConstraintError(error)) throw error;
         const resolved = await databaseOperation(async () => {
-          const db = await repository.connect();
+          const catchDb = await repository.connect();
+          const actorInCatch = await verifyActor(catchDb, principal);
           const replay = await repository.findByCreationKey(
-            db,
+            catchDb,
             scope.supplierId,
-            principal.id,
+            actorInCatch.id,
             input.idempotencyKey,
           );
-          if (!replay) return null;
-          await verifyActor(db, principal);
-          return replay;
+          return replay ? { replay, actorInCatch } : null;
         });
         if (resolved) {
-          if (resolved.creationFingerprint !== fingerprint) {
-            throw new HttpError(
-              409,
-              "Idempotency-Key đã được sử dụng cho nội dung đơn giao khác",
-            );
-          }
-          return { ...mapSupplierOrderDetail(resolved), created: false };
+          return buildCreateReplayResult(
+            resolved.replay,
+            resolved.actorInCatch,
+            fingerprint,
+          );
         }
         const constraint = getUniqueConstraintName(error);
         if (
           constraint === "uq_deliveries_request_mode" ||
-          (input.body.sourceType === "REQUEST" && !constraint)
+          (canonicalBody.sourceType === "REQUEST" && !constraint)
         ) {
           throw new HttpError(409, "Yêu cầu cung ứng này đã có đợt giao");
         }
@@ -711,7 +859,7 @@ export function createSupplierOrderService(
     },
 
     async listSchoolOptions(
-      query: SupplierOrderOptionsQueryDTO,
+      query: SupplierSchoolOptionsQueryDTO,
       principal: AuthPrincipal,
     ): Promise<SupplierSchoolOptionListResponseDTO> {
       const scope = supplierOrderManagementScope(principal);
@@ -723,6 +871,7 @@ export function createSupplierOrderService(
             supplierId: scope.supplierId,
             skip: window.skip,
             take: window.take,
+            ...(query.search ? { search: query.search } : {}),
           }),
         query,
       );
@@ -862,7 +1011,7 @@ export function createSupplierOrderService(
         query,
       );
       return {
-        items: page.items.map(mapSupplierOrderSummary),
+        items: page.items.map((row) => mapSupplierOrderSummary(row, principal)),
         pagination: page.pagination,
       };
     },
@@ -885,7 +1034,144 @@ export function createSupplierOrderService(
           "Không tìm thấy đơn giao hàng thuộc nhà cung cấp",
         );
       }
-      return mapSupplierOrderDetail(row);
+      return mapSupplierOrderDetail(row, principal);
+    },
+
+    async dispatch(
+      params: SupplierOrderDetailParamsDTO,
+      body: DispatchSupplierOrderBodyDTO,
+      principal: AuthPrincipal,
+    ): Promise<SupplierOrderDetailDTO> {
+      supplierOrderManagementScope(principal);
+      const expectedArrivalAt = new Date(body.expectedArrivalAt);
+
+      const matchesMetadata = (
+        currentExpectedArrival: Date | null,
+        currentPlate: string | null,
+      ) =>
+        currentExpectedArrival !== null &&
+        currentPlate !== null &&
+        currentExpectedArrival.getTime() === expectedArrivalAt.getTime() &&
+        currentPlate === body.vehiclePlate;
+
+      return transaction(async (tx) => {
+        const continuation = await assertDeliveryContinuation(tx, principal, {
+          deliveryId: params.id,
+          requiredPermission: "delivery.manage",
+          isReplay: (delivery) =>
+            delivery.workflowVersion === 2 &&
+            delivery.status !== "PREPARING" &&
+            delivery.expectedArrivalAt !== null &&
+            delivery.vehiclePlate !== null,
+        });
+        const liveScope = supplierOrderManagementScope(continuation.actor);
+
+        if (continuation.replayed) {
+          if (
+            !matchesMetadata(
+              continuation.delivery.expectedArrivalAt,
+              continuation.delivery.vehiclePlate,
+            )
+          ) {
+            throw new HttpError(
+              409,
+              "Đơn giao hàng đã được bắt đầu giao với thông tin vận chuyển khác",
+            );
+          }
+          const existing = await repository.findManagementDeliveryById(
+            tx,
+            liveScope,
+            params.id,
+          );
+          if (!existing) {
+            throw new HttpError(
+              404,
+              "Không tìm thấy đơn giao hàng thuộc nhà cung cấp",
+            );
+          }
+          return mapSupplierOrderDetail(existing, continuation.actor);
+        }
+
+        if (
+          continuation.delivery.workflowVersion !== 2 ||
+          continuation.delivery.traceabilityVersion !== 1
+        ) {
+          throw new HttpError(
+            409,
+            "Đơn giao hàng thuộc phiên bản cũ không thể cập nhật xuất kho hai bước",
+          );
+        }
+        if (continuation.delivery.status === "CANCELLED") {
+          throw new HttpError(
+            409,
+            "Đơn giao hàng đã bị hủy trước khi bắt đầu giao",
+          );
+        }
+        if (
+          continuation.delivery.status !== "PREPARING" ||
+          continuation.delivery.expectedArrivalAt !== null ||
+          continuation.delivery.vehiclePlate !== null
+        ) {
+          throw new HttpError(
+            409,
+            "Đơn giao hàng không ở trạng thái đang chuẩn bị để bắt đầu giao",
+          );
+        }
+
+        const updatedCount = await repository.dispatchDelivery(tx, {
+          scope: liveScope,
+          deliveryId: params.id,
+          expectedArrivalAt,
+          vehiclePlate: body.vehiclePlate,
+        });
+
+        const current = await repository.findManagementDeliveryById(
+          tx,
+          liveScope,
+          params.id,
+        );
+        if (!current) {
+          throw new HttpError(
+            404,
+            "Không tìm thấy đơn giao hàng thuộc nhà cung cấp",
+          );
+        }
+
+        if (updatedCount !== 1) {
+          if (
+            current.workflowVersion === 2 &&
+            current.status !== "PREPARING" &&
+            matchesMetadata(current.expectedArrivalAt, current.vehiclePlate)
+          ) {
+            return mapSupplierOrderDetail(current, continuation.actor);
+          }
+          if (
+            current.workflowVersion !== 2 ||
+            current.traceabilityVersion !== 1
+          ) {
+            throw new HttpError(
+              409,
+              "Đơn giao hàng thuộc phiên bản cũ không thể cập nhật xuất kho hai bước",
+            );
+          }
+          if (
+            current.status === "CANCELLED" &&
+            (current.expectedArrivalAt === null ||
+              current.vehiclePlate === null)
+          ) {
+            throw new HttpError(
+              409,
+              "Đơn giao hàng đã bị hủy trước khi bắt đầu giao",
+            );
+          }
+          throw new HttpError(
+            409,
+            "Trạng thái đơn giao hàng đã thay đổi trong lúc xử lý",
+          );
+        }
+
+        return mapSupplierOrderDetail(current, continuation.actor);
+      });
     },
   };
 }

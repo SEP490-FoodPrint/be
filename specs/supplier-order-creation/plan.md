@@ -1,51 +1,53 @@
-# Implementation Plan: Tạo đơn giao hàng có nguồn cung và QR
+# Implementation Plan: Tạo đơn nhiều nguồn, chuẩn bị và giao hàng
 
-**Branch**: `feat/supplier-order-creation-traceability` | **Date**: 2026-11-15 | **Spec**: [spec.md](spec.md)
+**Branch**: `feat/supplier-order-creation-stages` | **Date**: 2026-11-15 | **Spec**: [spec.md](spec.md)
 
-**Input**: `specs/supplier-order-creation/spec.md`, bản sửa đổi đã xác nhận Q1=B, Q2=B, Q3=A.
+**Input**:35 FR/14 SC hiện hành, đã chốt cả hai mode được nhiều dòng cùng thực phẩm khác nguồn, REQUEST giữ đúng tổng mỗi dòng yêu cầu; STANDALONE không có Đã xác nhận; bổ sung tìm trường linked trong scope supplier.
 
-**Status**: Phase0/Phase1 thiết kế hoàn tất; chưa triển khai bản sửa đổi. tasks.md đã sinh58 task amendment T041–T098, đều pending; lịch sử T001–T040 được giữ nguyên ở tasks-baseline.md, không tính là tiến độ mới.
+**Status**: Phase0 nghiên cứu và Phase1 thiết kế đã cập nhật theo clarification. Chưa triển khai.57 task T100–T156 đã cập nhật theo thiết kế mới, giữ ID/checkbox pending; hai file history bất biến. Setup resolver chọn đúng thư mục, BRANCH trả slug supplier-order-creation; Git branch thực được kiểm riêng như trên.
 
 ## Summary
 
-Mở rộng luồng Delivery hiện có, không tạo bảng đơn thương mại hoặc nguồn giả. Cả REQUEST/STANDALONE bắt buộc nguồn từng dòng, biển số xe/thời gian giao; tạo thành công ở IN_TRANSIT. Mã FP-DE tăng riêng supplier bằng khóa supplier và MAX canonical, chuyển global unique mã sang composite unique supplier+code. Giữ UUID làm khóa nội bộ, partial unique nguồn/idempotency và toàn bộ lịch sử.
+REQUEST: tiếp nhận yêu cầu → projection Đã xác nhận → lưu đầy đủ nguyên liệu/phân bổ nguồn thành PREPARING → lưu thời gian/biển số xe bằng dispatch thành IN_TRANSIT. STANDALONE: tìm/chọn trường linked → nhập nguyên liệu → lần lưu hợp lệ đầu tiên tạo PREPARING → dispatch IN_TRANSIT; không CONFIRMED/Đã xác nhận, không trường xác nhận trước lập đơn hoặc draft rỗng.
 
-Mỗi dòng mới có snapshot nguồn/tên nguyên liệu, token và URL QR ổn định, một lô dự kiến BLOCKED chưa tăng kho. Protected label endpoint trả PNG/text; public point lookup riêng trả HTML/JSON allowlist theo Q2. Trường xác nhận ARRIVED bằng bốn role kiểm nhận; receipt hiện hữu chỉ hoàn thành RECEIVED sau đủ4 đạt, source/lot/quantity/history hợp lệ. REJECTED hiển thị yêu cầu giao lại; standalone mới độc lập, cap3 nguồn giữ nguyên.
+Mỗi nguồn của cùng nguyên liệu là một DeliveryItem UUID, lượng, QR và PLAN-01 riêng; cấm lặp cặp ingredient+facility trong một Delivery. REQUEST cho nhiều allocation cùng source item, nhưng tổng Decimal từng source item phải đúng lượng nguồn. Sửa receipt để kiểm tổng cả nhóm và previous RECEIVED, không kiểm budget từng sibling riêng gây vượt lượng.
+
+Thêm PREPARING và nullable workflowVersion2, giữ traceabilityVersion1; hai migration mới tách enum commit khỏi marker/CHECK và thay child uniqueness. Mở rộng GET options/schools với search riêng theo tên/mã, giữ scope/eligibility/paging. Không thêm bảng allocation, package, timestamp dispatch, cache hoặc công cụ tìm kiếm ngoài hệ thống.
 
 ## Technical Context
 
-**Language/Version**: Node24.22.1 (.nvmrc), TypeScript6.0.3 strict/CommonJS, Node16 resolution, Prisma client cjs.
+**Language/Version**: Node24.22.1 theo `.nvmrc`, TypeScript6.0.3 strict, CommonJS/Node16 resolution, Prisma7.10.1 client cjs theo repository. Phiên bản là cấu hình đã đọc, không phải kết quả runtime check lần này.
 
-**Primary Dependencies**: Express4.21.2, Zod4.6.7, Prisma7.10.1/pg adapter hiện có, node:crypto. Thêm `qrcode`1.5.4 cùng TypeScript definitions khi implement; dùng PNG renderer nội bộ. Không framework mới, không Cloudinary cho QR, không dịch vụ QR bên ngoài. Tài liệu upstream được kiểm tra tại [research R4](research.md#r4-qr-dòng-nhãn-và-truy-xuất-công-khai); chưa cài package hoặc đo runtime ở bước plan.
+**Primary Dependencies**: Express4.21.x, Zod4.6.7, Prisma/adapter-pg7.10.1, pg, node:crypto/qrcode hiện có. Reuse response/validation/authorization và Decimal; không thêm package/framework/Prisma8 API hoặc search extension.
 
-**Storage**: PostgreSQL schema foodprint; thêm nullable version/snapshot/source/token/URL và composite unique. Không bảng counter, trigger/function hoặc backfill giả. Lô và inventory dùng model hiện có. Redis giữ auth/rate-limit, không dùng cấp số/idempotency/QR storage.
+**Storage**: PostgreSQL foodprint. Delivery thêm workflowVersion nullable, enum PREPARING; item bỏ hai unique toàn bộ, thay ba partial unique cho nguồn nonnull/null theo model. Giữ UUID/FK/nonunique indexes/source/QR metadata; header partial unique/idempotency và receipt-only unique không đổi. Không backfill, seed, trigger/function hoặc table mới. Redis chỉ giữ runtime rate limiter fail-closed, không cache auth/search/ghi.
 
-**Testing**: Node test runner/tsx hiện có; unit/HTTP và PostgreSQL disposable tests cho migration/tenant/concurrency/receipt. Camera/QR reader độc lập để kiểm tra scan nhãn. Các test mới phải đăng ký test:unit nếu infrastructure-free. Không chạy test/DDL ở bước lập plan.
+**Testing**: Node test runner/tsx, existing unit/HTTP, migration/authorization/lifecycle/supplier-orders integration. Test trọng tâm split totals, partial predicates/null semantics, compound replay, aggregate receipt, search ownership/wildcard và absence CONFIRMED standalone. Chỉ chạy tests ghi trong disposable local instance đã chọn/ủy quyền sau implement, không chạy DB ở bước plan.
 
-**Target Platform**: Backend Linux/Node; public HTML tối thiểu do backend trả, không xây thêm frontend app hoặc giao diện quản trị. In nhãn cung cấp PNG/text, chưa tích hợp printer/PDF.
+**Target Platform**: Backend Linux/Node, API cho client hiện có; mô tả bước/nextAction cho client nhưng không sửa repository frontend hoặc triển khai màn hình mới.
 
-**Project Type**: Modular Express web service.
+**Project Type**: Modular Express web service; mở rộng supply-order/supplier-order/account-lifecycle/delivery/delivery-trace.
 
-**Performance Goals**: List/options/labels page1/limit20, max100, limit+1; query batch source/ingredients/facilities, không N+1. Standalone max100 items; REQUEST exact set nguồn, không tự áp trần100 cho dữ liệu nguồn cũ. Render QR concurrency tối đa4, URL ngắn và PNG384px; không render ảnh trong mọi list/detail. Đo create nhiều dòng trong timeout thực tế trước release; không tự đổi SLA hoặc bỏ atomicity nếu chậm.
+**Performance Goals**: Paging1/20/max100, limit+1, id asc cho school search và order hiện có cho list. Search trim max100, không unaccent/full-text/trigram/index mới; AND scope trước OR name/code. STANDALONE max100allocation rows, REQUEST đủ tập source nhưng không tự áp trần100; body limit HTTP hiện có. Batch sources/facilities/previous receipt/entries, không N+1 theo allocation. Render QR tối đa4 trước tx, dispatch không render/mạng; giữ SC-00620create mỗi supplier. Không đặt SLA mới chưa được yêu cầu.
 
-**Constraints**: PUBLIC_TRACE_ORIGIN tuyệt đối/HTTPS production; token opaque không từ deliveryNo; public allowlist và log redaction. Cùng transaction cho reload quyền, locks, source validation, cấp mã, header/items/lots/request update. Render candidates trước transaction, không side effects mạng trong callback retry. Quy tắc nguồn mới không hồi tố phá lịch sử. Không tự xóa/seed/reset/deploy từ việc tạo plan.
+**Constraints**: ReadCommitted/maxWait20s/timeout30s, tối đa2retry lỗi khóa như source hiện tại. Shared parent locks → source nếu có → Delivery → lots khi nhận, same tx cho recheck/query/write. Decimal cho tổng, không Number; normalized tuple sort cho fingerprint/candidate mapping. Mọi query/where/select/lock ở repository, services chỉ policy/orchestration/DTO mapping. Dừng writer cũ trước rollout payload workflow2; không dùng v1/legacy replay để nâng cấp. Không tạo SQL hoặc thao tác DB từ plan.
 
-**Scale/Scope**: Hai role supplier tạo đơn, bốn role trường arrival/inspection; bảy management endpoints gồm baseline và source option/labels bổ sung, một arrival, một public lookup HTML/JSON. Hai cách tạo, QR theo dòng (không theo từng gói), một lô dự kiến/dòng mới, giữ nhiều lô legacy và ba lần từ chối theo yêu cầu gốc.
+**Scale/Scope**: Hai supplier roles, hai mode, một endpoint dispatch mới và school options endpoint mở rộng search. REQUEST có CONFIRMED projection, standalone không.35 FR/14 SC; thay uniquess/schema/validation/fingerprint/receipt aggregate cùng safe projection/search và hồi quy arrival/QR/cancellation. Không thêm split Delivery, draft persistence, chỉnh nội dung sau chuẩn bị, định danh bao bì hoặc payment.
 
 ## Constitution Check
 
-Đánh giá trước Phase0 và sau Phase1; không có vi phạm cần miễn trừ.
+Gate đối chiếu trước Phase0 và kiểm lại sau Phase1; PASS là thiết kế đáp ứng nguyên tắc, không là test phần mềm đã chạy.
 
-| Nguyên tắc                   | Trước | Sau  | Thiết kế đáp ứng                                                                                                                                                                                                          |
-| ---------------------------- | ----- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| I — Phân lớp                 | PASS  | PASS | supplier-order/delivery/delivery-trace đủ routes/controller/validation/service/repository/request.dto/response.dto; DTO chỉ service dùng; HTML helper không query, controllers không import DTO.                          |
-| II — Quyền/scope             | PASS  | PASS | Reload principal và quyền mỗi thao tác; mọi protected list dùng scope rõ, query supplier/school trong repository. Public chỉ point lookup allowlist được spec Q2 cho phép; không mở list/inspection hoặc bypass hệ thống. |
-| III — DB an toàn             | PASS  | PASS | Migration mới, giữ applied SQL/predicates; nullable marker giữ legacy, không đoán snapshot/nguồn, không kết nối DB trong plan; thử DDL chỉ trên disposable đã chọn và có ủy quyền.                                        |
-| IV — Transaction/cache/limit | PASS  | PASS | Reuse Serializable/retry và parent locks; exactly-once receipt. QR không side effect ngoài DB; public thuộc API Redis limiter fail-closed, no-store, không thêm cache.                                                    |
-| V — HTTP/safe DTO            | PASS  | PASS | Zod strict/safeParse + lỗi paths tiếng Việt; JSON envelopes cũ, Decimal/Date serialize; public allowlist riêng, ngoại lệ biểu diễn HTML ghi rõ contract.                                                                  |
-| VI — Theo spec               | PASS  | PASS | Dùng lại spec trên nhánh tiếp nối; 24 FR và quyết định Q1/B,Q2/B,Q3/A làm nguồn; thiết kế cũ được thay đồng bộ, task baseline không coi là bằng chứng cho bản sửa đổi.                                                    |
+| Nguyên tắc                  | Trước | Sau  | Thiết kế đáp ứng                                                                                                                                                                                                                                  |
+| --------------------------- | ----- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| I — Phân lớp                | PASS  | PASS | Module giữ7file; strict Zod/safeParse là nguồn z.infer Request DTO, chỉ service dùng DTO. Controller chỉ parse/gọi/send; repository nhận command nội bộ, giữ query/locks/Decimal persistence; service policy/tổng/transaction/map allowlist.      |
+| II — Quyền/scope            | PASS  | PASS | Supplier từ live principal, search/target cùng trusted scope, AND eligibility OR term không mở scope. Manage khác view/accept; auth recheck cùng tx kể cả replay, không SYSTEM bypass/cache. QR public giữ ngoại lệ allowlist đã duyệt.           |
+| III — DB an toàn            | PASS  | PASS | Hai migration mới, enum commit trước dùng; partial predicates và source-null cardinality rõ, không sửa SQL đã có/backfill. Preserve records, UUID/FK/QR/history. Chỉ disposable được chọn/ủy quyền mới chạy test ghi, không tự Azure deploy/seed. |
+| IV — Transaction/rate/cache | PASS  | PASS | Create allocations/source progression và dispatch atomic; receipt nhóm current+previous dưới source lock, final decision/kho cùng tx, exactly-once lot. Giữ limiter Redis503/fail-closed, không thêm cache/flush/wildcard delete.                 |
+| V — HTTP/DTO                | PASS  | PASS | Shared envelopes,400 nested paths tiếng Việt, quantity chuỗi/UTC/null explicit. Accept receipt4fields và raw status giữ nguyên; search chỉ id/code/name. Public không IDs/marker/action/xe/ETA; cờ created chỉ nội bộ service.                    |
+| VI — Spec-driven            | PASS  | PASS | Dùng đúng nhánh/thư mục35FR/14SC, thay toàn bộ quyết định cũ mâu thuẫn. Tasks pending đã đồng bộ35FR/14SC, history bất biến; không sửa scaffold hoặc commit feature.json/generated output.                                                        |
 
-Public anonymous access là nội dung đã được user xác nhận, không là ngoại lệ tùy ý khỏi auth của các resource protected. Có thể chọn cơ sở chưa có facilityCode, giữ null thật và tên, không tự tạo mã.
+Không có vi phạm cần miễn trừ. Những lựa chọn nhỏ về search bound/literal filtering và partial indexes là quyết định kỹ thuật để thực hiện yêu cầu đã xác nhận, không thêm nghiệp vụ hay tổ chức có quyền mới.
 
 ## Project Structure
 
@@ -62,94 +64,100 @@ specs/supplier-order-creation/
 ├── contracts/
 │   ├── supplier-orders.md
 │   └── public-trace.md
-├── tasks-baseline.md  # giữ nguyên lịch sử T001–T040
-└── tasks.md           # T041–T098 amendment, pending
+├── tasks.md                 # T100–T156 pending, đã đồng bộ theo plan mới
+├── tasks-traceability.md    # nguyên văn lịch sử T041–T099
+└── tasks-baseline.md        # lịch sử T001–T040
 ```
 
-### Source Code (repository root, mục tiêu khi implement)
+### Source Code (repository root)
 
 ```text
 prisma/schema.prisma
-prisma/migrations/<new-reviewed-migration>/migration.sql
-src/config/env.ts
-src/server.ts
+prisma/migrations/20261118000200_delivery_preparing_status/migration.sql  # dự kiến mới
+prisma/migrations/20261118000300_supplier_order_stages/migration.sql     # dự kiến mới
+src/modules/supply-order/          # supplier progress, accept receipt giữ nguyên
+src/modules/supplier-order/        # allocations/create/search/dispatch/list/labels
+src/modules/account-lifecycle/     # Delivery continuation/parent locks
+src/modules/delivery/              # source batch/budget aggregate/receipt/cancellation
+src/modules/delivery-trace/        # lookup từng QR, không collapse item
+src/utils/delivery-status.ts
+src/utils/resource-access.ts
 src/routes/index.ts
-src/utils/{resource-access,delivery-code,qr-code,public-trace-html}.ts
-src/modules/supplier-order/supplier-order.{routes,controller,validation,service,repository,request.dto,response.dto}.ts
-src/modules/delivery/delivery.{routes,controller,validation,service,repository,request.dto,response.dto}.ts
-src/modules/delivery-trace/delivery-trace.{routes,controller,validation,service,repository,request.dto,response.dto}.ts
-src/modules/account-lifecycle/intake-access.{service,repository}.ts
-src/modules/{warehouse,kitchen,menu}/  # audit projections/nullable legacy, chỉ sửa nơi bị ảnh hưởng
-src/app.ts  # public URL log redaction / wiring test injection nếu cần
 src/modules/README.md
 docs/AUTHORIZATION.md
-.env.example
-README.md
-package.json / package-lock.json
-tests/{supplier-order-creation,delivery-inspections,modules}.test.ts
-tests/{delivery-code,qr-code,delivery-trace}.test.ts  # thêm mới
-tests/{authorization.integration,migrations}.test.ts
+database/SCHEMA_BASELINE.md
+tests/supplier-order-creation.test.ts
+tests/supplier-order-creation.integration.test.ts
+tests/supply-order-intake.test.ts
+tests/intake-access.test.ts
+tests/delivery-inspections.test.ts
+tests/delivery-status.test.ts
+tests/delivery-trace.test.ts
+tests/migrations.test.ts
+tests/authorization.integration.test.ts
+tests/account-lifecycle.integration.test.ts
+tests/modules.test.ts
+tests/kitchen-nutrition-lists.test.ts
 ```
 
-**Structure Decision**: Bổ sung module public độc lập thay vì làm traceability-anchor authenticated thành anonymous. Rendering HTML dùng dữ liệu allowlist từ service, không import DTO ở controller. Helper QR thuần không có DB; repository quản lý MAX SQL/WHERE/select/locking/persistence. Chỉ refactor chỗ delivery service bị chạm để đưa Prisma arguments về repository, không reformat toàn repo.
+**Structure Decision**: Không thêm module thương mại hoặc allocation table. Source item relation vốn là list, item UUID/lot/QR giữ được từng nguồn. Các layer mới dùng đúng file module hiện hữu; search có schema/DTO riêng trong validation/request.dto thay vì sửa query schema dùng chung cho mọi options/labels.
 
-## Phase 0 — Research
+## Phase0 — Nghiên cứu hoàn tất
 
-Hoàn tất [research.md](research.md), R1–R8: quyền hiện hành, dãy riêng theo supplier, snapshot/legacy facilityCode null, QR dòng khác QR lô, fingerprint v2, lấp gap arrival/lot, receipt/cap3 và rollout. Hai research agent chỉ đọc, không sửa trùng file. Đã tham khảo primary docs của thư viện QR và PostgreSQL, không lấy một lời hứa thư viện làm bằng chứng runtime của repo. Các unknown kỹ thuật đã có quyết định; không có câu hỏi nghiệp vụ tồn đọng.
+[research.md](research.md) chốt9 nhóm quyết định: luồng từng mode, marker/version, migration, replay, guard/locks, projection, receipt policy, allocations/partial unique/aggregate budget, linked-school search. Hai research agents chỉ đọc source và đối chiếu mô hình/receipt/downstream cùng search/contract. Phát hiện Map một nguồn và kiểm budget từng dòng đang không đủ khi split; đã có thiết kế thay thế. Tài liệu PostgreSQL/Prisma v7 chính thức dẫn tại research; không suy API8 từ docs hiện hành hoặc truy cập DB để đoán schema.
 
-## Phase 1 — Design
+## Phase1 — Model và contracts
 
-1. [Data model](data-model.md): nullable traceabilityVersion/snapshots để tách baseline, unique composite, một QR và một lô dự kiến mỗi dòng mới, constraints/locks/state machine và rollout.
-2. [Supplier contract](contracts/supplier-orders.md): REQUEST sources exact set; standalone source per item; plate/ETA required; options nguồn, labels, arrival trường; giữ raw states, add statusLabel.
-3. [Public contract](contracts/public-trace.md): point lookup không login, HTML/JSON cùng allowlist, origin/QR URL ổn định, CSP/log/rate-limit/error policy.
-4. [Quickstart](quickstart.md): các bước validate sau implement, migration legacy, 20 concurrent creates mỗi supplier, QR scan/no leak, đủ4 receipt/reject/cap3.
+- [data-model.md](data-model.md): fields/CHECK, ba partial indexes thay hai unique, phân bổ exact totals, batch source read, receipt aggregate, canonical/replay, transaction và hai state flows.
+- [contracts/supplier-orders.md](contracts/supplier-orders.md): REQUEST sources có actualQuantity, STANDALONE repeated ingredient khác source, status/nextAction, search query riêng, dispatch immutable, safe errors và client compatibility.
+- [contracts/public-trace.md](contracts/public-trace.md): hai dòng cùng thực phẩm có QR/nguồn/lượng riêng; public allowlist giữ nguyên, PREPARING không cần dispatch mới quét.
+- [quickstart.md](quickstart.md): lệnh/scenario kiểm chứng sau implement, source6+4=10, duplicate-pair, search literal/scope, receipt aggregate/race và history preservation. Evidence cũ giữ nguyên riêng, không dùng làm pass mới.
 
 ### Quyết định tích hợp bắt buộc
 
-- Create v1 tạo N dòng/N token/N URL và N lô dự kiến BLOCKED, không receipt. Lô dự kiến lấy quantity/unit/source từ dữ liệu nhập, không giả ngày SX/HSD. Việc nhập nhiều lô sản xuất thực tế hoặc sửa quantity sau tạo không được thêm lén.
-- Arrival do người trường thuộc bốn role + view/inspect xác nhận, không do supplier/public QR. Đây là dependency cần thêm vì source chưa có endpoint đến nơi. Không tự nhận hàng lúc create; kiểm nhận độc lập xác nhận thực tế trước APPROVE.
-- Complete là RECEIVED sau4 đồng ý và receipt thành công; REJECTED là yêu cầu giao lại. Giữ photos/immutable signatures/source budget/cap3. Standalone missing entry vẫn create được nhưng không receipt nếu trường chưa cấu hình; không tự tạo entry/handlingType.
-- QR render trước write transaction để lỗi render không commit đơn thiếu nhãn; reprint/replay từ token+URL lưu, không cấp mới. Detail chứa traceUrl, không nhân payload PNG vào list; labels phân trang. HTML đọc được bằng browser camera, không chỉ API JSON.
-- Facility status recheck ở create, source equality recheck receipt; dừng/rename sau tạo giữ lịch sử qua snapshots. SourceCode null hợp lệ, không dùng nó làm public unique key.
+1. **Luồng**: CONFIRMED chỉ projection của request ACCEPTED/IN_PROGRESS chưa delivery; STANDALONE chọn trường/thêm nguyên liệu không có trạng thái trước lưu. Cả hai lần lưu nguyên liệu tạo PREPARING/workflow2/traceability1/metadata null; dispatch mới IN_TRANSIT. Không tạo request giả hoặc sửa accept receipt4trường.
+2. **Schema**: giữ DeliveryItem UUID, bỏ full uniques delivery+ingredient và delivery+requestItem; thêm pair unique nguồn nonnull và hai legacy uniques nguồn null. Giữ mọi quan hệ list/nonunique/FK/QR/receipt predicates; dùng map/where partialIndexes theo model, không dùng partial composite key thay PK. Hai migration dự kiến chưa được viết/applied; kiểm history khi implement, nếu tên đã có thì tạo phiên bản mới chứ không sửa applied SQL.
+3. **Allocations**: validator REQUEST sources nhận actualQuantity chuẩn hóa, cho repeated source item nhưng không repeated pair; service resolve ingredient từ source và kiểm pair ingredient+facility trên toàn đơn, đủ group và exact Decimal total. Bỏ Map sourceItem→single facility. Mỗi allocation một item/QR/PLAN-01, không collapse response theo ingredient/source item; standalone giới hạn100rows và vẫn không cần source request.
+4. **Receipt**: repository batch đủ source items/identity và previous RECEIVED trong cùng tx; service group current theo source item. Workflow2 recheck exact coverage/total/identity; mọi source delivery kiểm previous+currentGroup<=requested. Không áp exact equality/full coverage hồi tố legacy, không recheck facility ACTIVE. Khóa source→Delivery→lots/reload trước final approval; lỗi rollback quyết định cuối và toàn bộ kho.
+5. **Fingerprint**: canonical v3 REQUEST sort sourceItem+facility và quantity; standalone sort ingredient+facility và quantity/unit. Canonical row order dùng từ trước QR candidates/persist; same-key reorder200, đổi split/nguồn dù tổng bằng nhau409. Các marker null/hash v2 cũ không nâng cấp. Replay live auth/scope trước render/origin/cấp số, không sửa timestamp/status khi trả record đã commit.
+6. **Search**: mở rộng GET options/schools bằng search trim<=100, default blank và partial name/code insensitive/literal; tách school-specific schema/DTO/controller parse, chỉ service dùng DTO. Repo plain command/trusted supplierId và paging/search, giữ AND eligibility với OR name/code, escape LIKE chars. Không nới schema query của ingredient/source/labels, không thêm supplierId override/route search thứ hai hoặc full-text/index mới.
+7. **Dispatch**: guard continuation cho Delivery giữ parent→source→Delivery, live role/membership/quyền ở mọi lần; first policy source chưa terminal/admin không DEACTIVATED, không cung ứng-mới flags. Cặp metadata immutable chứng minh replay, CAS PREPARING/cả-null/marker2 đúng UUID+supplier. Không QR/lot/kho write ở dispatch, không key/timestamp thêm.
+8. **Consumer/rights**: supply-order progress source-only, manager list/detail/filter/nextAction map đúng mode, null legacy. Labels theo read OR trong matrix (source hiện manage-only cần đồng bộ); options/create/dispatch vẫn manage. Public8fields giữ riêng từng dòng. cancelRemainder thêm PREPARING; source cap3 giữ runtime/spec, chỉnh câu docs loại v1 đang lệch. Audit warehouse/kitchen/menu theo lot UUID/entry, không gộp mất source/QR hoặc viết lại nghiệp vụ không liên quan.
+9. **Rollout**: schema/partial constraints trước app/client; dừng writer cũ direct transit, REQUEST mới bắt buộc lượng từng allocation. Preserve QR host/history/metadata; không tự seed/deploy/reset, không rollback bằng xóa/gộp dòng hoặc restore unique cũ khi data đa nguồn đã có.
 
-## Execution Order and File Ownership
+## Thứ tự triển khai để cập nhật tasks
 
-Đây là thứ tự thiết kế để sinh tasks, chưa phải task list đã triển khai:
+1. Foundation schema/two migrations/partial-index preservation tests, generate client local sau schema; source guards/status và signatures query/DTO dùng chung.
+2. REQUEST allocation validation/canonical/repository/service/create DTO + intake source progress; STANDALONE cùng ingredient khác source và bỏ mọi synthetic CONFIRMED.
+3. School-only search validator/DTO/controller/service/repo và tests eligible scope/paging/wildcard; recheck POST khi lựa chọn cũ không còn hợp lệ.
+4. Dispatch separate và replay/rollback/live auth/CAS; labels/public/source snapshots; không nhận shipping tại create.
+5. Receipt grouped budget/source-coverage queries, cancellation và downstream lot projections; legacy receipt không bị equality hồi tố.
+6. New tests/migration/concurrency/auth/lifecycle/QR walkthrough, update docs/CI harness nếu thực sự thiếu; record kết quả thật. Checklist T100–T156 đã cập nhật theo thiết kế này; triển khai code theo tasks hiện hành và ghi kết quả thực, không dùng nội dung task trước clarification.
 
-1. Nền tảng: schema/migration/legacy fixtures, helpers mã/QR và public origin config. Quyết định khóa/schema phải xong trước service queries mới.
-2. Producer: supplier-order validation/DTO/repository/service, recheck guards, atomic code/source/QR/lots, options và labels. Unit mô phỏng rollback/race và lỗi render.
-3. Consumers độc lập sau schema: module delivery-trace + HTML/log wiring; module delivery arrival/inspection source equality/statusLabel. Mỗi người phụ trách toàn bộ file được giao, không sửa chung routes/index/resource-access/package/test integration trong cùng đợt.
-4. Integrator: routes/wiring, docs authorization, package/test scripts, audit downstream, migration/auth/receipt/QR E2E. Schema/models đã chốt trước sửa fixtures.
-5. Sau quality checks mới review migration rollout theo CD; bước plan không cấp phép deployment hoặc seed.
-
-Các file chia sẻ (`prisma/schema.prisma`, `src/routes/index.ts`, `resource-access.ts`, `package.json`, `tests/authorization.integration.test.ts`, `tests/migrations.test.ts`) mỗi file một owner. Phân công subagents cụ thể thuộc bước implement theo yêu cầu user, không mặc định chạy code song song ở plan.
+Đây là thứ tự kỹ thuật để bước tasks phân theo các user story hiện hành (P1 US1/US2/US4/US5/US6, P2 US3). File dùng chung có một owner tại mỗi thời điểm; research agents lần này không sửa artifact/runtime hoặc phân công implementation.
 
 ## Verification and Requirement Coverage
 
-| FR                | Thiết kế/kiểm chứng                                                                                                                        |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| 001–003, 010–013  | Actor live/role/denial/supplier scope; request source/linked school; giữ standalone độc lập và policies intake.                            |
-| 004, 007, 015     | UUID PK + supplier code composite; source quota; replay; hai supplier cùng00001, ít nhất20 creates mỗi bên,99999 boundary và legacy codes. |
-| 005–006, 009, 014 | Exact source set, Decimal/unit/active ingredient/facility; plate/ETA required; source lock race; atomic items/QR/lots/source update.       |
-| 008, 023          | Protected options/list/detail/labels, raw status/statusLabel, không lộ ngoài scope; null legacy; pagination stable.                        |
-| 016–018           | N line QR khác lot QR; decode/scan đúng URL, reprint same, snapshot rename/deactivate, public HTML/JSON allowlist/XSS/token errors.        |
-| 019–022           | Arrival school-only, đủ4 final receipt exactly once; fail rollback, REJECT reason/lock; cap3 legacy và standalone counters null.           |
-| 024               | Migration giữ IDs/codes/status/updated_at/approvals/lots/history và predicates; không guessed backfill; old API GET không mất dữ liệu.     |
+| Requirements / outcomes                                  | Thiết kế và kiểm chứng sau implement                                                                                                                                                                                                           |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| FR-001–FR-004/FR-010–FR-013; SC-001/SC-004/SC-005        | Actor live/role/denial/scope, source quota/linked school/intake continuation; hai mode không nguồn giả, key scope supplier+actor; POST recheck sau search.                                                                                     |
+| FR-005/FR-007/FR-009/FR-014/FR-032; SC-002/SC-003/SC-013 | REQUEST10kg→6A+4B đủ groups/exact sums,9/11/6+6 hoặc missing/extra source/ingredient-unit mismatch fail; A+A bị chặn, ingredient khác cùngA được phép; atomic N item/QR/lot/source update, quantity Decimal.                                   |
+| FR-006/FR-023/FR-025/FR-026/FR-028; SC-008/SC-012        | CONFIRMED chỉ REQUEST, standalone chọn trường→nhập→PREPARING, không trạng thái/draft trước lưu; shipping strict step, failed write không nhảy/lùi.                                                                                             |
+| FR-008/FR-030/FR-033; SC-011/SC-012                      | Reopen đúng bước; response mỗi allocation UUID/quantity/source/QR riêng, nullable legacy, quyền đọc/nextAction, stable paging và không collapse theo ingredient.                                                                               |
+| FR-015–FR-018; SC-006/SC-007                             | 20creates/supplier, code boundary/idempotency; same ingredient2sources→2 QR đúng lượng, reprint unchanged, source rename/deactivate, public allowlist/headers/labels OR safe.                                                                  |
+| FR-019–FR-022/FR-024/FR-031; SC-009/SC-010               | No arrival/inspect PREPARING; đủ4+aggregate source budget/coverage/identity mới receipt, previous+siblings không vượt; race exactly-once lots, REJECT/cap3 hủy preparing, legacy partial/multi-lot/null-source giữ hợp lệ.                     |
+| FR-027/FR-029; SC-003/SC-004/SC-008                      | Dispatch ETA/plate UTC/trim, no skip, first/terminal replay samebody200/different409, hủy-before409, denial403, source/arrival/cancel races and one-tx rollback.                                                                               |
+| FR-034/FR-035; SC-014                                    | Search name/code partial/insensitive,code null,blank/no match/paging,literal wildcard,max100/repeated/unknown query400; AND eligible trusted supplier, foreign/paused filtered, role deny, other options reject search.                        |
+| DB/history/quality                                       | Fresh deploy+upgrade via enum commit, null CHECK combinations, pair duplicate blocked/other source allowed/two legacy partials retained, old IDs/code/QR/decisions/lots/stock unchanged; layering/types/build/unit and real DB harness checks. |
 
-Khi implement chạy Prisma validate/generate, lint/format, typecheck/build, test:unit; migration/auth/receipt integration chỉ trên disposable PostgreSQL local đã chỉ định/ủy quyền, Redis test prefix riêng. Ghi check thực tế và prerequisite bị chặn. Không dùng pass của baseline làm pass amendment. Xem [quickstart](quickstart.md) cho lệnh và expected outcomes.
+Quality sau implement: prisma validate/generate, npm run validate, npm run test:unit; focused suites để khoanh vùng meaningful failures. DB groups local migrations/authorization/lifecycle/supplier-orders bằng harness và instance hiện có được chọn/ủy quyền cho tác vụ, không tạo container mới hoặc dùng Azure/member DB. New unit files nếu có phải đăng ký test:unit, không thêm framework hoặc viết test sao chép implementation. DB/Redis connection checks thêm khi đổi kết nối và có hạ tầng; thiết kế này không đổi kết nối.
 
 ## Complexity Tracking
 
-Không có vi phạm Constitution cần miễn trừ. Thêm version/snapshots và module public là cần thiết để không sửa lịch sử hoặc lộ DTO protected. Không thêm bảng counter, framework, QR hosting hoặc đối tượng đơn thương mại. Số thứ tự branch/spec không bắt buộc.
+Không có vi phạm Constitution cần miễn trừ. Một enum/cột kỹ thuật và ba partial indexes thay hai full uniques cần cho workflow/đa nguồn và legacy cardinality; không business entity hoặc child-version mới. Hai migration là ranh giới enum commit. Search reuse route/stack và không thêm engine/index extension.
 
-## Phase 1 completion
+## Kết quả và giới hạn
 
-Đã cập nhật plan/research/data-model/contracts/quickstart và đánh giá gate sau thiết kế. Setup resolver trả FEATURE_SPEC/IMPL_PLAN/SPECS_DIR đúng thư mục đang chọn; trường BRANCH của resolver theo active feature slug, còn Git branch thực được đối chiếu là `feat/supplier-order-creation-traceability`. Không sửa scaffold `.specify/`; feature pointer giữ đúng thư mục và không commit. Không có extension hook trước/sau plan. Tasks cho amendment đã được sinh theo plan; bước tiếp theo là implement theo tasks.md, chưa có task mới được thực hiện.
+Đã cập nhật Phase0/Phase1 artifacts theo35 FR/14 SC và đánh giá gate trước/sau thiết kế. Không có extension config/hook trước hoặc sau plan. Chỉ kiểm tài liệu, không sửa src/prisma, viết/applied migration SQL, sinh client, chạy phần mềm/test DB/seed/deploy. Bằng chứng cũ ở quickstart và hai history task files giữ nguyên.
 
-## Local testing setup — theo yêu cầu bổ sung 2026-11-15
-
-User xác nhận dùng PostgreSQL đang có trong DataGrip: 127.0.0.1:5433, user foodprint_admin; chỉ các database thử mới do từng lần chạy tạo được ghi/xóa. Instance được giữ cố định; không tạo container mới, không tác động database nghiệp vụ của user. `.env.test.local` chứa credential local và bị gitignore; `.env.test.example` là mẫu không có secret.
-
-Các lệnh `npm run test:local` / `test:local:<group>` dùng `tests/helpers/run-local-tests.ts` và `tests/helpers/local-test-database.ts` để chọn local target, tạo base database mới và ghi manifest tên database đã CREATE thành công. Migration/auth/lifecycle harness ghi thêm tên DB con vào manifest khi wrapper đang bật; ngoài wrapper là no-op, giữ CI cũ. Cleanup chỉ theo tên đã ghi, guard identifier và đúng owner, không scan prefix hoặc reset database có sẵn. Tên ASCII dài của fixture được chuẩn hóa theo giới hạn63 byte PostgreSQL để cleanup đúng DB đã được server tạo.
-
-Đây là setup hỗ trợ kiểm chứng được user yêu cầu riêng; không phải triển khai US1–US5 hoặc thay đổi schema feature. Migration SQL vẫn cần replay trong mỗi bài test dùng DB trống; setup không loại bỏ kiểm thử schema hoặc dùng lại dữ liệu member để tăng tốc. Bằng chứng thực tế của setup được ghi trong quickstart, không tính là pass của bản sửa đổi QR/nguồn cung chưa implement.
+**Bước tiếp**:57 task T100–T156 trong [tasks.md](tasks.md) đã đồng bộ theo plan, giữ ID/checkbox/history; có thể dùng `$speckit-analyze` để kiểm tra chéo hoặc `$speckit-implement` để triển khai theo phạm vi được cấp. Tasks có kiểm chứng search, multi-source/compound replay/aggregate receipt và standalone không CONFIRMED; chưa task nào được thực hiện.

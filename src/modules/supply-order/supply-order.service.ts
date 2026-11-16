@@ -1,7 +1,15 @@
 import type { Prisma } from "../../generated/prisma/client";
 import { ORG_TYPES, ROLES } from "../../constants/roles";
 import type { AuthPrincipal } from "../../types/auth";
-import { listScopes } from "../../utils/resource-access";
+import {
+  getDeliveryStatusLabel,
+  resolveSupplierDeliveryNextAction,
+} from "../../utils/delivery-status";
+import {
+  hasSupplierOrderManagePermission,
+  hasSupplierOrderReadPermission,
+  listScopes,
+} from "../../utils/resource-access";
 import { readListPage } from "../../utils/list-query";
 import {
   assertPermission,
@@ -27,6 +35,7 @@ import type {
   SupplierOrderListItemResponseDTO,
   SupplierOrderListResponseDTO,
   SupplierOrderDetailResponseDTO,
+  SupplyOrderProgressResponseDTO,
 } from "./supply-order.response.dto";
 
 type Dependencies = {
@@ -59,8 +68,43 @@ function assertSupplierActor(
       "Thao tác yêu cầu admin hoặc nhân viên nhà cung cấp",
     );
 }
+function mapSupplierOrderProgress(
+  order: SupplierOrderListRow,
+  principal: AuthPrincipal,
+): SupplyOrderProgressResponseDTO | null {
+  const canManage = hasSupplierOrderManagePermission(principal);
+  const canRead = hasSupplierOrderReadPermission(principal);
+  if (order._count.deliveries === 0) {
+    if (order.status !== "ACCEPTED" && order.status !== "IN_PROGRESS") {
+      return null;
+    }
+    return {
+      stage: "CONFIRMED",
+      statusLabel: "Đã xác nhận",
+      deliveryId: null,
+      nextAction: canManage ? "ADD_INGREDIENTS" : "NONE",
+    };
+  }
+  if (order._count.deliveries !== 1 || order.deliveries.length !== 1) {
+    return null;
+  }
+  const delivery = order.deliveries[0];
+  return {
+    stage: delivery.status,
+    statusLabel: getDeliveryStatusLabel(delivery.status),
+    deliveryId: delivery.id,
+    nextAction: resolveSupplierDeliveryNextAction({
+      workflowVersion: delivery.workflowVersion,
+      status: delivery.status,
+      supplyRequestStatus: order.status,
+      canManage,
+      canRead,
+    }),
+  };
+}
 function mapSupplierList(
   order: SupplierOrderListRow,
+  principal: AuthPrincipal,
 ): SupplierOrderListItemResponseDTO {
   return {
     id: order.id,
@@ -69,6 +113,7 @@ function mapSupplierList(
     supplierId: order.supplierId,
     schoolName: order.School.name,
     status: order.status,
+    orderProgress: mapSupplierOrderProgress(order, principal),
     requestedDeliveryDate:
       order.requestedDeliveryDate?.toISOString().slice(0, 10) ?? null,
     sentAt: order.sentAt?.toISOString() ?? null,
@@ -102,7 +147,7 @@ export function createSupplyOrderService(
           { page: query.page, limit: query.limit },
         );
         return {
-          items: page.items.map(mapSupplierList),
+          items: page.items.map((row) => mapSupplierList(row, principal)),
           pagination: page.pagination,
         };
       }
@@ -139,7 +184,7 @@ export function createSupplyOrderService(
       if (!order || order.status === "DRAFT")
         throw new HttpError(404, "Không tìm thấy đơn đặt hàng");
       return {
-        ...mapSupplierList(order),
+        ...mapSupplierList(order, principal),
         note: order.note,
         acceptedByUserId: order.acceptedByUserId,
         items: order.supplyRequestItems.map((item) => ({

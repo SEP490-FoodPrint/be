@@ -7,6 +7,9 @@ import type { AuthPrincipal } from "../src/types/auth";
 import { globalErrorHandler } from "../src/middlewares/error.middleware";
 import { createDeliveryRouter } from "../src/modules/delivery/delivery.routes";
 import { createSupplierOrderRouter } from "../src/modules/supplier-order/supplier-order.routes";
+import { createApiRouter } from "../src/routes";
+import { createIntakeAccessRepository } from "../src/modules/account-lifecycle/intake-access.repository";
+import { createIntakeAccessService } from "../src/modules/account-lifecycle/intake-access.service";
 import {
   supplierOrderRepository,
   type SupplierOrderRepository,
@@ -17,11 +20,13 @@ import {
 import { createSupplierOrderService } from "../src/modules/supplier-order/supplier-order.service";
 import {
   validateCreateSupplierOrderBody,
+  validateDispatchSupplierOrderBody,
   validateSupplierOrderDetailParams,
   validateSupplierOrderEmptyQuery,
   validateSupplierOrderIdempotencyKey,
   validateSupplierOrderListQuery,
   validateSupplierOrderOptionsQuery,
+  validateSupplierSchoolOptionsQuery,
 } from "../src/modules/supplier-order/supplier-order.validation";
 import { HttpError } from "../src/utils/http-error";
 import { RequestValidationError } from "../src/utils/request-validation";
@@ -185,6 +190,7 @@ function setupUs1Harness(options?: {
         creationMode: input.creationMode,
         creationFingerprint: input.creationFingerprint,
         traceabilityVersion: input.traceabilityVersion,
+        workflowVersion: input.workflowVersion ?? null,
         schoolId: input.schoolId,
         supplierId: input.supplierId,
         supplyRequestId: input.supplyRequestId,
@@ -199,7 +205,10 @@ function setupUs1Harness(options?: {
         updatedAt: now,
         School: { name: "Tiểu học Hoa Mai" },
         SupplyRequest: input.supplyRequestId
-          ? { requestNo: "SR-2026-001" }
+          ? {
+              status: requestState?.status ?? "IN_PROGRESS",
+              requestNo: "SR-2026-001",
+            }
           : null,
         deliveryItems: input.items.map((item, idx) => ({
           id: uid(500 + idx),
@@ -242,6 +251,7 @@ function setupUs1Harness(options?: {
     findManagementDeliveryById: () => Promise.resolve(null),
     findDeliveryForLabels: () => Promise.resolve(null),
     listDeliveryLabelItems: () => Promise.resolve([]),
+    dispatchDelivery: () => Promise.resolve(0),
   };
 
   let txCommitted = false;
@@ -318,10 +328,9 @@ void test("US1 validation enforces Idempotency-Key header and strict REQUEST bod
       {
         supplyRequestItemId: requestItemId.toUpperCase(),
         sourceFacilityId: sourceFacilityId.toUpperCase(),
+        actualQuantity: "12.500",
       },
     ],
-    expectedArrivalAt: "2026-11-16T08:30:00+07:00",
-    vehiclePlate: "  29A-123.45  ",
     note: "   ",
   });
   assert.deepEqual(parsed, {
@@ -331,24 +340,47 @@ void test("US1 validation enforces Idempotency-Key header and strict REQUEST bod
       {
         supplyRequestItemId: requestItemId,
         sourceFacilityId,
+        actualQuantity: "12.5",
       },
     ],
-    expectedArrivalAt: "2026-11-16T01:30:00.000Z",
-    vehiclePlate: "29A-123.45",
     note: null,
   });
+
+  // Multi-source allocation across distinct source facilities is valid for REQUEST
+  const multiSourceParsed = validateCreateSupplierOrderBody({
+    sourceType: "REQUEST",
+    supplyRequestId,
+    sources: [
+      {
+        supplyRequestItemId: requestItemId,
+        sourceFacilityId,
+        actualQuantity: "6.000",
+      },
+      {
+        supplyRequestItemId: requestItemId,
+        sourceFacilityId: sourceFacilityIdNullCode,
+        actualQuantity: "6.500",
+      },
+    ],
+  });
+  assert.equal(multiSourceParsed.sourceType, "REQUEST");
+  if (multiSourceParsed.sourceType === "REQUEST") {
+    assert.deepEqual(
+      multiSourceParsed.sources.map((s) => s.actualQuantity),
+      ["6", "6.5"],
+    );
+  }
 
   // REQUEST sources may exceed 100 lines when legacy requests contain many items
   const largeSources = Array.from({ length: 105 }, (_, i) => ({
     supplyRequestItemId: uid(2000 + i),
     sourceFacilityId,
+    actualQuantity: "1",
   }));
   const parsedLarge = validateCreateSupplierOrderBody({
     sourceType: "REQUEST",
     supplyRequestId,
     sources: largeSources,
-    expectedArrivalAt: "2026-11-16T08:30:00Z",
-    vehiclePlate: "29C-99999",
   });
   assert.equal(parsedLarge.sourceType, "REQUEST");
   if (parsedLarge.sourceType === "REQUEST") {
@@ -363,21 +395,11 @@ void test("US1 validation enforces Idempotency-Key header and strict REQUEST bod
       sourceType: "REQUEST",
       supplyRequestId,
       sources: [],
-      expectedArrivalAt: "2026-11-16T08:30:00Z",
-      vehiclePlate: "29A-1",
     },
     {
       sourceType: "REQUEST",
       supplyRequestId,
-      sources: [
-        { supplyRequestItemId: requestItemId, sourceFacilityId },
-        {
-          supplyRequestItemId: requestItemId,
-          sourceFacilityId: sourceFacilityIdNullCode,
-        },
-      ],
-      expectedArrivalAt: "2026-11-16T08:30:00Z",
-      vehiclePlate: "29A-1",
+      sources: [{ supplyRequestItemId: requestItemId, sourceFacilityId }],
     },
     {
       sourceType: "REQUEST",
@@ -386,79 +408,153 @@ void test("US1 validation enforces Idempotency-Key header and strict REQUEST bod
         {
           supplyRequestItemId: requestItemId,
           sourceFacilityId,
-          actualQuantity: "99",
+          actualQuantity: "0",
+        },
+      ],
+    },
+    {
+      sourceType: "REQUEST",
+      supplyRequestId,
+      sources: [
+        {
+          supplyRequestItemId: requestItemId,
+          sourceFacilityId,
+          actualQuantity: "-1",
+        },
+      ],
+    },
+    {
+      sourceType: "REQUEST",
+      supplyRequestId,
+      sources: [
+        {
+          supplyRequestItemId: requestItemId,
+          sourceFacilityId,
+          actualQuantity: "1e2",
+        },
+      ],
+    },
+    {
+      sourceType: "REQUEST",
+      supplyRequestId,
+      sources: [
+        {
+          supplyRequestItemId: requestItemId,
+          sourceFacilityId,
+          actualQuantity: "1.2345",
+        },
+      ],
+    },
+    {
+      sourceType: "REQUEST",
+      supplyRequestId,
+      sources: [
+        {
+          supplyRequestItemId: requestItemId,
+          sourceFacilityId,
+          actualQuantity: "12.5",
+        },
+        {
+          supplyRequestItemId: requestItemId.toUpperCase(),
+          sourceFacilityId: sourceFacilityId.toUpperCase(),
+          actualQuantity: "0.5",
+        },
+      ],
+    },
+    {
+      sourceType: "REQUEST",
+      supplyRequestId,
+      sources: [
+        {
+          supplyRequestItemId: requestItemId,
+          sourceFacilityId,
+          actualQuantity: "12.5",
+        },
+      ],
+      schoolId,
+    },
+    {
+      sourceType: "REQUEST",
+      supplyRequestId,
+      sources: [
+        {
+          supplyRequestItemId: requestItemId,
+          sourceFacilityId,
+          actualQuantity: "12.5",
+        },
+      ],
+      supplierId,
+    },
+    {
+      sourceType: "REQUEST",
+      supplyRequestId,
+      sources: [
+        {
+          supplyRequestItemId: requestItemId,
+          sourceFacilityId,
+          actualQuantity: "12.5",
+        },
+      ],
+      status: "RECEIVED",
+    },
+    {
+      sourceType: "REQUEST",
+      supplyRequestId,
+      sources: [
+        {
+          supplyRequestItemId: requestItemId,
+          sourceFacilityId,
+          actualQuantity: "12.5",
+        },
+      ],
+      items: [],
+    },
+    {
+      sourceType: "REQUEST",
+      supplyRequestId,
+      sources: [
+        {
+          supplyRequestItemId: requestItemId,
+          sourceFacilityId,
+          actualQuantity: "12.5",
+        },
+      ],
+      deliveryNo: "FP-DE-00999",
+    },
+    {
+      sourceType: "REQUEST",
+      supplyRequestId,
+      sources: [
+        {
+          supplyRequestItemId: requestItemId,
+          sourceFacilityId,
+          actualQuantity: "12.5",
         },
       ],
       expectedArrivalAt: "2026-11-16T08:30:00Z",
-      vehiclePlate: "29A-1",
     },
     {
       sourceType: "REQUEST",
       supplyRequestId,
-      sources: [{ supplyRequestItemId: requestItemId, sourceFacilityId }],
-      schoolId,
-      expectedArrivalAt: "2026-11-16T08:30:00Z",
-      vehiclePlate: "29A-1",
+      sources: [
+        {
+          supplyRequestItemId: requestItemId,
+          sourceFacilityId,
+          actualQuantity: "12.5",
+        },
+      ],
+      vehiclePlate: "29A-12345",
     },
     {
       sourceType: "REQUEST",
       supplyRequestId,
-      sources: [{ supplyRequestItemId: requestItemId, sourceFacilityId }],
-      supplierId,
-      expectedArrivalAt: "2026-11-16T08:30:00Z",
-      vehiclePlate: "29A-1",
-    },
-    {
-      sourceType: "REQUEST",
-      supplyRequestId,
-      sources: [{ supplyRequestItemId: requestItemId, sourceFacilityId }],
-      status: "RECEIVED",
-      expectedArrivalAt: "2026-11-16T08:30:00Z",
-      vehiclePlate: "29A-1",
-    },
-    {
-      sourceType: "REQUEST",
-      supplyRequestId,
-      sources: [{ supplyRequestItemId: requestItemId, sourceFacilityId }],
-      items: [],
-      expectedArrivalAt: "2026-11-16T08:30:00Z",
-      vehiclePlate: "29A-1",
-    },
-    {
-      sourceType: "REQUEST",
-      supplyRequestId,
-      sources: [{ supplyRequestItemId: requestItemId, sourceFacilityId }],
-      deliveryNo: "FP-DE-00999",
-      expectedArrivalAt: "2026-11-16T08:30:00Z",
-      vehiclePlate: "29A-1",
-    },
-    {
-      sourceType: "REQUEST",
-      supplyRequestId,
-      sources: [{ supplyRequestItemId: requestItemId, sourceFacilityId }],
-      expectedArrivalAt: "2026-11-16T08:30:00",
-      vehiclePlate: "29A-1",
-    },
-    {
-      sourceType: "REQUEST",
-      supplyRequestId,
-      sources: [{ supplyRequestItemId: requestItemId, sourceFacilityId }],
-      expectedArrivalAt: "2026-11-16T08:30:00Z",
-      vehiclePlate: "   ",
-    },
-    {
-      sourceType: "REQUEST",
-      supplyRequestId,
-      sources: [{ supplyRequestItemId: requestItemId, sourceFacilityId }],
-      expectedArrivalAt: "2026-11-16T08:30:00Z",
-      vehiclePlate: "x".repeat(41),
-    },
-    {
-      sourceType: "REQUEST",
-      supplyRequestId,
-      sources: [{ supplyRequestItemId: requestItemId, sourceFacilityId }],
-      expectedArrivalAt: "2026-11-16T08:30:00Z",
-      vehiclePlate: "29A-1",
+      sources: [
+        {
+          supplyRequestItemId: requestItemId,
+          sourceFacilityId,
+          actualQuantity: "12.5",
+        },
+      ],
       note: "x".repeat(2001),
     },
   ]) {
@@ -475,15 +571,40 @@ void test("US1 validation enforces Idempotency-Key header and strict REQUEST bod
         sourceType: "REQUEST",
         supplyRequestId,
         sources: [{ supplyRequestItemId: "bad", sourceFacilityId }],
-        expectedArrivalAt: "2026-11-16T08:30:00",
-        vehiclePlate: "",
+        expectedArrivalAt: "2026-11-16T08:30:00Z",
+        vehiclePlate: "29A-1",
       }),
     (err: unknown) =>
       err instanceof RequestValidationError &&
       err.statusCode === 400 &&
       err.fields.some((f) => f.field === "sources.0.supplyRequestItemId") &&
+      err.fields.some((f) => f.field === "sources.0.actualQuantity") &&
       err.fields.some((f) => f.field === "expectedArrivalAt") &&
       err.fields.some((f) => f.field === "vehiclePlate"),
+  );
+
+  assert.throws(
+    () =>
+      validateCreateSupplierOrderBody({
+        sourceType: "REQUEST",
+        supplyRequestId,
+        sources: [
+          {
+            supplyRequestItemId: requestItemId,
+            sourceFacilityId,
+            actualQuantity: "5",
+          },
+          {
+            supplyRequestItemId: requestItemId,
+            sourceFacilityId,
+            actualQuantity: "7.5",
+          },
+        ],
+      }),
+    (err: unknown) =>
+      err instanceof RequestValidationError &&
+      err.statusCode === 400 &&
+      err.fields.some((f) => f.field === "sources.1.sourceFacilityId"),
   );
 
   assert.throws(
@@ -503,9 +624,13 @@ void test("US1 creates REQUEST delivery for both supplier roles from ACCEPTED or
     const body = validateCreateSupplierOrderBody({
       sourceType: "REQUEST",
       supplyRequestId,
-      sources: [{ supplyRequestItemId: requestItemId, sourceFacilityId }],
-      expectedArrivalAt: "2026-11-16T08:00:00+07:00",
-      vehiclePlate: "29C-55555",
+      sources: [
+        {
+          supplyRequestItemId: requestItemId,
+          sourceFacilityId,
+          actualQuantity: "12.500",
+        },
+      ],
       note: "Giao đủ",
     });
 
@@ -516,14 +641,17 @@ void test("US1 creates REQUEST delivery for both supplier roles from ACCEPTED or
     assert.equal(result.created, true);
     assert.equal(result.sourceType, "REQUEST");
     assert.equal(result.traceabilityVersion, 1);
+    assert.equal(result.workflowVersion, 2);
+    assert.equal(result.nextAction, "ENTER_SHIPPING");
     assert.equal(result.deliveryNo, "FP-DE-00001");
-    assert.equal(result.status, "IN_TRANSIT");
-    assert.equal(result.statusLabel, "Đang giao");
+    assert.equal(result.status, "PREPARING");
+    assert.equal(result.statusLabel, "Đang chuẩn bị hàng");
     assert.equal(result.schoolId, schoolId);
     assert.equal(result.supplierId, supplierId);
     assert.equal(result.supplyRequestId, supplyRequestId);
     assert.equal(result.requestNo, "SR-2026-001");
-    assert.equal(result.expectedArrivalAt, "2026-11-16T01:00:00.000Z");
+    assert.equal(result.expectedArrivalAt, null);
+    assert.equal(result.vehiclePlate, null);
     assert.equal(result.items.length, 1);
     assert.equal(result.items[0].supplyRequestItemId, requestItemId);
     assert.equal(result.items[0].ingredientId, ingredientId);
@@ -565,17 +693,22 @@ void test("US1 creates REQUEST delivery for both supplier roles from ACCEPTED or
       {
         supplyRequestItemId: requestItemId2,
         sourceFacilityId: sourceFacilityIdNullCode,
+        actualQuantity: "4.000",
       },
-      { supplyRequestItemId: requestItemId, sourceFacilityId },
+      {
+        supplyRequestItemId: requestItemId,
+        sourceFacilityId,
+        actualQuantity: "12.500",
+      },
     ],
-    expectedArrivalAt: "2026-11-16T08:00:00Z",
-    vehiclePlate: "29C-55556",
   });
   const inProgressResult = await inProgressHarness.service.create(
     { idempotencyKey: idemKey2, body },
     makeSupplierActor(ROLES.INGREDIENT_SUPPLIER_STAFF),
   );
   assert.equal(inProgressResult.created, true);
+  assert.equal(inProgressResult.workflowVersion, 2);
+  assert.equal(inProgressResult.status, "PREPARING");
   assert.equal(inProgressResult.deliveryNo, "FP-DE-100000");
   assert.equal(inProgressResult.items.length, 2);
   assert.notEqual(
@@ -596,9 +729,13 @@ void test("US1 rejects unauthorized roles/permissions, prior deliveries, mismatc
     body: validateCreateSupplierOrderBody({
       sourceType: "REQUEST",
       supplyRequestId,
-      sources: [{ supplyRequestItemId: requestItemId, sourceFacilityId }],
-      expectedArrivalAt: "2026-11-16T08:00:00Z",
-      vehiclePlate: "29C-55555",
+      sources: [
+        {
+          supplyRequestItemId: requestItemId,
+          sourceFacilityId,
+          actualQuantity: "12.5",
+        },
+      ],
     }),
   };
 
@@ -869,9 +1006,13 @@ void test("HTTP POST /api/deliveries/management mounts before /api/deliveries an
   const validRequestBody = {
     sourceType: "REQUEST",
     supplyRequestId,
-    sources: [{ supplyRequestItemId: requestItemId, sourceFacilityId }],
-    vehiclePlate: "29C-55555",
-    expectedArrivalAt: "2026-11-16T08:00:00+07:00",
+    sources: [
+      {
+        supplyRequestItemId: requestItemId,
+        sourceFacilityId,
+        actualQuantity: "12.5",
+      },
+    ],
   };
 
   const badKey = await http.request("/api/deliveries/management", {
@@ -918,9 +1059,13 @@ void test("HTTP POST /api/deliveries/management mounts before /api/deliveries an
   };
   assert.equal(payload.success, true);
   assert.equal(payload.data.sourceType, "REQUEST");
-  assert.equal(payload.data.status, "IN_TRANSIT");
-  assert.equal(payload.data.statusLabel, "Đang giao");
+  assert.equal(payload.data.status, "PREPARING");
+  assert.equal(payload.data.statusLabel, "Đang chuẩn bị hàng");
   assert.equal(payload.data.traceabilityVersion, 1);
+  assert.equal(payload.data.workflowVersion, 2);
+  assert.equal(payload.data.nextAction, "ENTER_SHIPPING");
+  assert.equal(payload.data.expectedArrivalAt, null);
+  assert.equal(payload.data.vehiclePlate, null);
   assert.equal(payload.data.deliveryNo, "FP-DE-00001");
   assert.equal(payload.data.supplyRequestId, supplyRequestId);
   assert.equal("created" in payload.data, false);
@@ -928,12 +1073,524 @@ void test("HTTP POST /api/deliveries/management mounts before /api/deliveries an
   assert.equal("creationFingerprint" in payload.data, false);
 });
 
+void test("T111 REQUEST multi-source allocation supports 6A+4B split, prevents cross-group/ingredient+facility conflicts and replays canonically", async (context) => {
+  const sr10kg = makeSupplyRequestRecord("ACCEPTED", true, 1);
+  sr10kg.supplyRequestItems[0].requestedQuantity = new Prisma.Decimal("10.000");
+
+  const stored = new Map<string, SupplierOrderDetailRecord>();
+  const createdPayloads: SupplierOrderCreateDeliveryInput[] = [];
+  let hasPrior = false;
+  let requestState: SupplierOrderSupplyRequestRecord = sr10kg;
+  let renderCalls = 0;
+  let originCalls = 0;
+  let seq = 0;
+
+  const repo: SupplierOrderRepository = {
+    connect: () => Promise.resolve({} as never),
+    findByCreationKey: (_db, supId, userId, key) =>
+      Promise.resolve(stored.get(`${supId}:${userId}:${key}`) ?? null),
+    findSupplyRequestForCreation: () => Promise.resolve(requestState),
+    hasDeliveryForRequest: () => Promise.resolve(hasPrior),
+    lockSupplierForDeliveryNumber: () => Promise.resolve(),
+    findHighestCanonicalDeliverySequence: () => Promise.resolve(0n),
+    lockSourceFacilities: () => Promise.resolve(),
+    findSourceFacilitiesByIds: (_db, ids) =>
+      Promise.resolve(
+        [
+          {
+            id: sourceFacilityId,
+            supplierId,
+            facilityCode: "SF-A",
+            name: "Cơ sở A",
+            status: "ACTIVE" as const,
+          },
+          {
+            id: sourceFacilityIdNullCode,
+            supplierId,
+            facilityCode: null,
+            name: "Cơ sở B",
+            status: "ACTIVE" as const,
+          },
+        ].filter((f) => ids.includes(f.id)),
+      ),
+    createDeliveryWithItems: (_db, input) => {
+      createdPayloads.push(input);
+      const now = new Date("2026-11-15T05:00:00Z");
+      const rec: SupplierOrderDetailRecord = {
+        id: deliveryId,
+        deliveryNo: input.deliveryNo,
+        creationMode: input.creationMode,
+        creationFingerprint: input.creationFingerprint,
+        traceabilityVersion: input.traceabilityVersion,
+        workflowVersion: input.workflowVersion ?? null,
+        schoolId: input.schoolId,
+        supplierId: input.supplierId,
+        supplyRequestId: input.supplyRequestId,
+        status: input.status,
+        expectedArrivalAt: input.expectedArrivalAt,
+        arrivedAt: null,
+        receivedAt: null,
+        vehiclePlate: input.vehiclePlate,
+        note: input.note,
+        createdByUserId: input.createdByUserId,
+        createdAt: now,
+        updatedAt: now,
+        School: { name: "Tiểu học Hoa Mai" },
+        SupplyRequest: {
+          status: requestState.status,
+          requestNo: requestState.requestNo,
+        },
+        deliveryItems: input.items.map((item, idx) => ({
+          id: item.id ?? uid(5500 + idx),
+          ingredientId: item.ingredientId,
+          ingredientEntryId: item.ingredientEntryId,
+          supplyRequestItemId: item.supplyRequestItemId,
+          sourceFacilityId: item.sourceFacilityId,
+          sourceFacilityNameSnapshot: item.sourceFacilityNameSnapshot,
+          sourceFacilityCodeSnapshot: item.sourceFacilityCodeSnapshot,
+          ingredientNameSnapshot: item.ingredientNameSnapshot,
+          qrUrl: item.qrUrl,
+          actualQuantity: item.actualQuantity,
+          unit: item.unit,
+          note: item.note,
+          Ingredient: {
+            name: item.ingredientId === ingredientId ? "Gạo ST25" : "Dầu ăn",
+          },
+        })),
+      };
+      stored.set(
+        `${input.supplierId}:${input.createdByUserId}:${input.creationKey}`,
+        rec,
+      );
+      hasPrior = true;
+      return Promise.resolve(rec);
+    },
+    markSupplyRequestInProgress: () => {
+      requestState = { ...requestState, status: "IN_PROGRESS" };
+      return Promise.resolve(1);
+    },
+    listSchoolOptions: () => Promise.resolve([]),
+    listIngredientOptions: () => Promise.resolve([]),
+    listSourceFacilityOptions: () => Promise.resolve([]),
+    findIngredientsByIds: () => Promise.resolve([]),
+    findIngredientEntriesForSchool: () => Promise.resolve([]),
+    listManagementDeliveries: () => Promise.resolve([]),
+    findManagementDeliveryById: () => Promise.resolve(null),
+    findDeliveryForLabels: () => Promise.resolve(null),
+    listDeliveryLabelItems: () => Promise.resolve([]),
+    dispatchDelivery: () => Promise.resolve(0),
+  };
+
+  const service = createSupplierOrderService(repo, {
+    readOrigin: () => {
+      originCalls += 1;
+      return "https://trace.example.test";
+    },
+    generateToken: () => `${String(++seq).padStart(64, "c")}`,
+    renderQrBatch: (urls) => {
+      renderCalls += 1;
+      return Promise.resolve(urls.map(() => "data:image/png;base64,ok"));
+    },
+    transaction: async (fn) => fn({} as never),
+    guard: { assertAccess: (_tx, a) => Promise.resolve(a) },
+    verifyActor: (_tx, a) => Promise.resolve(a),
+  });
+
+  const actor = makeSupplierActor(ROLES.INGREDIENT_SUPPLIER_STAFF);
+  const app = express();
+  app.use(express.json());
+  app.use(
+    "/api/deliveries/management",
+    createSupplierOrderRouter(service, (req, _res, next) => {
+      req.auth = actor;
+      next();
+    }),
+  );
+  app.use(globalErrorHandler);
+  const http = await startHttp(app);
+  context.after(() => http.close());
+
+  const splitRes = await http.request("/api/deliveries/management", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": idemKey1,
+    },
+    body: JSON.stringify({
+      sourceType: "REQUEST",
+      supplyRequestId,
+      sources: [
+        {
+          supplyRequestItemId: requestItemId,
+          sourceFacilityId,
+          actualQuantity: "6.000",
+        },
+        {
+          supplyRequestItemId: requestItemId,
+          sourceFacilityId: sourceFacilityIdNullCode,
+          actualQuantity: "4",
+        },
+      ],
+    }),
+  });
+  assert.equal(splitRes.status, 201);
+  const splitBody = splitRes.body as {
+    data: {
+      id: string;
+      status: string;
+      workflowVersion: number | null;
+      traceabilityVersion: number | null;
+      nextAction: string;
+      expectedArrivalAt: string | null;
+      vehiclePlate: string | null;
+      items: Array<{
+        id: string;
+        supplyRequestItemId: string;
+        actualQuantity: string;
+        traceUrl: string;
+        sourceFacility: { id: string } | null;
+      }>;
+    };
+  };
+  assert.equal(splitBody.data.status, "PREPARING");
+  assert.equal(splitBody.data.workflowVersion, 2);
+  assert.equal(splitBody.data.traceabilityVersion, 1);
+  assert.equal(splitBody.data.nextAction, "ENTER_SHIPPING");
+  assert.equal(splitBody.data.expectedArrivalAt, null);
+  assert.equal(splitBody.data.vehiclePlate, null);
+  assert.equal(splitBody.data.items.length, 2);
+  assert.notEqual(splitBody.data.items[0].id, splitBody.data.items[1].id);
+  assert.notEqual(
+    splitBody.data.items[0].traceUrl,
+    splitBody.data.items[1].traceUrl,
+  );
+  assert.deepEqual(
+    splitBody.data.items.map((i) => ({
+      facility: i.sourceFacility?.id,
+      qty: i.actualQuantity,
+    })),
+    [
+      { facility: sourceFacilityId, qty: "6" },
+      { facility: sourceFacilityIdNullCode, qty: "4" },
+    ],
+  );
+  assert.equal(requestState.status, "IN_PROGRESS");
+  assert.ok(createdPayloads[0].items[0].id);
+  assert.ok(createdPayloads[0].items[1].id);
+  assert.notEqual(
+    createdPayloads[0].items[0].id,
+    createdPayloads[0].items[1].id,
+  );
+  const rawJson = JSON.stringify(splitRes.body);
+  for (const secret of [
+    "created",
+    "qrToken",
+    "creationKey",
+    "creationFingerprint",
+  ]) {
+    assert.equal(secret in (splitBody.data as object), false);
+    assert.equal(rawJson.includes(`"${secret}":`), false);
+  }
+
+  // Canonical v3 replay: reorder (4B, 6A) -> 200 without invoking renderer or origin
+  const rendersAfterCreate = renderCalls;
+  const originsAfterCreate = originCalls;
+  const reorderedReplay = await http.request("/api/deliveries/management", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": idemKey1,
+    },
+    body: JSON.stringify({
+      sourceType: "REQUEST",
+      supplyRequestId,
+      sources: [
+        {
+          supplyRequestItemId: requestItemId,
+          sourceFacilityId: sourceFacilityIdNullCode,
+          actualQuantity: "4.000",
+        },
+        {
+          supplyRequestItemId: requestItemId,
+          sourceFacilityId,
+          actualQuantity: "6",
+        },
+      ],
+    }),
+  });
+  assert.equal(reorderedReplay.status, 200);
+  assert.equal(renderCalls, rendersAfterCreate);
+  assert.equal(originCalls, originsAfterCreate);
+  assert.equal(
+    (reorderedReplay.body as { data: { id: string } }).data.id,
+    splitBody.data.id,
+  );
+
+  // Same key with 5A+5B -> 409; new key for same request -> 409
+  const diffSplitSameKey = await http.request("/api/deliveries/management", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": idemKey1,
+    },
+    body: JSON.stringify({
+      sourceType: "REQUEST",
+      supplyRequestId,
+      sources: [
+        {
+          supplyRequestItemId: requestItemId,
+          sourceFacilityId,
+          actualQuantity: "5",
+        },
+        {
+          supplyRequestItemId: requestItemId,
+          sourceFacilityId: sourceFacilityIdNullCode,
+          actualQuantity: "5",
+        },
+      ],
+    }),
+  });
+  assert.equal(diffSplitSameKey.status, 409);
+
+  const newKeyAfterDelivery = await http.request("/api/deliveries/management", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": idemKey2,
+    },
+    body: JSON.stringify({
+      sourceType: "REQUEST",
+      supplyRequestId,
+      sources: [
+        {
+          supplyRequestItemId: requestItemId,
+          sourceFacilityId,
+          actualQuantity: "10",
+        },
+      ],
+    }),
+  });
+  assert.equal(newKeyAfterDelivery.status, 409);
+
+  // Sum mismatch (9, 11, 6+6), cross-group offsetting, missing/extra group, resolved (ingredientId, sourceFacilityId) duplicate -> 409
+  const twoGroupReq = makeSupplyRequestRecord("ACCEPTED", true, 2);
+  twoGroupReq.supplyRequestItems[0].requestedQuantity = new Prisma.Decimal(
+    "10",
+  );
+  twoGroupReq.supplyRequestItems[1].requestedQuantity = new Prisma.Decimal("4");
+
+  for (const badSources of [
+    // sum = 9
+    [
+      {
+        supplyRequestItemId: requestItemId,
+        sourceFacilityId,
+        actualQuantity: "5",
+      },
+      {
+        supplyRequestItemId: requestItemId,
+        sourceFacilityId: sourceFacilityIdNullCode,
+        actualQuantity: "4",
+      },
+      {
+        supplyRequestItemId: requestItemId2,
+        sourceFacilityId,
+        actualQuantity: "4",
+      },
+    ],
+    // sum = 11
+    [
+      {
+        supplyRequestItemId: requestItemId,
+        sourceFacilityId,
+        actualQuantity: "6",
+      },
+      {
+        supplyRequestItemId: requestItemId,
+        sourceFacilityId: sourceFacilityIdNullCode,
+        actualQuantity: "5",
+      },
+      {
+        supplyRequestItemId: requestItemId2,
+        sourceFacilityId,
+        actualQuantity: "4",
+      },
+    ],
+    // 6+6 = 12
+    [
+      {
+        supplyRequestItemId: requestItemId,
+        sourceFacilityId,
+        actualQuantity: "6",
+      },
+      {
+        supplyRequestItemId: requestItemId,
+        sourceFacilityId: sourceFacilityIdNullCode,
+        actualQuantity: "6",
+      },
+      {
+        supplyRequestItemId: requestItemId2,
+        sourceFacilityId,
+        actualQuantity: "4",
+      },
+    ],
+    // Cross-group offset: 11 + 3 = 14 != (10, 4)
+    [
+      {
+        supplyRequestItemId: requestItemId,
+        sourceFacilityId,
+        actualQuantity: "11",
+      },
+      {
+        supplyRequestItemId: requestItemId2,
+        sourceFacilityId,
+        actualQuantity: "3",
+      },
+    ],
+    // Missing second group
+    [
+      {
+        supplyRequestItemId: requestItemId,
+        sourceFacilityId,
+        actualQuantity: "10",
+      },
+    ],
+    // Extra unknown supplyRequestItemId
+    [
+      {
+        supplyRequestItemId: requestItemId,
+        sourceFacilityId,
+        actualQuantity: "10",
+      },
+      {
+        supplyRequestItemId: requestItemId2,
+        sourceFacilityId,
+        actualQuantity: "4",
+      },
+      { supplyRequestItemId: uid(9998), sourceFacilityId, actualQuantity: "1" },
+    ],
+  ]) {
+    const errH = setupUs1Harness({ supplyRequest: twoGroupReq });
+    await assert.rejects(
+      () =>
+        errH.service.create(
+          {
+            idempotencyKey: idemKey1,
+            body: validateCreateSupplierOrderBody({
+              sourceType: "REQUEST",
+              supplyRequestId,
+              sources: badSources,
+            }),
+          },
+          actor,
+        ),
+      { statusCode: 409 },
+    );
+    assert.equal(errH.createdPayloads.length, 0);
+  }
+
+  // Two SupplyRequestItems with same ingredientId: duplicate resolved (ingredientId, sourceFacilityId) -> 409; distinct facilities -> 201
+  const sameIngTwoItems = makeSupplyRequestRecord("ACCEPTED", true, 2);
+  sameIngTwoItems.supplyRequestItems[0].requestedQuantity = new Prisma.Decimal(
+    "5",
+  );
+  sameIngTwoItems.supplyRequestItems[1].requestedQuantity = new Prisma.Decimal(
+    "5",
+  );
+  sameIngTwoItems.supplyRequestItems[1].ingredientEntryId = entryId2;
+  sameIngTwoItems.supplyRequestItems[1].IngredientEntry = {
+    id: entryId2,
+    ingredientId,
+    Ingredient: { id: ingredientId, name: "Gạo ST25" },
+  };
+  const dupResolvedH = setupUs1Harness({ supplyRequest: sameIngTwoItems });
+  await assert.rejects(
+    () =>
+      dupResolvedH.service.create(
+        {
+          idempotencyKey: idemKey1,
+          body: validateCreateSupplierOrderBody({
+            sourceType: "REQUEST",
+            supplyRequestId,
+            sources: [
+              {
+                supplyRequestItemId: requestItemId,
+                sourceFacilityId,
+                actualQuantity: "5",
+              },
+              {
+                supplyRequestItemId: requestItemId2,
+                sourceFacilityId,
+                actualQuantity: "5",
+              },
+            ],
+          }),
+        },
+        actor,
+      ),
+    { statusCode: 409 },
+  );
+
+  const distinctFacSameIngH = setupUs1Harness({
+    supplyRequest: sameIngTwoItems,
+  });
+  const sameIngOk = await distinctFacSameIngH.service.create(
+    {
+      idempotencyKey: idemKey1,
+      body: validateCreateSupplierOrderBody({
+        sourceType: "REQUEST",
+        supplyRequestId,
+        sources: [
+          {
+            supplyRequestItemId: requestItemId,
+            sourceFacilityId,
+            actualQuantity: "5",
+          },
+          {
+            supplyRequestItemId: requestItemId2,
+            sourceFacilityId: sourceFacilityIdNullCode,
+            actualQuantity: "5",
+          },
+        ],
+      }),
+    },
+    actor,
+  );
+  assert.equal(sameIngOk.created, true);
+  assert.equal(sameIngOk.items.length, 2);
+
+  // Different ingredients sharing the same sourceFacilityId -> allowed
+  const diffIngSharedFacH = setupUs1Harness({ supplyRequest: twoGroupReq });
+  const sharedFacOk = await diffIngSharedFacH.service.create(
+    {
+      idempotencyKey: idemKey1,
+      body: validateCreateSupplierOrderBody({
+        sourceType: "REQUEST",
+        supplyRequestId,
+        sources: [
+          {
+            supplyRequestItemId: requestItemId,
+            sourceFacilityId,
+            actualQuantity: "10",
+          },
+          {
+            supplyRequestItemId: requestItemId2,
+            sourceFacilityId,
+            actualQuantity: "4",
+          },
+        ],
+      }),
+    },
+    actor,
+  );
+  assert.equal(sharedFacOk.created, true);
+  assert.equal(sharedFacOk.items.length, 2);
+});
+
 void test("US2 validation enforces STANDALONE items, quantities, duplicate prevention and options pagination", () => {
   const valid = validateCreateSupplierOrderBody({
     sourceType: "STANDALONE",
     schoolId: schoolId.toUpperCase(),
-    expectedArrivalAt: "2026-11-16T08:00:00+07:00",
-    vehiclePlate: " 29D-999.88 ",
     note: "Giao độc lập",
     items: [
       {
@@ -953,7 +1610,7 @@ void test("US2 validation enforces STANDALONE items, quantities, duplicate preve
   assert.equal(valid.sourceType, "STANDALONE");
   if (valid.sourceType !== "STANDALONE") assert.fail("expected STANDALONE");
   assert.equal(valid.schoolId, schoolId);
-  assert.equal(valid.vehiclePlate, "29D-999.88");
+  assert.equal(valid.note, "Giao độc lập");
   assert.equal(valid.items[0].ingredientId, ingredientId);
   assert.equal(valid.items[0].sourceFacilityId, sourceFacilityId);
   assert.equal(valid.items[1].sourceFacilityId, sourceFacilityId);
@@ -961,48 +1618,118 @@ void test("US2 validation enforces STANDALONE items, quantities, duplicate preve
   assert.equal(valid.items[0].unit, "kg");
   assert.equal(valid.items[1].actualQuantity, "10");
 
-  const dupCase = {
+  const sameIngredientMultiSource = validateCreateSupplierOrderBody({
     sourceType: "STANDALONE",
     schoolId,
-    expectedArrivalAt: "2026-11-16T08:00:00+07:00",
-    vehiclePlate: "29D-999.88",
     items: [
-      { ingredientId, sourceFacilityId, actualQuantity: "1", unit: "kg" },
+      { ingredientId, sourceFacilityId, actualQuantity: "6", unit: "kg" },
       {
         ingredientId: ingredientId.toUpperCase(),
         sourceFacilityId: sourceFacilityIdNullCode,
-        actualQuantity: "2",
+        actualQuantity: "4.000",
+        unit: "kg",
+      },
+    ],
+  });
+  assert.equal(sameIngredientMultiSource.sourceType, "STANDALONE");
+  if (sameIngredientMultiSource.sourceType === "STANDALONE") {
+    assert.equal(sameIngredientMultiSource.items.length, 2);
+    assert.deepEqual(
+      sameIngredientMultiSource.items.map((i) => i.actualQuantity),
+      ["6", "4"],
+    );
+  }
+
+  const dupThirdPair = {
+    sourceType: "STANDALONE",
+    schoolId,
+    items: [
+      { ingredientId, sourceFacilityId, actualQuantity: "6", unit: "kg" },
+      {
+        ingredientId: ingredientId.toUpperCase(),
+        sourceFacilityId: sourceFacilityIdNullCode,
+        actualQuantity: "4",
+        unit: "kg",
+      },
+      {
+        ingredientId: ingredientId.toUpperCase(),
+        sourceFacilityId: sourceFacilityId.toUpperCase(),
+        actualQuantity: "1",
         unit: "kg",
       },
     ],
   };
   assert.throws(
-    () => validateCreateSupplierOrderBody(dupCase),
+    () => validateCreateSupplierOrderBody(dupThirdPair),
     (err: unknown) =>
       err instanceof RequestValidationError &&
       err.statusCode === 400 &&
-      err.fields.some((f) => f.field === "items.1.ingredientId"),
+      err.fields.some((f) => f.field === "items.2.sourceFacilityId"),
+  );
+
+  // Max 100 allocation rows for STANDALONE
+  const standalone101 = Array.from({ length: 101 }, (_, i) => ({
+    ingredientId,
+    sourceFacilityId: uid(4000 + i),
+    actualQuantity: "1",
+    unit: "kg",
+  }));
+  assert.throws(
+    () =>
+      validateCreateSupplierOrderBody({
+        sourceType: "STANDALONE",
+        schoolId,
+        items: standalone101,
+      }),
+    (err: unknown) =>
+      err instanceof RequestValidationError && err.statusCode === 400,
+  );
+
+  // T119: separate school search query validator vs strict options query validator
+  assert.deepEqual(validateSupplierSchoolOptionsQuery({}), {
+    page: 1,
+    limit: 20,
+  });
+  assert.deepEqual(
+    validateSupplierSchoolOptionsQuery({ search: "  Hoa Mai  ", limit: "5" }),
+    { page: 1, limit: 5, search: "Hoa Mai" },
+  );
+  assert.deepEqual(validateSupplierSchoolOptionsQuery({ search: "   " }), {
+    page: 1,
+    limit: 20,
+  });
+  assert.deepEqual(
+    validateSupplierSchoolOptionsQuery({ search: `  ${"a".repeat(100)}  ` }),
+    { page: 1, limit: 20, search: "a".repeat(100) },
+  );
+  for (const badSchoolQuery of [
+    { search: "a".repeat(101) },
+    { search: ["hoa", "mai"] },
+    { search: { contains: "hoa" } },
+    { q: "hoa" },
+    { supplierId },
+    { schoolId },
+  ]) {
+    assert.throws(
+      () => validateSupplierSchoolOptionsQuery(badSchoolQuery),
+      (err: unknown) =>
+        err instanceof RequestValidationError && err.statusCode === 400,
+    );
+  }
+  assert.throws(
+    () => validateSupplierOrderOptionsQuery({ search: "hoa" }),
+    (err: unknown) =>
+      err instanceof RequestValidationError && err.statusCode === 400,
   );
 
   const baseStandalone = {
     sourceType: "STANDALONE" as const,
     schoolId,
-    expectedArrivalAt: "2026-11-16T08:00:00+07:00",
-    vehiclePlate: "29D-999.88",
   };
   for (const invalidStandalone of [
     { ...baseStandalone, items: [] },
     {
-      sourceType: "STANDALONE",
-      schoolId,
-      vehiclePlate: "29D-999.88",
-      items: [
-        { ingredientId, sourceFacilityId, actualQuantity: "1", unit: "kg" },
-      ],
-    },
-    {
-      sourceType: "STANDALONE",
-      schoolId,
+      ...baseStandalone,
       expectedArrivalAt: "2026-11-16T08:00:00+07:00",
       items: [
         { ingredientId, sourceFacilityId, actualQuantity: "1", unit: "kg" },
@@ -1010,7 +1737,7 @@ void test("US2 validation enforces STANDALONE items, quantities, duplicate preve
     },
     {
       ...baseStandalone,
-      vehiclePlate: "   ",
+      vehiclePlate: "29D-999.88",
       items: [
         { ingredientId, sourceFacilityId, actualQuantity: "1", unit: "kg" },
       ],
@@ -1293,6 +2020,7 @@ void test("US2 creates STANDALONE delivery for both supplier roles, links only e
       findManagementDeliveryById: () => Promise.resolve(null),
       findDeliveryForLabels: () => Promise.resolve(null),
       listDeliveryLabelItems: () => Promise.resolve([]),
+      dispatchDelivery: () => Promise.resolve(0),
       createDeliveryWithItems: (_db, input) => {
         const deliverySeqIndex = createdPayloads.length;
         createdPayloads.push(input);
@@ -1302,6 +2030,7 @@ void test("US2 creates STANDALONE delivery for both supplier roles, links only e
           creationMode: input.creationMode,
           creationFingerprint: input.creationFingerprint,
           traceabilityVersion: input.traceabilityVersion,
+          workflowVersion: input.workflowVersion ?? null,
           schoolId: input.schoolId,
           supplierId: input.supplierId,
           supplyRequestId: null,
@@ -1398,8 +2127,6 @@ void test("US2 creates STANDALONE delivery for both supplier roles, links only e
     const body = validateCreateSupplierOrderBody({
       sourceType: "STANDALONE",
       schoolId,
-      expectedArrivalAt: "2026-11-16T08:00:00+07:00",
-      vehiclePlate: "29C-88888",
       items: [
         {
           ingredientId,
@@ -1421,9 +2148,13 @@ void test("US2 creates STANDALONE delivery for both supplier roles, links only e
     );
     assert.equal(res.created, true);
     assert.equal(res.sourceType, "STANDALONE");
-    assert.equal(res.status, "IN_TRANSIT");
-    assert.equal(res.statusLabel, "Đang giao");
+    assert.equal(res.status, "PREPARING");
+    assert.equal(res.statusLabel, "Đang chuẩn bị hàng");
     assert.equal(res.traceabilityVersion, 1);
+    assert.equal(res.workflowVersion, 2);
+    assert.equal(res.nextAction, "ENTER_SHIPPING");
+    assert.equal(res.expectedArrivalAt, null);
+    assert.equal(res.vehiclePlate, null);
     assert.equal(res.deliveryNo, "FP-DE-00001");
     assert.equal(res.supplyRequestId, null);
     assert.equal(res.requestNo, null);
@@ -1451,7 +2182,10 @@ void test("US2 creates STANDALONE delivery for both supplier roles, links only e
       name: "Trang trại không mã",
     });
     assert.equal(h.createdPayloads[0].traceabilityVersion, 1);
-    assert.equal(h.createdPayloads[0].status, "IN_TRANSIT");
+    assert.equal(h.createdPayloads[0].workflowVersion, 2);
+    assert.equal(h.createdPayloads[0].status, "PREPARING");
+    assert.equal(h.createdPayloads[0].expectedArrivalAt, null);
+    assert.equal(h.createdPayloads[0].vehiclePlate, null);
     assert.equal(h.createdPayloads[0].items[0].note, null);
     assert.equal(h.createdPayloads[0].items[1].note, null);
     assert.equal(
@@ -1482,8 +2216,6 @@ void test("US2 creates STANDALONE delivery for both supplier roles, links only e
   const standaloneBase = {
     sourceType: "STANDALONE" as const,
     schoolId,
-    expectedArrivalAt: "2026-11-16T08:00:00+07:00",
-    vehiclePlate: "29C-88888",
   };
 
   const unitMismatch = setupStandalone();
@@ -1727,6 +2459,89 @@ void test("US2 creates STANDALONE delivery for both supplier roles, links only e
     distinctIntent.createdPayloads[1].items[0].qrToken,
   );
   assert.equal(pausedGuard.createdPayloads.length, 0);
+
+  // T122: Same ingredient split 6A+4B across two source facilities in STANDALONE -> 201 PREPARING without CONFIRMED/fake records
+  const multiSourceStandalone = setupStandalone({ existingEntries: [] });
+  const splitStandaloneBody = validateCreateSupplierOrderBody({
+    sourceType: "STANDALONE",
+    schoolId,
+    items: [
+      {
+        ingredientId,
+        sourceFacilityId,
+        actualQuantity: "6.000",
+        unit: "kg",
+      },
+      {
+        ingredientId,
+        sourceFacilityId: sourceFacilityIdNullCode,
+        actualQuantity: "4.000",
+        unit: "kg",
+      },
+    ],
+  });
+  const splitStandaloneRes = await multiSourceStandalone.service.create(
+    { idempotencyKey: idemKey1, body: splitStandaloneBody },
+    makeSupplierActor(),
+  );
+  assert.equal(splitStandaloneRes.created, true);
+  assert.equal(splitStandaloneRes.status, "PREPARING");
+  assert.equal(splitStandaloneRes.workflowVersion, 2);
+  assert.equal(splitStandaloneRes.nextAction, "ENTER_SHIPPING");
+  assert.equal(splitStandaloneRes.expectedArrivalAt, null);
+  assert.equal(splitStandaloneRes.vehiclePlate, null);
+  assert.equal(splitStandaloneRes.items.length, 2);
+  assert.notEqual(
+    splitStandaloneRes.items[0].id,
+    splitStandaloneRes.items[1].id,
+  );
+  assert.notEqual(
+    splitStandaloneRes.items[0].traceUrl,
+    splitStandaloneRes.items[1].traceUrl,
+  );
+  assert.equal(splitStandaloneRes.items[0].ingredientEntryId, null);
+  assert.equal(splitStandaloneRes.items[1].ingredientEntryId, null);
+  assert.equal(splitStandaloneRes.items[0].actualQuantity, "6");
+  assert.equal(splitStandaloneRes.items[1].actualQuantity, "4");
+  assert.equal(multiSourceStandalone.getFlags().autoCreatedEntry, false);
+  assert.equal(multiSourceStandalone.getFlags().supplyRequestTouched, false);
+  assert.deepEqual(multiSourceStandalone.guardCommands[0], {
+    operation: "SUPPLIER_CREATE_STANDALONE_DELIVERY",
+    schoolId,
+    ingredientIds: [ingredientId],
+    sourceFacilityIds: [sourceFacilityId, sourceFacilityIdNullCode],
+  });
+
+  // Service-level 409 defense if duplicate (ingredientId, sourceFacilityId) bypasses schema validation
+  await assert.rejects(
+    () =>
+      multiSourceStandalone.service.create(
+        {
+          idempotencyKey: idemKey2,
+          body: {
+            sourceType: "STANDALONE",
+            schoolId,
+            note: null,
+            items: [
+              {
+                ingredientId,
+                sourceFacilityId,
+                actualQuantity: "5",
+                unit: "kg",
+              },
+              {
+                ingredientId,
+                sourceFacilityId,
+                actualQuantity: "5",
+                unit: "kg",
+              },
+            ],
+          },
+        },
+        makeSupplierActor(),
+      ),
+    { statusCode: 409 },
+  );
 });
 
 void test("US2 options repository queries and HTTP endpoints return safe scoped options and reject unauthorized callers", async (context) => {
@@ -1789,6 +2604,43 @@ void test("US2 options repository queries and HTTP endpoints return safe scoped 
     },
   });
 
+  await supplierOrderRepository.listSchoolOptions(mockDb, {
+    supplierId,
+    skip: 0,
+    take: 6,
+    search: "100%_hoa\\nam",
+  });
+  assert.deepEqual(schoolWhere, {
+    AND: [
+      {
+        status: "ACTIVE",
+        intakeState: "ACTIVE",
+        users: {
+          none: { roleCode: "SCHOOL_ADMINISTRATION", status: "DEACTIVATED" },
+        },
+        schoolSupplierRelationships: {
+          some: { supplierId, status: "ACTIVE" },
+        },
+      },
+      {
+        OR: [
+          {
+            name: {
+              contains: "100\\%\\_hoa\\\\nam",
+              mode: "insensitive",
+            },
+          },
+          {
+            code: {
+              contains: "100\\%\\_hoa\\\\nam",
+              mode: "insensitive",
+            },
+          },
+        ],
+      },
+    ],
+  });
+
   await supplierOrderRepository.listIngredientOptions(mockDb, {
     supplierId,
     skip: 0,
@@ -1807,10 +2659,20 @@ void test("US2 options repository queries and HTTP endpoints return safe scoped 
     status: "ACTIVE",
   });
 
+  const schoolQueries: Array<{ skip: number; take: number; search?: string }> =
+    [];
   const service = createSupplierOrderService(
     {
       ...supplierOrderRepository,
       connect: () => Promise.resolve(mockDb as never),
+      listSchoolOptions: (db, command) => {
+        schoolQueries.push({
+          skip: command.skip,
+          take: command.take,
+          ...(command.search !== undefined ? { search: command.search } : {}),
+        });
+        return supplierOrderRepository.listSchoolOptions(db, command);
+      },
     },
     {
       transaction: async (fn) => fn(mockDb),
@@ -1848,10 +2710,50 @@ void test("US2 options repository queries and HTTP endpoints return safe scoped 
     hasNext: false,
   });
 
+  const searchRes = await http.request(
+    "/api/deliveries/management/options/schools?search=%20Hoa%20Mai%20&limit=5",
+  );
+  assert.equal(searchRes.status, 200);
+  assert.deepEqual(schoolQueries[schoolQueries.length - 1], {
+    skip: 0,
+    take: 6,
+    search: "Hoa Mai",
+  });
+
+  const blankSearchRes = await http.request(
+    "/api/deliveries/management/options/schools?search=%20%20%20",
+  );
+  assert.equal(blankSearchRes.status, 200);
+  assert.deepEqual(schoolQueries[schoolQueries.length - 1], {
+    skip: 0,
+    take: 21,
+  });
+
+  for (const badSearchUrl of [
+    `/api/deliveries/management/options/schools?search=${"x".repeat(101)}`,
+    "/api/deliveries/management/options/schools?search=a&search=b",
+    "/api/deliveries/management/options/schools?search[contains]=hoa",
+    "/api/deliveries/management/options/schools?q=hoa",
+    "/api/deliveries/management/options/ingredients?search=gao",
+    "/api/deliveries/management/options/source-facilities?search=sf",
+    `/api/deliveries/management/${deliveryId}/labels?search=gao`,
+  ]) {
+    assert.equal((await http.request(badSearchUrl)).status, 400);
+  }
+
   const ingRes = await http.request(
     "/api/deliveries/management/options/ingredients",
   );
   assert.equal(ingRes.status, 200);
+
+  actor = makeSupplierActor(ROLES.INGREDIENT_SUPPLIER_ADMIN, [
+    "delivery.manage",
+  ]);
+  assert.equal(
+    (await http.request("/api/deliveries/management/options/schools?search=a"))
+      .status,
+    200,
+  );
 
   actor = { ...actor, permissions: ["delivery.view"] };
   assert.equal(
@@ -1937,7 +2839,7 @@ void test("US4 source-facility options and labels endpoints enforce scope, snaps
       findFirst: (args: { where: Record<string, unknown> }) => {
         labelDeliveryArgs = args;
         const raw = JSON.stringify(args.where);
-        if (raw.includes(deliveryId)) {
+        if (raw.includes(supplierId) && raw.includes(deliveryId)) {
           return Promise.resolve({
             id: deliveryId,
             supplierId,
@@ -1946,7 +2848,7 @@ void test("US4 source-facility options and labels endpoints enforce scope, snaps
             Supplier: { name: "Nhà cung cấp An Phát" },
           });
         }
-        if (raw.includes(legacyId)) {
+        if (raw.includes(supplierId) && raw.includes(legacyId)) {
           return Promise.resolve({
             id: legacyId,
             supplierId,
@@ -2153,12 +3055,58 @@ void test("US4 source-facility options and labels endpoints enforce scope, snaps
   renderError = null;
   assert.equal(dbWriteCalls, 0);
 
-  actor = makeSupplierActor(ROLES.INGREDIENT_SUPPLIER_STAFF, ["delivery.view"]);
+  // T133/T134: /labels allows supplier roles with delivery.view | delivery.manage | delivery.receive; options/source-facilities still needs delivery.manage
+  for (const allowedPerm of [
+    "delivery.view",
+    "delivery.manage",
+    "delivery.receive",
+  ] as const) {
+    actor = makeSupplierActor(ROLES.INGREDIENT_SUPPLIER_STAFF, [allowedPerm]);
+    assert.equal(
+      (await http.request(`/api/deliveries/management/${deliveryId}/labels`))
+        .status,
+      200,
+    );
+  }
+  actor = makeSupplierActor(ROLES.INGREDIENT_SUPPLIER_ADMIN, ["delivery.view"]);
   assert.equal(
     (await http.request(`/api/deliveries/management/${deliveryId}/labels`))
       .status,
+    200,
+  );
+  assert.equal(
+    (await http.request("/api/deliveries/management/options/source-facilities"))
+      .status,
     403,
   );
+  actor = makeSupplierActor(
+    ROLES.INGREDIENT_SUPPLIER_STAFF,
+    ["delivery.view"],
+    { supplierId: uid(9988) },
+  );
+  assert.equal(
+    (await http.request(`/api/deliveries/management/${deliveryId}/labels`))
+      .status,
+    404,
+  );
+  for (const deniedActor of [
+    makeSupplierActor(ROLES.INGREDIENT_SUPPLIER_STAFF, ["supply_order.accept"]),
+    makeSupplierActor(ROLES.INGREDIENT_SUPPLIER_STAFF, []),
+    {
+      ...makeSupplierActor(ROLES.INGREDIENT_SUPPLIER_ADMIN, ["delivery.view"]),
+      role: ROLES.SCHOOL_ADMINISTRATION,
+      orgType: "SCHOOL" as const,
+      supplierId: null,
+      schoolId: uid(4001),
+    },
+  ]) {
+    actor = deniedActor;
+    assert.equal(
+      (await http.request(`/api/deliveries/management/${deliveryId}/labels`))
+        .status,
+      403,
+    );
+  }
 });
 
 void test("US3 validates list queries and detail params cleanly", () => {
@@ -2212,11 +3160,19 @@ void test("US3 idempotent replay returns 200 without re-creating, checks live ac
   let guardCalls = 0;
   let verifyActorError: Error | null = null;
   let throwP2002Once = false;
+  let hidePreCheckRemaining = 0;
 
   const repo: SupplierOrderRepository = {
     connect: () => Promise.resolve({} as never),
-    findByCreationKey: (_db, supId, userId, key) =>
-      Promise.resolve(deliveries.get(`${supId}:${userId}:${key}`) ?? null),
+    findByCreationKey: (_db, supId, userId, key) => {
+      if (hidePreCheckRemaining > 0) {
+        hidePreCheckRemaining -= 1;
+        return Promise.resolve(null);
+      }
+      return Promise.resolve(
+        deliveries.get(`${supId}:${userId}:${key}`) ?? null,
+      );
+    },
     findSupplyRequestForCreation: () =>
       Promise.resolve(makeSupplyRequestRecord("ACCEPTED")),
     hasDeliveryForRequest: () => Promise.resolve(false),
@@ -2259,6 +3215,7 @@ void test("US3 idempotent replay returns 200 without re-creating, checks live ac
     findManagementDeliveryById: () => Promise.resolve(null),
     findDeliveryForLabels: () => Promise.resolve(null),
     listDeliveryLabelItems: () => Promise.resolve([]),
+    dispatchDelivery: () => Promise.resolve(0),
     createDeliveryWithItems: (_db, input) => {
       createCalls += 1;
       const record: SupplierOrderDetailRecord = {
@@ -2267,6 +3224,7 @@ void test("US3 idempotent replay returns 200 without re-creating, checks live ac
         creationMode: input.creationMode,
         creationFingerprint: input.creationFingerprint,
         traceabilityVersion: input.traceabilityVersion,
+        workflowVersion: input.workflowVersion ?? null,
         schoolId: input.schoolId,
         supplierId: input.supplierId,
         supplyRequestId: input.supplyRequestId,
@@ -2307,10 +3265,13 @@ void test("US3 idempotent replay returns 200 without re-creating, checks live ac
     },
   };
 
+  let renderCalls = 0;
   const service = createSupplierOrderService(repo, {
     publicTraceOrigin: "https://trace.example.test",
-    renderQrBatch: (urls) =>
-      Promise.resolve(urls.map(() => "data:image/png;base64,mock")),
+    renderQrBatch: (urls) => {
+      renderCalls += 1;
+      return Promise.resolve(urls.map(() => "data:image/png;base64,mock"));
+    },
     transaction: async (fn) => {
       if (throwP2002Once) {
         throwP2002Once = false;
@@ -2337,8 +3298,6 @@ void test("US3 idempotent replay returns 200 without re-creating, checks live ac
   const firstBody = validateCreateSupplierOrderBody({
     sourceType: "STANDALONE",
     schoolId,
-    expectedArrivalAt: "2026-11-16T08:00:00+07:00",
-    vehiclePlate: "29A-12345",
     items: [
       { ingredientId, sourceFacilityId, actualQuantity: "12.500", unit: "kg" },
       {
@@ -2354,14 +3313,14 @@ void test("US3 idempotent replay returns 200 without re-creating, checks live ac
     actor1,
   );
   assert.equal(first.created, true);
+  assert.equal(first.workflowVersion, 2);
   assert.equal(createCalls, 1);
   assert.equal(guardCalls, 1);
+  assert.equal(renderCalls, 1);
 
   const equivalentBody = validateCreateSupplierOrderBody({
     sourceType: "STANDALONE",
     schoolId,
-    expectedArrivalAt: "2026-11-16T01:00:00Z",
-    vehiclePlate: " 29A-12345 ",
     note: "   ",
     items: [
       {
@@ -2383,6 +3342,7 @@ void test("US3 idempotent replay returns 200 without re-creating, checks live ac
   assert.equal(replay.updatedAt, first.updatedAt);
   assert.equal(createCalls, 1);
   assert.equal(guardCalls, 1);
+  assert.equal(renderCalls, 1);
 
   await assert.rejects(
     () =>
@@ -2392,8 +3352,6 @@ void test("US3 idempotent replay returns 200 without re-creating, checks live ac
           body: validateCreateSupplierOrderBody({
             sourceType: "STANDALONE",
             schoolId,
-            expectedArrivalAt: "2026-11-16T08:00:00+07:00",
-            vehiclePlate: "29A-12345",
             items: [
               {
                 ingredientId,
@@ -2425,6 +3383,7 @@ void test("US3 idempotent replay returns 200 without re-creating, checks live ac
   assert.equal(createCalls, 2);
 
   throwP2002Once = true;
+  hidePreCheckRemaining = 1;
   const raceReplay = await service.create(
     { idempotencyKey: idemKey1, body: equivalentBody },
     actor1,
@@ -2440,6 +3399,7 @@ void test("US3 lists, filters legacy+standalone deliveries, returns detail and e
     deliveryNo: "DG-LEGACY-1",
     creationMode: null,
     traceabilityVersion: null,
+    workflowVersion: null,
     creationFingerprint: null,
     schoolId,
     supplierId,
@@ -2454,13 +3414,14 @@ void test("US3 lists, filters legacy+standalone deliveries, returns detail and e
     createdAt: now,
     updatedAt: now,
     School: { name: "Tiểu học Hoa Mai" },
-    SupplyRequest: { requestNo: "SR-2026-001" },
+    SupplyRequest: { status: "IN_PROGRESS" as const, requestNo: "SR-2026-001" },
   };
   const standaloneRecord: SupplierOrderDetailRecord = {
     id: uid(199),
     deliveryNo: "DG-STD-2",
     creationMode: "STANDALONE",
     traceabilityVersion: null,
+    workflowVersion: null,
     creationFingerprint: "secret-fp",
     schoolId,
     supplierId,
@@ -2579,6 +3540,7 @@ void test("US3 lists, filters legacy+standalone deliveries, returns detail and e
         id: deliveryId,
         deliveryNo: input.deliveryNo,
         traceabilityVersion: input.traceabilityVersion,
+        workflowVersion: input.workflowVersion ?? null,
         status: input.status,
         expectedArrivalAt: input.expectedArrivalAt,
         vehiclePlate: input.vehiclePlate,
@@ -2663,8 +3625,6 @@ void test("US3 lists, filters legacy+standalone deliveries, returns detail and e
   const createPayload = JSON.stringify({
     sourceType: "STANDALONE",
     schoolId,
-    expectedArrivalAt: "2026-11-16T08:00:00+07:00",
-    vehiclePlate: "29C-77777",
     items: [
       {
         ingredientId,
@@ -2708,8 +3668,6 @@ void test("US3 lists, filters legacy+standalone deliveries, returns detail and e
     body: JSON.stringify({
       sourceType: "STANDALONE",
       schoolId,
-      expectedArrivalAt: "2026-11-16T08:00:00+07:00",
-      vehiclePlate: "29C-77777",
       items: [
         { ingredientId, sourceFacilityId, actualQuantity: "9", unit: "kg" },
       ],
@@ -2739,6 +3697,7 @@ void test("US3 read matrix covers supplier roles with view-or-manage permission,
       creationMode: "STANDALONE",
       creationFingerprint: "fp-secret-hidden",
       traceabilityVersion: 1,
+      workflowVersion: null,
       schoolId,
       supplierId,
       supplyRequestId: null,
@@ -2778,6 +3737,7 @@ void test("US3 read matrix covers supplier roles with view-or-manage permission,
       creationMode: null,
       creationFingerprint: "legacy-fp",
       traceabilityVersion: null,
+      workflowVersion: null,
       schoolId,
       supplierId,
       supplyRequestId,
@@ -2791,7 +3751,7 @@ void test("US3 read matrix covers supplier roles with view-or-manage permission,
       createdAt: createdOlder,
       updatedAt: createdOlder,
       School: { name: "Tiểu học Hoa Mai" },
-      SupplyRequest: { requestNo: "SR-LEGACY-01" },
+      SupplyRequest: { status: "COMPLETED", requestNo: "SR-LEGACY-01" },
       deliveryItems: [
         {
           id: uid(9911),
@@ -2816,6 +3776,7 @@ void test("US3 read matrix covers supplier roles with view-or-manage permission,
       creationMode: "STANDALONE",
       creationFingerprint: "other-fp",
       traceabilityVersion: 1,
+      workflowVersion: null,
       schoolId,
       supplierId: supplierOtherId,
       supplyRequestId: null,
@@ -3013,7 +3974,7 @@ void test("US3 read matrix covers supplier roles with view-or-manage permission,
   assert.equal(listPayload.length, 2);
   assert.equal(listPayload[0].id, v1StandaloneDeliveryId);
   assert.equal(listPayload[0].status, "IN_TRANSIT");
-  assert.equal(listPayload[0].statusLabel, "Đang giao");
+  assert.equal(listPayload[0].statusLabel, "Đang giao hàng");
   assert.equal(listPayload[1].id, legacyReqDeliveryId);
   assert.equal(listPayload[1].sourceType, "REQUEST");
   assert.equal(listPayload[1].traceabilityVersion, null);
@@ -3167,6 +4128,7 @@ void test("US3 canonical v2 equivalence, field-level conflict matrix, legacy bas
         })),
       );
     },
+    dispatchDelivery: () => Promise.resolve(0),
     createDeliveryWithItems: (_db, input) => {
       seq += 1n;
       const now = new Date("2026-11-15T04:00:00Z");
@@ -3176,6 +4138,7 @@ void test("US3 canonical v2 equivalence, field-level conflict matrix, legacy bas
         creationMode: input.creationMode,
         creationFingerprint: input.creationFingerprint,
         traceabilityVersion: input.traceabilityVersion,
+        workflowVersion: input.workflowVersion ?? null,
         schoolId: input.schoolId,
         supplierId: input.supplierId,
         supplyRequestId: input.supplyRequestId,
@@ -3190,7 +4153,7 @@ void test("US3 canonical v2 equivalence, field-level conflict matrix, legacy bas
         updatedAt: now,
         School: { name: "Tiểu học Hoa Mai" },
         SupplyRequest: input.supplyRequestId
-          ? { requestNo: "SR-2026-001" }
+          ? { status: "IN_PROGRESS", requestNo: "SR-2026-001" }
           : null,
         deliveryItems: input.items.map((item, idx) => ({
           id: uid(9970 + idx + Number(seq) * 10),
@@ -3219,13 +4182,20 @@ void test("US3 canonical v2 equivalence, field-level conflict matrix, legacy bas
     },
   };
 
+  let renderCount = 0;
+  let originCount = 0;
   const service = createSupplierOrderService(repo, {
-    publicTraceOrigin: "https://trace.example.test",
+    readOrigin: () => {
+      originCount += 1;
+      return "https://trace.example.test";
+    },
     generateToken: () => `${String(++tokenSeq).padStart(64, "a")}`,
-    renderQrBatch: (urls) =>
-      renderError
+    renderQrBatch: (urls) => {
+      renderCount += 1;
+      return renderError
         ? Promise.reject(renderError)
-        : Promise.resolve(urls.map(() => "data:image/png;base64,ok")),
+        : Promise.resolve(urls.map(() => "data:image/png;base64,ok"));
+    },
     transaction: async (fn) => fn({} as never),
     guard: { assertAccess: (_tx, a) => Promise.resolve(a) },
     verifyActor: (_tx, a) => Promise.resolve(a),
@@ -3238,14 +4208,17 @@ void test("US3 canonical v2 equivalence, field-level conflict matrix, legacy bas
   const reqBody = validateCreateSupplierOrderBody({
     sourceType: "REQUEST",
     supplyRequestId,
-    expectedArrivalAt: "2026-11-16T08:00:00+07:00",
-    vehiclePlate: "29A-12345",
     note: "Giao sáng",
     sources: [
-      { supplyRequestItemId: requestItemId, sourceFacilityId },
+      {
+        supplyRequestItemId: requestItemId,
+        sourceFacilityId,
+        actualQuantity: "12.5",
+      },
       {
         supplyRequestItemId: requestItemId2,
         sourceFacilityId: sourceFacilityIdNullCode,
+        actualQuantity: "4",
       },
     ],
   });
@@ -3262,21 +4235,29 @@ void test("US3 canonical v2 equivalence, field-level conflict matrix, legacy bas
     actor,
   );
   assert.equal(createdReq.created, true);
+  assert.equal(createdReq.workflowVersion, 2);
+  assert.equal(createdReq.status, "PREPARING");
   assert.equal(persistedById.size, 1);
 
-  // Reordered sources + UTC equivalent timestamp + padded plate -> replay 200 without creating a second delivery
+  const renderCountBeforeReplay = renderCount;
+  const originCountBeforeReplay = originCount;
+
+  // Reordered sources + equivalent trailing decimals -> replay 200 without invoking renderer/origin or creating a second delivery
   const reqEquivalentBody = validateCreateSupplierOrderBody({
     sourceType: "REQUEST",
     supplyRequestId,
-    expectedArrivalAt: "2026-11-16T01:00:00Z",
-    vehiclePlate: "  29A-12345  ",
-    note: "Giao sáng",
+    note: "  Giao sáng  ",
     sources: [
       {
         supplyRequestItemId: requestItemId2,
         sourceFacilityId: sourceFacilityIdNullCode,
+        actualQuantity: "4.000",
       },
-      { supplyRequestItemId: requestItemId, sourceFacilityId },
+      {
+        supplyRequestItemId: requestItemId,
+        sourceFacilityId,
+        actualQuantity: "12.500",
+      },
     ],
   });
   const reqReplay = await service.create(
@@ -3286,8 +4267,10 @@ void test("US3 canonical v2 equivalence, field-level conflict matrix, legacy bas
   assert.equal(reqReplay.created, false);
   assert.equal(reqReplay.id, createdReq.id);
   assert.equal(persistedById.size, 1);
+  assert.equal(renderCount, renderCountBeforeReplay);
+  assert.equal(originCount, originCountBeforeReplay);
 
-  // Field-level conflicts on REQUEST (facility, plate, ETA, note) -> 409
+  // Field-level conflicts on REQUEST (facility, quantity, note) -> 409
   for (const mutated of [
     {
       ...reqBody,
@@ -3295,12 +4278,30 @@ void test("US3 canonical v2 equivalence, field-level conflict matrix, legacy bas
         {
           supplyRequestItemId: requestItemId,
           sourceFacilityId: sourceFacilityIdNullCode,
+          actualQuantity: "12.5",
         },
-        { supplyRequestItemId: requestItemId2, sourceFacilityId },
+        {
+          supplyRequestItemId: requestItemId2,
+          sourceFacilityId,
+          actualQuantity: "4",
+        },
       ],
     },
-    { ...reqBody, vehiclePlate: "29A-99999" },
-    { ...reqBody, expectedArrivalAt: "2026-11-16T08:01:00+07:00" },
+    {
+      ...reqBody,
+      sources: [
+        {
+          supplyRequestItemId: requestItemId,
+          sourceFacilityId,
+          actualQuantity: "12",
+        },
+        {
+          supplyRequestItemId: requestItemId2,
+          sourceFacilityId: sourceFacilityIdNullCode,
+          actualQuantity: "4.5",
+        },
+      ],
+    },
     { ...reqBody, note: "Ghi chú khác" },
   ]) {
     await assert.rejects(
@@ -3316,7 +4317,7 @@ void test("US3 canonical v2 equivalence, field-level conflict matrix, legacy bas
     );
   }
 
-  // 2. Post-commit renderer error on GET labels / POST replay does NOT delete/rollback committed DB record
+  // 2. Post-commit renderer error fails GET labels 503 while committed POST replay still succeeds 200 without touching DB or renderer
   const app = express();
   app.use(express.json());
   app.use(
@@ -3335,28 +4336,34 @@ void test("US3 canonical v2 equivalence, field-level conflict matrix, legacy bas
     `/api/deliveries/management/${createdReq.id}/labels`,
   );
   assert.equal(failedLabels.status, 503);
-  const failedReplayHttp = await http.request("/api/deliveries/management", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Idempotency-Key": reqKey,
+  const replayWhileRendererDown = await http.request(
+    "/api/deliveries/management",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": reqKey,
+      },
+      body: JSON.stringify({
+        sourceType: "REQUEST",
+        supplyRequestId,
+        note: "Giao sáng",
+        sources: [
+          {
+            supplyRequestItemId: requestItemId,
+            sourceFacilityId,
+            actualQuantity: "12.5",
+          },
+          {
+            supplyRequestItemId: requestItemId2,
+            sourceFacilityId: sourceFacilityIdNullCode,
+            actualQuantity: "4",
+          },
+        ],
+      }),
     },
-    body: JSON.stringify({
-      sourceType: "REQUEST",
-      supplyRequestId,
-      expectedArrivalAt: "2026-11-16T08:00:00+07:00",
-      vehiclePlate: "29A-12345",
-      note: "Giao sáng",
-      sources: [
-        { supplyRequestItemId: requestItemId, sourceFacilityId },
-        {
-          supplyRequestItemId: requestItemId2,
-          sourceFacilityId: sourceFacilityIdNullCode,
-        },
-      ],
-    }),
-  });
-  assert.equal(failedReplayHttp.status, 503);
+  );
+  assert.equal(replayWhileRendererDown.status, 200);
   // Detail still confirms committed delivery remained persisted cleanly
   const intactDetail = await http.request(
     `/api/deliveries/management/${createdReq.id}`,
@@ -3376,13 +4383,11 @@ void test("US3 canonical v2 equivalence, field-level conflict matrix, legacy bas
   assert.equal(recoveredReplay.created, false);
   assert.equal(recoveredReplay.id, createdReq.id);
 
-  // 3. STANDALONE field-level conflicts + Legacy baseline key conflict (never upgrades traceabilityVersion)
+  // 3. STANDALONE field-level conflicts + Legacy baseline/v1 key conflicts (never upgrades workflowVersion/traceabilityVersion)
   const stdKey = uid(9982);
   const stdBase = {
     sourceType: "STANDALONE" as const,
     schoolId,
-    expectedArrivalAt: "2026-11-16T09:00:00+07:00",
-    vehiclePlate: "30H-11111",
     note: "Đơn độc lập",
     items: [
       {
@@ -3409,8 +4414,17 @@ void test("US3 canonical v2 equivalence, field-level conflict matrix, legacy bas
         },
       ],
     },
-    { ...stdBase, vehiclePlate: "30H-22222" },
-    { ...stdBase, expectedArrivalAt: "2026-11-16T09:01:00+07:00" },
+    {
+      ...stdBase,
+      items: [
+        {
+          ingredientId,
+          sourceFacilityId,
+          actualQuantity: "4",
+          unit: "kg",
+        },
+      ],
+    },
     { ...stdBase, note: null },
   ]) {
     await assert.rejects(
@@ -3433,6 +4447,7 @@ void test("US3 canonical v2 equivalence, field-level conflict matrix, legacy bas
     creationMode: "STANDALONE",
     creationFingerprint: "legacy-v1-sha256-digest",
     traceabilityVersion: null,
+    workflowVersion: null,
     schoolId,
     supplierId,
     supplyRequestId: null,
@@ -3466,4 +4481,1356 @@ void test("US3 canonical v2 equivalence, field-level conflict matrix, legacy bas
     { statusCode: 409 },
   );
   assert.equal(legacyBaselineRow.traceabilityVersion, null);
+  assert.equal(legacyBaselineRow.workflowVersion, null);
+
+  const v1Key = uid(9985);
+  const v1BaselineRow: SupplierOrderDetailRecord = {
+    ...legacyBaselineRow,
+    id: uid(9986),
+    deliveryNo: "FP-DE-00999",
+    traceabilityVersion: 1,
+    workflowVersion: null,
+  };
+  persistedByKey.set(`${supplierId}:${actor.id}:${v1Key}`, v1BaselineRow);
+  await assert.rejects(
+    () =>
+      service.create(
+        {
+          idempotencyKey: v1Key,
+          body: validateCreateSupplierOrderBody(stdBase),
+        },
+        actor,
+      ),
+    { statusCode: 409 },
+  );
+  assert.equal(v1BaselineRow.workflowVersion, null);
+});
+
+void test("US6 HTTP contract enforces dispatch strict validation, mount order, manage permission without Idempotency-Key, and no internal leak (T125)", async (context) => {
+  // Audit main API router mount order: /deliveries/management precedes /deliveries
+  const apiRouter = createApiRouter((_req, _res, next) => next());
+  const routerLayers = (
+    apiRouter as unknown as { stack: Array<{ regexp?: RegExp }> }
+  ).stack;
+  const mgmtMountIdx = routerLayers.findIndex((layer) =>
+    layer.regexp?.source.includes("deliveries\\/management"),
+  );
+  const genericMountIdx = routerLayers.findIndex(
+    (layer) =>
+      layer.regexp?.source.includes("\\/deliveries") &&
+      !layer.regexp?.source.includes("deliveries\\/management") &&
+      !layer.regexp?.source.includes("public\\/delivery-items"),
+  );
+  assert.equal(mgmtMountIdx >= 0, true);
+  assert.equal(genericMountIdx >= 0, true);
+  assert.equal(mgmtMountIdx < genericMountIdx, true);
+
+  // Unit validation: multiple errors, strict fields, past/future ISO offset, free-form plate <= 40
+  assert.throws(
+    () => validateDispatchSupplierOrderBody({}),
+    (err: unknown) =>
+      err instanceof RequestValidationError &&
+      err.fields.some((issue) => issue.field === "expectedArrivalAt") &&
+      err.fields.some((issue) => issue.field === "vehiclePlate"),
+  );
+  for (const invalidBody of [
+    null,
+    [],
+    { expectedArrivalAt: null, vehiclePlate: "29C-12345" },
+    { expectedArrivalAt: "2026-11-16T08:00:00", vehiclePlate: "29C-12345" },
+    { expectedArrivalAt: "not-a-date", vehiclePlate: "29C-12345" },
+    { expectedArrivalAt: "2026-11-16T08:00:00+07:00", vehiclePlate: null },
+    { expectedArrivalAt: "2026-11-16T08:00:00+07:00", vehiclePlate: "   " },
+    {
+      expectedArrivalAt: "2026-11-16T08:00:00+07:00",
+      vehiclePlate: "A".repeat(41),
+    },
+    {
+      expectedArrivalAt: "2026-11-16T08:00:00+07:00",
+      vehiclePlate: "29C-12345",
+      note: "Cấm thêm note",
+    },
+    {
+      expectedArrivalAt: "2026-11-16T08:00:00+07:00",
+      vehiclePlate: "29C-12345",
+      items: [],
+    },
+    {
+      expectedArrivalAt: "2026-11-16T08:00:00+07:00",
+      vehiclePlate: "29C-12345",
+      status: "IN_TRANSIT",
+    },
+    {
+      expectedArrivalAt: "2026-11-16T08:00:00+07:00",
+      vehiclePlate: "29C-12345",
+      workflowVersion: 2,
+    },
+  ]) {
+    assert.throws(
+      () => validateDispatchSupplierOrderBody(invalidBody),
+      (err: unknown) =>
+        err instanceof RequestValidationError && err.statusCode === 400,
+    );
+  }
+
+  const pastParsed = validateDispatchSupplierOrderBody({
+    expectedArrivalAt: "2020-01-01T08:00:00+07:00",
+    vehiclePlate: "  XE LẠNH #01 - KCN Bắc  ",
+  });
+  assert.equal(pastParsed.expectedArrivalAt, "2020-01-01T01:00:00.000Z");
+  assert.equal(pastParsed.vehiclePlate, "XE LẠNH #01 - KCN Bắc");
+
+  const deliveryId = uid(7701);
+  const schoolId = uid(7702);
+  let liveActor = makeSupplierActor(ROLES.INGREDIENT_SUPPLIER_STAFF, [
+    "delivery.manage",
+  ]);
+  const storedRow: SupplierOrderDetailRecord = {
+    id: deliveryId,
+    deliveryNo: "FP-DE-00777",
+    creationMode: "STANDALONE",
+    creationFingerprint: "secret-fp",
+    traceabilityVersion: 1,
+    workflowVersion: 2,
+    schoolId,
+    supplierId,
+    supplyRequestId: null,
+    status: "PREPARING",
+    expectedArrivalAt: null,
+    arrivedAt: null,
+    receivedAt: null,
+    vehiclePlate: null,
+    note: "Đơn chuẩn bị sẵn",
+    createdByUserId: liveActor.id,
+    createdAt: new Date("2026-11-15T00:00:00.000Z"),
+    updatedAt: new Date("2026-11-15T00:00:00.000Z"),
+    School: { name: "Tiểu học Hoa Mai" },
+    SupplyRequest: null,
+    deliveryItems: [
+      {
+        id: uid(7703),
+        ingredientId: uid(7704),
+        ingredientNameSnapshot: "Gạo tám",
+        ingredientEntryId: null,
+        supplyRequestItemId: null,
+        sourceFacilityId: uid(7705),
+        sourceFacilityNameSnapshot: "Kho A",
+        sourceFacilityCodeSnapshot: "K-A",
+        qrUrl: "https://trace.example.test/public/delivery-items/qr-7703",
+        actualQuantity: new Prisma.Decimal("6.000"),
+        unit: "kg",
+        note: null,
+        Ingredient: { name: "Gạo tám" },
+      },
+    ],
+  };
+
+  const repo: SupplierOrderRepository = {
+    ...supplierOrderRepository,
+    connect: () => Promise.resolve({} as never),
+    findManagementDeliveryById: (_db, scope, id) => {
+      if (scope.supplierId !== storedRow.supplierId || id !== storedRow.id) {
+        return Promise.resolve(null);
+      }
+      return Promise.resolve({ ...storedRow });
+    },
+    dispatchDelivery: (_db, cmd) => {
+      if (
+        cmd.scope.supplierId !== storedRow.supplierId ||
+        cmd.deliveryId !== storedRow.id ||
+        storedRow.workflowVersion !== 2 ||
+        storedRow.traceabilityVersion !== 1 ||
+        storedRow.status !== "PREPARING" ||
+        storedRow.expectedArrivalAt !== null ||
+        storedRow.vehiclePlate !== null
+      ) {
+        return Promise.resolve(0);
+      }
+      storedRow.status = "IN_TRANSIT";
+      storedRow.expectedArrivalAt = cmd.expectedArrivalAt;
+      storedRow.vehiclePlate = cmd.vehiclePlate;
+      storedRow.updatedAt = new Date("2026-11-15T01:00:00.000Z");
+      return Promise.resolve(1);
+    },
+  };
+  const guard = createIntakeAccessService(
+    {
+      ...createIntakeAccessRepository(),
+      lockParents: () => Promise.resolve(),
+      lockDelivery: () => Promise.resolve(),
+      readDelivery: (_tx, id, supId) =>
+        Promise.resolve(
+          id === storedRow.id && supId === storedRow.supplierId
+            ? {
+                id: storedRow.id,
+                schoolId: storedRow.schoolId,
+                supplierId: storedRow.supplierId,
+                supplyRequestId: storedRow.supplyRequestId,
+                status: storedRow.status,
+                workflowVersion: storedRow.workflowVersion,
+                traceabilityVersion: storedRow.traceabilityVersion,
+                expectedArrivalAt: storedRow.expectedArrivalAt,
+                vehiclePlate: storedRow.vehiclePlate,
+              }
+            : null,
+        ),
+      readSchool: () =>
+        Promise.resolve({ id: schoolId, status: "ACTIVE" } as never),
+      readSupplier: () =>
+        Promise.resolve({ id: supplierId, status: "ACTIVE" } as never),
+      readSchoolAdmin: () =>
+        Promise.resolve({ id: uid(7710), status: "ACTIVE" } as never),
+      readSupplierAdmin: () =>
+        Promise.resolve({ id: uid(7711), status: "ACTIVE" } as never),
+    },
+    () => Promise.resolve(liveActor),
+  );
+  const service = createSupplierOrderService(repo, {
+    transaction: (fn) => fn({} as never),
+    guard,
+  });
+
+  let reqActor: AuthPrincipal | undefined = liveActor;
+  const app = express();
+  app.use(express.json());
+  app.use(
+    "/api/deliveries/management",
+    createSupplierOrderRouter(service, (req, _res, next) => {
+      if (!reqActor) {
+        next(new HttpError(401, "Chưa đăng nhập"));
+        return;
+      }
+      req.auth = reqActor;
+      next();
+    }),
+  );
+  app.use(
+    "/api/deliveries",
+    createDeliveryRouter(undefined, (req, _res, next) => {
+      if (!reqActor) {
+        next(new HttpError(401, "Chưa đăng nhập"));
+        return;
+      }
+      req.auth = reqActor;
+      next();
+    }),
+  );
+  app.use(globalErrorHandler);
+
+  const server = await new Promise<ReturnType<typeof app.listen>>((resolve) => {
+    const started = app.listen(0, () => resolve(started));
+  });
+  context.after(
+    () =>
+      new Promise<void>((resolve, reject) =>
+        server.close((err) => (err ? reject(err) : resolve())),
+      ),
+  );
+  const address = server.address();
+  const baseUrl = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
+
+  // Bad params UUID or unexpected query -> 400
+  assert.equal(
+    (
+      await fetch(`${baseUrl}/api/deliveries/management/not-a-uuid/dispatch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          expectedArrivalAt: "2026-11-16T08:00:00+07:00",
+          vehiclePlate: "29C-12345",
+        }),
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await fetch(
+        `${baseUrl}/api/deliveries/management/${deliveryId}/dispatch?extra=1`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            expectedArrivalAt: "2026-11-16T08:00:00+07:00",
+            vehiclePlate: "29C-12345",
+          }),
+        },
+      )
+    ).status,
+    400,
+  );
+
+  // PATCH status is not opened (404 from generic/router)
+  assert.equal(
+    (
+      await fetch(`${baseUrl}/api/deliveries/management/${deliveryId}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "IN_TRANSIT" }),
+      })
+    ).status,
+    404,
+  );
+
+  // Unauthenticated -> 401
+  reqActor = undefined;
+  assert.equal(
+    (
+      await fetch(
+        `${baseUrl}/api/deliveries/management/${deliveryId}/dispatch`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            expectedArrivalAt: "2026-11-16T08:00:00+07:00",
+            vehiclePlate: "29C-12345",
+          }),
+        },
+      )
+    ).status,
+    401,
+  );
+
+  // View/accept without manage -> 403; SCHOOL_ADMIN even with manage -> 403
+  for (const denied of [
+    makeSupplierActor(ROLES.INGREDIENT_SUPPLIER_STAFF, [
+      "delivery.view",
+      "supply_order.accept",
+    ]),
+    {
+      ...makeSupplierActor(ROLES.INGREDIENT_SUPPLIER_ADMIN, [
+        "delivery.manage",
+      ]),
+      role: ROLES.SCHOOL_ADMINISTRATION,
+      orgType: "SCHOOL" as const,
+      supplierId: null,
+      schoolId,
+    },
+  ]) {
+    reqActor = denied;
+    liveActor = denied;
+    assert.equal(
+      (
+        await fetch(
+          `${baseUrl}/api/deliveries/management/${deliveryId}/dispatch`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              expectedArrivalAt: "2026-11-16T08:00:00+07:00",
+              vehiclePlate: "29C-12345",
+            }),
+          },
+        )
+      ).status,
+      403,
+    );
+  }
+
+  // Foreign supplier -> 404
+  const foreignActor = makeSupplierActor(
+    ROLES.INGREDIENT_SUPPLIER_ADMIN,
+    ["delivery.manage"],
+    { supplierId: uid(7799) },
+  );
+  reqActor = foreignActor;
+  liveActor = foreignActor;
+  assert.equal(
+    (
+      await fetch(
+        `${baseUrl}/api/deliveries/management/${deliveryId}/dispatch`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            expectedArrivalAt: "2026-11-16T08:00:00+07:00",
+            vehiclePlate: "29C-12345",
+          }),
+        },
+      )
+    ).status,
+    404,
+  );
+
+  // Manage-only staff succeeds WITHOUT Idempotency-Key & exposes clean Detail DTO (no internal markers)
+  const manageOnlyStaff = makeSupplierActor(ROLES.INGREDIENT_SUPPLIER_STAFF, [
+    "delivery.manage",
+  ]);
+  reqActor = manageOnlyStaff;
+  liveActor = manageOnlyStaff;
+  const okRes = await fetch(
+    `${baseUrl}/api/deliveries/management/${deliveryId}/dispatch`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        expectedArrivalAt: "2026-11-16T08:00:00+07:00",
+        vehiclePlate: "  29C-12345  ",
+      }),
+    },
+  );
+  assert.equal(okRes.status, 200);
+  const okJson = (await okRes.json()) as {
+    success: boolean;
+    data: Record<string, unknown>;
+  };
+  assert.equal(okJson.success, true);
+  assert.equal(okJson.data.status, "IN_TRANSIT");
+  assert.equal(okJson.data.statusLabel, "Đang giao hàng");
+  assert.equal(okJson.data.workflowVersion, 2);
+  assert.equal(okJson.data.nextAction, "TRACK_DELIVERY");
+  assert.equal(okJson.data.expectedArrivalAt, "2026-11-16T01:00:00.000Z");
+  assert.equal(okJson.data.vehiclePlate, "29C-12345");
+  assert.equal("created" in okJson.data, false);
+  assert.equal("creationKey" in okJson.data, false);
+  assert.equal("creationFingerprint" in okJson.data, false);
+  assert.equal(
+    "qrToken" in (okJson.data.items as Array<Record<string, unknown>>)[0],
+    false,
+  );
+
+  // Admin can replay same canonical body after staff dispatched -> 200
+  const manageOnlyAdmin = makeSupplierActor(ROLES.INGREDIENT_SUPPLIER_ADMIN, [
+    "delivery.manage",
+  ]);
+  reqActor = manageOnlyAdmin;
+  liveActor = manageOnlyAdmin;
+  const replayRes = await fetch(
+    `${baseUrl}/api/deliveries/management/${deliveryId}/dispatch`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        expectedArrivalAt: "2026-11-16T01:00:00.000Z",
+        vehiclePlate: "29C-12345",
+      }),
+    },
+  );
+  assert.equal(replayRes.status, 200);
+  assert.equal(
+    ((await replayRes.json()) as { data: { status: string } }).data.status,
+    "IN_TRANSIT",
+  );
+});
+
+void test("US6 dispatch service handles continuation policy, all-state replay/409, rollback, renderer independence, and CAS race cleanly (T130)", async () => {
+  const schoolId = uid(7801);
+  const actor = makeSupplierActor(ROLES.INGREDIENT_SUPPLIER_STAFF, [
+    "delivery.manage",
+  ]);
+  const initialUpdatedAt = new Date("2026-11-15T02:00:00.000Z");
+  const validEta = new Date("2026-11-16T01:00:00.000Z");
+  const validPlate = "51D-999.88";
+
+  const makeRow = (
+    overrides: Partial<SupplierOrderDetailRecord> = {},
+  ): SupplierOrderDetailRecord => ({
+    id: uid(7802),
+    deliveryNo: "FP-DE-00888",
+    creationMode: "REQUEST",
+    creationFingerprint: "fp-7802",
+    traceabilityVersion: 1,
+    workflowVersion: 2,
+    schoolId,
+    supplierId,
+    supplyRequestId: uid(7803),
+    status: "PREPARING",
+    expectedArrivalAt: null,
+    arrivedAt: null,
+    receivedAt: null,
+    vehiclePlate: null,
+    note: "Cổng phụ",
+    createdByUserId: actor.id,
+    createdAt: new Date("2026-11-15T01:00:00.000Z"),
+    updatedAt: initialUpdatedAt,
+    School: { name: "Tiểu học Hòa Bình" },
+    SupplyRequest: { status: "IN_PROGRESS", requestNo: "YC-7803" },
+    deliveryItems: [
+      {
+        id: uid(7804),
+        ingredientId: uid(7805),
+        ingredientNameSnapshot: "Thịt gà",
+        ingredientEntryId: null,
+        supplyRequestItemId: uid(7806),
+        sourceFacilityId: uid(7807),
+        sourceFacilityNameSnapshot: "Trại A",
+        sourceFacilityCodeSnapshot: "TA",
+        qrUrl: "https://trace.example.test/public/delivery-items/qr-7804",
+        actualQuantity: new Prisma.Decimal("6.000"),
+        unit: "kg",
+        note: null,
+        Ingredient: { name: "Thịt gà" },
+      },
+    ],
+    ...overrides,
+  });
+
+  // 1. Rollback if failure happens right after dispatchDelivery writes inside transaction
+  {
+    let committed = makeRow();
+    let working = { ...committed };
+    let findCalls = 0;
+    const repo: SupplierOrderRepository = {
+      ...supplierOrderRepository,
+      connect: () => Promise.resolve({} as never),
+      dispatchDelivery: (_db, cmd) => {
+        working = {
+          ...working,
+          status: "IN_TRANSIT",
+          expectedArrivalAt: cmd.expectedArrivalAt,
+          vehiclePlate: cmd.vehiclePlate,
+          updatedAt: new Date("2026-11-15T02:05:00.000Z"),
+        };
+        return Promise.resolve(1);
+      },
+      findManagementDeliveryById: () => {
+        findCalls += 1;
+        if (findCalls === 1)
+          return Promise.reject(new Error("post-write read fail"));
+        return Promise.resolve(working);
+      },
+    };
+    const guard = createIntakeAccessService(
+      {
+        ...createIntakeAccessRepository(),
+        lockParents: () => Promise.resolve(),
+        lockOrder: () => Promise.resolve(),
+        lockDelivery: () => Promise.resolve(),
+        readOrder: () =>
+          Promise.resolve({
+            id: working.supplyRequestId!,
+            schoolId,
+            supplierId,
+            status: "IN_PROGRESS",
+          } as never),
+        readDelivery: () =>
+          Promise.resolve({
+            id: working.id,
+            schoolId,
+            supplierId,
+            supplyRequestId: working.supplyRequestId,
+            status: working.status,
+            workflowVersion: working.workflowVersion,
+            traceabilityVersion: working.traceabilityVersion,
+            expectedArrivalAt: working.expectedArrivalAt,
+            vehiclePlate: working.vehiclePlate,
+          }),
+        readSchool: () =>
+          Promise.resolve({ id: schoolId, status: "ACTIVE" } as never),
+        readSupplier: () =>
+          Promise.resolve({ id: supplierId, status: "ACTIVE" } as never),
+        readSchoolAdmin: () =>
+          Promise.resolve({ id: uid(7810), status: "ACTIVE" } as never),
+        readSupplierAdmin: () =>
+          Promise.resolve({ id: uid(7811), status: "ACTIVE" } as never),
+      },
+      () => Promise.resolve(actor),
+    );
+    const service = createSupplierOrderService(repo, {
+      guard,
+      transaction: async (fn) => {
+        try {
+          const result = await fn({} as never);
+          committed = working;
+          return result;
+        } catch (err) {
+          working = committed;
+          if (err instanceof HttpError) throw err;
+          throw new HttpError(503, "Rollback cleanly");
+        }
+      },
+    });
+    await assert.rejects(
+      () =>
+        service.dispatch(
+          { id: committed.id },
+          validateDispatchSupplierOrderBody({
+            expectedArrivalAt: validEta.toISOString(),
+            vehiclePlate: validPlate,
+          }),
+          actor,
+        ),
+      { statusCode: 503 },
+    );
+    assert.equal(committed.status, "PREPARING");
+    assert.equal(committed.expectedArrivalAt, null);
+    assert.equal(committed.vehiclePlate, null);
+    assert.equal(committed.updatedAt.getTime(), initialUpdatedAt.getTime());
+  }
+
+  // 2. Replay across all post-dispatch states (same body -> 200 & untouched updatedAt; diff body -> 409)
+  // Plus pre-dispatch CANCELLED & legacy workflowVersion=null -> 409
+  // Plus deactivated admin / terminal source does NOT block already-dispatched replay, DOES block first PREPARING dispatch!
+  for (const replayStatus of [
+    "IN_TRANSIT",
+    "ARRIVED",
+    "PENDING_APPROVAL",
+    "RECEIVED",
+    "REJECTED",
+    "CANCELLED",
+  ] as const) {
+    const row = makeRow({
+      status: replayStatus,
+      expectedArrivalAt: validEta,
+      vehiclePlate: validPlate,
+      SupplyRequest: {
+        status: replayStatus === "CANCELLED" ? "CANCELLED" : "IN_PROGRESS",
+        requestNo: "YC-7803",
+      },
+    });
+    let dispatchWrites = 0;
+    let schoolAdminStatus: "ACTIVE" | "DEACTIVATED" = "DEACTIVATED";
+    let currentActor = actor;
+    const repo: SupplierOrderRepository = {
+      ...supplierOrderRepository,
+      connect: () => Promise.resolve({} as never),
+      dispatchDelivery: () => {
+        dispatchWrites += 1;
+        return Promise.resolve(1);
+      },
+      findManagementDeliveryById: () => Promise.resolve(row),
+    };
+    const guard = createIntakeAccessService(
+      {
+        ...createIntakeAccessRepository(),
+        lockParents: () => Promise.resolve(),
+        lockOrder: () => Promise.resolve(),
+        lockDelivery: () => Promise.resolve(),
+        readOrder: () =>
+          Promise.resolve({
+            id: row.supplyRequestId!,
+            schoolId,
+            supplierId,
+            status: row.SupplyRequest!.status,
+          } as never),
+        readDelivery: () =>
+          Promise.resolve({
+            id: row.id,
+            schoolId,
+            supplierId,
+            supplyRequestId: row.supplyRequestId,
+            status: row.status,
+            workflowVersion: row.workflowVersion,
+            traceabilityVersion: row.traceabilityVersion,
+            expectedArrivalAt: row.expectedArrivalAt,
+            vehiclePlate: row.vehiclePlate,
+          }),
+        readSchool: () =>
+          Promise.resolve({ id: schoolId, status: "SUSPENDED" } as never),
+        readSupplier: () =>
+          Promise.resolve({ id: supplierId, status: "ACTIVE" } as never),
+        readSchoolAdmin: () =>
+          Promise.resolve({
+            id: uid(7810),
+            status: schoolAdminStatus,
+          } as never),
+        readSupplierAdmin: () =>
+          Promise.resolve({ id: uid(7811), status: "ACTIVE" } as never),
+      },
+      () => Promise.resolve(currentActor),
+    );
+    const service = createSupplierOrderService(repo, {
+      guard,
+      transaction: (fn) => fn({} as never),
+      renderQrBatch: () => Promise.reject(new Error("renderer unavailable")),
+    });
+
+    const ok = await service.dispatch(
+      { id: row.id },
+      validateDispatchSupplierOrderBody({
+        expectedArrivalAt: "2026-11-16T08:00:00+07:00",
+        vehiclePlate: `  ${validPlate} `,
+      }),
+      actor,
+    );
+    assert.equal(ok.status, replayStatus);
+    assert.equal(ok.updatedAt, initialUpdatedAt.toISOString());
+    assert.equal(dispatchWrites, 0);
+
+    // Different ETA or plate -> 409
+    await assert.rejects(
+      () =>
+        service.dispatch(
+          { id: row.id },
+          validateDispatchSupplierOrderBody({
+            expectedArrivalAt: "2026-11-16T09:00:00+07:00",
+            vehiclePlate: validPlate,
+          }),
+          actor,
+        ),
+      { statusCode: 409 },
+    );
+    await assert.rejects(
+      () =>
+        service.dispatch(
+          { id: row.id },
+          validateDispatchSupplierOrderBody({
+            expectedArrivalAt: "2026-11-16T08:00:00+07:00",
+            vehiclePlate: "29C-00000",
+          }),
+          actor,
+        ),
+      { statusCode: 409 },
+    );
+
+    // Denied permission / org mismatch blocks replay too -> 403
+    currentActor = makeSupplierActor(ROLES.INGREDIENT_SUPPLIER_STAFF, [
+      "delivery.view",
+    ]);
+    await assert.rejects(
+      () =>
+        service.dispatch(
+          { id: row.id },
+          validateDispatchSupplierOrderBody({
+            expectedArrivalAt: validEta.toISOString(),
+            vehiclePlate: validPlate,
+          }),
+          actor,
+        ),
+      { statusCode: 403 },
+    );
+    currentActor = { ...actor, supplierId: uid(7899) };
+    await assert.rejects(
+      () =>
+        service.dispatch(
+          { id: row.id },
+          validateDispatchSupplierOrderBody({
+            expectedArrivalAt: validEta.toISOString(),
+            vehiclePlate: validPlate,
+          }),
+          actor,
+        ),
+      { statusCode: 403 },
+    );
+    currentActor = actor;
+    schoolAdminStatus = "ACTIVE";
+  }
+
+  // Pre-dispatch CANCELLED (metadata null) & legacy workflowVersion:null -> 409
+  for (const blockedRow of [
+    makeRow({
+      status: "CANCELLED",
+      expectedArrivalAt: null,
+      vehiclePlate: null,
+    }),
+    makeRow({ workflowVersion: null, status: "PREPARING" }),
+    makeRow({
+      workflowVersion: null,
+      status: "IN_TRANSIT",
+      expectedArrivalAt: validEta,
+      vehiclePlate: validPlate,
+    }),
+  ]) {
+    let dispatchWrites = 0;
+    const repo: SupplierOrderRepository = {
+      ...supplierOrderRepository,
+      connect: () => Promise.resolve({} as never),
+      dispatchDelivery: () => {
+        dispatchWrites += 1;
+        return Promise.resolve(1);
+      },
+      findManagementDeliveryById: () => Promise.resolve(blockedRow),
+    };
+    const guard = createIntakeAccessService(
+      {
+        ...createIntakeAccessRepository(),
+        lockParents: () => Promise.resolve(),
+        lockOrder: () => Promise.resolve(),
+        lockDelivery: () => Promise.resolve(),
+        readOrder: () =>
+          Promise.resolve({
+            id: blockedRow.supplyRequestId!,
+            schoolId,
+            supplierId,
+            status: "IN_PROGRESS",
+          } as never),
+        readDelivery: () =>
+          Promise.resolve({
+            id: blockedRow.id,
+            schoolId,
+            supplierId,
+            supplyRequestId: blockedRow.supplyRequestId,
+            status: blockedRow.status,
+            workflowVersion: blockedRow.workflowVersion,
+            traceabilityVersion: blockedRow.traceabilityVersion,
+            expectedArrivalAt: blockedRow.expectedArrivalAt,
+            vehiclePlate: blockedRow.vehiclePlate,
+          }),
+        readSchool: () =>
+          Promise.resolve({ id: schoolId, status: "ACTIVE" } as never),
+        readSupplier: () =>
+          Promise.resolve({ id: supplierId, status: "ACTIVE" } as never),
+        readSchoolAdmin: () =>
+          Promise.resolve({ id: uid(7810), status: "ACTIVE" } as never),
+        readSupplierAdmin: () =>
+          Promise.resolve({ id: uid(7811), status: "ACTIVE" } as never),
+      },
+      () => Promise.resolve(actor),
+    );
+    const service = createSupplierOrderService(repo, {
+      guard,
+      transaction: (fn) => fn({} as never),
+    });
+    await assert.rejects(
+      () =>
+        service.dispatch(
+          { id: blockedRow.id },
+          validateDispatchSupplierOrderBody({
+            expectedArrivalAt: validEta.toISOString(),
+            vehiclePlate: validPlate,
+          }),
+          actor,
+        ),
+      { statusCode: 409 },
+    );
+    assert.equal(dispatchWrites, 0);
+  }
+
+  // 3. First dispatch succeeds while renderer is down AND intake/relationship/source are paused,
+  // but fails 409 if admin deactivated or source order terminal, plus handles mock CAS race=0!
+  {
+    let row = makeRow();
+    let reqStatus: "IN_PROGRESS" | "CANCELLED" = "IN_PROGRESS";
+    let supplierAdminStatus: "ACTIVE" | "DEACTIVATED" = "ACTIVE";
+    let casCount = 1;
+    const repo: SupplierOrderRepository = {
+      ...supplierOrderRepository,
+      connect: () => Promise.resolve({} as never),
+      dispatchDelivery: (_db, cmd) => {
+        if (casCount === 0) {
+          row = {
+            ...row,
+            status: "IN_TRANSIT",
+            expectedArrivalAt: validEta,
+            vehiclePlate: validPlate,
+          };
+          return Promise.resolve(0);
+        }
+        row = {
+          ...row,
+          status: "IN_TRANSIT",
+          expectedArrivalAt: cmd.expectedArrivalAt,
+          vehiclePlate: cmd.vehiclePlate,
+        };
+        return Promise.resolve(1);
+      },
+      findManagementDeliveryById: () => Promise.resolve(row),
+    };
+    const guard = createIntakeAccessService(
+      {
+        ...createIntakeAccessRepository(),
+        lockParents: () => Promise.resolve(),
+        lockOrder: () => Promise.resolve(),
+        lockDelivery: () => Promise.resolve(),
+        readOrder: () =>
+          Promise.resolve({
+            id: row.supplyRequestId!,
+            schoolId,
+            supplierId,
+            status: reqStatus,
+          } as never),
+        readDelivery: () =>
+          Promise.resolve({
+            id: row.id,
+            schoolId,
+            supplierId,
+            supplyRequestId: row.supplyRequestId,
+            status: row.status,
+            workflowVersion: row.workflowVersion,
+            traceabilityVersion: row.traceabilityVersion,
+            expectedArrivalAt: row.expectedArrivalAt,
+            vehiclePlate: row.vehiclePlate,
+          }),
+        readSchool: () =>
+          Promise.resolve({ id: schoolId, status: "PAUSED" } as never),
+        readSupplier: () =>
+          Promise.resolve({ id: supplierId, status: "ACTIVE" } as never),
+        readSchoolAdmin: () =>
+          Promise.resolve({ id: uid(7810), status: "ACTIVE" } as never),
+        readSupplierAdmin: () =>
+          Promise.resolve({
+            id: uid(7811),
+            status: supplierAdminStatus,
+          } as never),
+      },
+      () => Promise.resolve(actor),
+    );
+    const service = createSupplierOrderService(repo, {
+      guard,
+      transaction: (fn) => fn({} as never),
+      renderQrBatch: () => Promise.reject(new Error("renderer offline")),
+    });
+
+    reqStatus = "CANCELLED";
+    await assert.rejects(
+      () =>
+        service.dispatch(
+          { id: row.id },
+          validateDispatchSupplierOrderBody({
+            expectedArrivalAt: validEta.toISOString(),
+            vehiclePlate: validPlate,
+          }),
+          actor,
+        ),
+      { statusCode: 409 },
+    );
+
+    reqStatus = "IN_PROGRESS";
+    supplierAdminStatus = "DEACTIVATED";
+    await assert.rejects(
+      () =>
+        service.dispatch(
+          { id: row.id },
+          validateDispatchSupplierOrderBody({
+            expectedArrivalAt: validEta.toISOString(),
+            vehiclePlate: validPlate,
+          }),
+          actor,
+        ),
+      { statusCode: 409 },
+    );
+
+    // Mock CAS count = 0 where concurrent writer committed different plate -> 409
+    supplierAdminStatus = "ACTIVE";
+    casCount = 0;
+    await assert.rejects(
+      () =>
+        service.dispatch(
+          { id: row.id },
+          validateDispatchSupplierOrderBody({
+            expectedArrivalAt: validEta.toISOString(),
+            vehiclePlate: "29C-OTHER",
+          }),
+          actor,
+        ),
+      { statusCode: 409 },
+    );
+
+    // Mock CAS count = 0 where concurrent writer committed SAME canonical metadata -> 200
+    row = makeRow();
+    const raceWonSame = await service.dispatch(
+      { id: row.id },
+      validateDispatchSupplierOrderBody({
+        expectedArrivalAt: validEta.toISOString(),
+        vehiclePlate: validPlate,
+      }),
+      actor,
+    );
+    assert.equal(raceWonSame.status, "IN_TRANSIT");
+    assert.equal(raceWonSame.nextAction, "TRACK_DELIVERY");
+  }
+});
+
+void test("US4 labels support PREPARING 6A+4B multi-source items with distinct UUIDs/QRs, read OR and unchanged URL after dispatch (T133)", async () => {
+  const deliveryId = uid(8401);
+  const ingredientId = uid(8402);
+  const facilityA = uid(8403);
+  const facilityB = uid(8404);
+  const itemAId = uid(8405);
+  const itemBId = uid(8406);
+  const urlA = `https://trace.example.test/api/public/delivery-items/${"aa".repeat(32)}`;
+  const urlB = `https://trace.example.test/api/public/delivery-items/${"bb".repeat(32)}`;
+  let capturedLabelOrderBy: unknown;
+
+  const repo: SupplierOrderRepository = {
+    ...supplierOrderRepository,
+    connect: () => Promise.resolve({} as never),
+    findDeliveryForLabels: (_db, scope, id) => {
+      if (scope.supplierId !== supplierId || id !== deliveryId) {
+        return Promise.resolve(null);
+      }
+      return Promise.resolve({
+        id: deliveryId,
+        supplierId,
+        deliveryNo: "FP-DE-00604",
+        traceabilityVersion: 1,
+        Supplier: { name: "NCC 6A4B" },
+      });
+    },
+    listDeliveryLabelItems: (_db, cmd) => {
+      capturedLabelOrderBy = cmd;
+      return Promise.resolve([
+        {
+          id: itemAId,
+          deliveryId,
+          sourceFacilityId: facilityA,
+          sourceFacilityNameSnapshot: "Cơ sở A",
+          sourceFacilityCodeSnapshot: "FA",
+          ingredientNameSnapshot: "Thịt gà sạch",
+          actualQuantity: new Prisma.Decimal("6.000"),
+          unit: "kg",
+          qrUrl: urlA,
+          Ingredient: { name: "Thịt gà sạch" },
+        },
+        {
+          id: itemBId,
+          deliveryId,
+          sourceFacilityId: facilityB,
+          sourceFacilityNameSnapshot: "Cơ sở B",
+          sourceFacilityCodeSnapshot: null,
+          ingredientNameSnapshot: "Thịt gà sạch",
+          actualQuantity: new Prisma.Decimal("4.000"),
+          unit: "kg",
+          qrUrl: urlB,
+          Ingredient: { name: "Thịt gà sạch" },
+        },
+      ]);
+    },
+  };
+
+  const service = createSupplierOrderService(repo, {
+    renderQrBatch: (urls) =>
+      Promise.resolve(
+        urls.map(
+          (u) => `data:image/png;base64,${Buffer.from(u).toString("base64")}`,
+        ),
+      ),
+  });
+
+  const viewStaff = makeSupplierActor(ROLES.INGREDIENT_SUPPLIER_STAFF, [
+    "delivery.view",
+  ]);
+  const prepLabels = await service.listLabels(
+    { id: deliveryId },
+    { page: 1, limit: 20 },
+    viewStaff,
+  );
+  assert.equal(prepLabels.items.length, 2);
+  assert.equal(
+    (capturedLabelOrderBy as { deliveryId: string }).deliveryId,
+    deliveryId,
+  );
+  assert.equal(prepLabels.items[0].deliveryItemId, itemAId);
+  assert.equal(prepLabels.items[0].actualQuantity, "6");
+  assert.equal(prepLabels.items[0].sourceFacility.name, "Cơ sở A");
+  assert.equal(prepLabels.items[0].traceUrl, urlA);
+  assert.equal(prepLabels.items[1].deliveryItemId, itemBId);
+  assert.equal(prepLabels.items[1].actualQuantity, "4");
+  assert.equal(prepLabels.items[1].sourceFacility.name, "Cơ sở B");
+  assert.equal(prepLabels.items[1].sourceFacility.facilityCode, null);
+  assert.equal(prepLabels.items[1].traceUrl, urlB);
+  assert.notEqual(
+    prepLabels.items[0].qrImageDataUrl,
+    prepLabels.items[1].qrImageDataUrl,
+  );
+  assert.equal(ingredientId.length, 36);
+
+  // Receive-only staff also reads identical label URLs & images after dispatch
+  const receiveStaff = makeSupplierActor(ROLES.INGREDIENT_SUPPLIER_STAFF, [
+    "delivery.receive",
+  ]);
+  const postDispatchLabels = await service.listLabels(
+    { id: deliveryId },
+    { page: 1, limit: 20 },
+    receiveStaff,
+  );
+  assert.deepEqual(postDispatchLabels, prepLabels);
+});
+
+void test("US3 management list/detail enforce PREPARING filter, nextAction read/manage/terminal rules, multi-row preservation, and safe DTO projection (T143)", async () => {
+  const prepId = uid(9101);
+  const terminalSourcePrepId = uid(9102);
+  const legacyId = uid(9103);
+  const standalonePrepId = uid(9104);
+  const facilityAId = uid(9201);
+  const facilityBId = uid(9202);
+  const itemAId = uid(9301);
+  const itemBId = uid(9302);
+  const supplierB = uid(9902);
+  let capturedListCommand: unknown;
+
+  const baseRow = (
+    id: string,
+    overrides: Partial<{
+      deliveryNo: string;
+      creationMode: "REQUEST" | "STANDALONE" | null;
+      traceabilityVersion: number | null;
+      workflowVersion: number | null;
+      status: "PREPARING" | "IN_TRANSIT" | "RECEIVED" | "CANCELLED" | "ARRIVED";
+      supplyRequestId: string | null;
+      requestStatus: "IN_PROGRESS" | "CANCELLED" | "COMPLETED" | "ACCEPTED";
+      expectedArrivalAt: Date | null;
+      vehiclePlate: string | null;
+    }> = {},
+  ) => ({
+    id,
+    deliveryNo: overrides.deliveryNo ?? "FP-DE-00901",
+    creationMode:
+      "creationMode" in overrides
+        ? overrides.creationMode!
+        : ("REQUEST" as const),
+    traceabilityVersion:
+      "traceabilityVersion" in overrides ? overrides.traceabilityVersion! : 1,
+    workflowVersion:
+      "workflowVersion" in overrides ? overrides.workflowVersion! : 2,
+    schoolId,
+    supplierId,
+    supplyRequestId:
+      "supplyRequestId" in overrides
+        ? overrides.supplyRequestId!
+        : supplyRequestId,
+    status: overrides.status ?? ("PREPARING" as const),
+    expectedArrivalAt:
+      "expectedArrivalAt" in overrides ? overrides.expectedArrivalAt! : null,
+    arrivedAt: null,
+    receivedAt: null,
+    vehiclePlate: "vehiclePlate" in overrides ? overrides.vehiclePlate! : null,
+    note: null,
+    createdByUserId: uid(301),
+    createdAt: new Date("2026-11-15T01:00:00.000Z"),
+    updatedAt: new Date("2026-11-15T01:00:00.000Z"),
+    School: { name: "Trường Tiểu học A" },
+    SupplyRequest: (
+      "supplyRequestId" in overrides
+        ? overrides.supplyRequestId
+        : supplyRequestId
+    )
+      ? {
+          requestNo: "SR-901",
+          status: overrides.requestStatus ?? "IN_PROGRESS",
+        }
+      : null,
+  });
+
+  const summaryRows = [
+    baseRow(prepId, {
+      status: "PREPARING",
+      workflowVersion: 2,
+      requestStatus: "IN_PROGRESS",
+    }),
+    baseRow(terminalSourcePrepId, {
+      deliveryNo: "FP-DE-00902",
+      status: "PREPARING",
+      workflowVersion: 2,
+      requestStatus: "COMPLETED",
+    }),
+    baseRow(standalonePrepId, {
+      deliveryNo: "FP-DE-00903",
+      creationMode: "STANDALONE",
+      supplyRequestId: null,
+      status: "PREPARING",
+      workflowVersion: 2,
+    }),
+    baseRow(legacyId, {
+      deliveryNo: "DG-OLD-904",
+      creationMode: null,
+      traceabilityVersion: null,
+      workflowVersion: null,
+      supplyRequestId: null,
+      status: "IN_TRANSIT",
+      expectedArrivalAt: new Date("2026-11-15T05:00:00.000Z"),
+      vehiclePlate: "29C-00904",
+    }),
+  ];
+
+  const multiDetailRow = {
+    ...summaryRows[0],
+    creationFingerprint: "v3:secret-fingerprint",
+    deliveryItems: [
+      {
+        id: itemAId,
+        ingredientId,
+        ingredientEntryId: entryId,
+        supplyRequestItemId: requestItemId,
+        sourceFacilityId: facilityAId,
+        sourceFacilityNameSnapshot: "Cơ sở A",
+        sourceFacilityCodeSnapshot: "SHARED-CODE",
+        ingredientNameSnapshot: "Gạo ST25",
+        qrUrl: `https://trace.example.test/api/public/delivery-items/${"11".repeat(32)}`,
+        actualQuantity: new Prisma.Decimal("6.000"),
+        unit: "kg",
+        note: null,
+        Ingredient: { name: "Gạo ST25" },
+      },
+      {
+        id: itemBId,
+        ingredientId,
+        ingredientEntryId: entryId,
+        supplyRequestItemId: requestItemId,
+        sourceFacilityId: facilityBId,
+        sourceFacilityNameSnapshot: "Cơ sở B",
+        sourceFacilityCodeSnapshot: "SHARED-CODE",
+        ingredientNameSnapshot: "Gạo ST25",
+        qrUrl: `https://trace.example.test/api/public/delivery-items/${"22".repeat(32)}`,
+        actualQuantity: new Prisma.Decimal("4.000"),
+        unit: "kg",
+        note: null,
+        Ingredient: { name: "Gạo ST25" },
+      },
+    ],
+  };
+
+  const repo: SupplierOrderRepository = {
+    ...supplierOrderRepository,
+    connect: () => Promise.resolve({} as never),
+    listManagementDeliveries: (_db, cmd) => {
+      capturedListCommand = cmd;
+      return Promise.resolve(
+        summaryRows.filter((row) => !cmd.status || row.status === cmd.status),
+      );
+    },
+    findManagementDeliveryById: (_db, scope, id) => {
+      if (scope.supplierId !== supplierId || id !== prepId) {
+        return Promise.resolve(null);
+      }
+      return Promise.resolve(multiDetailRow as never);
+    },
+  };
+
+  const service = createSupplierOrderService(repo);
+  assert.deepEqual(validateSupplierOrderListQuery({ status: "PREPARING" }), {
+    page: 1,
+    limit: 20,
+    status: "PREPARING",
+  });
+  assert.throws(
+    () => validateSupplierOrderListQuery({ limit: "101" }),
+    RequestValidationError,
+  );
+  assert.throws(
+    () => validateSupplierOrderListQuery({ status: "CONFIRMED" }),
+    RequestValidationError,
+  );
+
+  // HTTP filter ?status=PREPARING accepts all read OR permissions and blocks missing read perm
+  const app = express();
+  app.use(express.json());
+  let currentPrincipal = makeSupplierActor(ROLES.INGREDIENT_SUPPLIER_STAFF, [
+    "delivery.view",
+  ]);
+  app.use(
+    "/api/deliveries/management",
+    createSupplierOrderRouter(service, (req, _res, next) => {
+      req.auth = currentPrincipal;
+      next();
+    }),
+  );
+  app.use(globalErrorHandler);
+  const http = await startHttp(app);
+  try {
+    const viewListRes = await http.request(
+      "/api/deliveries/management?status=PREPARING",
+    );
+    assert.equal(viewListRes.status, 200);
+    assert.equal(
+      (capturedListCommand as { status?: string; take: number }).status,
+      "PREPARING",
+    );
+    assert.equal((capturedListCommand as { take: number }).take, 21);
+
+    const viewData = (
+      viewListRes.body as {
+        data: { items: Array<Record<string, unknown>> };
+      }
+    ).data;
+    assert.equal(viewData.items.length, 3);
+    assert.deepEqual(
+      viewData.items.map((item) => item.nextAction),
+      ["VIEW_DELIVERY", "VIEW_DELIVERY", "VIEW_DELIVERY"],
+    );
+    assert.equal(viewData.items[2].supplyRequestId, null);
+    assert.notEqual(viewData.items[2].status, "CONFIRMED");
+
+    // delivery.receive read OR gets VIEW_DELIVERY on PREPARING & TRACK_DELIVERY on IN_TRANSIT
+    currentPrincipal = makeSupplierActor(ROLES.INGREDIENT_SUPPLIER_STAFF, [
+      "delivery.receive",
+    ]);
+    const receiveListRes = await http.request("/api/deliveries/management");
+    assert.equal(receiveListRes.status, 200);
+    const receiveItems = (
+      receiveListRes.body as {
+        data: { items: Array<Record<string, unknown>> };
+      }
+    ).data.items;
+    assert.deepEqual(
+      receiveItems.map((item) => item.nextAction),
+      ["VIEW_DELIVERY", "VIEW_DELIVERY", "VIEW_DELIVERY", "TRACK_DELIVERY"],
+    );
+    assert.equal(receiveItems[3].workflowVersion, null);
+
+    // delivery.manage gets ENTER_SHIPPING on non-terminal PREPARING and VIEW_DELIVERY when source COMPLETED
+    currentPrincipal = makeSupplierActor(ROLES.INGREDIENT_SUPPLIER_ADMIN, [
+      "delivery.manage",
+    ]);
+    const manageListRes = await http.request("/api/deliveries/management");
+    assert.equal(manageListRes.status, 200);
+    const manageItems = (
+      manageListRes.body as {
+        data: { items: Array<Record<string, unknown>> };
+      }
+    ).data.items;
+    assert.deepEqual(
+      manageItems.map((item) => item.nextAction),
+      ["ENTER_SHIPPING", "VIEW_DELIVERY", "ENTER_SHIPPING", "TRACK_DELIVERY"],
+    );
+    for (const item of manageItems) {
+      if (item.status === "PREPARING") {
+        assert.equal(item.expectedArrivalAt, null);
+        assert.equal(item.vehiclePlate, null);
+      }
+    }
+
+    // Detail keeps uncollapsed 6+4 items, same display facilityCode with distinct facility UUIDs, and zero secrets
+    const detailRes = await http.request(
+      `/api/deliveries/management/${prepId}`,
+    );
+    assert.equal(detailRes.status, 200);
+    const detailData = (
+      detailRes.body as {
+        data: Record<string, unknown> & {
+          items: Array<{
+            id: string;
+            actualQuantity: string;
+            traceUrl: string;
+            sourceFacility: { id: string; facilityCode: string | null };
+          }>;
+        };
+      }
+    ).data;
+    assert.equal(detailData.items.length, 2);
+    assert.equal(detailData.items[0].id, itemAId);
+    assert.equal(detailData.items[1].id, itemBId);
+    assert.equal(detailData.items[0].actualQuantity, "6");
+    assert.equal(detailData.items[1].actualQuantity, "4");
+    assert.notEqual(
+      detailData.items[0].sourceFacility.id,
+      detailData.items[1].sourceFacility.id,
+    );
+    assert.notEqual(detailData.items[0].traceUrl, detailData.items[1].traceUrl);
+    for (const serialized of [
+      JSON.stringify(manageListRes.body),
+      JSON.stringify(detailRes.body),
+    ]) {
+      assert(!serialized.includes("qrToken"));
+      assert(!serialized.includes("photoHash"));
+      assert(!serialized.includes("qrImageDataUrl"));
+      assert(!serialized.includes("creationFingerprint"));
+      assert(!serialized.includes("secret-fingerprint"));
+      assert(!serialized.includes('"created"'));
+    }
+
+    // Foreign supplier gets 404 even with delivery.manage
+    currentPrincipal = makeSupplierActor(
+      ROLES.INGREDIENT_SUPPLIER_ADMIN,
+      ["delivery.manage"],
+      { supplierId: supplierB },
+    );
+    assert.equal(
+      (await http.request(`/api/deliveries/management/${prepId}`)).status,
+      404,
+    );
+
+    // Invalid status query -> 400; missing read perm -> 403
+    currentPrincipal = makeSupplierActor(ROLES.INGREDIENT_SUPPLIER_STAFF, []);
+    assert.equal(
+      (await http.request("/api/deliveries/management")).status,
+      403,
+    );
+    assert.equal(
+      (await http.request("/api/deliveries/management?status=BAD")).status,
+      400,
+    );
+  } finally {
+    await http.close();
+  }
 });

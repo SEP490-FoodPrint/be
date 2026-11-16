@@ -7,12 +7,14 @@ import {
 } from "./supplier-order.service";
 import {
   validateCreateSupplierOrderBody,
+  validateDispatchSupplierOrderBody,
   validateSupplierOrderDetailParams,
   validateSupplierOrderEmptyQuery,
   validateSupplierOrderIdempotencyKey,
   validateSupplierOrderLabelsQuery,
   validateSupplierOrderListQuery,
   validateSupplierOrderOptionsQuery,
+  validateSupplierSchoolOptionsQuery,
 } from "./supplier-order.validation";
 
 export function createSupplierOrderController(
@@ -40,7 +42,7 @@ export function createSupplierOrderController(
     }),
 
     listSchoolOptions: asyncHandler(async (req, res) => {
-      const query = validateSupplierOrderOptionsQuery(req.query);
+      const query = validateSupplierSchoolOptionsQuery(req.query);
       const result = await service.listSchoolOptions(
         query,
         requirePrincipal(req),
@@ -92,6 +94,22 @@ export function createSupplierOrderController(
       validateSupplierOrderEmptyQuery(req.query);
       const result = await service.detail(params, requirePrincipal(req));
       sendSuccess(res, result, "Lấy chi tiết đơn giao hàng thành công");
+    }),
+
+    dispatch: asyncHandler(async (req, res) => {
+      const params = validateSupplierOrderDetailParams(req.params);
+      validateSupplierOrderEmptyQuery(req.query);
+      const body = validateDispatchSupplierOrderBody(req.body);
+      const result = await service.dispatch(
+        params,
+        body,
+        requirePrincipal(req),
+      );
+      sendSuccess(
+        res,
+        result,
+        "Cập nhật thông tin vận chuyển và bắt đầu giao hàng thành công",
+      );
     }),
   };
 }

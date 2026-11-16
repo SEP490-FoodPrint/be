@@ -36,6 +36,22 @@ export type IntakeOperation =
       sourceFacilityIds?: readonly string[];
     };
 
+export type DeliveryContinuationRecord = NonNullable<
+  Awaited<ReturnType<IntakeAccessRepository["readDelivery"]>>
+>;
+
+export interface DeliveryContinuationCommand {
+  deliveryId: string;
+  requiredPermission?: string;
+  isReplay?: (delivery: DeliveryContinuationRecord) => boolean;
+}
+
+export interface DeliveryContinuationResult {
+  actor: AuthPrincipal;
+  delivery: DeliveryContinuationRecord;
+  replayed: boolean;
+}
+
 type PrincipalLoader = (
   id: string,
   tx: Prisma.TransactionClient,
@@ -251,14 +267,14 @@ export function createIntakeAccessService(
       }
       const [owner, admin] =
         scope.kind === "SCHOOL"
-          ? await Promise.all([
-              repo.readSchool(tx, scope.id),
-              repo.readSchoolAdmin(tx, scope.id),
-            ])
-          : await Promise.all([
-              repo.readSupplier(tx, scope.id),
-              repo.readSupplierAdmin(tx, scope.id),
-            ]);
+          ? [
+              await repo.readSchool(tx, scope.id),
+              await repo.readSchoolAdmin(tx, scope.id),
+            ]
+          : [
+              await repo.readSupplier(tx, scope.id),
+              await repo.readSupplierAdmin(tx, scope.id),
+            ];
       if (!owner) throw new HttpError(404, "Không tìm thấy tổ chức");
       if (desiredStatus === "ACTIVE" && admin?.status === "DEACTIVATED")
         throw new HttpError(
@@ -317,14 +333,15 @@ export function createIntakeAccessService(
           "Chỉ quản trị viên hoặc nhân viên nhà cung cấp được tạo đơn độc lập",
         );
         assertPermission(current, "delivery.manage");
-        const [school, supplier, schoolAdmin, supplierAdmin, relationship] =
-          await Promise.all([
-            repo.readSchool(tx, command.schoolId),
-            repo.readSupplier(tx, supplierId),
-            repo.readSchoolAdmin(tx, command.schoolId),
-            repo.readSupplierAdmin(tx, supplierId),
-            repo.readRelationship(tx, command.schoolId, supplierId),
-          ]);
+        const school = await repo.readSchool(tx, command.schoolId);
+        const supplier = await repo.readSupplier(tx, supplierId);
+        const schoolAdmin = await repo.readSchoolAdmin(tx, command.schoolId);
+        const supplierAdmin = await repo.readSupplierAdmin(tx, supplierId);
+        const relationship = await repo.readRelationship(
+          tx,
+          command.schoolId,
+          supplierId,
+        );
         if (!school || !relationship)
           throw new HttpError(
             404,
@@ -533,27 +550,121 @@ export function createIntakeAccessService(
         )
           throw new HttpError(409, "Đơn hàng chưa được tiếp nhận để xử lý");
       }
-      const [school, supplier, schoolAdmin, supplierAdmin] = await Promise.all([
-        repo.readSchool(tx, schoolId),
-        repo.readSupplier(tx, supplierId),
-        repo.readSchoolAdmin(tx, schoolId),
-        repo.readSupplierAdmin(tx, supplierId),
-      ]);
-      if (!school || !supplier)
-        throw new HttpError(409, "Không tìm thấy đơn vị của đơn hàng");
-      if (
-        schoolAdmin?.status === "DEACTIVATED" ||
-        supplierAdmin?.status === "DEACTIVATED"
-      )
-        throw new HttpError(
-          409,
-          "Tài khoản quản trị của đơn vị đã bị vô hiệu hóa",
-        );
+      const schoolRow = await repo.readSchool(tx, schoolId);
+      const supplierRow = await repo.readSupplier(tx, supplierId);
+      const schoolAdmin = await repo.readSchoolAdmin(tx, schoolId);
+      const supplierAdmin = await repo.readSupplierAdmin(tx, supplierId);
+      const { school, supplier } = assertContinuationParties(
+        schoolRow,
+        supplierRow,
+        schoolAdmin,
+        supplierAdmin,
+      );
       if (!isContinuation && !isSupplier && school.intakeState !== "ACTIVE")
         throw new HttpError(409, "Trường đang tạm dừng tạo đơn");
       if (!isContinuation && isSupplier && supplier.intakeState !== "ACTIVE")
         throw new HttpError(409, "Nhà cung cấp đang tạm dừng nhận đơn");
       return current;
     },
+
+    async assertDeliveryContinuation(
+      tx: Prisma.TransactionClient,
+      initial: AuthPrincipal,
+      command: DeliveryContinuationCommand,
+    ): Promise<DeliveryContinuationResult> {
+      const requiredPermission =
+        command.requiredPermission ?? "delivery.manage";
+      const supplierMessage =
+        "Chỉ quản trị viên hoặc nhân viên nhà cung cấp được xử lý đơn giao hàng";
+      const actor = await loadActor(initial.id, tx);
+      checkSameIdentity(actor, initial);
+      assertSupplierActor(actor, supplierMessage);
+      assertPermission(actor, requiredPermission);
+      const supplierId = actor.supplierId!;
+
+      const before = await repo.readDelivery(
+        tx,
+        command.deliveryId,
+        supplierId,
+      );
+      if (!before) {
+        throw new HttpError(404, "Không tìm thấy đơn giao hàng");
+      }
+
+      await repo.lockParents(tx, {
+        schoolId: before.schoolId,
+        supplierId,
+        roleIds: [actor.roleId],
+        userIds: [actor.id],
+      });
+      if (before.supplyRequestId) {
+        await repo.lockOrder(tx, before.supplyRequestId);
+      }
+      await repo.lockDelivery(tx, before.id, supplierId);
+
+      const current = await loadActor(actor.id, tx);
+      checkSameIdentity(current, actor);
+      assertSupplierActor(current, supplierMessage);
+      assertPermission(current, requiredPermission);
+
+      const delivery = await repo.readDelivery(tx, before.id, supplierId);
+      if (
+        !delivery ||
+        delivery.schoolId !== before.schoolId ||
+        delivery.supplierId !== supplierId ||
+        delivery.supplyRequestId !== before.supplyRequestId
+      ) {
+        throw new HttpError(404, "Không tìm thấy đơn giao hàng");
+      }
+
+      const replayed = command.isReplay?.(delivery) ?? false;
+      if (
+        !replayed &&
+        delivery.workflowVersion === 2 &&
+        delivery.status === "PREPARING"
+      ) {
+        if (delivery.supplyRequestId) {
+          const order = await repo.readOrder(tx, delivery.supplyRequestId);
+          if (
+            !order ||
+            order.schoolId !== before.schoolId ||
+            order.supplierId !== supplierId ||
+            (order.status !== "ACCEPTED" && order.status !== "IN_PROGRESS")
+          ) {
+            throw new HttpError(
+              409,
+              "Đơn đặt hàng nguồn không còn ở trạng thái được phép xuất hàng",
+            );
+          }
+        }
+        const school = await repo.readSchool(tx, before.schoolId);
+        const supplier = await repo.readSupplier(tx, supplierId);
+        const schoolAdmin = await repo.readSchoolAdmin(tx, before.schoolId);
+        const supplierAdmin = await repo.readSupplierAdmin(tx, supplierId);
+        assertContinuationParties(school, supplier, schoolAdmin, supplierAdmin);
+      }
+
+      return { actor: current, delivery, replayed };
+    },
   };
+}
+
+function assertContinuationParties<TSchool, TSupplier>(
+  school: TSchool | null,
+  supplier: TSupplier | null,
+  schoolAdmin: Awaited<ReturnType<IntakeAccessRepository["readSchoolAdmin"]>>,
+  supplierAdmin: Awaited<
+    ReturnType<IntakeAccessRepository["readSupplierAdmin"]>
+  >,
+): { school: TSchool; supplier: TSupplier } {
+  if (!school || !supplier) {
+    throw new HttpError(409, "Không tìm thấy đơn vị của đơn hàng");
+  }
+  if (
+    schoolAdmin?.status === "DEACTIVATED" ||
+    supplierAdmin?.status === "DEACTIVATED"
+  ) {
+    throw new HttpError(409, "Tài khoản quản trị của đơn vị đã bị vô hiệu hóa");
+  }
+  return { school, supplier };
 }

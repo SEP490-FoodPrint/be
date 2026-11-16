@@ -1,5 +1,11 @@
 # HTTP Contract: Truy xuất QR công khai theo dòng
 
+## Workflow từng bước — bản sửa đổi 2026-11-15
+
+Contract công khai và allowlist tám trường dưới đây giữ nguyên. Đơn workflowVersion2 tiếp tục dùng traceabilityVersion1; QR được cấp lúc hoàn tất nguyên liệu, lấy/quét được ngay ở PREPARING với statusLabel **Đang chuẩn bị hàng**. Khi dispatch thành công, cùng QR đọc IN_TRANSIT với statusLabel **Đang giao hàng**, không đổi URL/token/snapshot. Trạng thái hủy cũng chỉ hiển thị trạng thái hiện tại, không thu hồi QR ngầm. Không thêm workflowVersion, nextAction hoặc metadata vận chuyển vào dữ liệu công khai; renderer enum phải hỗ trợ PREPARING. Phần ghi thời điểm “tạo” bên dưới được hiểu là bước hoàn tất nguyên liệu, không phải lúc chọn trường/tiếp nhận. Xem [contract workflow](supplier-orders.md).
+
+Mỗi dòng phân bổ có UUID/QR riêng dù cùng ingredientId và cùng supplyRequestItemId. Ví dụ thịt heo6 kg từ A và4 kg từ B có hai URL khác nhau; quét từng QR trả đúng lượng và snapshot nguồn của dòng đó. Không gộp public lookup/nhãn theo tên thực phẩm hoặc request item; vẫn không thêm IDs/marker/xe/ETA vào tám trường công khai. Chọn trường của STANDALONE không sinh QR/record hoặc trạng thái Đã xác nhận.
+
 ## Point lookup được công khai
 
 `GET /api/public/delivery-items/:token`, không cần token đăng nhập, không có endpoint list/search. Token là64 ký tự hex lowercase ngẫu nhiên, lookup `DeliveryItem.qrToken` globally unique, chỉ row có parent traceabilityVersion1 và đủ snapshot/URL được công khai. Không dùng IngredientLot.qrToken, ingredientId hoặc deliveryNo làm khóa công khai.
