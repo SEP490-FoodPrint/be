@@ -437,9 +437,10 @@ void test("saving an unchanged grade menu preserves its recipe snapshot without 
   assert.equal(f.counts().committedWrites, 1);
 });
 
-void test("dish category persists through create/read/update and old updates do not clear it", async (t) => {
+void test("dish category and meal classification persist through create/read/update without clearing omitted values", async (t) => {
   const f = fixture(t);
   let category: string | null = null;
+  let mealType: "LUNCH" | "AFTERNOON" | "BOTH" | null = null;
   const categories = [
     { id: id(90), name: "Cơm / Tinh bột" },
     { id: id(91), name: "Món canh" },
@@ -467,6 +468,7 @@ void test("dish category persists through create/read/update and old updates do 
     name: "Rice",
     description: null,
     categoryId: category,
+    mealType,
     schoolCategory: categories.find((item) => item.id === category) ?? null,
     dishIngredientEntries: [
       {
@@ -478,8 +480,13 @@ void test("dish category persists through create/read/update and old updates do 
       },
     ],
   });
-  const save = ({ data }: { data: { categoryId?: string | null } }) => {
+  const save = ({
+    data,
+  }: {
+    data: { categoryId?: string | null; mealType?: typeof mealType };
+  }) => {
     if (data.categoryId !== undefined) category = data.categoryId;
+    if (data.mealType !== undefined) mealType = data.mealType;
     return Promise.resolve(row());
   };
   Object.assign(f.tx, {
@@ -531,36 +538,52 @@ void test("dish category persists through create/read/update and old updates do 
   };
   const created = await service.save(
     undefined,
-    validateDishRecipe({ ...input, category: "RICE_STARCH" }),
+    validateDishRecipe({
+      ...input,
+      category: "RICE_STARCH",
+      mealType: "LUNCH",
+    }),
     f.principal,
   );
   assert.equal(created.category, id(90));
   assert.equal(created.categoryLabel, "Cơm / Tinh bột");
+  assert.equal(created.mealType, "LUNCH");
   const legacyUpdate = await service.save(
     id(6),
     validateDishRecipe(input),
     f.principal,
   );
   assert.equal(legacyUpdate.category, id(90));
+  assert.equal(legacyUpdate.mealType, "LUNCH");
   const changed = await service.save(
     id(6),
-    validateDishRecipe({ ...input, category: "SOUP" }),
+    validateDishRecipe({ ...input, category: "SOUP", mealType: "BOTH" }),
     f.principal,
   );
   assert.equal(changed.category, id(91));
+  assert.equal(changed.mealType, "BOTH");
   const catalog = await service.catalog({ page: 1, limit: 10 }, f.principal);
   assert.equal(catalog.items[0].categoryLabel, "Món canh");
   assert.equal(catalog.categories.length, 2);
+  assert.equal(catalog.items[0].mealType, "BOTH");
+  const afternoon = await service.save(
+    id(6),
+    validateDishRecipe({ ...input, mealType: "AFTERNOON" }),
+    f.principal,
+  );
+  assert.equal(afternoon.mealType, "AFTERNOON");
   const cleared = await service.save(
     id(6),
-    validateDishRecipe({ ...input, category: null }),
+    validateDishRecipe({ ...input, category: null, mealType: null }),
     f.principal,
   );
   assert.equal(cleared.category, null);
   assert.equal(cleared.categoryLabel, null);
+  assert.equal(cleared.mealType, null);
   assert.throws(() =>
     validateDishRecipe({ ...input, category: "AUTOMATIC_FROM_NAME" }),
   );
+  assert.throws(() => validateDishRecipe({ ...input, mealType: "BREAKFAST" }));
 });
 
 for (const references of [0, 1])

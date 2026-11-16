@@ -21,6 +21,7 @@ const select = {
   schoolId: true,
   name: true,
   category: true,
+  mealType: true,
   description: true,
   status: true,
   createdAt: true,
@@ -74,6 +75,7 @@ function recipeDTO(row: RecipeRows[number]): DishRecipeDTO {
   return {
     id: row.id,
     name: row.name,
+    mealType: row.mealType ?? null,
     category: row.categoryId,
     categoryLabel: row.schoolCategory?.name ?? null,
     description: row.description,
@@ -483,6 +485,7 @@ export function createDishRecipeService(
             input.description ?? null,
             categoryId,
             input.lines,
+            input.mealType,
           );
           if (!row) throw new HttpError(404, "Không tìm thấy món của trường");
           if (input.gradeRecipes) {

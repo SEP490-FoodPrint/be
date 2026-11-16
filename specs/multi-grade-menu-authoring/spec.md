@@ -57,6 +57,9 @@ Nhân viên dinh dưỡng chọn các khối và lập lịch món chung; mỗi 
 
 ### Functional Requirements
 
+- **FR-007**: Danh mục món ăn có phân loại Bữa trưa, Bữa xế hoặc Cả hai bữa. Hiển thị cột Bữa ăn, nhập ở form thêm/chỉnh sửa và xem lại trong chi tiết. Người dùng xác nhận cho phép cả hai bữa.
+- **FR-008**: Phân loại lưu tại món ăn, dùng enum riêng không mở rộng MealType của thực đơn/lô chế biến. Món cũ để null (chưa phân loại); request cũ không gửi trường này khi cập nhật phải giữ giá trị hiện có. Không đổi công thức, định lượng từng khối, lịch món lịch sử hoặc tự giới hạn chọn món khi soạn thực đơn.
+
 - **FR-001**: Tạo lịch món chung và xem định lượng theo từng khối từ công thức đã cấu hình.
 - **FR-002**: Lưu riêng ảnh chụp định lượng cho mỗi khối; sửa danh mục sau đó không đổi thực đơn đã lưu.
 - **FR-003**: Không giữ kho, tạo lô hoặc thay đổi số suất khi xem trước hay lưu thực đơn.

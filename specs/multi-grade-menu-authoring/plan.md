@@ -27,6 +27,10 @@ VI. Spec/branch: spec cùng slug với nhánh; không thay scaffold; PR BE vào 
 
 ## Validation Strategy
 
+### Dish meal classification
+
+Add nullable Dish.mealType with a separate DishMealType enum (LUNCH, AFTERNOON, BOTH) through a new additive versioned migration. No guessed backfill. Extend recipe request validation, repository persistence and explicit response mapping; omitted values preserve existing classification on update, null clears legacy metadata. FE requires choosing one of the three options when saving the current form, keeps grouping/newest ordering and grade quantities, and shows the saved value in list/detail. Validate enum rejection, create/update/preserve/null behavior, API round-trip and migration preservation of legacy dishes. Work remains on the current branch by user instruction; remote migration deployment follows AGENTS.md database authorization policy.
+
 ### Reopening fix
 
 User follow-up: apply an assigned-scope predicate (school-wide flag or at least one grade relation) to repository list/count, summaries and week choices. Add the same guard to frontend cards, grade options and comparison for compatibility with cached/older responses. Preserve legitimate school-wide menus and school grade options without menus. No data deletion.

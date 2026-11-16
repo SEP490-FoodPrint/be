@@ -447,6 +447,7 @@ model Dish {
   schoolId              String                @map("school_id") @db.Uuid
   name                  String                @db.VarChar(255)
   category              DishCategory?
+  mealType              DishMealType?         @map("meal_type")
   categoryId            String?               @map("category_id") @db.Uuid
   schoolCategory        SchoolDishCategory?   @relation(fields: [categoryId, schoolId], references: [id, schoolId], onDelete: Restrict, onUpdate: NoAction)
   description           String?               @db.Text
@@ -1884,6 +1885,15 @@ enum MealType {
   AFTERNOON
 
   @@map("meal_type")
+  @@schema("foodprint")
+}
+
+enum DishMealType {
+  LUNCH
+  AFTERNOON
+  BOTH
+
+  @@map("dish_meal_type")
   @@schema("foodprint")
 }
 
