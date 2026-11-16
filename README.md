@@ -118,6 +118,19 @@ tests/                         # Business list, role, rate-limit, cache, Redis v
 
 Prisma Client dùng `moduleFormat = "cjs"`; `package.json` dùng `type: commonjs`. Source TypeScript có thể dùng cú pháp `import`/`export`; compiler chuyển sang CommonJS `require`/`exports`. Xem [Prisma generator](https://www.prisma.io/docs/orm/v7/prisma-schema/overview/generators) và [TypeScript module modes](https://www.typescriptlang.org/tsconfig/module.html).
 
+### Bằng chứng blockchain (tuỳ chọn)
+
+Mặc định `BLOCKCHAIN_ENABLED=false`, nghiệp vụ chạy như cũ. Để chạy với Hardhat node local:
+
+1. Trong repo `blockchain`: `npm run node` (terminal riêng), rồi `npm run deploy:local`.
+2. Copy `deployments/localhost/FoodPrintHashRegistry.json` sang `be/blockchain/` (xem `blockchain/README.md`).
+3. Trong `.env` của `be`: `BLOCKCHAIN_ENABLED=true`, `BLOCKCHAIN_NETWORK=localhost`, `BLOCKCHAIN_RPC_URL=http://127.0.0.1:8545`. Có thể bỏ trống `BLOCKCHAIN_WRITER_PRIVATE_KEY`: khi đó dùng tài khoản #0 của Hardhat node.
+4. `npm run dev`. Kiểm nhận xong, hoàn thành mẻ, lưu hoặc tiêu huỷ mẫu sẽ tạo version `PREPARED` rồi gửi ngầm lên chain. Xem kết quả ở `GET /api/blockchain-proofs/:kind/:recordId/versions`.
+
+Với Sepolia: `BLOCKCHAIN_NETWORK=sepolia`, `BLOCKCHAIN_RPC_URL` của Sepolia, và `BLOCKCHAIN_WRITER_PRIVATE_KEY` là ví đã được cấp quyền bằng `npm run set-writer:sepolia` trong repo `blockchain`. Không commit `.env` hay file key.
+
+Tx hash được lưu (`SUBMITTED`) ngay khi gửi. Nếu quá `BLOCKCHAIN_RECEIPT_TIMEOUT_MS` (mặc định 120 giây) mà chưa có receipt, version chuyển `FAILED` nhưng vẫn giữ tx hash. Gửi lại bằng `POST /api/blockchain-proofs/:kind/versions/:versionId/anchor`: giao dịch cũ đã được mine thì dùng lại tx/block của nó; nếu giao dịch cũ còn đang chờ thì không gửi thêm giao dịch mới.
+
 ## 4. Giới hạn bước thiết lập này
 
 - Schema Prisma phản ánh SQL thiết kế database mới, dùng `@map`/`@@map` để giữ nguyên tên bảng/cột và `@@schema("foodprint")`. Client generation không introspect, tạo hoặc thay đổi database.
@@ -264,7 +277,7 @@ Team tạo nhánh `<type>/<kebab-case-description>` từ `dev`, mở PR vào `de
 
 Workflow chỉ có quyền đọc repository; các action được pin bằng commit SHA. Job Code quality dùng URL PostgreSQL placeholder trên `127.0.0.1:1` và JWT secret dành riêng cho test. Job PostgreSQL migrations dựng PostgreSQL 18 và Redis 7 tạm, kiểm tra baseline/migration/CHECK bằng `npm run test:migrations`, signup/login/phân quyền bằng `npm run test:authorization`, lifecycle tài khoản bằng `npm run test:account-lifecycle:integration`, rotation/TTL bằng `npm run test:auth:redis` và tạo đơn giao/QR/kiểm nhận bằng `npm run test:supplier-orders:integration`. Check Backend quality tổng hợp cả hai kết quả, nên migration lỗi vẫn chặn check bắt buộc hiện có. Các job quality không cần `.env`/GitHub Secrets thật và không kết nối Azure. Sau khi check Backend quality của push vào `dev` PASS, workflow gọi job CD Azure ở mục 10; PR và `main` không deploy database này. `HUSKY=0` chỉ áp dụng trong CI vì các bước kiểm tra được chạy trực tiếp.
 
-Lưu ý triển khai tính năng đơn giao `v1` và tem QR: luôn hoàn tất `db:migrate:deploy` trên database đích trước khi phát hành backend `v1` hoặc client gửi payload bắt buộc `sources`/`sourceFacilityId`/`expectedArrivalAt`/`vehiclePlate`; không tự cấp quyền hay seed ngầm; giữ cố định hostname trong `PUBLIC_TRACE_ORIGIN` khi đã in tem nhãn QR (endpoint công khai `/api/public/delivery-items/:token` trả HTML/JSON allowlist 8 trường, che token trong log HTTP/lỗi).
+Lưu ý triển khai tính năng đơn giao `workflowVersion = 2`, phân bổ nhiều nguồn và tem QR: luôn hoàn tất `db:migrate:deploy` tuần tự cho enum `PREPARING` (`20261118000200_delivery_preparing_status`) rồi marker `workflow_version` / CHECK / 3 partial unique indexes (`20261118000300_supplier_order_stages`) trên database đích trước khi phát hành backend mới hoặc client hai bước (`POST /api/deliveries/management` nhận `sources`/`items` nhiều nguồn và **không** nhận `expectedArrivalAt`/`vehiclePlate`, tạo `PREPARING`; sau đó `POST /api/deliveries/management/:id/dispatch` mới ghi `expectedArrivalAt`/`vehiclePlate` và chuyển `IN_TRANSIT`), đồng thời dừng writer cũ tạo thẳng `IN_TRANSIT`; rollback ứng dụng sau khi đã phát sinh đơn nhiều nguồn cần compatibility review (không gộp QR hoặc khôi phục hai full unique index cũ); không tự cấp quyền hay seed ngầm; giữ cố định hostname trong `PUBLIC_TRACE_ORIGIN` khi đã in tem nhãn QR (endpoint công khai `/api/public/delivery-items/:token` trả HTML/JSON allowlist 8 trường, che token trong log HTTP/lỗi).
 
 Để tái hiện kiểm tra trên một checkout sạch, chưa có `.env`:
 

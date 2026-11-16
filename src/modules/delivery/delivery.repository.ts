@@ -122,6 +122,7 @@ const summarySelect = {
   schoolId: true,
   creationMode: true,
   traceabilityVersion: true,
+  workflowVersion: true,
   supplyRequestId: true,
   status: true,
   expectedArrivalAt: true,
@@ -204,6 +205,8 @@ const detailSelect = {
           IngredientEntry: {
             select: {
               schoolId: true,
+              ingredientId: true,
+              status: true,
               Ingredient: {
                 select: {
                   name: true,
@@ -288,10 +291,55 @@ function inspectionWhere(
 }
 
 export const deliveryInspectionRepository = {
-  receivedItems(tx: Tx, supplyRequestItemId: string) {
+  listRequestSourceItems(
+    tx: Tx,
+    supplyRequestId: string,
+    schoolId: string,
+    supplierId: string,
+  ) {
+    return tx.supplyRequestItem.findMany({
+      where: {
+        supplyRequestId,
+        SupplyRequest: { id: supplyRequestId, schoolId, supplierId },
+      },
+      orderBy: { id: "asc" },
+      select: {
+        id: true,
+        supplyRequestId: true,
+        ingredientEntryId: true,
+        requestedQuantity: true,
+        unit: true,
+        IngredientEntry: {
+          select: {
+            ingredientId: true,
+            schoolId: true,
+            status: true,
+            Ingredient: { select: { supplierId: true } },
+          },
+        },
+      },
+    });
+  },
+  async receivedItemsBySourceIds(
+    tx: Tx,
+    supplyRequestItemIds: readonly string[],
+    excludeDeliveryId?: string,
+  ) {
+    const ids = [...new Set(supplyRequestItemIds)];
+    if (!ids.length) return [];
     return tx.deliveryItem.findMany({
-      where: { supplyRequestItemId, Delivery: { status: "RECEIVED" } },
-      select: { actualQuantity: true, unit: true },
+      where: {
+        supplyRequestItemId: { in: ids },
+        Delivery: {
+          status: "RECEIVED",
+          ...(excludeDeliveryId ? { id: { not: excludeDeliveryId } } : {}),
+        },
+      },
+      select: {
+        supplyRequestItemId: true,
+        actualQuantity: true,
+        unit: true,
+      },
     });
   },
   async lock(tx: Tx, schoolId: string, id: string) {
@@ -306,9 +354,15 @@ export const deliveryInspectionRepository = {
     await tx.$queryRaw`SELECT id FROM foodprint.deliveries WHERE id = ${id}::uuid AND school_id = ${schoolId}::uuid FOR UPDATE`;
     return true;
   },
-  findSchoolIngredientEntry(tx: Tx, schoolId: string, ingredientId: string) {
-    return tx.ingredientEntry.findUnique({
-      where: { schoolId_ingredientId: { schoolId, ingredientId } },
+  async findSchoolIngredientEntries(
+    tx: Tx,
+    schoolId: string,
+    ingredientIds: readonly string[],
+  ) {
+    const ids = [...new Set(ingredientIds)];
+    if (!ids.length) return [];
+    return tx.ingredientEntry.findMany({
+      where: { schoolId, ingredientId: { in: ids } },
       select: {
         id: true,
         schoolId: true,
@@ -402,6 +456,7 @@ export const deliveryInspectionRepository = {
         status: {
           in: [
             "CREATED",
+            "PREPARING",
             "IN_TRANSIT",
             "ARRIVED",
             "PENDING_APPROVAL",

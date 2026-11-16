@@ -586,6 +586,30 @@ export function supplierOrderSourceOptionScope(
 export function supplierOrderLabelScope(
   principal: AuthPrincipal,
 ): Prisma.DeliveryWhereInput & SupplierOrderScope {
-  const { supplierId } = supplierOrderManagementScope(principal);
-  return { supplierId };
+  return supplierOrderReadScope(principal);
+}
+
+export function hasSupplierOrderManagePermission(
+  principal: AuthPrincipal,
+): boolean {
+  return principal.permissions.includes("delivery.manage");
+}
+
+export function hasSupplierOrderReadPermission(
+  principal: AuthPrincipal,
+): boolean {
+  return RESOURCE_PERMISSIONS.delivery.some((permission) =>
+    principal.permissions.includes(permission),
+  );
+}
+
+/** School scope for blockchain proof versions; `null` means SYSTEM (unrestricted). */
+export function blockchainProofScope(principal: AuthPrincipal): string | null {
+  assertPermission(principal, ...RESOURCE_PERMISSIONS["traceability"]);
+  if (principal.orgType === "SYSTEM") return null;
+  if (principal.orgType === "SCHOOL") return school(principal);
+  throw new HttpError(
+    403,
+    "Loại tổ chức không có phạm vi truy cập tài nguyên này",
+  );
 }

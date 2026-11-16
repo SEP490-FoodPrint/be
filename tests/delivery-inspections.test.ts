@@ -202,7 +202,9 @@ void test("inspection detail hides other schools and sanitizes database failures
   );
 });
 
-function decisionFixture() {
+function decisionFixture(
+  proofs?: Parameters<typeof createDeliveryInspectionService>[2],
+) {
   const uid = (n: number) =>
     `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
   const identities = deliveryInspectionRoles.map((role, index) => ({
@@ -328,10 +330,13 @@ function decisionFixture() {
         },
         SupplyRequestItem: {
           supplyRequestId: uid(22),
+          ingredientEntryId: uid(26),
           requestedQuantity: new Prisma.Decimal(data.requestedQuantity),
           unit: "kg",
           IngredientEntry: {
             schoolId: delivery.wrongSchool ? uid(999) : uid(20),
+            ingredientId: uid(25),
+            status: "ACTIVE",
             Ingredient: {
               supplierId: delivery.wrongSupplier ? uid(999) : uid(21),
               name: "Rice",
@@ -414,16 +419,67 @@ function decisionFixture() {
         return Promise.resolve({});
       },
     },
+    supplyRequestItem: {
+      findMany: ({
+        where,
+      }: {
+        where: {
+          supplyRequestId: string;
+          SupplyRequest?: {
+            id?: string;
+            schoolId?: string;
+            supplierId?: string;
+          };
+        };
+      }) => {
+        if (
+          where.supplyRequestId !== uid(22) ||
+          where.SupplyRequest?.schoolId !== uid(20) ||
+          where.SupplyRequest?.supplierId !== uid(21)
+        ) {
+          return Promise.resolve([]);
+        }
+        return Promise.resolve([
+          {
+            id: uid(24),
+            supplyRequestId: uid(22),
+            ingredientEntryId: uid(26),
+            requestedQuantity: new Prisma.Decimal(data.requestedQuantity),
+            unit: "kg",
+            IngredientEntry: {
+              ingredientId: uid(25),
+              schoolId: uid(20),
+              status: "ACTIVE",
+              Ingredient: { supplierId: uid(21) },
+            },
+          },
+        ]);
+      },
+    },
     deliveryItem: {
-      findMany: () =>
-        Promise.resolve(
+      findMany: ({
+        where,
+      }: {
+        where: {
+          supplyRequestItemId?: string | { in: string[] };
+          Delivery: { status: string; id?: { not: string } };
+        };
+      }) => {
+        const excludeId = where.Delivery.id?.not;
+        return Promise.resolve(
           data.deliveries
-            .filter((delivery) => delivery.status === "RECEIVED")
+            .filter(
+              (delivery) =>
+                delivery.status === where.Delivery.status &&
+                (!excludeId || delivery.id !== excludeId),
+            )
             .map((delivery) => ({
+              supplyRequestItemId: uid(24),
               actualQuantity: new Prisma.Decimal(delivery.actual),
               unit: "kg",
             })),
-        ),
+        );
+      },
     },
     inventoryTransaction: {
       count: ({ where }: { where: { ingredientLotId: { in: string[] } } }) =>
@@ -505,6 +561,7 @@ function decisionFixture() {
     service: createDeliveryInspectionService(
       () => Promise.resolve(db),
       () => new Date("2026-11-13T02:00:00Z"),
+      proofs,
     ),
     failReceipt: () => {
       failReceipt = true;
@@ -967,6 +1024,31 @@ void test("standalone deliveries list, inspect, attach IngredientEntry on final 
         },
       },
       ingredientEntry: {
+        findMany: ({
+          where,
+        }: {
+          where: {
+            schoolId: string;
+            ingredientId: { in: string[] };
+          };
+        }) => {
+          if (
+            activeEntry &&
+            where.schoolId === schoolId &&
+            where.ingredientId.in.includes(ingredientId)
+          ) {
+            return Promise.resolve([
+              {
+                id: ingredientEntryId,
+                schoolId,
+                ingredientId,
+                status: "ACTIVE",
+                handlingType: "DRY_STOCK",
+              },
+            ]);
+          }
+          return Promise.resolve([]);
+        },
         findUnique: ({
           where,
         }: {
@@ -1134,6 +1216,34 @@ void test("standalone deliveries list, inspect, attach IngredientEntry on final 
   assert.equal(rejectHarness.getState().supplyRequestTouched, false);
 });
 
+void test("blockchain proof is prepared only when an inspection ends, then scheduled after commit", async () => {
+  const prepared: string[] = [];
+  const scheduled: unknown[] = [];
+  const f = decisionFixture({
+    prepareDeliveryInspected: (_tx, deliveryId, actorId) => {
+      prepared.push(`${deliveryId}:${actorId}`);
+      return Promise.resolve({ kind: "deliveries", id: deliveryId });
+    },
+    scheduleAnchor: (ref) => {
+      scheduled.push(ref);
+    },
+  });
+  const [received, rejected] = f.data.deliveries;
+  for (const actor of f.actors.slice(0, 3))
+    await f.service.decide(received.id, approve(), actor);
+  assert.equal(prepared.length, 0, "PENDING_APPROVAL must not anchor");
+  assert.deepEqual(scheduled, [null, null, null]);
+  await f.service.decide(received.id, approve(), f.actors[3]);
+  assert.deepEqual(prepared, [`${received.id}:${f.actors[3].id}`]);
+  await f.service.decide(received.id, approve(), f.actors[3]);
+  assert.equal(prepared.length, 1, "replayed signature must not anchor again");
+  await f.service.decide(rejected.id, reject(), f.actors[0]);
+  assert.deepEqual(prepared[1], `${rejected.id}:${f.actors[0].id}`);
+  assert.deepEqual(scheduled.slice(-1), [
+    { kind: "deliveries", id: rejected.id },
+  ]);
+});
+
 function v1InspectionFixture() {
   const uid = (group: number, n: number) =>
     `00000000-0000-4000-${String(group).padStart(4, "0")}-${String(n).padStart(12, "0")}`;
@@ -1277,6 +1387,7 @@ function v1InspectionFixture() {
     id: string;
     quantity: string;
     available: string;
+    unit?: string;
     status: string;
     manufacture: string | null;
     expiry: string | null;
@@ -1303,11 +1414,22 @@ function v1InspectionFixture() {
     supplyRequestId: string | null;
     creationMode: "REQUEST" | "STANDALONE" | null;
     traceabilityVersion: number | null;
+    workflowVersion: number | null;
     status: string;
     expectedArrivalAt: string | null;
     arrivedAt: string | null;
     receivedAt: string | null;
+    vehiclePlate: string | null;
     items: ItemState[];
+  };
+  type SourceItemState = {
+    id: string;
+    supplyRequestId: string;
+    ingredientEntryId: string;
+    ingredientId: string;
+    requestedQuantity: string;
+    unit: string;
+    ingredientName?: string;
   };
   type DecisionState = {
     id: string;
@@ -1328,8 +1450,11 @@ function v1InspectionFixture() {
       supplyRequestId?: string | null;
       creationMode?: "REQUEST" | "STANDALONE" | null;
       traceabilityVersion?: number | null;
+      workflowVersion?: number | null;
       status?: string;
+      expectedArrivalAt?: string | null;
       arrivedAt?: string | null;
+      vehiclePlate?: string | null;
       sourceFacilityId?: string | null;
       lotSourceFacilityId?: string | null;
       ingredientEntryId?: string | null;
@@ -1345,6 +1470,19 @@ function v1InspectionFixture() {
       opts && "lotSourceFacilityId" in opts
         ? opts.lotSourceFacilityId
         : itemSource;
+    const defaultStatus = opts?.status ?? "IN_TRANSIT";
+    const expectedArrivalAt =
+      opts && "expectedArrivalAt" in opts
+        ? (opts.expectedArrivalAt ?? null)
+        : defaultStatus === "PREPARING"
+          ? null
+          : "2026-11-15T04:00:00.000Z";
+    const vehiclePlate =
+      opts && "vehiclePlate" in opts
+        ? (opts.vehiclePlate ?? null)
+        : defaultStatus === "PREPARING"
+          ? null
+          : "29C-12345";
     return {
       id: uid(60, n),
       deliveryNo: `FP-DE-${String(n).padStart(5, "0")}`,
@@ -1354,10 +1492,15 @@ function v1InspectionFixture() {
       creationMode:
         opts?.creationMode ?? (reqIdValue === null ? "STANDALONE" : "REQUEST"),
       traceabilityVersion: version ?? null,
-      status: opts?.status ?? "IN_TRANSIT",
-      expectedArrivalAt: "2026-11-15T04:00:00.000Z",
+      workflowVersion:
+        opts && "workflowVersion" in opts
+          ? (opts.workflowVersion ?? null)
+          : null,
+      status: defaultStatus,
+      expectedArrivalAt,
       arrivedAt: opts?.arrivedAt ?? null,
       receivedAt: null,
+      vehiclePlate,
       items: [
         {
           id: uid(70, n),
@@ -1396,6 +1539,7 @@ function v1InspectionFixture() {
     currentTime: new Date("2026-11-15T05:00:00.000Z"),
     requestStatus: "IN_PROGRESS",
     requestedQuantity: "25",
+    customSourceItems: null as SourceItemState[] | null,
     entryStatus: "ACTIVE" as "ACTIVE" | "INACTIVE" | "MISSING",
     supplierIntakeState: "PAUSED" as "ACTIVE" | "PAUSED",
     facilities: {
@@ -1426,6 +1570,19 @@ function v1InspectionFixture() {
     failReceiveLot: false,
   };
 
+  const getSourceItems = (): SourceItemState[] =>
+    state.customSourceItems ?? [
+      {
+        id: requestItemId,
+        supplyRequestId: requestId,
+        ingredientEntryId: entryId,
+        ingredientId,
+        requestedQuantity: state.requestedQuantity,
+        unit: "kg",
+        ingredientName: "Gạo ST25",
+      },
+    ];
+
   const buildSnapshot = (d: DeliveryState) => ({
     id: d.id,
     deliveryNo: d.deliveryNo,
@@ -1434,13 +1591,14 @@ function v1InspectionFixture() {
     supplyRequestId: d.supplyRequestId,
     creationMode: d.creationMode,
     traceabilityVersion: d.traceabilityVersion,
+    workflowVersion: d.workflowVersion,
     status: d.status,
     expectedArrivalAt: d.expectedArrivalAt
       ? new Date(d.expectedArrivalAt)
       : null,
     arrivedAt: d.arrivedAt ? new Date(d.arrivedAt) : null,
     receivedAt: d.receivedAt ? new Date(d.receivedAt) : null,
-    vehiclePlate: "29C-12345",
+    vehiclePlate: d.vehiclePlate,
     note: null,
     createdAt: new Date("2026-11-15T01:00:00.000Z"),
     updatedAt: new Date("2026-11-15T01:00:00.000Z"),
@@ -1523,26 +1681,36 @@ function v1InspectionFixture() {
             }
           : null,
       SupplyRequestItem: item.supplyRequestItemId
-        ? {
-            supplyRequestId: d.supplyRequestId,
-            requestedQuantity: new Prisma.Decimal(state.requestedQuantity),
-            unit: "kg",
-            IngredientEntry: {
-              schoolId: d.schoolId,
-              handlingType: "DRY_STOCK",
-              Ingredient: {
-                supplierId,
-                name: "Gạo ST25",
-                ingredientCategory: null,
+        ? (() => {
+            const source = getSourceItems().find(
+              (s) => s.id === item.supplyRequestItemId,
+            );
+            return {
+              supplyRequestId: source?.supplyRequestId ?? d.supplyRequestId,
+              ingredientEntryId: source?.ingredientEntryId ?? entryId,
+              requestedQuantity: new Prisma.Decimal(
+                source?.requestedQuantity ?? state.requestedQuantity,
+              ),
+              unit: source?.unit ?? "kg",
+              IngredientEntry: {
+                schoolId: d.schoolId,
+                ingredientId: source?.ingredientId ?? ingredientId,
+                status: state.entryStatus,
+                handlingType: "DRY_STOCK",
+                Ingredient: {
+                  supplierId,
+                  name: source?.ingredientName ?? "Gạo ST25",
+                  ingredientCategory: null,
+                },
               },
-            },
-          }
+            };
+          })()
         : null,
       ingredientLots: item.lots.map((lot) => ({
         id: lot.id,
         receivedQuantity: new Prisma.Decimal(lot.quantity),
         availableQuantity: new Prisma.Decimal(lot.available),
-        unit: "kg",
+        unit: lot.unit ?? "kg",
         status: lot.status,
         manufactureDate: lot.manufacture ? new Date(lot.manufacture) : null,
         expiryDate: lot.expiry ? new Date(lot.expiry) : null,
@@ -1579,7 +1747,79 @@ function v1InspectionFixture() {
         return Promise.resolve({});
       },
     },
+    supplyRequestItem: {
+      findMany: ({
+        where,
+      }: {
+        where: {
+          supplyRequestId: string;
+          SupplyRequest?: {
+            id?: string;
+            schoolId?: string;
+            supplierId?: string;
+          };
+        };
+      }) =>
+        Promise.resolve(
+          getSourceItems()
+            .filter(
+              (item) =>
+                item.supplyRequestId === where.supplyRequestId &&
+                (!where.SupplyRequest?.schoolId ||
+                  where.SupplyRequest.schoolId === schoolA) &&
+                (!where.SupplyRequest?.supplierId ||
+                  where.SupplyRequest.supplierId === supplierId),
+            )
+            .map((item) => ({
+              id: item.id,
+              supplyRequestId: item.supplyRequestId,
+              ingredientEntryId: item.ingredientEntryId,
+              requestedQuantity: new Prisma.Decimal(item.requestedQuantity),
+              unit: item.unit,
+              IngredientEntry: {
+                ingredientId: item.ingredientId,
+                schoolId: schoolA,
+                status: state.entryStatus,
+                Ingredient: { supplierId },
+              },
+            })),
+        ),
+    },
     ingredientEntry: {
+      findMany: ({
+        where,
+      }: {
+        where: {
+          schoolId: string;
+          ingredientId: { in: string[] };
+        };
+      }) => {
+        if (state.entryStatus === "MISSING" || where.schoolId !== schoolA) {
+          return Promise.resolve([]);
+        }
+        const results = getSourceItems()
+          .filter((item) => where.ingredientId.in.includes(item.ingredientId))
+          .map((item) => ({
+            id: item.ingredientEntryId,
+            schoolId: schoolA,
+            ingredientId: item.ingredientId,
+            status: state.entryStatus,
+            handlingType: "DRY_STOCK",
+          }));
+        if (
+          where.ingredientId.in.includes(ingredientId) &&
+          !results.some((entry) => entry.ingredientId === ingredientId)
+        ) {
+          results.push({
+            id: entryId,
+            schoolId: schoolA,
+            ingredientId,
+            status: state.entryStatus,
+            handlingType: "DRY_STOCK",
+          });
+        }
+        return Promise.resolve(results);
+      },
       findUnique: ({
         where,
       }: {
@@ -1608,24 +1848,37 @@ function v1InspectionFixture() {
         where,
       }: {
         where: {
-          supplyRequestItemId: string;
-          Delivery: { status: string };
+          supplyRequestItemId: string | { in: string[] };
+          Delivery: { status: string; id?: { not: string } };
         };
-      }) =>
-        Promise.resolve(
+      }) => {
+        const sourceIds =
+          typeof where.supplyRequestItemId === "string"
+            ? [where.supplyRequestItemId]
+            : where.supplyRequestItemId.in;
+        const excludeId = where.Delivery.id?.not;
+        return Promise.resolve(
           state.deliveries
-            .filter((d) => d.status === where.Delivery.status)
+            .filter(
+              (d) =>
+                d.status === where.Delivery.status &&
+                (!excludeId || d.id !== excludeId),
+            )
             .flatMap((d) =>
               d.items
                 .filter(
-                  (i) => i.supplyRequestItemId === where.supplyRequestItemId,
+                  (i) =>
+                    i.supplyRequestItemId !== null &&
+                    sourceIds.includes(i.supplyRequestItemId),
                 )
                 .map((i) => ({
+                  supplyRequestItemId: i.supplyRequestItemId,
                   actualQuantity: new Prisma.Decimal(i.actual),
                   unit: i.unit,
                 })),
             ),
-        ),
+        );
+      },
       update: ({
         where,
         data: changes,
@@ -1841,6 +2094,7 @@ function v1InspectionFixture() {
 
   let queue = Promise.resolve();
   const client = {
+    delivery: tx.delivery,
     $transaction: async <T>(fn: (clientTx: typeof tx) => Promise<T>) => {
       const previous = queue;
       let release!: () => void;
@@ -1879,6 +2133,7 @@ function v1InspectionFixture() {
       schoolB,
       supplierId,
       requestId,
+      requestItemId,
       ingredientId,
       entryId,
       sourceAId,
@@ -2375,4 +2630,451 @@ void test("v1 reject immutability, photoHash replay, request cap3 preservation, 
   assert.equal(reqPending.status, "CANCELLED");
   assert.equal(reqD4.status, "RECEIVED");
   assert.equal(f.state.receipts.length, 1);
+});
+
+void test("PREPARING blocks arrival/inspect 409 and dispatched v2 6+4 REQUEST + inactive source + standalone repeated ingredient receive cleanly (T138)", async (context) => {
+  context.mock.method(
+    documentStorage,
+    "download",
+    (document: OnboardingDocument) =>
+      `https://example.test/photos/${encodeURIComponent(document.publicId)}`,
+  );
+  const approve = () =>
+    validateDeliveryInspectionDecision({ decision: "APPROVE" });
+  const f = v1InspectionFixture();
+  f.state.requestedQuantity = "10";
+
+  // 1. PREPARING blocks both school arrival and inspection with 409 without side effects
+  const preparingOrder = f.makeDelivery(20, {
+    workflowVersion: 2,
+    status: "PREPARING",
+    expectedArrivalAt: null,
+    vehiclePlate: null,
+  });
+  f.state.deliveries.push(preparingOrder);
+  await assert.rejects(
+    () => f.service.arrive(preparingOrder.id, {}, {}, f.actors[0]),
+    { statusCode: 409 },
+  );
+  await assert.rejects(
+    () => f.service.decide(preparingOrder.id, approve(), f.actors[0]),
+    { statusCode: 409 },
+  );
+  assert.equal(preparingOrder.arrivedAt, null);
+  assert.equal(f.state.decisions.length, 0);
+  assert.equal(f.state.receipts.length, 0);
+
+  // 2. Dispatched v2 REQUEST 6+4 split on the same supplyRequestItemId receives both lots without exposing workflowVersion; inactive sourceFacility after prep does NOT block
+  const v2Split = f.makeDelivery(21, {
+    workflowVersion: 2,
+    status: "IN_TRANSIT",
+    expectedArrivalAt: "2026-11-15T04:00:00.000Z",
+    vehiclePlate: "29C-64001",
+  });
+  v2Split.items = [
+    {
+      id: "00000000-0000-4000-0071-000000000001",
+      ingredientId: f.ids.ingredientId,
+      ingredientEntryId: f.ids.entryId,
+      supplyRequestItemId: f.ids.requestItemId,
+      actual: "6.000",
+      unit: "kg",
+      sourceFacilityId: f.ids.sourceAId,
+      sourceFacilityNameSnapshot: "Nông trại A",
+      sourceFacilityCodeSnapshot: "CS-A",
+      ingredientNameSnapshot: "Gạo ST25",
+      lots: [
+        {
+          id: "00000000-0000-4000-0081-000000000001",
+          quantity: "6.000",
+          available: "0",
+          unit: "kg",
+          status: "BLOCKED",
+          manufacture: "2026-11-10",
+          expiry: "2027-01-01",
+          sourceFacilityId: f.ids.sourceAId,
+        },
+      ],
+    },
+    {
+      id: "00000000-0000-4000-0071-000000000002",
+      ingredientId: f.ids.ingredientId,
+      ingredientEntryId: f.ids.entryId,
+      supplyRequestItemId: f.ids.requestItemId,
+      actual: "4.000",
+      unit: "kg",
+      sourceFacilityId: f.ids.sourceBId,
+      sourceFacilityNameSnapshot: "Nông trại B",
+      sourceFacilityCodeSnapshot: "CS-B",
+      ingredientNameSnapshot: "Gạo ST25",
+      lots: [
+        {
+          id: "00000000-0000-4000-0081-000000000002",
+          quantity: "4.000",
+          available: "0",
+          unit: "kg",
+          status: "BLOCKED",
+          manufacture: "2026-11-10",
+          expiry: "2027-01-01",
+          sourceFacilityId: f.ids.sourceBId,
+        },
+      ],
+    },
+  ];
+  f.state.deliveries.push(v2Split);
+
+  const arrivedDto = await f.service.arrive(v2Split.id, {}, {}, f.actors[0]);
+  assert.equal(arrivedDto.status, "ARRIVED");
+  assert.equal("workflowVersion" in arrivedDto, false);
+  // Deactivate facility B after creation/dispatch -> receipt MUST still succeed cleanly
+  f.state.facilities[f.ids.sourceBId].status = "INACTIVE";
+
+  for (const actor of f.actors.slice(0, 3)) {
+    const partial = await f.service.decide(v2Split.id, approve(), actor);
+    assert.equal(partial.status, "PENDING_APPROVAL");
+    assert.equal("workflowVersion" in partial, false);
+  }
+  assert.equal(f.state.receipts.length, 0);
+
+  const completed = await f.service.decide(v2Split.id, approve(), f.actors[3]);
+  assert.equal(completed.status, "RECEIVED");
+  assert.equal("workflowVersion" in completed, false);
+  assert.equal(
+    f.state.decisions.filter((d) => d.deliveryId === v2Split.id).length,
+    4,
+  );
+  assert.equal(f.state.receipts.length, 2);
+  assert.equal(v2Split.items[0].lots[0].status, "AVAILABLE");
+  assert.equal(v2Split.items[0].lots[0].available, "6");
+  assert.equal(v2Split.items[1].lots[0].status, "AVAILABLE");
+  assert.equal(v2Split.items[1].lots[0].available, "4");
+  const detailDto = await f.service.detail(v2Split.id, f.actors[0]);
+  assert.equal("workflowVersion" in detailDto, false);
+  assert.equal(detailDto.deliveryItems?.length, 2);
+
+  // 3. STANDALONE repeated ingredient across 2 facilities attaches single IngredientEntry without collapsing lots/receipts
+  const fStandalone = v1InspectionFixture();
+  const standaloneMulti = fStandalone.makeDelivery(22, {
+    supplyRequestId: null,
+    workflowVersion: 2,
+    status: "ARRIVED",
+    arrivedAt: "2026-11-15T04:30:00.000Z",
+    ingredientEntryId: null,
+  });
+  standaloneMulti.items = [
+    {
+      id: "00000000-0000-4000-0072-000000000001",
+      ingredientId: fStandalone.ids.ingredientId,
+      ingredientEntryId: null,
+      supplyRequestItemId: null,
+      actual: "6.000",
+      unit: "kg",
+      sourceFacilityId: fStandalone.ids.sourceAId,
+      sourceFacilityNameSnapshot: "Nông trại A",
+      sourceFacilityCodeSnapshot: "CS-A",
+      ingredientNameSnapshot: "Gạo ST25",
+      lots: [
+        {
+          id: "00000000-0000-4000-0082-000000000001",
+          quantity: "6.000",
+          available: "0",
+          unit: "kg",
+          status: "BLOCKED",
+          manufacture: "2026-11-10",
+          expiry: "2027-01-01",
+          sourceFacilityId: fStandalone.ids.sourceAId,
+        },
+      ],
+    },
+    {
+      id: "00000000-0000-4000-0072-000000000002",
+      ingredientId: fStandalone.ids.ingredientId,
+      ingredientEntryId: null,
+      supplyRequestItemId: null,
+      actual: "4.000",
+      unit: "kg",
+      sourceFacilityId: fStandalone.ids.sourceBId,
+      sourceFacilityNameSnapshot: "Nông trại B",
+      sourceFacilityCodeSnapshot: "CS-B",
+      ingredientNameSnapshot: "Gạo ST25",
+      lots: [
+        {
+          id: "00000000-0000-4000-0082-000000000002",
+          quantity: "4.000",
+          available: "0",
+          unit: "kg",
+          status: "BLOCKED",
+          manufacture: "2026-11-10",
+          expiry: "2027-01-01",
+          sourceFacilityId: fStandalone.ids.sourceBId,
+        },
+      ],
+    },
+  ];
+  fStandalone.state.deliveries.push(standaloneMulti);
+  for (const actor of fStandalone.actors) {
+    await fStandalone.service.decide(standaloneMulti.id, approve(), actor);
+  }
+  assert.equal(standaloneMulti.status, "RECEIVED");
+  assert.equal(
+    standaloneMulti.items[0].ingredientEntryId,
+    fStandalone.ids.entryId,
+  );
+  assert.equal(
+    standaloneMulti.items[1].ingredientEntryId,
+    fStandalone.ids.entryId,
+  );
+  assert.equal(fStandalone.state.receipts.length, 2);
+  assert.equal(standaloneMulti.items[0].lots[0].status, "AVAILABLE");
+  assert.equal(standaloneMulti.items[1].lots[0].status, "AVAILABLE");
+});
+
+void test("v2 grouped/identity/unit/budget violations rollback cleanly while legacy partial convertQuantity and cap3 PREPARING cancellation stay intact (T138)", async () => {
+  const approve = () =>
+    validateDeliveryInspectionDecision({ decision: "APPROVE" });
+  const reject = () =>
+    validateDeliveryInspectionDecision({
+      decision: "REJECT",
+      reason: "Không đạt kiểm tra đầu vào",
+    });
+
+  for (const scenario of [
+    "split-6-plus-6-over-10",
+    "missing-source-group",
+    "wrong-ingredient-id",
+    "wrong-entry-id",
+    "wrong-unit-no-conversion",
+    "duplicate-ingredient-source-pair",
+    "previous-received-plus-current-over-budget",
+    "final-write-error-rollback",
+  ] as const) {
+    const sub = v1InspectionFixture();
+    sub.state.requestedQuantity = "10";
+    const delivery = sub.makeDelivery(31, {
+      workflowVersion: 2,
+      status: "IN_TRANSIT",
+    });
+    const makeItem = (
+      idx: number,
+      qty: string,
+      facilityId: string,
+      opts?: {
+        ingredientId?: string;
+        ingredientEntryId?: string;
+        unit?: string;
+      },
+    ) => ({
+      id: `00000000-0000-4000-0073-${String(idx).padStart(12, "0")}`,
+      ingredientId: opts?.ingredientId ?? sub.ids.ingredientId,
+      ingredientEntryId: opts?.ingredientEntryId ?? sub.ids.entryId,
+      supplyRequestItemId: sub.ids.requestItemId,
+      actual: qty,
+      unit: opts?.unit ?? "kg",
+      sourceFacilityId: facilityId,
+      sourceFacilityNameSnapshot: "Nông trại",
+      sourceFacilityCodeSnapshot: "CS",
+      ingredientNameSnapshot: "Gạo ST25",
+      lots: [
+        {
+          id: `00000000-0000-4000-0083-${String(idx).padStart(12, "0")}`,
+          quantity: qty,
+          available: "0",
+          unit: opts?.unit ?? "kg",
+          status: "BLOCKED",
+          manufacture: "2026-11-10",
+          expiry: "2027-01-01",
+          sourceFacilityId: facilityId,
+        },
+      ],
+    });
+
+    if (scenario === "split-6-plus-6-over-10") {
+      delivery.items = [
+        makeItem(1, "6.000", sub.ids.sourceAId),
+        makeItem(2, "6.000", sub.ids.sourceBId),
+      ];
+    } else if (scenario === "missing-source-group") {
+      delivery.items = [makeItem(1, "10.000", sub.ids.sourceAId)];
+      sub.state.customSourceItems = [
+        {
+          id: sub.ids.requestItemId,
+          supplyRequestId: sub.ids.requestId,
+          ingredientEntryId: sub.ids.entryId,
+          ingredientId: sub.ids.ingredientId,
+          requestedQuantity: "10",
+          unit: "kg",
+          ingredientName: "Gạo ST25",
+        },
+        {
+          id: "00000000-0000-4000-0031-000000000002",
+          supplyRequestId: sub.ids.requestId,
+          ingredientEntryId: "00000000-0000-4000-0041-000000000002",
+          ingredientId: "00000000-0000-4000-0040-000000000002",
+          requestedQuantity: "5",
+          unit: "kg",
+          ingredientName: "Thịt heo",
+        },
+      ];
+    } else if (scenario === "wrong-ingredient-id") {
+      delivery.items = [
+        makeItem(1, "10.000", sub.ids.sourceAId, {
+          ingredientId: "00000000-0000-4000-0040-000000000099",
+        }),
+      ];
+    } else if (scenario === "wrong-entry-id") {
+      delivery.items = [
+        makeItem(1, "10.000", sub.ids.sourceAId, {
+          ingredientEntryId: "00000000-0000-4000-0041-000000000099",
+        }),
+      ];
+    } else if (scenario === "wrong-unit-no-conversion") {
+      delivery.items = [
+        makeItem(1, "10000.000", sub.ids.sourceAId, { unit: "g" }),
+      ];
+    } else if (scenario === "duplicate-ingredient-source-pair") {
+      delivery.items = [
+        makeItem(1, "6.000", sub.ids.sourceAId),
+        makeItem(2, "4.000", sub.ids.sourceAId),
+      ];
+    } else if (scenario === "previous-received-plus-current-over-budget") {
+      const priorReceived = sub.makeDelivery(30, {
+        workflowVersion: null,
+        status: "RECEIVED",
+        arrivedAt: "2026-11-15T02:00:00.000Z",
+      });
+      priorReceived.items[0].actual = "4.000";
+      priorReceived.items[0].lots[0].quantity = "4.000";
+      priorReceived.items[0].lots[0].available = "4.000";
+      priorReceived.items[0].lots[0].status = "AVAILABLE";
+      sub.state.deliveries.push(priorReceived);
+      delivery.items = [
+        makeItem(1, "6.000", sub.ids.sourceAId),
+        makeItem(2, "4.000", sub.ids.sourceBId),
+      ];
+    } else {
+      delivery.items = [
+        makeItem(1, "6.000", sub.ids.sourceAId),
+        makeItem(2, "4.000", sub.ids.sourceBId),
+      ];
+    }
+
+    sub.state.deliveries.push(delivery);
+    await sub.service.arrive(delivery.id, {}, {}, sub.actors[0]);
+    for (const actor of sub.actors.slice(0, 3)) {
+      await sub.service.decide(delivery.id, approve(), actor);
+    }
+    if (scenario === "final-write-error-rollback") {
+      sub.state.failReceipt = true;
+    }
+
+    await assert.rejects(
+      () => sub.service.decide(delivery.id, approve(), sub.actors[3]),
+      scenario === "final-write-error-rollback" ? Error : { statusCode: 409 },
+    );
+    const rolledBack = sub.state.deliveries.find((d) => d.id === delivery.id)!;
+    assert.equal(
+      sub.state.decisions.filter((d) => d.deliveryId === delivery.id).length,
+      3,
+    );
+    assert.equal(rolledBack.status, "PENDING_APPROVAL");
+    assert.equal(sub.state.receipts.length, 0);
+    for (const item of rolledBack.items) {
+      for (const lot of item.lots) {
+        assert.equal(lot.status, "BLOCKED");
+        assert.equal(lot.available, "0");
+      }
+    }
+  }
+
+  // Legacy/v1 partial receipt (`previous 2 + current 3 <= 10`) with convertQuantity compatibility STILL succeeds
+  const legacyFix = v1InspectionFixture();
+  legacyFix.state.requestedQuantity = "10";
+  legacyFix.state.customSourceItems = [
+    {
+      id: legacyFix.ids.requestItemId,
+      supplyRequestId: legacyFix.ids.requestId,
+      ingredientEntryId: legacyFix.ids.entryId,
+      ingredientId: legacyFix.ids.ingredientId,
+      requestedQuantity: "10",
+      unit: "kg",
+      ingredientName: "Gạo ST25",
+    },
+    {
+      id: "00000000-0000-4000-0031-000000000002",
+      supplyRequestId: legacyFix.ids.requestId,
+      ingredientEntryId: "00000000-0000-4000-0041-000000000002",
+      ingredientId: "00000000-0000-4000-0040-000000000002",
+      requestedQuantity: "5",
+      unit: "kg",
+      ingredientName: "Thịt heo",
+    },
+  ];
+  const prevLegacy = legacyFix.makeDelivery(40, {
+    workflowVersion: null,
+    status: "RECEIVED",
+    arrivedAt: "2026-11-15T01:00:00.000Z",
+  });
+  prevLegacy.items[0].actual = "2.000";
+  prevLegacy.items[0].lots[0].quantity = "2.000";
+  prevLegacy.items[0].lots[0].available = "2.000";
+  prevLegacy.items[0].lots[0].status = "AVAILABLE";
+  const currentLegacy = legacyFix.makeDelivery(41, {
+    workflowVersion: null,
+    status: "IN_TRANSIT",
+  });
+  currentLegacy.items[0].actual = "3000.000";
+  currentLegacy.items[0].unit = "g";
+  currentLegacy.items[0].lots[0].quantity = "3000.000";
+  currentLegacy.items[0].lots[0].unit = "g";
+  legacyFix.state.deliveries.push(prevLegacy, currentLegacy);
+  await legacyFix.service.arrive(currentLegacy.id, {}, {}, legacyFix.actors[0]);
+  for (const actor of legacyFix.actors) {
+    await legacyFix.service.decide(currentLegacy.id, approve(), actor);
+  }
+  assert.equal(currentLegacy.status, "RECEIVED");
+  assert.equal(legacyFix.state.receipts.length, 1);
+
+  // cap3 cancels both PREPARING (preserving null metadata) and post-dispatch IN_TRANSIT (preserving metadata) without touching RECEIVED stock/history
+  const capFix = v1InspectionFixture();
+  capFix.state.requestedQuantity = "10";
+  const [d1, d2, d3] = capFix.state.deliveries;
+  const receivedKeep = capFix.makeDelivery(50, {
+    workflowVersion: 2,
+    status: "IN_TRANSIT",
+  });
+  receivedKeep.items[0].actual = "10.000";
+  receivedKeep.items[0].lots[0].quantity = "10.000";
+  const preparingCancel = capFix.makeDelivery(51, {
+    workflowVersion: 2,
+    status: "PREPARING",
+    expectedArrivalAt: null,
+    vehiclePlate: null,
+  });
+  const transitCancel = capFix.makeDelivery(52, {
+    workflowVersion: 2,
+    status: "IN_TRANSIT",
+    expectedArrivalAt: "2026-11-15T04:00:00.000Z",
+    vehiclePlate: "29C-55555",
+  });
+  capFix.state.deliveries.push(receivedKeep, preparingCancel, transitCancel);
+  await capFix.service.arrive(receivedKeep.id, {}, {}, capFix.actors[0]);
+  for (const actor of capFix.actors) {
+    await capFix.service.decide(receivedKeep.id, approve(), actor);
+  }
+  for (const d of [d1, d2, d3]) {
+    await capFix.service.arrive(d.id, {}, {}, capFix.actors[0]);
+  }
+  await capFix.service.decide(d1.id, reject(), capFix.actors[0]);
+  await capFix.service.decide(d2.id, reject(), capFix.actors[1]);
+  await capFix.service.decide(d3.id, reject(), capFix.actors[2]);
+  assert.equal(capFix.state.requestStatus, "CANCELLED");
+  assert.equal(preparingCancel.status, "CANCELLED");
+  assert.equal(preparingCancel.expectedArrivalAt, null);
+  assert.equal(preparingCancel.vehiclePlate, null);
+  assert.equal(transitCancel.status, "CANCELLED");
+  assert.equal(transitCancel.expectedArrivalAt, "2026-11-15T04:00:00.000Z");
+  assert.equal(transitCancel.vehiclePlate, "29C-55555");
+  assert.equal(receivedKeep.status, "RECEIVED");
+  assert.equal(receivedKeep.items[0].lots[0].status, "AVAILABLE");
+  assert.equal(capFix.state.receipts.length, 1);
 });

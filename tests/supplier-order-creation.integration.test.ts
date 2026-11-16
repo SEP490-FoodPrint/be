@@ -121,6 +121,24 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       intakeState: "PAUSED",
     },
   });
+  const schoolWildcardNullCode = await db.school.create({
+    data: {
+      name: "Trường 100%_test\\vn NullCode",
+      code: null,
+    },
+  });
+  await db.school.create({
+    data: {
+      name: "Integration School A",
+      code: "UNLINKED-SA",
+    },
+  });
+  const schoolForeignBOnly = await db.school.create({
+    data: {
+      name: "Integration School Foreign",
+      code: "FOREIGN-B",
+    },
+  });
   const supplierA = await db.supplier.create({
     data: { name: "Integration Supplier A" },
   });
@@ -176,6 +194,18 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       {
         schoolId: schoolPaused.id,
         supplierId: supplierA.id,
+        linkedByUserId: schoolAdminA.id,
+        status: "ACTIVE",
+      },
+      {
+        schoolId: schoolWildcardNullCode.id,
+        supplierId: supplierA.id,
+        linkedByUserId: schoolAdminA.id,
+        status: "ACTIVE",
+      },
+      {
+        schoolId: schoolForeignBOnly.id,
+        supplierId: supplierB.id,
         linkedByUserId: schoolAdminA.id,
         status: "ACTIVE",
       },
@@ -411,17 +441,148 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     },
   });
 
-  // 1. Options endpoints exclude paused schools, inactive ingredients, inactive/foreign facilities, and keep null facilityCode
+  // 1. Options endpoints exclude paused/foreign/unlinked schools, inactive ingredients, inactive/foreign facilities, support literal wildcard & code-null search, and keep POST recheck
   const schoolOpts = await apiRequest(
     "/api/deliveries/management/options/schools",
     supplierStaffA.id,
   );
   assert.equal(schoolOpts.status, 200);
-  const schoolsData = unwrap<{ items: Array<{ id: string }> }>(schoolOpts.body);
+  const schoolsData = unwrap<{
+    items: Array<{ id: string; code: string | null }>;
+  }>(schoolOpts.body);
   assert.deepEqual(
-    schoolsData.items.map((item) => item.id),
+    schoolsData.items.map((item) => item.id).sort(),
+    [schoolA.id, schoolWildcardNullCode.id].sort(),
+  );
+
+  // Case-insensitive name search excludes unlinked same-name school, paused school & foreign school
+  const nameSearch = await apiRequest(
+    "/api/deliveries/management/options/schools?search=integration%20school",
+    supplierAdminA.id,
+  );
+  assert.equal(nameSearch.status, 200);
+  assert.deepEqual(
+    unwrap<{ items: Array<{ id: string }> }>(nameSearch.body).items.map(
+      (i) => i.id,
+    ),
     [schoolA.id],
   );
+
+  // Code search (lowercase -> uppercase match)
+  const codeSearch = await apiRequest(
+    "/api/deliveries/management/options/schools?search=int-sa",
+    supplierStaffA.id,
+  );
+  assert.equal(codeSearch.status, 200);
+  assert.deepEqual(
+    unwrap<{ items: Array<{ id: string }> }>(codeSearch.body).items.map(
+      (i) => i.id,
+    ),
+    [schoolA.id],
+  );
+
+  // Literal wildcard escaping (%, _, \) finds school with code=null without matching everything
+  const wildcardSearch = await apiRequest(
+    `/api/deliveries/management/options/schools?search=${encodeURIComponent("100%_test\\vn")}`,
+    supplierStaffA.id,
+  );
+  assert.equal(wildcardSearch.status, 200);
+  assert.deepEqual(
+    unwrap<{ items: Array<{ id: string; code: string | null }> }>(
+      wildcardSearch.body,
+    ).items.map((i) => ({ id: i.id, code: i.code })),
+    [{ id: schoolWildcardNullCode.id, code: null }],
+  );
+
+  // Blank search acts as unfiltered + paging limit=1
+  const pagedBlank = await apiRequest(
+    "/api/deliveries/management/options/schools?search=%20%20&page=1&limit=1",
+    supplierStaffA.id,
+  );
+  assert.equal(pagedBlank.status, 200);
+  assert.deepEqual(
+    unwrap<{ items: unknown[]; pagination: { hasNext: boolean } }>(
+      pagedBlank.body,
+    ).pagination,
+    { page: 1, limit: 1, hasNext: true },
+  );
+
+  // No-match & strict validation/permission boundaries
+  const noMatchSearch = await apiRequest(
+    "/api/deliveries/management/options/schools?search=khong-ton-tai-xyz",
+    supplierStaffA.id,
+  );
+  assert.equal(noMatchSearch.status, 200);
+  assert.deepEqual(unwrap<{ items: unknown[] }>(noMatchSearch.body).items, []);
+  assert.equal(
+    (
+      await apiRequest(
+        `/api/deliveries/management/options/schools?search=${"x".repeat(101)}`,
+        supplierStaffA.id,
+      )
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await apiRequest(
+        "/api/deliveries/management/options/ingredients?search=gao",
+        supplierStaffA.id,
+      )
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await apiRequest(
+        "/api/deliveries/management/options/schools?q=hoa",
+        supplierStaffA.id,
+      )
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await apiRequest(
+        "/api/deliveries/management/options/schools?search=integration",
+        inspectorUsers[0].id,
+      )
+    ).status,
+    403,
+  );
+
+  // Selecting a school via search then suspending relationship before POST still rejects 409 (no fake SupplyRequest/CONFIRMED)
+  await db.schoolSupplierRelationship.updateMany({
+    where: { schoolId: schoolWildcardNullCode.id, supplierId: supplierA.id },
+    data: {
+      status: "SUSPENDED",
+      suspendedAt: new Date(),
+      suspensionReason: "Ngừng sau bước tìm kiếm",
+    },
+  });
+  const countReqBeforeStaleSearch = await db.supplyRequest.count();
+  const staleSearchPost = await apiRequest(
+    "/api/deliveries/management",
+    supplierStaffA.id,
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": randomUUID() },
+      body: {
+        sourceType: "STANDALONE",
+        schoolId: schoolWildcardNullCode.id,
+        items: [
+          {
+            ingredientId: riceA.id,
+            sourceFacilityId: facilityA1.id,
+            actualQuantity: "5",
+            unit: "kg",
+          },
+        ],
+      },
+    },
+  );
+  assert.equal(staleSearchPost.status, 409);
+  assert.equal(await db.supplyRequest.count(), countReqBeforeStaleSearch);
 
   const ingOpts = await apiRequest(
     "/api/deliveries/management/options/ingredients",
@@ -475,8 +636,6 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
         body: {
           sourceType: "STANDALONE",
           schoolId: schoolA.id,
-          expectedArrivalAt: "2026-11-16T08:00:00+07:00",
-          vehiclePlate: `29A-${String(10000 + i)}`,
           items: [
             {
               ingredientId: riceA.id,
@@ -489,15 +648,13 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       },
     ),
   );
-  const concBatchB = Array.from({ length: 20 }, (_, i) =>
+  const concBatchB = Array.from({ length: 20 }, () =>
     apiRequest("/api/deliveries/management", supplierAdminB.id, {
       method: "POST",
       headers: { "Idempotency-Key": randomUUID() },
       body: {
         sourceType: "STANDALONE",
         schoolId: schoolA.id,
-        expectedArrivalAt: "2026-11-16T08:00:00+07:00",
-        vehiclePlate: `30B-${String(20000 + i)}`,
         items: [
           {
             ingredientId: wheatB.id,
@@ -583,8 +740,6 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       body: {
         sourceType: "STANDALONE",
         schoolId: schoolA.id,
-        expectedArrivalAt: "2026-11-16T08:00:00+07:00",
-        vehiclePlate: "30B-99999",
         items: [
           {
             ingredientId: wheatB.id,
@@ -614,11 +769,13 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       body: {
         sourceType: "REQUEST",
         supplyRequestId: acceptedRequest.id,
-        expectedArrivalAt: "2026-11-16T08:00:00+07:00",
-        vehiclePlate: "29A-11111",
         note: "Giao cổng sau",
         sources: [
-          { supplyRequestItemId: reqItemId, sourceFacilityId: facilityA1.id },
+          {
+            supplyRequestItemId: reqItemId,
+            sourceFacilityId: facilityA1.id,
+            actualQuantity: "15.5",
+          },
         ],
       },
     },
@@ -629,8 +786,13 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     deliveryNo: string;
     sourceType: string;
     traceabilityVersion: number;
+    workflowVersion: number | null;
+    nextAction: string;
     status: string;
     statusLabel: string;
+    expectedArrivalAt: string | null;
+    vehiclePlate: string | null;
+    updatedAt: string;
     items: Array<{
       id: string;
       ingredientEntryId: string | null;
@@ -645,8 +807,12 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   }>(createReqRes.body);
   assert.equal(createdReq.sourceType, "REQUEST");
   assert.equal(createdReq.traceabilityVersion, 1);
-  assert.equal(createdReq.status, "IN_TRANSIT");
-  assert.equal(createdReq.statusLabel, "Đang giao");
+  assert.equal(createdReq.workflowVersion, 2);
+  assert.equal(createdReq.status, "PREPARING");
+  assert.equal(createdReq.statusLabel, "Đang chuẩn bị hàng");
+  assert.equal(createdReq.nextAction, "ENTER_SHIPPING");
+  assert.equal(createdReq.expectedArrivalAt, null);
+  assert.equal(createdReq.vehiclePlate, null);
   assert.equal(createdReq.deliveryNo, "FP-DE-00021");
   assert.equal(createdReq.items[0].ingredientEntryId, riceEntry.id);
   assert.equal(createdReq.items[0].actualQuantity, "15.5");
@@ -665,6 +831,18 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   });
   assert.equal(updatedReq.status, "IN_PROGRESS");
 
+  // School cannot arrive while PREPARING (409)
+  assert.equal(
+    (
+      await apiRequest(
+        `/api/deliveries/${createdReq.id}/arrival`,
+        inspectorUsers[0].id,
+        { method: "POST" },
+      )
+    ).status,
+    409,
+  );
+
   const replayReqRes = await apiRequest(
     "/api/deliveries/management",
     supplierAdminA.id,
@@ -674,11 +852,13 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       body: {
         sourceType: "REQUEST",
         supplyRequestId: acceptedRequest.id,
-        expectedArrivalAt: "2026-11-16T01:00:00Z",
-        vehiclePlate: " 29A-11111 ",
         note: "Giao cổng sau",
         sources: [
-          { supplyRequestItemId: reqItemId, sourceFacilityId: facilityA1.id },
+          {
+            supplyRequestItemId: reqItemId,
+            sourceFacilityId: facilityA1.id,
+            actualQuantity: "15.500",
+          },
         ],
       },
     },
@@ -690,21 +870,25 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     {
       sourceType: "REQUEST",
       supplyRequestId: acceptedRequest.id,
-      expectedArrivalAt: "2026-11-16T08:00:00+07:00",
-      vehiclePlate: "29A-99999",
-      note: "Giao cổng sau",
+      note: "Giao cổng khác",
       sources: [
-        { supplyRequestItemId: reqItemId, sourceFacilityId: facilityA1.id },
+        {
+          supplyRequestItemId: reqItemId,
+          sourceFacilityId: facilityA1.id,
+          actualQuantity: "15.5",
+        },
       ],
     },
     {
       sourceType: "REQUEST",
       supplyRequestId: acceptedRequest.id,
-      expectedArrivalAt: "2026-11-16T08:00:00+07:00",
-      vehiclePlate: "29A-11111",
       note: "Giao cổng sau",
       sources: [
-        { supplyRequestItemId: reqItemId, sourceFacilityId: facilityA2.id },
+        {
+          supplyRequestItemId: reqItemId,
+          sourceFacilityId: facilityA2.id,
+          actualQuantity: "15.5",
+        },
       ],
     },
   ]) {
@@ -720,6 +904,66 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     assert.equal(conflictReqRes.status, 409);
   }
 
+  // Stage 2 dispatch -> IN_TRANSIT + idempotent canonical replay keeps updatedAt + conflict 409
+  const dispatchReqRes = await apiRequest(
+    `/api/deliveries/management/${createdReq.id}/dispatch`,
+    supplierAdminA.id,
+    {
+      method: "POST",
+      body: {
+        expectedArrivalAt: "2026-11-16T08:00:00+07:00",
+        vehiclePlate: "29A-11111",
+      },
+    },
+  );
+  assert.equal(dispatchReqRes.status, 200);
+  const dispatchedReq = unwrap<{
+    status: string;
+    statusLabel: string;
+    nextAction: string;
+    expectedArrivalAt: string | null;
+    vehiclePlate: string | null;
+    updatedAt: string;
+  }>(dispatchReqRes.body);
+  assert.equal(dispatchedReq.status, "IN_TRANSIT");
+  assert.equal(dispatchedReq.statusLabel, "Đang giao hàng");
+  assert.equal(dispatchedReq.nextAction, "TRACK_DELIVERY");
+  assert.equal(dispatchedReq.expectedArrivalAt, "2026-11-16T01:00:00.000Z");
+  assert.equal(dispatchedReq.vehiclePlate, "29A-11111");
+
+  const dispatchReplayRes = await apiRequest(
+    `/api/deliveries/management/${createdReq.id}/dispatch`,
+    supplierStaffA.id,
+    {
+      method: "POST",
+      body: {
+        expectedArrivalAt: "2026-11-16T01:00:00Z",
+        vehiclePlate: "  29A-11111  ",
+      },
+    },
+  );
+  assert.equal(dispatchReplayRes.status, 200);
+  assert.equal(
+    unwrap<{ updatedAt: string }>(dispatchReplayRes.body).updatedAt,
+    dispatchedReq.updatedAt,
+  );
+  assert.equal(
+    (
+      await apiRequest(
+        `/api/deliveries/management/${createdReq.id}/dispatch`,
+        supplierStaffA.id,
+        {
+          method: "POST",
+          body: {
+            expectedArrivalAt: "2026-11-16T01:00:00Z",
+            vehiclePlate: "29A-99999",
+          },
+        },
+      )
+    ).status,
+    409,
+  );
+
   // Concurrent race on the same SupplyRequest produces one 201 and one 409
   const raceItemId = raceRequest.supplyRequestItems[0].id;
   const raceResults = await Promise.all([
@@ -729,10 +973,12 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       body: {
         sourceType: "REQUEST",
         supplyRequestId: raceRequest.id,
-        expectedArrivalAt: "2026-11-16T08:00:00+07:00",
-        vehiclePlate: "29A-22222",
         sources: [
-          { supplyRequestItemId: raceItemId, sourceFacilityId: facilityA1.id },
+          {
+            supplyRequestItemId: raceItemId,
+            sourceFacilityId: facilityA1.id,
+            actualQuantity: "8.000",
+          },
         ],
       },
     }),
@@ -742,10 +988,12 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       body: {
         sourceType: "REQUEST",
         supplyRequestId: raceRequest.id,
-        expectedArrivalAt: "2026-11-16T08:00:00+07:00",
-        vehiclePlate: "29A-22222",
         sources: [
-          { supplyRequestItemId: raceItemId, sourceFacilityId: facilityA1.id },
+          {
+            supplyRequestItemId: raceItemId,
+            sourceFacilityId: facilityA1.id,
+            actualQuantity: "8.000",
+          },
         ],
       },
     }),
@@ -765,8 +1013,6 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   const retryBody = validateCreateSupplierOrderBody({
     sourceType: "STANDALONE",
     schoolId: schoolA.id,
-    expectedArrivalAt: "2026-11-16T10:00:00+07:00",
-    vehiclePlate: "29H-88888",
     items: [
       {
         ingredientId: riceA.id,
@@ -810,8 +1056,6 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       body: {
         sourceType: "STANDALONE",
         schoolId: schoolA.id,
-        expectedArrivalAt: "2026-11-16T08:00:00+07:00",
-        vehiclePlate: "29C-00001",
         items: [
           {
             ingredientId: chickenA.id,
@@ -842,8 +1086,6 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       body: {
         sourceType: "STANDALONE",
         schoolId: schoolA.id,
-        expectedArrivalAt: "2026-11-16T08:00:00+07:00",
-        vehiclePlate: "29C-00002",
         items: [
           {
             ingredientId: chickenA.id,
@@ -865,7 +1107,245 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     },
   });
 
-  // 4. STANDALONE v1 full HTTP flow: pre-arrival 409 -> HTTP arrival -> missing entry rollback -> entry created -> 4th APPROVE -> RECEIVED -> snapshot preserved -> public trace -> labels
+  // T123: Multi-source STANDALONE (chickenA 6+4 across 2 facilities with entryId null, plus riceA across 2 facilities)
+  const reqCountBeforeMultiStandalone = await db.supplyRequest.count();
+  const entryCountBeforeMultiStandalone = await db.ingredientEntry.count({
+    where: { schoolId: schoolA.id },
+  });
+  const dupStandalonePairRes = await apiRequest(
+    "/api/deliveries/management",
+    supplierStaffA.id,
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": randomUUID() },
+      body: {
+        sourceType: "STANDALONE",
+        schoolId: schoolA.id,
+        items: [
+          {
+            ingredientId: chickenA.id,
+            sourceFacilityId: facilityA1.id,
+            actualQuantity: "6.000",
+            unit: "kg",
+          },
+          {
+            ingredientId: chickenA.id,
+            sourceFacilityId: facilityA1.id,
+            actualQuantity: "4.000",
+            unit: "kg",
+          },
+        ],
+      },
+    },
+  );
+  assert.equal(dupStandalonePairRes.status, 400);
+
+  const multiStandaloneRes = await apiRequest(
+    "/api/deliveries/management",
+    supplierStaffA.id,
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": randomUUID() },
+      body: {
+        sourceType: "STANDALONE",
+        schoolId: schoolA.id,
+        items: [
+          {
+            ingredientId: chickenA.id,
+            sourceFacilityId: facilityA1.id,
+            actualQuantity: "6.000",
+            unit: "kg",
+          },
+          {
+            ingredientId: chickenA.id,
+            sourceFacilityId: facilityA2.id,
+            actualQuantity: "4.000",
+            unit: "kg",
+          },
+          {
+            ingredientId: riceA.id,
+            sourceFacilityId: facilityA1.id,
+            actualQuantity: "3.000",
+            unit: "kg",
+          },
+          {
+            ingredientId: riceA.id,
+            sourceFacilityId: facilityA2.id,
+            actualQuantity: "2.000",
+            unit: "kg",
+          },
+        ],
+      },
+    },
+  );
+  assert.equal(multiStandaloneRes.status, 201);
+  const multiStandalone = unwrap<{
+    id: string;
+    sourceType: string;
+    status: string;
+    statusLabel: string;
+    workflowVersion: number | null;
+    traceabilityVersion: number | null;
+    nextAction: string;
+    supplyRequestId: string | null;
+    requestNo: string | null;
+    expectedArrivalAt: string | null;
+    vehiclePlate: string | null;
+    items: Array<{
+      id: string;
+      ingredientId: string;
+      ingredientEntryId: string | null;
+      sourceFacility: { id: string } | null;
+      traceUrl: string | null;
+      actualQuantity: string;
+    }>;
+  }>(multiStandaloneRes.body);
+  assert.equal(multiStandalone.sourceType, "STANDALONE");
+  assert.equal(multiStandalone.status, "PREPARING");
+  assert.equal(multiStandalone.statusLabel, "Đang chuẩn bị hàng");
+  assert.equal(multiStandalone.workflowVersion, 2);
+  assert.equal(multiStandalone.traceabilityVersion, 1);
+  assert.equal(multiStandalone.nextAction, "ENTER_SHIPPING");
+  assert.equal(multiStandalone.supplyRequestId, null);
+  assert.equal(multiStandalone.requestNo, null);
+  assert.equal(multiStandalone.expectedArrivalAt, null);
+  assert.equal(multiStandalone.vehiclePlate, null);
+  assert.equal(multiStandalone.items.length, 4);
+  assert.equal(new Set(multiStandalone.items.map((item) => item.id)).size, 4);
+  assert.equal(
+    new Set(multiStandalone.items.map((item) => item.traceUrl)).size,
+    4,
+  );
+  const sortedChickenActual = multiStandalone.items
+    .filter((item) => item.ingredientId === chickenA.id)
+    .map((item) => [
+      item.sourceFacility?.id ?? null,
+      item.ingredientEntryId,
+      item.actualQuantity,
+    ])
+    .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+  const sortedChickenExpected = [
+    [facilityA1.id, null, "6"],
+    [facilityA2.id, null, "4"],
+  ].sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+  assert.deepEqual(sortedChickenActual, sortedChickenExpected);
+  const sortedRiceActual = multiStandalone.items
+    .filter((item) => item.ingredientId === riceA.id)
+    .map((item) => [
+      item.sourceFacility?.id ?? null,
+      item.ingredientEntryId,
+      item.actualQuantity,
+    ])
+    .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+  const sortedRiceExpected = [
+    [facilityA1.id, riceEntry.id, "3"],
+    [facilityA2.id, riceEntry.id, "2"],
+  ].sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+  assert.deepEqual(sortedRiceActual, sortedRiceExpected);
+  assert.equal(await db.supplyRequest.count(), reqCountBeforeMultiStandalone);
+  assert.equal(
+    await db.ingredientEntry.count({ where: { schoolId: schoolA.id } }),
+    entryCountBeforeMultiStandalone,
+  );
+  const multiStandaloneLots = await db.ingredientLot.findMany({
+    where: {
+      deliveryItemId: { in: multiStandalone.items.map((item) => item.id) },
+    },
+  });
+  assert.equal(multiStandaloneLots.length, 4);
+  assert.equal(new Set(multiStandaloneLots.map((lot) => lot.qrToken)).size, 4);
+  for (const lot of multiStandaloneLots) {
+    const matchedItem = multiStandalone.items.find(
+      (item) => item.id === lot.deliveryItemId,
+    )!;
+    assert.equal(lot.lotCode, "PLAN-01");
+    assert.equal(lot.status, "BLOCKED");
+    assert.equal(
+      lot.receivedQuantity.toFixed(3),
+      Number(matchedItem.actualQuantity).toFixed(3),
+    );
+    assert.equal(lot.availableQuantity.toFixed(3), "0.000");
+  }
+
+  // T136: PREPARING 6A+4B multi-source labels & public scan work BEFORE dispatch (no collapsing), and keep identical URLs on reprint
+  const prepMultiLabelsRes = await apiRequest(
+    `/api/deliveries/management/${multiStandalone.id}/labels`,
+    supplierStaffA.id,
+  );
+  assert.equal(prepMultiLabelsRes.status, 200);
+  const prepMultiLabels = unwrap<{
+    items: Array<{
+      deliveryItemId: string;
+      ingredientName: string;
+      actualQuantity: string;
+      sourceFacility: { name: string; facilityCode: string | null };
+      traceUrl: string;
+      qrImageDataUrl: string;
+    }>;
+  }>(prepMultiLabelsRes.body);
+  assert.equal(prepMultiLabels.items.length, 4);
+  assert.equal(
+    new Set(prepMultiLabels.items.map((item) => item.deliveryItemId)).size,
+    4,
+  );
+  assert.equal(
+    new Set(prepMultiLabels.items.map((item) => item.qrImageDataUrl)).size,
+    4,
+  );
+  const chickenItems = multiStandalone.items.filter(
+    (item) => item.ingredientId === chickenA.id,
+  );
+  const chickenLots = multiStandaloneLots.filter((lot) =>
+    chickenItems.some((item) => item.id === lot.deliveryItemId),
+  );
+  assert.equal(chickenLots.length, 2);
+  for (const chickenItem of chickenItems) {
+    const lotForItem = chickenLots.find(
+      (lot) => lot.deliveryItemId === chickenItem.id,
+    );
+    assert(lotForItem);
+    const dbChickenItem = await db.deliveryItem.findUniqueOrThrow({
+      where: { id: chickenItem.id },
+      select: { qrToken: true },
+    });
+    assert(dbChickenItem.qrToken);
+    assert(chickenItem.traceUrl?.endsWith(`/${dbChickenItem.qrToken}`));
+    const scanPrepRes = await http.request(
+      `/api/public/delivery-items/${dbChickenItem.qrToken}`,
+      { headers: { Accept: "application/json" } },
+    );
+    assert.equal(scanPrepRes.status, 200);
+    const scanPrepData = unwrap<Record<string, unknown>>(scanPrepRes.body);
+    assert.deepEqual(Object.keys(scanPrepData).sort(), [
+      "actualQuantity",
+      "deliveryNo",
+      "ingredientName",
+      "sourceFacility",
+      "status",
+      "statusLabel",
+      "supplierName",
+      "unit",
+    ]);
+    assert.equal(scanPrepData.status, "PREPARING");
+    assert.equal(scanPrepData.statusLabel, "Đang chuẩn bị hàng");
+    assert.equal(scanPrepData.actualQuantity, chickenItem.actualQuantity);
+    assert(
+      chickenItem.actualQuantity === "6" || chickenItem.actualQuantity === "4",
+    );
+  }
+  const reprintPrepLabelsRes = await apiRequest(
+    `/api/deliveries/management/${multiStandalone.id}/labels`,
+    supplierAdminA.id,
+  );
+  assert.equal(reprintPrepLabelsRes.status, 200);
+  assert.deepEqual(
+    unwrap<{ items: Array<{ traceUrl: string }> }>(
+      reprintPrepLabelsRes.body,
+    ).items.map((i) => i.traceUrl),
+    prepMultiLabels.items.map((i) => i.traceUrl),
+  );
+
+  // 4. STANDALONE workflow2 full HTTP flow: create PREPARING -> pre-dispatch arrival/inspection 409 -> dispatch IN_TRANSIT -> HTTP arrival -> missing entry rollback -> entry created -> 4th APPROVE -> RECEIVED -> snapshot preserved -> public trace -> labels
   const standaloneRes = await apiRequest(
     "/api/deliveries/management",
     supplierStaffA.id,
@@ -875,8 +1355,6 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       body: {
         sourceType: "STANDALONE",
         schoolId: schoolA.id,
-        expectedArrivalAt: "2026-11-16T08:00:00+07:00",
-        vehiclePlate: "29C-77777",
         items: [
           {
             ingredientId: chickenA.id,
@@ -894,7 +1372,10 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     deliveryNo: string;
     sourceType: string;
     status: string;
+    workflowVersion: number | null;
     supplyRequestId: string | null;
+    expectedArrivalAt: string | null;
+    vehiclePlate: string | null;
     items: Array<{
       id: string;
       ingredientEntryId: string | null;
@@ -902,23 +1383,33 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     }>;
   }>(standaloneRes.body);
   assert.equal(standaloneOrder.sourceType, "STANDALONE");
-  assert.equal(standaloneOrder.status, "IN_TRANSIT");
+  assert.equal(standaloneOrder.status, "PREPARING");
+  assert.equal(standaloneOrder.workflowVersion, 2);
   assert.equal(standaloneOrder.supplyRequestId, null);
+  assert.equal(standaloneOrder.expectedArrivalAt, null);
+  assert.equal(standaloneOrder.vehiclePlate, null);
   assert.equal(standaloneOrder.items[0].ingredientEntryId, null);
 
-  // Missing photos fail before storage or writes; a valid photo reaches pre-arrival protection.
+  // Pre-dispatch arrival and inspection are rejected
+  assert.equal(
+    (
+      await apiRequest(
+        `/api/deliveries/${standaloneOrder.id}/arrival`,
+        inspectorUsers[0].id,
+        { method: "POST" },
+      )
+    ).status,
+    409,
+  );
   const missingPhotoInspect = await apiRequest(
     `/api/deliveries/${standaloneOrder.id}/inspection`,
     inspectorUsers[0].id,
     { method: "POST", body: { decision: "APPROVE" } },
   );
   assert.equal(missingPhotoInspect.status, 400);
-  assert.equal(uploadedPhotos.size, 0);
-  assert.equal(
-    await db.deliveryApproval.count({
-      where: { deliveryId: standaloneOrder.id },
-    }),
-    0,
+  assert.match(
+    (missingPhotoInspect.body as { message: string }).message,
+    /Cần gửi ảnh/,
   );
   const preArrivalInspect = await apiRequest(
     `/api/deliveries/${standaloneOrder.id}/inspection`,
@@ -931,6 +1422,35 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     JSON.stringify(preArrivalInspect.body),
   );
   assert.equal(uploadedPhotos.size, 0);
+  assert.equal(
+    await db.deliveryApproval.count({
+      where: { deliveryId: standaloneOrder.id },
+    }),
+    0,
+  );
+  assert.equal(
+    (await db.delivery.findUniqueOrThrow({ where: { id: standaloneOrder.id } }))
+      .status,
+    "PREPARING",
+  );
+
+  // Dispatch -> IN_TRANSIT before arrival/inspection flow
+  const dispatchStandaloneRes = await apiRequest(
+    `/api/deliveries/management/${standaloneOrder.id}/dispatch`,
+    supplierStaffA.id,
+    {
+      method: "POST",
+      body: {
+        expectedArrivalAt: "2026-11-16T08:00:00+07:00",
+        vehiclePlate: "29C-77777",
+      },
+    },
+  );
+  assert.equal(dispatchStandaloneRes.status, 200);
+  assert.equal(
+    unwrap<{ status: string }>(dispatchStandaloneRes.body).status,
+    "IN_TRANSIT",
+  );
 
   // Supplier cannot confirm school arrival (403)
   assert.equal(
@@ -1155,8 +1675,6 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       body: {
         sourceType: "STANDALONE",
         schoolId: schoolA.id,
-        expectedArrivalAt: "2026-11-17T08:00:00+07:00",
-        vehiclePlate: "29C-66666",
         items: [
           {
             ingredientId: riceA.id,
@@ -1177,6 +1695,22 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   assert.notEqual(replacement.id, createdReq.id);
   assert.notEqual(replacement.deliveryNo, createdReq.deliveryNo);
   assert.notEqual(replacement.items[0].traceUrl, createdReq.items[0].traceUrl);
+  assert.equal(
+    (
+      await apiRequest(
+        `/api/deliveries/management/${replacement.id}/dispatch`,
+        supplierAdminA.id,
+        {
+          method: "POST",
+          body: {
+            expectedArrivalAt: "2026-11-17T08:00:00+07:00",
+            vehiclePlate: "29C-66666",
+          },
+        },
+      )
+    ).status,
+    200,
+  );
 
   assert.equal(
     (
@@ -1205,6 +1739,1439 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   });
   assert.equal(repCheck.status, "RECEIVED");
 
+  // T131: Concurrent real-DB dispatch same body -> both 200 & unchanged updatedAt; diff body -> 200/409; revoked perm blocks dispatch replay 403
+  const concDispatchSame = await apiRequest(
+    "/api/deliveries/management",
+    supplierAdminA.id,
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": randomUUID() },
+      body: {
+        sourceType: "STANDALONE",
+        schoolId: schoolA.id,
+        items: [
+          {
+            ingredientId: riceA.id,
+            sourceFacilityId: facilityA1.id,
+            actualQuantity: "2.000",
+            unit: "kg",
+          },
+        ],
+      },
+    },
+  );
+  assert.equal(concDispatchSame.status, 201);
+  const concSameId = unwrap<{ id: string }>(concDispatchSame.body).id;
+  const sameRace = await Promise.all([
+    apiRequest(
+      `/api/deliveries/management/${concSameId}/dispatch`,
+      supplierAdminA.id,
+      {
+        method: "POST",
+        body: {
+          expectedArrivalAt: "2026-11-18T08:00:00+07:00",
+          vehiclePlate: "29A-77701",
+        },
+      },
+    ),
+    apiRequest(
+      `/api/deliveries/management/${concSameId}/dispatch`,
+      supplierStaffA.id,
+      {
+        method: "POST",
+        body: {
+          expectedArrivalAt: "2026-11-18T01:00:00Z",
+          vehiclePlate: "  29A-77701 ",
+        },
+      },
+    ),
+  ]);
+  assert.deepEqual(
+    sameRace.map((res) => res.status),
+    [200, 200],
+  );
+  const sameRaceUpdatedAts = sameRace.map(
+    (res) => unwrap<{ updatedAt: string }>(res.body).updatedAt,
+  );
+  assert.equal(sameRaceUpdatedAts[0], sameRaceUpdatedAts[1]);
+
+  const concDispatchDiff = await apiRequest(
+    "/api/deliveries/management",
+    supplierAdminA.id,
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": randomUUID() },
+      body: {
+        sourceType: "STANDALONE",
+        schoolId: schoolA.id,
+        items: [
+          {
+            ingredientId: riceA.id,
+            sourceFacilityId: facilityA1.id,
+            actualQuantity: "2.500",
+            unit: "kg",
+          },
+        ],
+      },
+    },
+  );
+  assert.equal(concDispatchDiff.status, 201);
+  const concDiffId = unwrap<{ id: string }>(concDispatchDiff.body).id;
+  const diffRace = await Promise.all([
+    apiRequest(
+      `/api/deliveries/management/${concDiffId}/dispatch`,
+      supplierAdminA.id,
+      {
+        method: "POST",
+        body: {
+          expectedArrivalAt: "2026-11-18T08:00:00+07:00",
+          vehiclePlate: "29A-77702",
+        },
+      },
+    ),
+    apiRequest(
+      `/api/deliveries/management/${concDiffId}/dispatch`,
+      supplierStaffA.id,
+      {
+        method: "POST",
+        body: {
+          expectedArrivalAt: "2026-11-18T08:00:00+07:00",
+          vehiclePlate: "29A-77703",
+        },
+      },
+    ),
+  ]);
+  assert.deepEqual(diffRace.map((res) => res.status).sort(), [200, 409]);
+
+  // Pre-dispatch arrival/cancel race: cancel SupplyRequest leaves PREPARING delivery CANCELLED (metadata null) -> dispatch 409
+  const cancelRaceReq = await db.supplyRequest.create({
+    data: {
+      schoolId: schoolA.id,
+      supplierId: supplierA.id,
+      requestNo: `SR-CDISP-${randomUUID().slice(0, 8)}`,
+      createdByUserId: inspectorUsers[0].id,
+      status: "ACCEPTED",
+      acceptedByUserId: supplierAdminA.id,
+      acceptedAt: new Date(),
+      sentAt: new Date(),
+      supplyRequestItems: {
+        create: {
+          ingredientEntryId: riceEntry.id,
+          requestedQuantity: "3.000",
+          unit: "kg",
+        },
+      },
+    },
+    include: { supplyRequestItems: true },
+  });
+  const cancelPreparingRes = await apiRequest(
+    "/api/deliveries/management",
+    supplierAdminA.id,
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": randomUUID() },
+      body: {
+        sourceType: "REQUEST",
+        supplyRequestId: cancelRaceReq.id,
+        sources: [
+          {
+            supplyRequestItemId: cancelRaceReq.supplyRequestItems[0].id,
+            sourceFacilityId: facilityA1.id,
+            actualQuantity: "3.000",
+          },
+        ],
+      },
+    },
+  );
+  assert.equal(cancelPreparingRes.status, 201);
+  const cancelPreparingId = unwrap<{ id: string }>(cancelPreparingRes.body).id;
+  await db.delivery.update({
+    where: { id: cancelPreparingId },
+    data: { status: "CANCELLED" },
+  });
+  await db.supplyRequest.update({
+    where: { id: cancelRaceReq.id },
+    data: { status: "CANCELLED" },
+  });
+  const cancelledPreDispatchRes = await apiRequest(
+    `/api/deliveries/management/${cancelPreparingId}/dispatch`,
+    supplierAdminA.id,
+    {
+      method: "POST",
+      body: {
+        expectedArrivalAt: "2026-11-18T08:00:00+07:00",
+        vehiclePlate: "29A-77704",
+      },
+    },
+  );
+  assert.equal(cancelledPreDispatchRes.status, 409);
+
+  // Post-RECEIVED dispatch replay on replacement -> 200 RECEIVED
+  const receivedReplayDispatch = await apiRequest(
+    `/api/deliveries/management/${replacement.id}/dispatch`,
+    supplierAdminA.id,
+    {
+      method: "POST",
+      body: {
+        expectedArrivalAt: "2026-11-17T08:00:00+07:00",
+        vehiclePlate: "29C-66666",
+      },
+    },
+  );
+  assert.equal(receivedReplayDispatch.status, 200);
+  assert.equal(
+    unwrap<{ status: string }>(receivedReplayDispatch.body).status,
+    "RECEIVED",
+  );
+
+  // T141: Complete STANDALONE repeated-ingredient multiStandalone (even after facilityA2 became INACTIVE),
+  // concurrent 4th approval, fresh REQUEST 6+4, negative grouped/identity/unit rollbacks, legacy partial/null-source,
+  // and cap3 canceling PREPARING (null metadata) & post-dispatch while preserving RECEIVED stock/history/QR
+  assert.equal(
+    (
+      await apiRequest(
+        `/api/deliveries/management/${multiStandalone.id}/dispatch`,
+        supplierStaffA.id,
+        {
+          method: "POST",
+          body: {
+            expectedArrivalAt: "2026-11-17T09:00:00+07:00",
+            vehiclePlate: "29C-64002",
+          },
+        },
+      )
+    ).status,
+    200,
+  );
+  assert.equal(
+    (
+      await apiRequest(
+        `/api/deliveries/${multiStandalone.id}/arrival`,
+        inspectorUsers[0].id,
+        { method: "POST" },
+      )
+    ).status,
+    200,
+  );
+  for (const user of inspectorUsers.slice(0, 3)) {
+    assert.equal(
+      (
+        await apiRequest(
+          `/api/deliveries/${multiStandalone.id}/inspection`,
+          user.id,
+          { method: "POST", body: inspectionForm("APPROVE") },
+        )
+      ).status,
+      200,
+    );
+  }
+  const [concApprove1, concApprove2] = await Promise.all([
+    apiRequest(
+      `/api/deliveries/${multiStandalone.id}/inspection`,
+      inspectorUsers[3].id,
+      {
+        method: "POST",
+        body: inspectionForm("APPROVE"),
+      },
+    ),
+    apiRequest(
+      `/api/deliveries/${multiStandalone.id}/inspection`,
+      inspectorUsers[3].id,
+      {
+        method: "POST",
+        body: inspectionForm("APPROVE"),
+      },
+    ),
+  ]);
+  assert.equal(concApprove1.status, 200);
+  assert.equal(concApprove2.status, 200);
+  assert.equal(
+    await db.deliveryApproval.count({
+      where: { deliveryId: multiStandalone.id },
+    }),
+    4,
+  );
+  const completedMultiStandalone = await db.delivery.findUniqueOrThrow({
+    where: { id: multiStandalone.id },
+    include: {
+      deliveryItems: { include: { ingredientLots: true } },
+    },
+  });
+  assert.equal(completedMultiStandalone.status, "RECEIVED");
+  for (const chItem of completedMultiStandalone.deliveryItems.filter(
+    (item) => item.ingredientId === chickenA.id,
+  )) {
+    assert.equal(chItem.ingredientEntryId, chickenEntry.id);
+    assert.equal(chItem.ingredientLots.length, 1);
+    assert.equal(chItem.ingredientLots[0].status, "AVAILABLE");
+  }
+  assert.equal(
+    await db.inventoryTransaction.count({
+      where: {
+        movementType: "RECEIPT",
+        IngredientLot: { DeliveryItem: { deliveryId: multiStandalone.id } },
+      },
+    }),
+    4,
+  );
+
+  // Fresh active facilityA3 for two-source 6+4 REQUEST workflow
+  const facilityA3 = await db.sourceFacility.create({
+    data: {
+      supplierId: supplierA.id,
+      name: "Nông trại A3",
+      facilityCode: "SF-A3",
+      address: "Ba Vì, Hà Nội",
+      status: "ACTIVE",
+    },
+  });
+  const splitReq = await db.supplyRequest.create({
+    data: {
+      schoolId: schoolA.id,
+      supplierId: supplierA.id,
+      requestNo: `SR-SPLIT-${randomUUID().slice(0, 8)}`,
+      createdByUserId: inspectorUsers[0].id,
+      status: "ACCEPTED",
+      requestedDeliveryDate: new Date("2026-11-22T00:00:00.000Z"),
+      acceptedAt: new Date(),
+      sentAt: new Date(),
+      supplyRequestItems: {
+        create: {
+          ingredientEntryId: riceEntry.id,
+          requestedQuantity: "10.000",
+          unit: "kg",
+        },
+      },
+    },
+    include: { supplyRequestItems: true },
+  });
+  const splitCreateRes = await apiRequest(
+    "/api/deliveries/management",
+    supplierAdminA.id,
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": randomUUID() },
+      body: {
+        sourceType: "REQUEST",
+        supplyRequestId: splitReq.id,
+        sources: [
+          {
+            supplyRequestItemId: splitReq.supplyRequestItems[0].id,
+            sourceFacilityId: facilityA1.id,
+            actualQuantity: "6.000",
+          },
+          {
+            supplyRequestItemId: splitReq.supplyRequestItems[0].id,
+            sourceFacilityId: facilityA3.id,
+            actualQuantity: "4.000",
+          },
+        ],
+      },
+    },
+  );
+  assert.equal(splitCreateRes.status, 201);
+  const splitOrder = unwrap<{ id: string }>(splitCreateRes.body);
+  assert.equal(
+    (
+      await apiRequest(
+        `/api/deliveries/management/${splitOrder.id}/dispatch`,
+        supplierAdminA.id,
+        {
+          method: "POST",
+          body: {
+            expectedArrivalAt: "2026-11-22T07:00:00+07:00",
+            vehiclePlate: "29C-64003",
+          },
+        },
+      )
+    ).status,
+    200,
+  );
+  assert.equal(
+    (
+      await apiRequest(
+        `/api/deliveries/${splitOrder.id}/arrival`,
+        inspectorUsers[0].id,
+        { method: "POST" },
+      )
+    ).status,
+    200,
+  );
+  const splitDetailRes = await apiRequest(
+    `/api/deliveries/${splitOrder.id}/inspection`,
+    inspectorUsers[0].id,
+  );
+  assert.equal(splitDetailRes.status, 200);
+  const splitDetailBody = unwrap<Record<string, unknown>>(splitDetailRes.body);
+  assert.equal("workflowVersion" in splitDetailBody, false);
+
+  for (const user of inspectorUsers.slice(0, 3)) {
+    assert.equal(
+      (
+        await apiRequest(
+          `/api/deliveries/${splitOrder.id}/inspection`,
+          user.id,
+          { method: "POST", body: inspectionForm("APPROVE") },
+        )
+      ).status,
+      200,
+    );
+  }
+  const [splitFinal1, splitFinal2] = await Promise.all([
+    apiRequest(
+      `/api/deliveries/${splitOrder.id}/inspection`,
+      inspectorUsers[3].id,
+      {
+        method: "POST",
+        body: inspectionForm("APPROVE"),
+      },
+    ),
+    apiRequest(
+      `/api/deliveries/${splitOrder.id}/inspection`,
+      inspectorUsers[3].id,
+      {
+        method: "POST",
+        body: inspectionForm("APPROVE"),
+      },
+    ),
+  ]);
+  assert.equal(splitFinal1.status, 200);
+  assert.equal(splitFinal2.status, 200);
+  const completedSplit = await db.delivery.findUniqueOrThrow({
+    where: { id: splitOrder.id },
+    include: { deliveryItems: { include: { ingredientLots: true } } },
+  });
+  assert.equal(completedSplit.status, "RECEIVED");
+  assert.equal(completedSplit.deliveryItems.length, 2);
+  assert.equal(
+    await db.inventoryTransaction.count({
+      where: {
+        movementType: "RECEIPT",
+        IngredientLot: { DeliveryItem: { deliveryId: splitOrder.id } },
+      },
+    }),
+    2,
+  );
+
+  // Controlled negative real-DB tests (6+6, missing group, wrong unit g vs kg, wrong entry, previous+current > budget) & rollback + legacy partial null-source
+  const createNegReq = async () => {
+    const req = await db.supplyRequest.create({
+      data: {
+        schoolId: schoolA.id,
+        supplierId: supplierA.id,
+        requestNo: `SR-NEG-${randomUUID().slice(0, 8)}`,
+        createdByUserId: inspectorUsers[0].id,
+        status: "IN_PROGRESS",
+        requestedDeliveryDate: new Date("2026-11-23T00:00:00.000Z"),
+        acceptedAt: new Date(),
+        sentAt: new Date(),
+        supplyRequestItems: {
+          create: [
+            {
+              ingredientEntryId: riceEntry.id,
+              requestedQuantity: "10.000",
+              unit: "kg",
+            },
+            {
+              ingredientEntryId: chickenEntry.id,
+              requestedQuantity: "5.000",
+              unit: "kg",
+            },
+          ],
+        },
+      },
+      include: { supplyRequestItems: true },
+    });
+    return {
+      req,
+      riceItem: req.supplyRequestItems.find(
+        (item) => item.ingredientEntryId === riceEntry.id,
+      )!,
+      chickenItem: req.supplyRequestItems.find(
+        (item) => item.ingredientEntryId === chickenEntry.id,
+      )!,
+    };
+  };
+
+  const {
+    req: negReq,
+    riceItem: negRiceItem,
+    chickenItem: negChickenItem,
+  } = await createNegReq();
+
+  // Prior legacy RECEIVED 4 kg on negRiceItem (creationMode: null obeys uq_deliveries_request_mode and DB CHECKs)
+  const priorNegReceived = await db.delivery.create({
+    data: {
+      schoolId: schoolA.id,
+      supplierId: supplierA.id,
+      supplyRequestId: negReq.id,
+      creationMode: null,
+      deliveryNo: "FP-DE-90100",
+      status: "RECEIVED",
+      createdByUserId: supplierAdminA.id,
+      receivedByUserId: inspectorUsers[3].id,
+      receivedAt: new Date(),
+      deliveryItems: {
+        create: {
+          supplyRequestItemId: negRiceItem.id,
+          ingredientId: riceA.id,
+          ingredientEntryId: riceEntry.id,
+          actualQuantity: "4.000",
+          unit: "kg",
+          ingredientLots: {
+            create: {
+              lotCode: "LEG-1",
+              qrToken:
+                randomUUID().replace(/-/g, "") + randomUUID().replace(/-/g, ""),
+              receivedQuantity: "4.000",
+              availableQuantity: "4.000",
+              unit: "kg",
+              status: "AVAILABLE",
+            },
+          },
+        },
+      },
+    },
+  });
+  assert.equal(priorNegReceived.status, "RECEIVED");
+
+  let negDeliverySeq = 90101;
+  const seedNegDelivery = async (
+    supplyRequestId: string,
+    items: Array<{
+      supplyRequestItemId: string;
+      ingredientId: string;
+      ingredientEntryId: string;
+      sourceFacilityId: string | null;
+      actualQuantity: string;
+      unit: string;
+      lots?: Array<{ quantity: string; unit: string }>;
+    }>,
+    workflowVersion: number | null = 2,
+    traceabilityVersion: number | null = 1,
+  ) => {
+    const seqNo = `FP-DE-${String(negDeliverySeq++).padStart(5, "0")}`;
+    const isV1 = traceabilityVersion === 1;
+    const created = await db.delivery.create({
+      data: {
+        schoolId: schoolA.id,
+        supplierId: supplierA.id,
+        supplyRequestId,
+        creationMode: isV1 ? "REQUEST" : null,
+        creationKey: isV1 ? randomUUID() : null,
+        creationFingerprint: isV1 ? "d".repeat(64) : null,
+        workflowVersion,
+        traceabilityVersion,
+        deliveryNo: seqNo,
+        status: "ARRIVED",
+        expectedArrivalAt: new Date("2026-11-23T06:00:00.000Z"),
+        arrivedAt: new Date("2026-11-23T06:15:00.000Z"),
+        vehiclePlate: "29C-64999",
+        createdByUserId: supplierAdminA.id,
+        deliveryItems: {
+          create: items.map((item) => {
+            const itemQr =
+              randomUUID().replace(/-/g, "") + randomUUID().replace(/-/g, "");
+            return {
+              supplyRequestItemId: item.supplyRequestItemId,
+              ingredientId: item.ingredientId,
+              ingredientEntryId: item.ingredientEntryId,
+              sourceFacilityId: item.sourceFacilityId,
+              sourceFacilityNameSnapshot: isV1 ? "Trang trại kiểm thử" : null,
+              sourceFacilityCodeSnapshot: isV1 ? "SF-NEG" : null,
+              ingredientNameSnapshot: isV1
+                ? item.ingredientId === riceA.id
+                  ? "Gạo ST25"
+                  : "Thịt gà"
+                : null,
+              qrToken: isV1 ? itemQr : null,
+              qrUrl: isV1
+                ? `https://trace.example.test/api/public/delivery-items/${itemQr}`
+                : null,
+              actualQuantity: item.actualQuantity,
+              unit: item.unit,
+              ingredientLots: {
+                create: (
+                  item.lots ?? [
+                    { quantity: item.actualQuantity, unit: item.unit },
+                  ]
+                ).map((lot, lotIdx) => ({
+                  lotCode: `PLAN-0${lotIdx + 1}`,
+                  qrToken:
+                    randomUUID().replace(/-/g, "") +
+                    randomUUID().replace(/-/g, ""),
+                  sourceFacilityId: item.sourceFacilityId,
+                  receivedQuantity: lot.quantity,
+                  availableQuantity: "0",
+                  unit: lot.unit,
+                  status: "BLOCKED",
+                })),
+              },
+            };
+          }),
+        },
+      },
+      include: { deliveryItems: { include: { ingredientLots: true } } },
+    });
+    for (const user of inspectorUsers.slice(0, 3)) {
+      const approval = await apiRequest(
+        `/api/deliveries/${created.id}/inspection`,
+        user.id,
+        { method: "POST", body: inspectionForm("APPROVE") },
+      );
+      assert.equal(approval.status, 200, JSON.stringify(approval.body));
+    }
+    return created;
+  };
+
+  const over66Req = await createNegReq();
+  const missGrpReq = await createNegReq();
+  const unitGReq = await createNegReq();
+  const wrongEntReq = await createNegReq();
+
+  const negCases = [
+    await seedNegDelivery(over66Req.req.id, [
+      {
+        supplyRequestItemId: over66Req.riceItem.id,
+        ingredientId: riceA.id,
+        ingredientEntryId: riceEntry.id,
+        sourceFacilityId: facilityA1.id,
+        actualQuantity: "6.000",
+        unit: "kg",
+      },
+      {
+        supplyRequestItemId: over66Req.riceItem.id,
+        ingredientId: riceA.id,
+        ingredientEntryId: riceEntry.id,
+        sourceFacilityId: facilityA3.id,
+        actualQuantity: "6.000",
+        unit: "kg",
+      },
+      {
+        supplyRequestItemId: over66Req.chickenItem.id,
+        ingredientId: chickenA.id,
+        ingredientEntryId: chickenEntry.id,
+        sourceFacilityId: facilityA1.id,
+        actualQuantity: "5.000",
+        unit: "kg",
+      },
+    ]),
+    await seedNegDelivery(missGrpReq.req.id, [
+      {
+        supplyRequestItemId: missGrpReq.riceItem.id,
+        ingredientId: riceA.id,
+        ingredientEntryId: riceEntry.id,
+        sourceFacilityId: facilityA1.id,
+        actualQuantity: "10.000",
+        unit: "kg",
+      },
+    ]),
+    await seedNegDelivery(unitGReq.req.id, [
+      {
+        supplyRequestItemId: unitGReq.riceItem.id,
+        ingredientId: riceA.id,
+        ingredientEntryId: riceEntry.id,
+        sourceFacilityId: facilityA1.id,
+        actualQuantity: "10000.000",
+        unit: "g",
+      },
+      {
+        supplyRequestItemId: unitGReq.chickenItem.id,
+        ingredientId: chickenA.id,
+        ingredientEntryId: chickenEntry.id,
+        sourceFacilityId: facilityA1.id,
+        actualQuantity: "5.000",
+        unit: "kg",
+      },
+    ]),
+    await seedNegDelivery(wrongEntReq.req.id, [
+      {
+        supplyRequestItemId: wrongEntReq.riceItem.id,
+        ingredientId: chickenA.id,
+        ingredientEntryId: chickenEntry.id,
+        sourceFacilityId: facilityA1.id,
+        actualQuantity: "10.000",
+        unit: "kg",
+      },
+      {
+        supplyRequestItemId: wrongEntReq.chickenItem.id,
+        ingredientId: chickenA.id,
+        ingredientEntryId: chickenEntry.id,
+        sourceFacilityId: facilityA3.id,
+        actualQuantity: "5.000",
+        unit: "kg",
+      },
+    ]),
+    await seedNegDelivery(negReq.id, [
+      {
+        supplyRequestItemId: negRiceItem.id,
+        ingredientId: riceA.id,
+        ingredientEntryId: riceEntry.id,
+        sourceFacilityId: facilityA1.id,
+        actualQuantity: "6.000",
+        unit: "kg",
+      },
+      {
+        supplyRequestItemId: negRiceItem.id,
+        ingredientId: riceA.id,
+        ingredientEntryId: riceEntry.id,
+        sourceFacilityId: facilityA3.id,
+        actualQuantity: "4.000",
+        unit: "kg",
+      },
+      {
+        supplyRequestItemId: negChickenItem.id,
+        ingredientId: chickenA.id,
+        ingredientEntryId: chickenEntry.id,
+        sourceFacilityId: facilityA1.id,
+        actualQuantity: "5.000",
+        unit: "kg",
+      },
+    ]),
+  ];
+  for (const negCase of negCases) {
+    const blocked = await apiRequest(
+      `/api/deliveries/${negCase.id}/inspection`,
+      inspectorUsers[3].id,
+      { method: "POST", body: inspectionForm("APPROVE") },
+    );
+    assert.equal(blocked.status, 409);
+    const reloaded = await db.delivery.findUniqueOrThrow({
+      where: { id: negCase.id },
+      include: { deliveryItems: { include: { ingredientLots: true } } },
+    });
+    assert.equal(reloaded.status, "PENDING_APPROVAL");
+    assert.equal(
+      await db.deliveryApproval.count({ where: { deliveryId: negCase.id } }),
+      3,
+    );
+    assert.equal(
+      await db.inventoryTransaction.count({
+        where: {
+          IngredientLot: { DeliveryItem: { deliveryId: negCase.id } },
+        },
+      }),
+      0,
+    );
+    for (const item of reloaded.deliveryItems) {
+      for (const lot of item.ingredientLots) {
+        assert.equal(lot.status, "BLOCKED");
+      }
+    }
+  }
+
+  // Legacy/v1 partial (4 prior + 3 current <= 10 kg), multi-lot, convertQuantity (3000 g -> 3 kg), null source STILL passes cleanly
+  const legacyPartial = await seedNegDelivery(
+    negReq.id,
+    [
+      {
+        supplyRequestItemId: negRiceItem.id,
+        ingredientId: riceA.id,
+        ingredientEntryId: riceEntry.id,
+        sourceFacilityId: null,
+        actualQuantity: "3000.000",
+        unit: "g",
+        lots: [
+          { quantity: "1500.000", unit: "g" },
+          { quantity: "1500.000", unit: "g" },
+        ],
+      },
+    ],
+    null,
+    null,
+  );
+  const legacyApprove = await apiRequest(
+    `/api/deliveries/${legacyPartial.id}/inspection`,
+    inspectorUsers[3].id,
+    { method: "POST", body: inspectionForm("APPROVE") },
+  );
+  assert.equal(legacyApprove.status, 200);
+  assert.equal(
+    (await db.delivery.findUniqueOrThrow({ where: { id: legacyPartial.id } }))
+      .status,
+    "RECEIVED",
+  );
+  assert.equal(
+    await db.inventoryTransaction.count({
+      where: {
+        movementType: "RECEIPT",
+        IngredientLot: { DeliveryItem: { deliveryId: legacyPartial.id } },
+      },
+    }),
+    2,
+  );
+
+  // cap3 cancels queued PREPARING (keeping null metadata) & post-dispatch IN_TRANSIT (keeping metadata) while leaving RECEIVED/stock/history/QR intact
+  const capReq = await db.supplyRequest.create({
+    data: {
+      schoolId: schoolA.id,
+      supplierId: supplierA.id,
+      requestNo: `SR-CAP3-${randomUUID().slice(0, 8)}`,
+      createdByUserId: inspectorUsers[0].id,
+      status: "ACCEPTED",
+      requestedDeliveryDate: new Date("2026-11-24T00:00:00.000Z"),
+      acceptedAt: new Date(),
+      sentAt: new Date(),
+      supplyRequestItems: {
+        create: {
+          ingredientEntryId: riceEntry.id,
+          requestedQuantity: "10.000",
+          unit: "kg",
+        },
+      },
+    },
+    include: { supplyRequestItems: true },
+  });
+  const capItemId = capReq.supplyRequestItems[0].id;
+
+  // One RECEIVED delivery via full two-stage HTTP lifecycle before cap3 cancellations
+  const capReceivedRes = await apiRequest(
+    "/api/deliveries/management",
+    supplierAdminA.id,
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": randomUUID() },
+      body: {
+        sourceType: "REQUEST",
+        supplyRequestId: capReq.id,
+        sources: [
+          {
+            supplyRequestItemId: capItemId,
+            sourceFacilityId: facilityA1.id,
+            actualQuantity: "10.000",
+          },
+        ],
+      },
+    },
+  );
+  assert.equal(capReceivedRes.status, 201);
+  const capReceived = unwrap<{
+    id: string;
+    items: Array<{ traceUrl: string | null }>;
+  }>(capReceivedRes.body);
+  assert.equal(
+    (
+      await apiRequest(
+        `/api/deliveries/management/${capReceived.id}/dispatch`,
+        supplierAdminA.id,
+        {
+          method: "POST",
+          body: {
+            expectedArrivalAt: "2026-11-24T07:00:00+07:00",
+            vehiclePlate: "29C-CAPRCV",
+          },
+        },
+      )
+    ).status,
+    200,
+  );
+  assert.equal(
+    (
+      await apiRequest(
+        `/api/deliveries/${capReceived.id}/arrival`,
+        inspectorUsers[0].id,
+        { method: "POST" },
+      )
+    ).status,
+    200,
+  );
+  for (const user of inspectorUsers) {
+    assert.equal(
+      (
+        await apiRequest(
+          `/api/deliveries/${capReceived.id}/inspection`,
+          user.id,
+          {
+            method: "POST",
+            body: inspectionForm("APPROVE"),
+          },
+        )
+      ).status,
+      200,
+    );
+  }
+
+  let capDeliverySeq = 90201;
+  const seedLegacyCapDelivery = async (
+    supplyRequestId: string,
+    requestItemId: string,
+    status: "ARRIVED" | "IN_TRANSIT",
+    plate: string | null,
+  ) =>
+    db.delivery.create({
+      data: {
+        schoolId: schoolA.id,
+        supplierId: supplierA.id,
+        supplyRequestId,
+        creationMode: null,
+        workflowVersion: null,
+        traceabilityVersion: null,
+        deliveryNo: `LEG-CAP-${String(capDeliverySeq++)}`,
+        status,
+        expectedArrivalAt: plate ? new Date("2026-11-24T08:00:00.000Z") : null,
+        arrivedAt:
+          status === "ARRIVED" ? new Date("2026-11-24T08:15:00.000Z") : null,
+        vehiclePlate: plate,
+        createdByUserId: supplierAdminA.id,
+        deliveryItems: {
+          create: {
+            supplyRequestItemId: requestItemId,
+            ingredientId: riceA.id,
+            ingredientEntryId: riceEntry.id,
+            sourceFacilityId: null,
+            actualQuantity: "10.000",
+            unit: "kg",
+            ingredientLots: {
+              create: {
+                lotCode: "PLAN-01",
+                qrToken:
+                  randomUUID().replace(/-/g, "") +
+                  randomUUID().replace(/-/g, ""),
+                sourceFacilityId: null,
+                receivedQuantity: "10.000",
+                availableQuantity: "0",
+                unit: "kg",
+                status: "BLOCKED",
+              },
+            },
+          },
+        },
+      },
+    });
+
+  // capReq tests RECEIVED (v2 REQUEST HTTP + QR/stock/history intact) + queued IN_TRANSIT + 3 ARRIVED rejects
+  const rejCap1 = await seedLegacyCapDelivery(
+    capReq.id,
+    capItemId,
+    "ARRIVED",
+    "29C-CAPR1",
+  );
+  const rejCap2 = await seedLegacyCapDelivery(
+    capReq.id,
+    capItemId,
+    "ARRIVED",
+    "29C-CAPR2",
+  );
+  const rejCap3 = await seedLegacyCapDelivery(
+    capReq.id,
+    capItemId,
+    "ARRIVED",
+    "29C-CAPR3",
+  );
+  const queuedTransit = await seedLegacyCapDelivery(
+    capReq.id,
+    capItemId,
+    "IN_TRANSIT",
+    "29C-CAPTR",
+  );
+
+  // Separate capPrepReq has a single v2 REQUEST PREPARING delivery created via HTTP plus 3 ARRIVED rounds -> 3rd reject cancels PREPARING with null metadata
+  const capPrepReq = await db.supplyRequest.create({
+    data: {
+      schoolId: schoolA.id,
+      supplierId: supplierA.id,
+      requestNo: `SR-CAPPREP-${randomUUID().slice(0, 8)}`,
+      createdByUserId: inspectorUsers[0].id,
+      status: "ACCEPTED",
+      requestedDeliveryDate: new Date("2026-11-24T00:00:00.000Z"),
+      acceptedAt: new Date(),
+      sentAt: new Date(),
+      supplyRequestItems: {
+        create: {
+          ingredientEntryId: riceEntry.id,
+          requestedQuantity: "10.000",
+          unit: "kg",
+        },
+      },
+    },
+    include: { supplyRequestItems: true },
+  });
+  const capPrepItemId = capPrepReq.supplyRequestItems[0].id;
+  const queuedPreparingRes = await apiRequest(
+    "/api/deliveries/management",
+    supplierAdminA.id,
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": randomUUID() },
+      body: {
+        sourceType: "REQUEST",
+        supplyRequestId: capPrepReq.id,
+        sources: [
+          {
+            supplyRequestItemId: capPrepItemId,
+            sourceFacilityId: facilityA1.id,
+            actualQuantity: "10.000",
+          },
+        ],
+      },
+    },
+  );
+  assert.equal(queuedPreparingRes.status, 201);
+  const queuedPreparing = unwrap<{ id: string }>(queuedPreparingRes.body);
+  const prepRej1 = await seedLegacyCapDelivery(
+    capPrepReq.id,
+    capPrepItemId,
+    "ARRIVED",
+    "29C-PR1",
+  );
+  const prepRej2 = await seedLegacyCapDelivery(
+    capPrepReq.id,
+    capPrepItemId,
+    "ARRIVED",
+    "29C-PR2",
+  );
+  const prepRej3 = await seedLegacyCapDelivery(
+    capPrepReq.id,
+    capPrepItemId,
+    "ARRIVED",
+    "29C-PR3",
+  );
+
+  for (const rejTarget of [rejCap1, rejCap2, prepRej1, prepRej2]) {
+    assert.equal(
+      (
+        await apiRequest(
+          `/api/deliveries/${rejTarget.id}/inspection`,
+          inspectorUsers[0].id,
+          { method: "POST", body: inspectionForm("REJECT", "Chưa đạt") },
+        )
+      ).status,
+      200,
+    );
+  }
+  // After REJECT without CONFIRMED, standalone delivery can still be created
+  assert.equal(
+    (
+      await apiRequest("/api/deliveries/management", supplierAdminA.id, {
+        method: "POST",
+        headers: { "Idempotency-Key": randomUUID() },
+        body: {
+          sourceType: "STANDALONE",
+          schoolId: schoolA.id,
+          items: [
+            {
+              ingredientId: riceA.id,
+              sourceFacilityId: facilityA1.id,
+              actualQuantity: "2.000",
+              unit: "kg",
+            },
+          ],
+        },
+      })
+    ).status,
+    201,
+  );
+
+  // 3rd reject on capReq triggers cancelRemainder for queuedTransit while keeping RECEIVED/stock/QR intact
+  assert.equal(
+    (
+      await apiRequest(
+        `/api/deliveries/${rejCap3.id}/inspection`,
+        inspectorUsers[1].id,
+        {
+          method: "POST",
+          body: inspectionForm("REJECT", "Quá hạn giao"),
+        },
+      )
+    ).status,
+    200,
+  );
+  // 3rd reject on capPrepReq cancels queuedPreparing keeping null metadata
+  assert.equal(
+    (
+      await apiRequest(
+        `/api/deliveries/${prepRej3.id}/inspection`,
+        inspectorUsers[1].id,
+        {
+          method: "POST",
+          body: inspectionForm("REJECT", "Quá hạn giao"),
+        },
+      )
+    ).status,
+    200,
+  );
+
+  const cancelledPrepDb = await db.delivery.findUniqueOrThrow({
+    where: { id: queuedPreparing.id },
+  });
+  const cancelledTransitDb = await db.delivery.findUniqueOrThrow({
+    where: { id: queuedTransit.id },
+  });
+  const intactReceivedDb = await db.delivery.findUniqueOrThrow({
+    where: { id: capReceived.id },
+    include: { deliveryItems: { include: { ingredientLots: true } } },
+  });
+  assert.equal(cancelledPrepDb.status, "CANCELLED");
+  assert.equal(cancelledPrepDb.expectedArrivalAt, null);
+  assert.equal(cancelledPrepDb.vehiclePlate, null);
+  assert.equal(cancelledTransitDb.status, "CANCELLED");
+  assert.notEqual(cancelledTransitDb.expectedArrivalAt, null);
+  assert.equal(cancelledTransitDb.vehiclePlate, "29C-CAPTR");
+  assert.equal(intactReceivedDb.status, "RECEIVED");
+  assert.equal(
+    intactReceivedDb.deliveryItems[0].ingredientLots[0].status,
+    "AVAILABLE",
+  );
+  assert.equal(
+    await db.inventoryTransaction.count({
+      where: {
+        movementType: "RECEIPT",
+        IngredientLot: { DeliveryItem: { deliveryId: capReceived.id } },
+      },
+    }),
+    1,
+  );
+  const intactQrPath = new URL(capReceived.items[0].traceUrl!).pathname;
+  const intactPublicRes = await http.request(intactQrPath, {
+    headers: { Accept: "application/json" },
+  });
+  assert.equal(intactPublicRes.status, 200);
+  assert.equal(
+    unwrap<{ status: string }>(intactPublicRes.body).status,
+    "RECEIVED",
+  );
+
+  // T147: Management list ?status=PREPARING excludes uncreated ACCEPTED requests, detail/reopen preserves multi-row UUIDs/QRs without collapse,
+  // v3 reorder/normalize replay works post-dispatch & post-terminal even when origin/facility/renderer change, 5+5 conflict -> 409, old v1 key -> 409,
+  // and /api/supply-requests projects CONFIRMED -> PREPARING -> IN_TRANSIT -> terminal transitions cleanly
+  const uncreatedAcceptedReq = await db.supplyRequest.create({
+    data: {
+      schoolId: schoolA.id,
+      supplierId: supplierA.id,
+      requestNo: `SR-UNCREATED-${randomUUID().slice(0, 8)}`,
+      createdByUserId: inspectorUsers[0].id,
+      status: "ACCEPTED",
+      requestedDeliveryDate: new Date("2026-11-25T00:00:00.000Z"),
+      acceptedAt: new Date(),
+      sentAt: new Date(),
+      supplyRequestItems: {
+        create: {
+          ingredientEntryId: riceEntry.id,
+          requestedQuantity: "10.000",
+          unit: "kg",
+        },
+      },
+    },
+    include: { supplyRequestItems: true },
+  });
+  const us3PreparingStandaloneRes = await apiRequest(
+    "/api/deliveries/management",
+    supplierStaffA.id,
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": randomUUID() },
+      body: {
+        sourceType: "STANDALONE",
+        schoolId: schoolA.id,
+        items: [
+          {
+            ingredientId: riceA.id,
+            sourceFacilityId: facilityA1.id,
+            actualQuantity: "6",
+            unit: "kg",
+          },
+          {
+            ingredientId: riceA.id,
+            sourceFacilityId: facilityA3.id,
+            actualQuantity: "4",
+            unit: "kg",
+          },
+        ],
+      },
+    },
+  );
+  assert.equal(us3PreparingStandaloneRes.status, 201);
+  const us3Prep = unwrap<{
+    id: string;
+    items: Array<{
+      id: string;
+      actualQuantity: string;
+      sourceFacility: { id: string } | null;
+      traceUrl: string | null;
+    }>;
+  }>(us3PreparingStandaloneRes.body);
+
+  const prepFilterRes = await apiRequest(
+    "/api/deliveries/management?status=PREPARING&page=1&limit=20",
+    supplierStaffA.id,
+  );
+  assert.equal(prepFilterRes.status, 200);
+  const prepFilterList = unwrap<{
+    items: Array<{
+      id: string;
+      status: string;
+      nextAction: string;
+      supplyRequestId: string | null;
+      expectedArrivalAt: string | null;
+      vehiclePlate: string | null;
+    }>;
+  }>(prepFilterRes.body);
+  assert.equal(
+    prepFilterList.items.some((item) => item.id === us3Prep.id),
+    true,
+  );
+  assert.equal(
+    prepFilterList.items.every((item) => item.status === "PREPARING"),
+    true,
+  );
+  assert.equal(
+    prepFilterList.items.some(
+      (item) => item.supplyRequestId === uncreatedAcceptedReq.id,
+    ),
+    false,
+  );
+  const us3PrepSummary = prepFilterList.items.find(
+    (item) => item.id === us3Prep.id,
+  )!;
+  assert.equal(us3PrepSummary.nextAction, "ENTER_SHIPPING");
+  assert.equal(us3PrepSummary.expectedArrivalAt, null);
+  assert.equal(us3PrepSummary.vehiclePlate, null);
+
+  const us3PrepDetailRes = await apiRequest(
+    `/api/deliveries/management/${us3Prep.id}`,
+    supplierStaffA.id,
+  );
+  assert.equal(us3PrepDetailRes.status, 200);
+  const us3PrepDetail = unwrap<{
+    items: Array<{
+      id: string;
+      actualQuantity: string;
+      sourceFacility: { id: string } | null;
+      traceUrl: string;
+    }>;
+  }>(us3PrepDetailRes.body);
+  assert.deepEqual(
+    us3PrepDetail.items.map((item) => [item.id, item.actualQuantity]),
+    us3Prep.items.map((item) => [item.id, item.actualQuantity]),
+  );
+  assert.deepEqual(
+    us3PrepDetail.items
+      .map((item) => [item.sourceFacility?.id ?? null, item.actualQuantity])
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+    [
+      [facilityA1.id, "6"],
+      [facilityA3.id, "4"],
+    ].sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+  );
+  const us3RawDetailText = JSON.stringify(us3PrepDetailRes.body);
+  assert.equal(us3RawDetailText.includes("qrToken"), false);
+  assert.equal(us3RawDetailText.includes("creationFingerprint"), false);
+  assert.equal(us3RawDetailText.includes("qrImageDataUrl"), false);
+  assert.equal(us3RawDetailText.includes('"created"'), false);
+
+  // Fresh split REQUEST with key + reorder 4+6 replay post-dispatch & post-RECEIVED while origin/facility/renderer change
+  const replayReq = await db.supplyRequest.create({
+    data: {
+      schoolId: schoolA.id,
+      supplierId: supplierA.id,
+      requestNo: `SR-REPLAY-${randomUUID().slice(0, 8)}`,
+      createdByUserId: inspectorUsers[0].id,
+      status: "ACCEPTED",
+      requestedDeliveryDate: new Date("2026-11-26T00:00:00.000Z"),
+      acceptedAt: new Date(),
+      sentAt: new Date(),
+      supplyRequestItems: {
+        create: {
+          ingredientEntryId: riceEntry.id,
+          requestedQuantity: "10.000",
+          unit: "kg",
+        },
+      },
+    },
+    include: { supplyRequestItems: true },
+  });
+  const replayReqItemId = replayReq.supplyRequestItems[0].id;
+  const replayKey = randomUUID();
+  const create64Res = await apiRequest(
+    "/api/deliveries/management",
+    supplierAdminA.id,
+    {
+      method: "POST",
+      headers: { "Idempotency-Key": replayKey },
+      body: {
+        sourceType: "REQUEST",
+        supplyRequestId: replayReq.id,
+        sources: [
+          {
+            supplyRequestItemId: replayReqItemId,
+            sourceFacilityId: facilityA1.id,
+            actualQuantity: "6",
+          },
+          {
+            supplyRequestItemId: replayReqItemId,
+            sourceFacilityId: facilityA3.id,
+            actualQuantity: "4",
+          },
+        ],
+      },
+    },
+  );
+  assert.equal(create64Res.status, 201);
+  const created64 = unwrap<{
+    id: string;
+    updatedAt: string;
+    items: Array<{ id: string; traceUrl: string }>;
+  }>(create64Res.body);
+
+  // 5+5 conflict with same total 10 rejects 409
+  assert.equal(
+    (
+      await apiRequest("/api/deliveries/management", supplierAdminA.id, {
+        method: "POST",
+        headers: { "Idempotency-Key": replayKey },
+        body: {
+          sourceType: "REQUEST",
+          supplyRequestId: replayReq.id,
+          sources: [
+            {
+              supplyRequestItemId: replayReqItemId,
+              sourceFacilityId: facilityA1.id,
+              actualQuantity: "5",
+            },
+            {
+              supplyRequestItemId: replayReqItemId,
+              sourceFacilityId: facilityA3.id,
+              actualQuantity: "5",
+            },
+          ],
+        },
+      })
+    ).status,
+    409,
+  );
+
+  // Supply-order intake shows CONFIRMED for uncreatedAcceptedReq and PREPARING/ENTER_SHIPPING for replayReq
+  const intakeListRes = await apiRequest(
+    "/api/supply-requests?page=1&limit=100",
+    supplierAdminA.id,
+  );
+  assert.equal(intakeListRes.status, 200);
+  const intakeItems = unwrap<{
+    items: Array<{
+      id: string;
+      orderProgress: {
+        stage: string;
+        nextAction: string;
+        deliveryId: string | null;
+      } | null;
+    }>;
+  }>(intakeListRes.body).items;
+  assert.deepEqual(
+    intakeItems.find((item) => item.id === uncreatedAcceptedReq.id)
+      ?.orderProgress,
+    {
+      stage: "CONFIRMED",
+      statusLabel: "Đã xác nhận",
+      deliveryId: null,
+      nextAction: "ADD_INGREDIENTS",
+    },
+  );
+  assert.equal(
+    intakeItems.find((item) => item.id === replayReq.id)?.orderProgress
+      ?.nextAction,
+    "ENTER_SHIPPING",
+  );
+
+  // Dispatch replayReq -> IN_TRANSIT, deactivate facilityA3, override origin + failing renderer:
+  // canonical v3 reorder 4+6 (with 4.000/6.000 formatting) MUST replay 200 preserving IDs, traceUrls, updatedAt!
+  assert.equal(
+    (
+      await apiRequest(
+        `/api/deliveries/management/${created64.id}/dispatch`,
+        supplierAdminA.id,
+        {
+          method: "POST",
+          body: {
+            expectedArrivalAt: "2026-11-26T08:00:00+07:00",
+            vehiclePlate: "29C-88864",
+          },
+        },
+      )
+    ).status,
+    200,
+  );
+  const afterDispatchStamp = (
+    await db.delivery.findUniqueOrThrow({ where: { id: created64.id } })
+  ).updatedAt.toISOString();
+  await db.sourceFacility.update({
+    where: { id: facilityA3.id },
+    data: { status: "INACTIVE" },
+  });
+  const replayIsolatedService = createSupplierOrderService(undefined, {
+    publicTraceOrigin: "https://changed-origin.example.test",
+    renderQrBatch: () =>
+      Promise.reject(new Error("Renderer should not run on replay")),
+  });
+  const replayActorA = await loadPrincipal(supplierAdminA.id, db);
+  const reorderedBody = validateCreateSupplierOrderBody({
+    sourceType: "REQUEST",
+    supplyRequestId: replayReq.id,
+    sources: [
+      {
+        supplyRequestItemId: replayReqItemId,
+        sourceFacilityId: facilityA3.id,
+        actualQuantity: "4.000",
+      },
+      {
+        supplyRequestItemId: replayReqItemId,
+        sourceFacilityId: facilityA1.id,
+        actualQuantity: "6.000",
+      },
+    ],
+  });
+  const postDispatchReplay = await replayIsolatedService.create(
+    { idempotencyKey: replayKey, body: reorderedBody },
+    replayActorA,
+  );
+  assert.equal(postDispatchReplay.created, false);
+  assert.equal(postDispatchReplay.id, created64.id);
+  assert.equal(postDispatchReplay.status, "IN_TRANSIT");
+  assert.equal(postDispatchReplay.updatedAt, afterDispatchStamp);
+  assert.deepEqual(
+    postDispatchReplay.items.map((item) => [item.id, item.traceUrl]),
+    created64.items.map((item) => [item.id, item.traceUrl]),
+  );
+
+  // Old v1 creationFingerprint (without "v3:") using its creationKey fails 409 under v2 endpoint
+  const v1SeedKey = randomUUID();
+  await db.delivery.create({
+    data: {
+      schoolId: schoolA.id,
+      supplierId: supplierA.id,
+      creationMode: "STANDALONE",
+      creationKey: v1SeedKey,
+      creationFingerprint: "a".repeat(64),
+      deliveryNo: "FP-DE-90999",
+      status: "IN_TRANSIT",
+      expectedArrivalAt: new Date("2026-11-26T08:00:00.000Z"),
+      vehiclePlate: "29C-V1OLD",
+      traceabilityVersion: 1,
+      workflowVersion: null,
+      createdByUserId: supplierAdminA.id,
+    },
+  });
+  assert.equal(
+    (
+      await apiRequest("/api/deliveries/management", supplierAdminA.id, {
+        method: "POST",
+        headers: { "Idempotency-Key": v1SeedKey },
+        body: {
+          sourceType: "STANDALONE",
+          schoolId: schoolA.id,
+          items: [
+            {
+              ingredientId: riceA.id,
+              sourceFacilityId: facilityA1.id,
+              actualQuantity: "1",
+              unit: "kg",
+            },
+          ],
+        },
+      })
+    ).status,
+    409,
+  );
+
   // 6. Foreign supplier gets 404 on management detail and revoking delivery.manage blocks replay
   const foreignDetail = await apiRequest(
     `/api/deliveries/management/${standaloneOrder.id}`,
@@ -1232,14 +3199,85 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       body: {
         sourceType: "REQUEST",
         supplyRequestId: acceptedRequest.id,
-        expectedArrivalAt: "2026-11-16T01:00:00Z",
-        vehiclePlate: "29A-11111",
         note: "Giao cổng sau",
         sources: [
-          { supplyRequestItemId: reqItemId, sourceFacilityId: facilityA1.id },
+          {
+            supplyRequestItemId: reqItemId,
+            sourceFacilityId: facilityA1.id,
+            actualQuantity: "15.5",
+          },
         ],
       },
     },
   );
   assert.equal(revokedReplay.status, 403);
+  const revokedDispatchReplay = await apiRequest(
+    `/api/deliveries/management/${createdReq.id}/dispatch`,
+    supplierAdminA.id,
+    {
+      method: "POST",
+      body: {
+        expectedArrivalAt: "2026-11-16T08:00:00+07:00",
+        vehiclePlate: "29A-11111",
+      },
+    },
+  );
+  assert.equal(revokedDispatchReplay.status, 403);
+
+  // T136: Even with delivery.manage denied, supplierAdminA still has delivery.view read OR for /labels (200)
+  // while /options/source-facilities stays 403; denying all read permissions drops /labels to 403
+  assert.equal(
+    (
+      await apiRequest(
+        `/api/deliveries/management/${createdReq.id}/labels`,
+        supplierAdminA.id,
+      )
+    ).status,
+    200,
+  );
+  assert.equal(
+    (
+      await apiRequest(
+        "/api/deliveries/management/options/source-facilities",
+        supplierAdminA.id,
+      )
+    ).status,
+    403,
+  );
+  assert.equal(
+    (
+      await apiRequest(
+        `/api/deliveries/management/${createdReq.id}/labels`,
+        supplierAdminB.id,
+      )
+    ).status,
+    404,
+  );
+  const viewPerm = await db.permission.findUnique({
+    where: { code: "delivery.view" },
+  });
+  const receivePerm = await db.permission.findUnique({
+    where: { code: "delivery.receive" },
+  });
+  for (const readPerm of [viewPerm, receivePerm]) {
+    if (readPerm) {
+      await db.userPermissionDenial.create({
+        data: {
+          userId: supplierAdminA.id,
+          permissionId: readPerm.id,
+          supplierId: supplierA.id,
+          disabledByUserId: systemAdmin.id,
+        },
+      });
+    }
+  }
+  assert.equal(
+    (
+      await apiRequest(
+        `/api/deliveries/management/${createdReq.id}/labels`,
+        supplierAdminA.id,
+      )
+    ).status,
+    403,
+  );
 });

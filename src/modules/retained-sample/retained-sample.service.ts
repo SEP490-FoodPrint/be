@@ -6,6 +6,10 @@ import {
   withSchoolTransaction,
 } from "../../utils/authorization";
 import { getPrisma } from "../../utils/database";
+import {
+  blockchainProofService,
+  type ProofRef,
+} from "../blockchain-proof/blockchain-proof.service";
 import { HttpError } from "../../utils/http-error";
 import { listScopes } from "../../utils/resource-access";
 import type {
@@ -56,6 +60,10 @@ function mapSample(row: SampleRow): RetainedSampleResponseDTO {
 export function createRetainedSampleService(
   read?: ListReader,
   connect: () => Promise<PrismaClient> = getPrisma,
+  proofs: Pick<
+    typeof blockchainProofService,
+    "prepareSampleStored" | "prepareSampleDisposed" | "scheduleAnchor"
+  > = blockchainProofService,
 ) {
   const repository = createRetainedSampleRepository(read);
   return {
@@ -78,7 +86,8 @@ export function createRetainedSampleService(
       principal: AuthPrincipal,
       photo: RecordPhoto | null = null,
     ): Promise<RetainedSampleResponseDTO & { created: boolean }> {
-      return withSchoolTransaction(
+      let proof: ProofRef | null = null;
+      const result = await withSchoolTransaction(
         await connect(),
         principal,
         "retained_sample.create",
@@ -131,20 +140,24 @@ export function createRetainedSampleService(
             ...photo,
             dishId,
           });
+          proof = await proofs.prepareSampleStored(tx, sample.id, actor.id);
           return { ...mapSample(sample), created: true };
         },
       );
+      proofs.scheduleAnchor(proof);
+      return result;
     },
     async dispose(
       id: string,
       input: SampleDisposalInput,
       principal: AuthPrincipal,
     ): Promise<RetainedSampleResponseDTO> {
-      return withSchoolTransaction(
+      let proof: ProofRef | null = null;
+      const result = await withSchoolTransaction(
         await connect(),
         principal,
         "retained_sample.dispose",
-        async (tx, _actor, schoolId) => {
+        async (tx, actor, schoolId) => {
           const sample = await repository.findInSchool(tx, id, schoolId);
           if (!sample)
             throw new HttpError(404, "Không tìm thấy mẫu lưu của trường");
@@ -178,9 +191,13 @@ export function createRetainedSampleService(
               409,
               "Mẫu liên quan sự cố ATTP chưa kết thúc; cần tiếp tục bảo quản",
             );
-          return mapSample(await repository.dispose(tx, id, input));
+          const disposed = await repository.dispose(tx, id, input);
+          proof = await proofs.prepareSampleDisposed(tx, id, actor.id);
+          return mapSample(disposed);
         },
       );
+      proofs.scheduleAnchor(proof);
+      return result;
     },
     async getAll(
       query: RetainedSampleListQuery,

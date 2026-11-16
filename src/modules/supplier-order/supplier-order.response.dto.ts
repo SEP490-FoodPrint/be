@@ -1,6 +1,9 @@
 import type { DeliveryStatus } from "../../generated/prisma/client";
+import type { SupplierDeliveryNextAction } from "../../utils/delivery-status";
 
 export type SupplierOrderSourceType = "REQUEST" | "STANDALONE";
+
+export type SupplierOrderNextAction = SupplierDeliveryNextAction;
 
 export interface SupplierOrderSourceFacilityDTO {
   id: string;
@@ -26,6 +29,8 @@ export interface SupplierOrderSummaryDTO {
   deliveryNo: string;
   sourceType: SupplierOrderSourceType;
   traceabilityVersion: number | null;
+  workflowVersion: number | null;
+  nextAction: SupplierOrderNextAction;
   schoolId: string;
   schoolName: string;
   supplierId: string;
