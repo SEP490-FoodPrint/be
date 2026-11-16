@@ -196,6 +196,15 @@ export function createSupplyOrderService(
       principal: AuthPrincipal,
     ): Promise<SupplierOrderDetailResponseDTO> {
       assertPermission(principal, "supply_request.view");
+      if (principal.orgType === ORG_TYPES.SUPPLIER) {
+        assertSupplierActor(principal);
+      } else if (principal.orgType === ORG_TYPES.SCHOOL) {
+        if (!principal.schoolId) {
+          throw new HttpError(403, "Chỉ dành cho nhân viên trường học");
+        }
+      } else {
+        throw new HttpError(403, "Không có quyền truy cập");
+      }
       const order = await databaseOperation<SupplierOrderDetailRow | null>(
         async () => {
           if (
@@ -226,8 +235,6 @@ export function createSupplyOrderService(
           ingredientEntryId: item.ingredientEntryId,
           ingredientName:
             item.IngredientEntry?.Ingredient?.name ?? "Nguyên liệu",
-          name: item.IngredientEntry?.Ingredient?.name ?? "Nguyên liệu",
-          quantity: Number(item.requestedQuantity),
           requestedQuantity: item.requestedQuantity.toString(),
           unit: item.unit,
           note: item.note,

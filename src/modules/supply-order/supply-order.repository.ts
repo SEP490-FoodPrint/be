@@ -5,18 +5,22 @@ import type {
 import { getPrisma } from "../../utils/database";
 import { listWindow, type ListQuery } from "../../utils/list-query";
 
-const listSelect = {
+const baseListSelect = {
   id: true,
   requestNo: true,
   schoolId: true,
   supplierId: true,
   status: true,
-  requestedDeliveryDate: true,
-  note: true,
-  sentAt: true,
   acceptedAt: true,
   createdAt: true,
   updatedAt: true,
+} as const satisfies Prisma.SupplyRequestSelect;
+
+const listSelect = {
+  ...baseListSelect,
+  requestedDeliveryDate: true,
+  note: true,
+  sentAt: true,
   Supplier: { select: { id: true, name: true, phone: true } },
   School: { select: { id: true, name: true } },
   supplyRequestItems: {
@@ -47,7 +51,7 @@ type SupplierOrderListQuery = ListQuery & {
   status?: Exclude<SupplyRequestStatus, "DRAFT">;
 };
 const supplierListSelect = {
-  ...listSelect,
+  ...baseListSelect,
   requestedDeliveryDate: true,
   sentAt: true,
   School: { select: { id: true, name: true } },
@@ -67,7 +71,6 @@ const supplierDetailSelect = {
   ...supplierListSelect,
   note: true,
   acceptedByUserId: true,
-  Supplier: { select: { id: true, name: true, phone: true } },
   supplyRequestItems: {
     select: {
       id: true,
@@ -76,10 +79,7 @@ const supplierDetailSelect = {
       unit: true,
       note: true,
       IngredientEntry: {
-        select: {
-          ingredientId: true,
-          Ingredient: { select: { id: true, name: true, defaultUnit: true } },
-        },
+        select: { Ingredient: { select: { name: true } } },
       },
     },
     orderBy: [{ id: "asc" }],
