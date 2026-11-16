@@ -11,3 +11,4 @@
 - [x] T009 Bổ sung trường `note` lưu lịch hẹn giao trong `orderDraftSchema` và repository tạo đơn nháp `src/modules/supplier-onboarding/`.
 - [x] T010 Bổ sung `supplyRequestItems` và thông tin nhà cung cấp trong `listSelect` và mapper `getAll` tại `src/modules/supply-order/`.
 - [x] T011 Thêm phương thức `findDetailForSchool` và mở quyền xem chi tiết đơn hàng cho vai trò School trong `src/modules/supply-order/supply-order.service.ts`.
+- [x] T012 Bổ sung `gradeId` và `gradeName` vào DTO và mapper `summary` tại `src/modules/meal-attendance/` phục vụ phân bổ suất ăn theo khối lớp.

@@ -11,6 +11,7 @@
 9. Bổ sung trường `note` trong `orderDraftSchema`, lưu thông tin lịch hẹn giao vào `tx.supplyRequest.create` trong `src/modules/supplier-onboarding/`.
 10. Mở rộng `listSelect` và `supplierDetailSelect` trong `src/modules/supply-order/supply-order.repository.ts` để truy vấn danh sách nguyên liệu và nhà cung cấp.
 11. Bổ sung phương thức `findDetailForSchool` và phân quyền cho tài khoản Trường học xem chi tiết đơn đặt hàng trong `src/modules/supply-order/supply-order.service.ts`.
+12. Bổ sung trường `gradeId` và `gradeName` trong `MealAttendanceClassDetailDTO` và phương thức `summary` tại `src/modules/meal-attendance/` phục vụ tính toán sĩ số theo khối lớp.
 
 ## Constitution Check
 
