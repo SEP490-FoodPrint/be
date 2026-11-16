@@ -8,4 +8,7 @@
 - Cho phép vai trò Quản lý nguyên liệu (quyền `supply_request.create`) truy cập API tổng hợp suất ăn điểm danh theo ngày `GET /api/v1/daily-meal-portions` để tự động tính toán cân đối sĩ số đơn giao Đợt 2 từ dữ liệu chốt của GVCN.
 - API quản lý kho và lô hàng nguyên liệu `GET /api/ingredient-lots` truy vấn trực tiếp từ cơ sở dữ liệu thật, mở rộng thông tin chi tiết mặt hàng nguyên liệu, nhà cung cấp, cơ sở nguồn và phiếu giao nhận phục vụ màn hình Quản lý Kho đồ khô.
 - API danh sách đợt giao hàng `GET /api/deliveries` bổ sung thông tin liên hệ nhà cung cấp và ngày hẹn giao phục vụ màn hình Theo dõi đơn hàng & Vận chuyển.
+- Bổ sung trường `note` trong `SupplyRequest` lưu thông tin lịch hẹn giao và hướng dẫn vận chuyển khi tạo đơn đặt hàng nháp.
+- Mở rộng quyền xem chi tiết đơn đặt hàng `GET /api/supply-requests/:id` cho tài khoản trường học (School), trả về đầy đủ thông tin nhà cung cấp và danh sách mặt hàng nguyên liệu (`supplyRequestItems`).
+- API danh sách đơn đặt hàng `GET /api/supply-requests` bổ sung truy vấn danh sách nguyên liệu và lịch hẹn giao từ cơ sở dữ liệu.
 - Loại bỏ hoàn toàn mock data ở cả frontend và backend, đồng bộ 100% dữ liệu thực từ PostgreSQL.

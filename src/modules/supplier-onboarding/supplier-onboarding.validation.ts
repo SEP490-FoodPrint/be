@@ -143,6 +143,7 @@ export const orderDraftSchema = z
     supplierId: requestUuidSchema,
     requestNo: requiredText(80),
     requestedDeliveryDate: orderDate,
+    note: z.string().max(500).optional(),
     items: z
       .array(orderItemSchema, { error: "Đơn phải có danh sách nguyên liệu" })
       .min(1, { error: "Đơn phải có từ 1 đến 100 dòng nguyên liệu" })

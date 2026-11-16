@@ -8,6 +8,9 @@
 6. Cho phép quyền `supply_request.create` truy cập API tổng hợp suất ăn `GET /api/v1/daily-meal-portions`.
 7. Mở rộng truy vấn `select` cho API lô hàng tồn kho `GET /api/ingredient-lots` phục vụ màn hình Quản lý Kho đồ khô.
 8. Mở rộng thông tin liên hệ nhà cung cấp và ngày hẹn giao trong API `GET /api/deliveries` phục vụ màn hình Theo dõi đơn hàng & Vận chuyển.
+9. Bổ sung trường `note` trong `orderDraftSchema`, lưu thông tin lịch hẹn giao vào `tx.supplyRequest.create` trong `src/modules/supplier-onboarding/`.
+10. Mở rộng `listSelect` và `supplierDetailSelect` trong `src/modules/supply-order/supply-order.repository.ts` để truy vấn danh sách nguyên liệu và nhà cung cấp.
+11. Bổ sung phương thức `findDetailForSchool` và phân quyền cho tài khoản Trường học xem chi tiết đơn đặt hàng trong `src/modules/supply-order/supply-order.service.ts`.
 
 ## Constitution Check
 

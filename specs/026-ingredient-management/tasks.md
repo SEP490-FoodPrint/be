@@ -8,3 +8,6 @@
 - [x] T006 Mở rộng quyền truy cập API `GET /api/v1/daily-meal-portions` cho `supply_request.create` tại `src/modules/meal-attendance/meal-attendance.routes.ts` và `src/modules/meal-attendance/meal-attendance.service.ts`.
 - [x] T007 Bổ sung thông tin mặt hàng, nhà cung cấp, đợt giao nhận và cơ sở nguồn trong `GET /api/ingredient-lots` tại `src/modules/warehouse/warehouse.service.ts`.
 - [x] T008 Bổ sung hotline nhà cung cấp và ngày hẹn giao trong `GET /api/deliveries` phục vụ màn hình theo dõi đơn hàng và cập nhật test fixtures.
+- [x] T009 Bổ sung trường `note` lưu lịch hẹn giao trong `orderDraftSchema` và repository tạo đơn nháp `src/modules/supplier-onboarding/`.
+- [x] T010 Bổ sung `supplyRequestItems` và thông tin nhà cung cấp trong `listSelect` và mapper `getAll` tại `src/modules/supply-order/`.
+- [x] T011 Thêm phương thức `findDetailForSchool` và mở quyền xem chi tiết đơn hàng cho vai trò School trong `src/modules/supply-order/supply-order.service.ts`.

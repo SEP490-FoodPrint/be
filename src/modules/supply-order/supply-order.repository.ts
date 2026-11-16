@@ -11,9 +11,30 @@ const listSelect = {
   schoolId: true,
   supplierId: true,
   status: true,
+  requestedDeliveryDate: true,
+  note: true,
+  sentAt: true,
   acceptedAt: true,
   createdAt: true,
   updatedAt: true,
+  Supplier: { select: { id: true, name: true, phone: true } },
+  School: { select: { id: true, name: true } },
+  supplyRequestItems: {
+    select: {
+      id: true,
+      ingredientEntryId: true,
+      requestedQuantity: true,
+      unit: true,
+      note: true,
+      IngredientEntry: {
+        select: {
+          ingredientId: true,
+          Ingredient: { select: { id: true, name: true, defaultUnit: true } },
+        },
+      },
+    },
+    orderBy: [{ id: "asc" }],
+  },
 } as const satisfies Prisma.SupplyRequestSelect;
 const supplierOrderStatuses = [
   "SENT",
@@ -46,6 +67,7 @@ const supplierDetailSelect = {
   ...supplierListSelect,
   note: true,
   acceptedByUserId: true,
+  Supplier: { select: { id: true, name: true, phone: true } },
   supplyRequestItems: {
     select: {
       id: true,
@@ -54,7 +76,10 @@ const supplierDetailSelect = {
       unit: true,
       note: true,
       IngredientEntry: {
-        select: { Ingredient: { select: { name: true } } },
+        select: {
+          ingredientId: true,
+          Ingredient: { select: { id: true, name: true, defaultUnit: true } },
+        },
       },
     },
     orderBy: [{ id: "asc" }],
@@ -111,6 +136,20 @@ export function createSupplyOrderRepository(connect = getPrisma) {
       const db = await connect();
       return db.supplyRequest.findFirst({
         where: { id, supplierId, status: { in: supplierOrderStatuses } },
+        select: supplierDetailSelect,
+      });
+    },
+    async findDetailForSchool(id: string, schoolId: string) {
+      const db = await connect();
+      return db.supplyRequest.findFirst({
+        where: { id, schoolId },
+        select: supplierDetailSelect,
+      });
+    },
+    async findDetailById(id: string) {
+      const db = await connect();
+      return db.supplyRequest.findFirst({
+        where: { id },
         select: supplierDetailSelect,
       });
     },
