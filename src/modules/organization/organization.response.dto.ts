@@ -134,21 +134,26 @@ export interface PublicDailyMenuDTO {
 }
 
 export interface AvailableWeekSummaryDTO {
-  id: string;
+  id?: string | null;
   title: string;
   weekNumber: number;
   weekStartDate: string;
+  weekEndDate: string;
   weekRange: string;
-  status: string;
+  isCurrentWeek: boolean;
+  hasMenu: boolean;
+  status?: string | null;
 }
 
 export interface PublicWeeklyMenuDTO {
-  id: string;
+  id: string | null;
   title: string;
   weekNumber: number;
   weekStartDate: string;
+  weekEndDate: string;
   weekRange: string;
-  status: string;
+  isCurrentWeek: boolean;
+  status: string | null;
   portionGroups: PortionGroupDTO[];
   gradeGroups: Array<{ key: string; label: string }>;
   days: WeeklyMenuDayDTO[];

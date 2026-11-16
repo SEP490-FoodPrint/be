@@ -207,6 +207,9 @@ void test("organization service maps school rows correctly and respects paginati
     findWeeklyMenu: () => Promise.resolve(null),
     findLatestApprovedWeeklyMenu: () => Promise.resolve(null),
     findAvailableWeeklyMenuWeeks: () => Promise.resolve([]),
+    findCurrentAcademicYear: () => Promise.resolve(null),
+    findApprovedWeekStartDates: () => Promise.resolve([]),
+    findWeekGrades: () => Promise.resolve([]),
     findPortionGroupsRaw: () => Promise.resolve([]),
   };
 

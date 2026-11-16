@@ -14,6 +14,10 @@ import {
   formatTimeString,
   getDayOfWeekName,
   getWeekNumber,
+  getSchoolMonday,
+  getSchoolWeekSchedule,
+  calculateAcademicWeekNumber,
+  generateAcademicWeeks,
 } from "../../utils/date-time";
 import type {
   CookingModeRequestDTO,
@@ -433,33 +437,120 @@ export function createOrganizationService(
         );
       }
 
-      let targetWeekMonday: Date | undefined;
+      const now = new Date();
+      const todayIso = now.toISOString().slice(0, 10);
+      let targetWeekMonday: Date;
+
       if (query.week) {
         const rawDate = new Date(`${query.week}T00:00:00.000Z`);
-        const day = rawDate.getUTCDay();
-        const diff = (day === 0 ? -6 : 1) - day;
-        const monday = new Date(rawDate);
-        monday.setUTCDate(rawDate.getUTCDate() + diff);
-        targetWeekMonday = monday;
+        targetWeekMonday = getSchoolMonday(rawDate);
+      } else {
+        targetWeekMonday = getSchoolMonday(now);
       }
 
-      let weeklyMenu = await data.findWeeklyMenu(school.id, targetWeekMonday);
+      const gradeId =
+        query.grade && query.grade !== "all"
+          ? query.grade
+          : query.group && query.group !== "all"
+            ? query.group
+            : undefined;
 
+      let weeklyMenu = await data.findWeeklyMenu(
+        school.id,
+        targetWeekMonday,
+        gradeId,
+      );
+
+      // Nếu không truyền query.week và tuần hiện tại chưa có thực đơn, thử tìm thực đơn gần nhất được duyệt
       if (!weeklyMenu && !query.week) {
-        weeklyMenu = await data.findLatestApprovedWeeklyMenu(school.id);
+        const latestMenu = await data.findLatestApprovedWeeklyMenu(school.id);
+        if (latestMenu) {
+          targetWeekMonday = latestMenu.weekStartDate;
+          weeklyMenu = await data.findWeeklyMenu(
+            school.id,
+            targetWeekMonday,
+            gradeId,
+          );
+        }
       }
 
-      if (!weeklyMenu || weeklyMenu.menuDays.length === 0) {
-        return null;
+      // Lấy thông tin năm học tương ứng
+      const academicYear = await data.findCurrentAcademicYear(
+        school.id,
+        targetWeekMonday,
+      );
+
+      // Sinh danh sách toàn bộ các tuần của năm học
+      let academicWeeks = academicYear
+        ? generateAcademicWeeks(
+            academicYear.startDate,
+            academicYear.endDate,
+            now,
+          )
+        : [];
+
+      // Fallback nếu trường chưa cấu hình năm học: tạo tuần xung quanh targetWeekMonday
+      if (academicWeeks.length === 0) {
+        const fallbackSchedule = getSchoolWeekSchedule(targetWeekMonday);
+        const wNum = getWeekNumber(targetWeekMonday);
+        academicWeeks = [
+          {
+            weekNumber: wNum,
+            weekLabel: `Tuần ${wNum}`,
+            weekStartDate: fallbackSchedule.weekStartDate,
+            weekEndDate: fallbackSchedule.weekEndDate,
+            weekRange: `${formatDateDMY(new Date(fallbackSchedule.weekStartDate))} – ${formatDateDMY(new Date(fallbackSchedule.weekEndDate))}`,
+            isCurrentWeek:
+              fallbackSchedule.weekStartDate ===
+              getSchoolMonday(now).toISOString().slice(0, 10),
+          },
+        ];
       }
 
-      const dayIds = weeklyMenu.menuDays.map((d) => d.id);
-      const rawGroups = await data.findPortionGroupsRaw(dayIds);
-      let dynamicGroups: PortionGroupDTO[] = rawGroups.map((g) => ({
-        id: g.id,
-        name: g.name,
-        isDefault: g.is_default,
-      }));
+      // Lấy danh sách các tuần đã có thực đơn công bố của trường
+      const approvedStartDates = await data.findApprovedWeekStartDates(
+        school.id,
+        academicYear?.startDate,
+        academicYear?.endDate,
+      );
+      const approvedWeekSet = new Set(approvedStartDates);
+
+      // Ánh xạ availableWeeks theo toàn bộ các tuần của năm học
+      const availableWeeks: AvailableWeekSummaryDTO[] = academicWeeks.map(
+        (w) => {
+          const hasMenu = approvedWeekSet.has(w.weekStartDate);
+          return {
+            title: `Thực đơn ${w.weekLabel}`,
+            weekNumber: w.weekNumber,
+            weekStartDate: w.weekStartDate,
+            weekEndDate: w.weekEndDate,
+            weekRange: w.weekRange,
+            isCurrentWeek: w.isCurrentWeek,
+            hasMenu,
+            status: hasMenu ? "APPROVED" : null,
+          };
+        },
+      );
+
+      // Lấy các khối lớp có thực đơn cho tuần đang tra cứu
+      const weekGrades = await data.findWeekGrades(school.id, targetWeekMonday);
+
+      let dynamicGroups: PortionGroupDTO[] = [];
+      if (weekGrades.length > 0) {
+        dynamicGroups = weekGrades.map((g, idx) => ({
+          id: g.id,
+          name: g.name,
+          isDefault: idx === 0,
+        }));
+      } else if (weeklyMenu && weeklyMenu.menuDays.length > 0) {
+        const dayIds = weeklyMenu.menuDays.map((d) => d.id);
+        const rawGroups = await data.findPortionGroupsRaw(dayIds);
+        dynamicGroups = rawGroups.map((g) => ({
+          id: g.id,
+          name: g.name,
+          isDefault: g.is_default,
+        }));
+      }
 
       if (dynamicGroups.length === 0) {
         dynamicGroups = [
@@ -471,15 +562,32 @@ export function createOrganizationService(
         ];
       }
 
-      const weekNumber = getWeekNumber(weeklyMenu.weekStartDate);
-      const weekStartDmy = formatDateDMY(weeklyMenu.weekStartDate);
-      const fridayDate = new Date(weeklyMenu.weekStartDate);
-      fridayDate.setUTCDate(fridayDate.getUTCDate() + 4);
-      const weekEndDmy = formatDateDMY(fridayDate);
-      const weekRange = `${weekStartDmy} – ${weekEndDmy}`;
+      const weekSchedule = getSchoolWeekSchedule(targetWeekMonday);
+      const weekNumber = academicYear
+        ? calculateAcademicWeekNumber(targetWeekMonday, academicYear.startDate)
+        : getWeekNumber(targetWeekMonday);
+      const weekRange = `${formatDateDMY(new Date(weekSchedule.weekStartDate))} – ${formatDateDMY(new Date(weekSchedule.weekEndDate))}`;
+      const isCurrentWeek =
+        weekSchedule.weekStartDate ===
+        getSchoolMonday(now).toISOString().slice(0, 10);
 
-      const now = new Date();
-      const todayIso = now.toISOString().slice(0, 10);
+      // Nếu tuần này chưa có thực đơn hoặc chưa có ngày ăn nào
+      if (!weeklyMenu || weeklyMenu.menuDays.length === 0) {
+        return {
+          id: null,
+          title: `Thực đơn Tuần ${weekNumber}`,
+          weekNumber,
+          weekStartDate: weekSchedule.weekStartDate,
+          weekEndDate: weekSchedule.weekEndDate,
+          weekRange,
+          isCurrentWeek,
+          status: null,
+          portionGroups: dynamicGroups,
+          gradeGroups: dynamicGroups.map((g) => ({ key: g.id, label: g.name })),
+          days: [],
+          availableWeeks,
+        };
+      }
 
       const days: WeeklyMenuDayDTO[] = weeklyMenu.menuDays.map((day) => {
         const dateIso = day.menuDate.toISOString().slice(0, 10);
@@ -549,33 +657,14 @@ export function createOrganizationService(
         };
       });
 
-      const rawAvailableWeeks = await data.findAvailableWeeklyMenuWeeks(
-        school.id,
-      );
-      const availableWeeks: AvailableWeekSummaryDTO[] = rawAvailableWeeks.map(
-        (w) => {
-          const wNum = getWeekNumber(w.weekStartDate);
-          const startStr = formatDateDMY(w.weekStartDate);
-          const fri = new Date(w.weekStartDate);
-          fri.setUTCDate(fri.getUTCDate() + 4);
-          const endStr = formatDateDMY(fri);
-          return {
-            id: w.id,
-            title: w.title || `Thực đơn tuần ${wNum}`,
-            weekNumber: wNum,
-            weekStartDate: w.weekStartDate.toISOString().slice(0, 10),
-            weekRange: `${startStr} – ${endStr}`,
-            status: w.status,
-          };
-        },
-      );
-
       return {
         id: weeklyMenu.id,
-        title: weeklyMenu.title || `Thực đơn tuần ${weekNumber}`,
+        title: weeklyMenu.title || `Thực đơn Tuần ${weekNumber}`,
         weekNumber,
-        weekStartDate: weeklyMenu.weekStartDate.toISOString().slice(0, 10),
+        weekStartDate: weekSchedule.weekStartDate,
+        weekEndDate: weekSchedule.weekEndDate,
         weekRange,
+        isCurrentWeek,
         status: weeklyMenu.status,
         portionGroups: dynamicGroups,
         gradeGroups: dynamicGroups.map((g) => ({ key: g.id, label: g.name })),
