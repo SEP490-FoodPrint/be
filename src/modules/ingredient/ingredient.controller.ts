@@ -11,7 +11,7 @@ import {
   validateIngredientParams,
   validateIngredientCreate,
   validateIngredientUpdate,
-  validateIngredientHide,
+  validateIngredientChangeStatus,
   validateIngredientUploadEnvelope,
   validateIngredientSingleUpload,
   validateIngredientMultipleUpload,
@@ -116,15 +116,15 @@ export function createIngredientController(
         "Sửa nguyên liệu thành công",
       );
     }),
-    hide: asyncHandler(async (req, res) => {
+    changeStatus: asyncHandler(async (req, res) => {
       sendSuccess(
         res,
-        await service.hide(
+        await service.changeStatus(
           validateIngredientParams(req.params),
-          validateIngredientHide(req.body),
+          validateIngredientChangeStatus(req.body),
           requirePrincipal(req),
         ),
-        "Ẩn nguyên liệu thành công",
+        "Đổi trạng thái nguyên liệu thành công",
       );
     }),
   };

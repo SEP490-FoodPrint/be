@@ -8,6 +8,7 @@ import {
   createIngredientService,
   ingredientService,
 } from "../src/modules/ingredient/ingredient.service";
+import { ingredientRepository } from "../src/modules/ingredient/ingredient.repository";
 import {
   createSourceFacilityService,
   sourceFacilityService,
@@ -3391,7 +3392,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           ["GET", "/" + ingredientA.id],
           ["POST", ""],
           ["PATCH", "/" + ingredientA.id],
-          ["POST", "/" + ingredientA.id + "/hide"],
+          ["PATCH", "/" + ingredientA.id + "/status"],
         ]) {
           assert.equal(
             (await request(base + suffix, actor.id, method)).status,
@@ -3449,12 +3450,16 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       });
       const absent = randomUUID();
       for (const foreignId of [foreign.id, absent]) {
-        for (const method of ["GET", "PATCH", "POST"]) {
+        for (const method of ["GET", "PATCH", "STATUS"]) {
           const response = await request(
-            base + "/" + foreignId + (method === "POST" ? "/hide" : ""),
+            base + "/" + foreignId + (method === "STATUS" ? "/status" : ""),
             supplierAdmin.id,
-            method,
-            method === "PATCH" ? { name: "Refused" } : undefined,
+            method === "STATUS" ? "PATCH" : method,
+            method === "PATCH"
+              ? { name: "Refused" }
+              : method === "STATUS"
+                ? { status: "ACTIVE" }
+                : undefined,
           );
           assert.equal(response.status, 404);
           assert.equal(
@@ -3521,15 +3526,27 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         },
       });
       assert.equal(
-        (await request(base + "/" + id + "/hide", supplierAdmin.id, "POST"))
-          .status,
+        (
+          await request(
+            base + "/" + id + "/status",
+            supplierAdmin.id,
+            "PATCH",
+            { status: "INACTIVE" },
+          )
+        ).status,
         200,
       );
       const hidden = await db.ingredient.findUniqueOrThrow({ where: { id } });
       assert.equal(hidden.status, "INACTIVE");
       assert.equal(
-        (await request(base + "/" + id + "/hide", supplierAdmin.id, "POST"))
-          .status,
+        (
+          await request(
+            base + "/" + id + "/status",
+            supplierAdmin.id,
+            "PATCH",
+            { status: "INACTIVE" },
+          )
+        ).status,
         200,
       );
       assert.equal(
@@ -3560,6 +3577,221 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         (await request(base, supplierAdmin.id, "POST", payload)).status,
         409,
       );
+      // A pre-existing hidden ingredient can be restored without recreating it.
+      const beforeCycles = await db.ingredient.findUniqueOrThrow({
+        where: { id },
+      });
+      for (let cycle = 0; cycle < 3; cycle++) {
+        for (const status of ["ACTIVE", "INACTIVE"] as const) {
+          const changed = await request(
+            base + "/" + id + "/status",
+            supplierAdmin.id,
+            "PATCH",
+            { status },
+          );
+          assert.equal(changed.status, 200, JSON.stringify(changed.body));
+          assert.equal(record(record(changed.body).data).status, status);
+          const after = await db.ingredient.findUniqueOrThrow({
+            where: { id },
+          });
+          assert.equal(after.status, status);
+          assert.equal(after.id, beforeCycles.id);
+          assert.equal(after.supplierId, beforeCycles.supplierId);
+          assert.equal(after.name, beforeCycles.name);
+          assert.equal(after.description, beforeCycles.description);
+          assert.equal(after.categoryId, beforeCycles.categoryId);
+          assert.equal(after.coverImage, beforeCycles.coverImage);
+          assert.deepEqual(
+            after.imageDescription,
+            beforeCycles.imageDescription,
+          );
+          assert.equal(+after.createdAt, +beforeCycles.createdAt);
+          const repeated = await request(
+            base + "/" + id + "/status",
+            supplierAdmin.id,
+            "PATCH",
+            { status },
+          );
+          assert.equal(repeated.status, 200);
+          assert.equal(
+            +(await db.ingredient.findUniqueOrThrow({ where: { id } }))
+              .updatedAt,
+            +after.updatedAt,
+          );
+          assert.equal(
+            (
+              await db.ingredientEntry.findUniqueOrThrow({
+                where: { id: entry.id },
+              })
+            ).ingredientId,
+            id,
+          );
+          const detail = await request(base + "/" + id, supplierAdmin.id);
+          assert.equal(record(record(detail.body).data).status, status);
+        }
+      }
+      assert.equal(
+        (await request(base + "/" + id + "/hide", supplierAdmin.id, "POST"))
+          .status,
+        404,
+      );
+      assert.equal(
+        (await db.ingredient.findUniqueOrThrow({ where: { id } })).status,
+        "INACTIVE",
+      );
+      const beforeRollback = await db.ingredient.findUniqueOrThrow({
+        where: { id },
+      });
+      const faultService = createIngredientService({
+        ...ingredientRepository,
+        async changeStatus(...args) {
+          await ingredientRepository.changeStatus(...args);
+          throw new Error("private driver details");
+        },
+      });
+      const currentActor = await loadPrincipal(supplierAdmin.id, db);
+      await assert.rejects(
+        () =>
+          faultService.changeStatus(
+            { ingredientId: id },
+            { status: "ACTIVE" },
+            currentActor,
+          ),
+        (error: unknown) =>
+          error instanceof HttpError &&
+          error.statusCode === 503 &&
+          !error.message.includes("private driver details"),
+      );
+      const afterRollback = await db.ingredient.findUniqueOrThrow({
+        where: { id },
+      });
+      assert.equal(afterRollback.status, beforeRollback.status);
+      assert.equal(+afterRollback.updatedAt, +beforeRollback.updatedAt);
+      let attempts = 0;
+      const conflictService = createIngredientService({
+        ...ingredientRepository,
+        changeStatus() {
+          attempts++;
+          return Promise.reject(
+            Object.assign(new Error("test conflict"), { code: "P2034" }),
+          );
+        },
+      });
+      await assert.rejects(
+        () =>
+          conflictService.changeStatus(
+            { ingredientId: id },
+            { status: "ACTIVE" },
+            currentActor,
+          ),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 503,
+      );
+      assert.equal(attempts, 3);
+      assert.equal(
+        (await db.ingredient.findUniqueOrThrow({ where: { id } })).status,
+        "INACTIVE",
+      );
+
+      // A school with no other suppliers makes both option lists deterministic.
+      const optionsSchool = await db.school.create({
+        data: { name: "Status options " + id },
+      });
+      const optionsRelationship = await db.schoolSupplierRelationship.create({
+        data: {
+          schoolId: optionsSchool.id,
+          supplierId: supplierA.id,
+          status: "ACTIVE",
+        },
+      });
+      const optionsEntry = await db.ingredientEntry.create({
+        data: {
+          schoolId: optionsSchool.id,
+          ingredientId: id,
+          handlingType: "DRY_STOCK",
+          status: "ACTIVE",
+        },
+      });
+      const optionsUser = await user("SCHOOL_NUTRITION_OFFICER", {
+        schoolId: optionsSchool.id,
+      });
+      const ingredientReader = await user("INGREDIENT_MANAGEMENT_DEPARTMENT", {
+        schoolId: optionsSchool.id,
+      });
+      const ingredientReaderSession = await authSessions.issue(
+        ingredientReader.id,
+      );
+      issued.set(ingredientReader.id, ingredientReaderSession);
+      refreshTokens.push(ingredientReaderSession.refreshToken);
+      const optionsActor = await loadPrincipal(optionsUser.id, db);
+      const menus = createMenuService(undefined, () => Promise.resolve(db));
+      const optionList = async (kind: "main" | "seasoning") =>
+        menus.getIngredientOptions(kind, { page: 1, limit: 100 }, optionsActor);
+      const includesIngredient = (
+        items: { id?: unknown; ingredientId?: unknown }[],
+      ) => items.some((row) => row.id === id || row.ingredientId === id);
+      const schoolIngredients = async () => {
+        const result = await request(
+          "/api/ingredients?limit=100",
+          ingredientReader.id,
+        );
+        assert.equal(result.status, 200);
+        return rows(result.body);
+      };
+      assert(!includesIngredient(await schoolIngredients()));
+      assert(!includesIngredient((await optionList("main")).items));
+      assert(!includesIngredient((await optionList("seasoning")).items));
+      assert.equal(
+        (
+          await request(
+            base + "/" + id + "/status",
+            supplierAdmin.id,
+            "PATCH",
+            { status: "ACTIVE" },
+          )
+        ).status,
+        200,
+      );
+      assert(includesIngredient((await optionList("main")).items));
+      assert(includesIngredient((await optionList("seasoning")).items));
+      assert(includesIngredient(await schoolIngredients()));
+      await db.schoolSupplierRelationship.update({
+        where: { id: optionsRelationship.id },
+        data: {
+          status: "SUSPENDED",
+          suspendedAt: new Date(),
+          suspensionReason: "Status selection test",
+        },
+      });
+      assert(!includesIngredient(await schoolIngredients()));
+      assert(!includesIngredient((await optionList("main")).items));
+      // Seasoning selection is based on the school's active entry, independently of supplier relationships.
+      assert(includesIngredient((await optionList("seasoning")).items));
+      await db.schoolSupplierRelationship.update({
+        where: { id: optionsRelationship.id },
+        data: { status: "ACTIVE", suspendedAt: null, suspensionReason: null },
+      });
+      assert(includesIngredient(await schoolIngredients()));
+      await db.ingredientEntry.update({
+        where: { id: optionsEntry.id },
+        data: { status: "INACTIVE" },
+      });
+      assert(!includesIngredient((await optionList("seasoning")).items));
+      assert(includesIngredient((await optionList("main")).items));
+      assert.equal(
+        (
+          await request(
+            base + "/" + id + "/status",
+            supplierAdmin.id,
+            "PATCH",
+            { status: "INACTIVE" },
+          )
+        ).status,
+        200,
+      );
+      assert(!includesIngredient((await optionList("main")).items));
+      assert(!includesIngredient(await schoolIngredients()));
+
       // Same name remains allowed in another supplier.
       await db.ingredient.create({
         data: {
@@ -3570,15 +3802,97 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       });
       const hideEdit = await Promise.all([
         request(
-          base + "/" + raceItems[0].id + "/hide",
+          base + "/" + raceItems[0].id + "/status",
           supplierAdmin.id,
-          "POST",
+          "PATCH",
+          { status: "INACTIVE" },
         ),
         request(base + "/" + raceItems[0].id, supplierAdmin.id, "PATCH", {
           description: "Concurrent edit",
         }),
       ]);
       assert(hideEdit.every((r) => r.status === 200));
+      assert.equal(
+        (
+          await db.ingredient.findUniqueOrThrow({
+            where: { id: raceItems[0].id },
+          })
+        ).status,
+        "INACTIVE",
+      );
+      assert.equal(
+        (
+          await db.ingredient.findUniqueOrThrow({
+            where: { id: raceItems[0].id },
+          })
+        ).description,
+        "Concurrent edit",
+      );
+      for (const status of ["ACTIVE", "INACTIVE"] as const) {
+        const concurrent = await Promise.all(
+          [1, 2].map(() =>
+            request(
+              base + "/" + raceItems[0].id + "/status",
+              supplierAdmin.id,
+              "PATCH",
+              { status },
+            ),
+          ),
+        );
+        assert(concurrent.every((response) => response.status === 200));
+        assert.equal(
+          (
+            await db.ingredient.findUniqueOrThrow({
+              where: { id: raceItems[0].id },
+            })
+          ).status,
+          status,
+        );
+      }
+      // Start both operations together, then release the second only after the first commits.
+      const rendezvous = createBarrier(2);
+      let releaseSecond!: () => void;
+      const firstCommitted = new Promise<void>((resolve) => {
+        releaseSecond = resolve;
+      });
+      let firstStarted = false;
+      let secondStarted = false;
+      const firstService = createIngredientService({
+        ...ingredientRepository,
+        async lockSupplier(scope, tx) {
+          if (!firstStarted) {
+            firstStarted = true;
+            await rendezvous.wait();
+          }
+          return ingredientRepository.lockSupplier(scope, tx);
+        },
+      });
+      const secondService = createIngredientService({
+        ...ingredientRepository,
+        async lockSupplier(scope, tx) {
+          if (!secondStarted) {
+            secondStarted = true;
+            await rendezvous.wait();
+          }
+          await firstCommitted;
+          return ingredientRepository.lockSupplier(scope, tx);
+        },
+      });
+      const first = firstService
+        .changeStatus(
+          { ingredientId: raceItems[0].id },
+          { status: "ACTIVE" },
+          currentActor,
+        )
+        .finally(releaseSecond);
+      const second = secondService.changeStatus(
+        { ingredientId: raceItems[0].id },
+        { status: "INACTIVE" },
+        currentActor,
+      );
+      const [firstResult, secondResult] = await Promise.all([first, second]);
+      assert.equal(firstResult.status, "ACTIVE");
+      assert.equal(secondResult.status, "INACTIVE");
       assert.equal(
         (
           await db.ingredient.findUniqueOrThrow({
@@ -3634,6 +3948,18 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         },
       });
       assert.equal((await request(base, supplierAdmin.id)).status, 403);
+      for (const status of ["ACTIVE", "INACTIVE"] as const) {
+        await assert.rejects(
+          () =>
+            ingredientService.changeStatus(
+              { ingredientId: id },
+              { status },
+              staleActor,
+            ),
+          (error: unknown) =>
+            error instanceof HttpError && error.statusCode === 403,
+        );
+      }
       assert.equal(
         (
           await request(base + "/" + id, supplierAdmin.id, "PATCH", {
@@ -3665,6 +3991,16 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       });
       await assert.rejects(
         () =>
+          ingredientService.changeStatus(
+            { ingredientId: id },
+            { status: "INACTIVE" },
+            staleActor,
+          ),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 403,
+      );
+      await assert.rejects(
+        () =>
           ingredientService.update(
             { ingredientId: id },
             { name: "Locked account" },
@@ -3682,6 +4018,16 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         where: { id: supplierAdmin.id },
         data: { status: "ACTIVE", supplierId: supplierB.id },
       });
+      await assert.rejects(
+        () =>
+          ingredientService.changeStatus(
+            { ingredientId: id },
+            { status: "ACTIVE" },
+            staleActor,
+          ),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 403,
+      );
       await assert.rejects(
         () =>
           ingredientService.update(
@@ -3753,6 +4099,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       });
       // Remove only this subtest's disposable fixture so later scope assertions keep their baseline.
       await db.ingredientEntry.delete({ where: { id: entry.id } });
+      await db.ingredientEntry.delete({ where: { id: optionsEntry.id } });
       await db.ingredient.deleteMany({
         where: {
           OR: [

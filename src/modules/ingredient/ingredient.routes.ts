@@ -46,7 +46,7 @@ export function createIngredientRouter(
   management.post("/", controller.create);
   management.get("/:ingredientId", controller.getDetail);
   management.patch("/:ingredientId", controller.update);
-  management.post("/:ingredientId/hide", controller.hide);
+  management.patch("/:ingredientId/status", controller.changeStatus);
   router.use("/management", management);
   router.get(
     "/",

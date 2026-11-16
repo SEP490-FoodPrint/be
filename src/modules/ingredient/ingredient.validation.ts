@@ -76,7 +76,11 @@ export const ingredientQuerySchema = z
 export const ingredientParamsSchema = z.strictObject({
   ingredientId: requestUuidSchema,
 });
-export const ingredientHideSchema = z.strictObject({});
+export const ingredientChangeStatusSchema = z.strictObject({
+  status: z.enum(["ACTIVE", "INACTIVE"], {
+    error: "Trạng thái phải là ACTIVE hoặc INACTIVE",
+  }),
+});
 export const validateIngredientCreate = (value: unknown) =>
   parseRequest(ingredientCreateSchema, value);
 export const validateIngredientUpdate = (value: unknown) =>
@@ -85,8 +89,8 @@ export const validateIngredientQuery = (value: unknown) =>
   parseRequest(ingredientQuerySchema, value);
 export const validateIngredientParams = (value: unknown) =>
   parseRequest(ingredientParamsSchema, value);
-export const validateIngredientHide = (value: unknown) =>
-  parseRequest(ingredientHideSchema, value === undefined ? {} : value);
+export const validateIngredientChangeStatus = (value: unknown) =>
+  parseRequest(ingredientChangeStatusSchema, value);
 export { parseListQuery as validateIngredientListQuery } from "../../utils/list-query";
 
 const uploadFileSchema = z.strictObject({

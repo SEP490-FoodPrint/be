@@ -159,14 +159,15 @@ export function createIngredientRepository(connect = getPrisma) {
         return ingredientWriteError(error);
       }
     },
-    async hide(
+    async changeStatus(
       scope: IngredientManagementScope,
       id: string,
+      status: "ACTIVE" | "INACTIVE",
       tx: Tx,
     ): Promise<IngredientRow | null> {
       await tx.ingredient.updateMany({
-        where: { id, supplierId: scope.supplierId, status: "ACTIVE" },
-        data: { status: "INACTIVE" },
+        where: { id, supplierId: scope.supplierId, status: { not: status } },
+        data: { status },
       });
       return this.find(scope, id, tx);
     },

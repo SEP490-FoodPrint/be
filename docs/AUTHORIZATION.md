@@ -291,18 +291,20 @@ Tệp chứng nhận được xác minh qua anchor hồ sơ APPROVED/SUPPLIER v�
 
 Nhóm `/api/ingredients/management` yêu cầu tài khoản ACTIVE, role `INGREDIENT_SUPPLIER_ADMIN`, tổ chức SUPPLIER hợp lệ đang ACTIVE và permission hiệu lực `ingredient.manage`. Staff bị chặn kể cả được gán permission này; System Admin không có bypass. Mỗi lần ghi nạp lại actor/quyền/membership và supplier trong cùng Serializable transaction với kiểm tra target/category và mutation.
 
-| Method | Endpoint                                       | Kết quả                                                  |
-| ------ | ---------------------------------------------- | -------------------------------------------------------- |
-| GET    | /api/ingredients/management                    | Nguyên liệu thuộc supplier hiện tại, gồm ACTIVE/INACTIVE |
-| GET    | /api/ingredients/management/categories         | Danh mục dùng chung chỉ đọc                              |
-| GET    | /api/ingredients/management/:ingredientId      | Chi tiết thuộc sở hữu                                    |
-| POST   | /api/ingredients/management                    | Tạo nguyên liệu ACTIVE, tự gắn supplier                  |
-| PATCH  | /api/ingredients/management/:ingredientId      | Sửa trường editable, giữ trạng thái                      |
-| POST   | /api/ingredients/management/:ingredientId/hide | Chuyển INACTIVE; gọi lại thành công không đổi timestamp  |
+| Method | Endpoint                                         | Kết quả                                                          |
+| ------ | ------------------------------------------------ | ---------------------------------------------------------------- |
+| GET    | /api/ingredients/management                      | Nguyên liệu thuộc supplier hiện tại, gồm ACTIVE/INACTIVE         |
+| GET    | /api/ingredients/management/categories           | Danh mục dùng chung chỉ đọc                                      |
+| GET    | /api/ingredients/management/:ingredientId        | Chi tiết thuộc sở hữu                                            |
+| POST   | /api/ingredients/management                      | Tạo nguyên liệu ACTIVE, tự gắn supplier                          |
+| PATCH  | /api/ingredients/management/:ingredientId        | Sửa trường editable, giữ trạng thái                              |
+| PATCH  | /api/ingredients/management/:ingredientId/status | Đặt ACTIVE/INACTIVE; gọi lại cùng trạng thái không đổi timestamp |
 
 Danh sách chỉ nhận page/limit, mặc định 1/20, limit tối đa 100, envelope items/pagination.hasNext hiện hành. Scope từ principal, không từ supplierId do client gửi. Target ngoài sở hữu và không tồn tại cùng 404. Trùng tên trong cùng supplier kể cả đang ẩn trả 409. Quyền đọc GET `/api/ingredients` hiện có giữ nguyên, gồm staff được cấp quyền đọc hợp lệ.
 
 Input tạo/sửa chỉ gồm name/defaultUnit/description/categoryId/coverImage/imageDescription; tạo cần name và defaultUnit. PATCH bỏ qua giữ nguyên, null xóa trường nullable, [] xóa danh sách ảnh. coverImage tối đa một tham chiếu; imageDescription nhiều tham chiếu theo thứ tự. Chấp nhận URL HTTP/HTTPS không credentials hoặc đường dẫn bắt đầu /, tối đa 2048 ký tự. categoryId nullable tham chiếu danh mục có sẵn; chưa có API quản trị danh mục. Chi tiết input/output tại [contract](../specs/008-supplier-ingredient-management/contracts/ingredient-management.md).
+
+Đổi trạng thái nhận body `{ "status": "ACTIVE" }` để hiện lại hoặc `{ "status": "INACTIVE" }` để ẩn. Thao tác giữ lịch sử và quyền sở hữu; target ngoài sở hữu trả 404 như không tồn tại. Contract [đổi trạng thái](../specs/ingredient-change-status/contracts/ingredient-status-api.md) thay thế endpoint hide trong contract cũ.
 
 Hai API `POST /api/ingredients/management/upload-image` và `POST /api/ingredients/management/upload-images` nhận multipart lần lượt một ảnh `image` hoặc từ một đến năm ảnh `images` (JPEG/PNG/WebP, tối đa 5 MiB mỗi ảnh). API dùng cùng quyền quản trị nguyên liệu; upload trước khi tạo/sửa và trả URL để gửi trong body JSON riêng. Single trả 201; batch trả 200 và kết quả thành công/thất bại cho từng tệp theo thứ tự. Chi tiết tại [contract upload](../specs/ingredient-image-upload/contracts/ingredient-upload-api.md).
 
