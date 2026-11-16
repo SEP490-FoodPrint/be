@@ -949,6 +949,7 @@ export function createOrderIntakeService(
           createdByUserId: actor.id,
           requestNo: body.requestNo,
           deliveryDate: body.deliveryDate,
+          note: body.note,
           items: body.items.map((item) => ({
             ...item,
             unit: entries.find((entry) => entry.id === item.ingredientEntryId)!

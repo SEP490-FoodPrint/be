@@ -114,6 +114,20 @@ export function createSupplyOrderRepository(connect = getPrisma) {
         select: supplierDetailSelect,
       });
     },
+    async findDetailForSchool(id: string, schoolId: string) {
+      const db = await connect();
+      return db.supplyRequest.findFirst({
+        where: { id, schoolId },
+        select: supplierDetailSelect,
+      });
+    },
+    async findDetailById(id: string) {
+      const db = await connect();
+      return db.supplyRequest.findFirst({
+        where: { id },
+        select: supplierDetailSelect,
+      });
+    },
     async findForSupplier(
       tx: Prisma.TransactionClient,
       id: string,

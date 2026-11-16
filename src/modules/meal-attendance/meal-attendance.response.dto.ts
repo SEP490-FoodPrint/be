@@ -18,6 +18,8 @@ export interface MyClassMealResponseDTO {
 export interface MealAttendanceClassDetailDTO {
   classId: string;
   className: string;
+  gradeId?: string | null;
+  gradeName?: string | null;
   registeredPortions: number;
   actualPortions: number;
   status: "FINALIZED" | "DRAFT" | "NOT_REPORTED";
