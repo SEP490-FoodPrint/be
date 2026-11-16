@@ -29,6 +29,7 @@ function authorityReports(
 export const RESOURCE_PERMISSIONS = {
   auth: ["role.view"],
   user: ["user.manage", "school_user.manage", "supplier_staff.manage"],
+  "supplier-staff": ["supplier_staff.manage"],
   organization: ["school.manage"],
   ingredient: ["ingredient.view", "ingredient.manage"],
   menu: ["menu.view"],
@@ -91,6 +92,19 @@ export const listScopes = {
       403,
       "Loại tổ chức không có phạm vi truy cập tài nguyên này",
     );
+  },
+  "supplier-staff": (p: AuthPrincipal): Prisma.UserWhereInput => {
+    const { supplierId } = supplierStaffManagementScope(p);
+    return {
+      supplierId,
+      schoolId: null,
+      communeFoodSafetyUnitId: null,
+      roleCode: ROLES.INGREDIENT_SUPPLIER_STAFF,
+      Role: {
+        code: ROLES.INGREDIENT_SUPPLIER_STAFF,
+        type: ORG_TYPES.SUPPLIER,
+      },
+    };
   },
   organization: (p: AuthPrincipal): Prisma.SchoolWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["organization"]);
@@ -496,6 +510,28 @@ export const listScopes = {
   },
 };
 export type Resource = keyof typeof listScopes;
+
+export interface SupplierStaffManagementScope {
+  readonly supplierId: string;
+}
+
+export function supplierStaffManagementScope(
+  principal: AuthPrincipal,
+): SupplierStaffManagementScope {
+  if (
+    principal.role !== ROLES.INGREDIENT_SUPPLIER_ADMIN ||
+    principal.orgType !== ORG_TYPES.SUPPLIER ||
+    !principal.supplierId ||
+    principal.schoolId ||
+    principal.communeFoodSafetyUnitId
+  )
+    throw new HttpError(
+      403,
+      "Chỉ quản trị viên nhà cung cấp được quản lý nhân viên",
+    );
+  assertPermission(principal, ...RESOURCE_PERMISSIONS["supplier-staff"]);
+  return { supplierId: principal.supplierId };
+}
 
 export interface SourceFacilityManagementScope {
   readonly supplierId: string;

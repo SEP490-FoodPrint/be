@@ -1374,7 +1374,8 @@ model User {
 
   receivedFoodSafetyReports FoodSafetyReportForwarding[] @relation("food_safety_forwarding_recipient_user")
 
-  @@unique([username])
+  @@unique([username], map: "uq_users_non_staff_username", where: raw("((role_code)::text <> 'INGREDIENT_SUPPLIER_STAFF'::text)"))
+  @@unique([supplierId, username], map: "uq_users_supplier_username", where: raw("supplier_id IS NOT NULL"))
   @@unique([email])
   @@unique([schoolId], map: "uq_users_school_admin", where: raw("((role_code)::text = 'SCHOOL_ADMINISTRATION'::text)"))
   @@unique([supplierId], map: "uq_users_supplier_admin", where: raw("((role_code)::text = 'INGREDIENT_SUPPLIER_ADMIN'::text)"))

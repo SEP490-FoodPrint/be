@@ -65,30 +65,24 @@ export function createSessionService(
     async login(input: LoginRequestDTO, previousRefreshToken?: string) {
       return databaseOperation(async () => {
         const db = await connect();
-        const rows = await sessionRepository.findCandidates(
+        const candidate = await sessionRepository.findByEmail(
           db,
           input.identifier,
         );
-        const candidate = rows.length === 1 ? rows[0] : undefined;
         const valid = await bcrypt.compare(
           input.password,
           candidate?.passwordHash ?? dummyHash,
         );
         if (!candidate || !valid)
-          throw new HttpError(
-            401,
-            "Tên đăng nhập/email hoặc mật khẩu không đúng",
-          );
+          throw new HttpError(401, "Email hoặc mật khẩu không đúng");
         return authorizationTransaction(db, async (tx) => {
           const current = await sessionRepository.lockPassword(
             tx,
             candidate.id,
+            input.identifier,
           );
           if (current?.passwordHash !== candidate.passwordHash)
-            throw new HttpError(
-              401,
-              "Tên đăng nhập/email hoặc mật khẩu không đúng",
-            );
+            throw new HttpError(401, "Email hoặc mật khẩu không đúng");
           const user = await loadSessionUser(candidate.id, tx);
           if (previousRefreshToken) await sessions.logout(previousRefreshToken);
           return {

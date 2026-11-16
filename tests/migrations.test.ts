@@ -55,6 +55,246 @@ function runPrisma(url: string, args: string[]) {
   );
 }
 
+async function verifySupplierStaffUsernameScope(client: Client) {
+  const indexes = (
+    await client.query<{ indexname: string; indexdef: string }>(
+      `SELECT indexname,indexdef FROM pg_indexes
+       WHERE schemaname='foodprint' AND tablename='users'
+       AND indexname IN ('uq_users_non_staff_username','uq_users_supplier_username')
+       ORDER BY indexname`,
+    )
+  ).rows;
+  assert.deepEqual(
+    indexes.map((index) => index.indexname),
+    ["uq_users_non_staff_username", "uq_users_supplier_username"],
+  );
+  assert.match(
+    indexes[0].indexdef,
+    /UNIQUE.*\(username\).*WHERE.*role_code.*<>.*'INGREDIENT_SUPPLIER_STAFF'/,
+  );
+  assert.match(
+    indexes[1].indexdef,
+    /UNIQUE.*\(supplier_id, username\).*WHERE.*supplier_id IS NOT NULL/,
+  );
+  const constraints = (
+    await client.query<{ conname: string }>(
+      `SELECT conname FROM pg_constraint WHERE conrelid='foodprint.users'::regclass
+       AND conname IN ('users_username_key','users_email_key') ORDER BY conname`,
+    )
+  ).rows;
+  assert.deepEqual(constraints, [{ conname: "users_email_key" }]);
+  assert.equal(
+    (
+      await client.query<{ name: string | null }>(
+        "SELECT to_regclass('foodprint.users_username_key')::text AS name",
+      )
+    ).rows[0].name,
+    null,
+  );
+
+  // Keep the collision matrix independent from the outer suite's fixtures.
+  await client.query("BEGIN");
+  try {
+    const suffix = randomUUID().replaceAll("-", "");
+    const role = async (code: string, type: string) => {
+      await client.query(
+        "INSERT INTO foodprint.roles(code,name,type) VALUES ($1,$1,$2::foodprint.role_type) ON CONFLICT (code) DO NOTHING",
+        [code, type],
+      );
+      const row = (
+        await client.query<{ id: string; type: string }>(
+          "SELECT id,type FROM foodprint.roles WHERE code=$1",
+          [code],
+        )
+      ).rows[0];
+      assert.equal(row.type, type);
+      return row.id;
+    };
+    const staffRole = await role("INGREDIENT_SUPPLIER_STAFF", "SUPPLIER");
+    const adminRole = await role("INGREDIENT_SUPPLIER_ADMIN", "SUPPLIER");
+    const schoolRole = await role("SCHOOL_KITCHEN_STAFF", "SCHOOL");
+    const supplierIds: string[] = [];
+    const schoolIds: string[] = [];
+    for (let index = 0; index < 2; index++) {
+      supplierIds.push(
+        (
+          await client.query<{ id: string }>(
+            "INSERT INTO foodprint.suppliers(name) VALUES ($1) RETURNING id",
+            [`Username scope supplier ${suffix} ${index}`],
+          )
+        ).rows[0].id,
+      );
+      schoolIds.push(
+        (
+          await client.query<{ id: string }>(
+            "INSERT INTO foodprint.schools(name) VALUES ($1) RETURNING id",
+            [`Username scope school ${suffix} ${index}`],
+          )
+        ).rows[0].id,
+      );
+    }
+    let serial = 0;
+    const insert = async (input: {
+      username: string;
+      supplierId?: string;
+      schoolId?: string;
+      roleCode?: string;
+      status?: string;
+      email?: string;
+    }) => {
+      const code = input.roleCode ?? "INGREDIENT_SUPPLIER_STAFF";
+      const roleId =
+        code === "INGREDIENT_SUPPLIER_ADMIN"
+          ? adminRole
+          : code === "SCHOOL_KITCHEN_STAFF"
+            ? schoolRole
+            : staffRole;
+      return client.query(
+        `INSERT INTO foodprint.users(role_id,role_code,supplier_id,school_id,username,email,password_hash,full_name,status)
+         VALUES ($1,$2,$3,$4,$5,$6,'username-scope-preserved-hash','Username scope fixture',$7::foodprint.account_status) RETURNING id`,
+        [
+          roleId,
+          code,
+          input.supplierId ?? null,
+          input.schoolId ?? null,
+          input.username,
+          input.email ?? `${suffix}-${serial++}@example.test`,
+          input.status ?? "ACTIVE",
+        ],
+      );
+    };
+    const rejects = async (
+      operation: () => Promise<unknown>,
+      constraint: string,
+    ) => {
+      await client.query("SAVEPOINT username_collision");
+      try {
+        await assert.rejects(operation, (error) =>
+          sqlState(error, "23505", constraint),
+        );
+      } finally {
+        await client.query("ROLLBACK TO SAVEPOINT username_collision");
+        await client.query("RELEASE SAVEPOINT username_collision");
+      }
+    };
+    const shared = `shared_${suffix}`;
+    await insert({ supplierId: supplierIds[0], username: shared });
+    await insert({ supplierId: supplierIds[1], username: shared });
+    assert.equal(
+      (
+        await client.query<{ count: number }>(
+          "SELECT count(*)::int AS count FROM foodprint.users WHERE username=$1",
+          [shared],
+        )
+      ).rows[0].count,
+      2,
+    );
+
+    for (const state of [
+      "UNVERIFIED",
+      "ACTIVE",
+      "INACTIVE",
+      "LOCKED",
+      "DEACTIVATED",
+    ]) {
+      const username = `status_${state}_${suffix}`;
+      const email = `${state}-${suffix}@example.test`;
+      await insert({
+        supplierId: supplierIds[0],
+        username,
+        email,
+        status: state,
+      });
+      await rejects(
+        () =>
+          insert({ supplierId: supplierIds[0], username, status: "ACTIVE" }),
+        "uq_users_supplier_username",
+      );
+      await insert({ supplierId: supplierIds[1], username, status: state });
+      // Citext must reject the same email from another organization and role,
+      // even if the account already owning it is not active.
+      await rejects(
+        () =>
+          insert({
+            roleCode: "SCHOOL_KITCHEN_STAFF",
+            schoolId: schoolIds[0],
+            username: `email_collision_${state}_${suffix}`,
+            email: email.toUpperCase(),
+          }),
+        "users_email_key",
+      );
+    }
+    const adminName = `admin_${suffix}`;
+    await insert({
+      roleCode: "INGREDIENT_SUPPLIER_ADMIN",
+      supplierId: supplierIds[0],
+      username: adminName,
+    });
+    await rejects(
+      () => insert({ supplierId: supplierIds[0], username: adminName }),
+      "uq_users_supplier_username",
+    );
+    await insert({ supplierId: supplierIds[1], username: adminName });
+    const existingStaffName = `staff_first_${suffix}`;
+    await insert({ supplierId: supplierIds[1], username: existingStaffName });
+    await rejects(
+      () =>
+        insert({
+          roleCode: "INGREDIENT_SUPPLIER_ADMIN",
+          supplierId: supplierIds[1],
+          username: existingStaffName,
+        }),
+      "uq_users_supplier_username",
+    );
+    const schoolName = `school_${suffix}`;
+    await insert({
+      roleCode: "SCHOOL_KITCHEN_STAFF",
+      schoolId: schoolIds[0],
+      username: schoolName,
+      status: "LOCKED",
+    });
+    await rejects(
+      () =>
+        insert({
+          roleCode: "SCHOOL_KITCHEN_STAFF",
+          schoolId: schoolIds[1],
+          username: schoolName,
+        }),
+      "uq_users_non_staff_username",
+    );
+    await insert({ supplierId: supplierIds[0], username: schoolName });
+    const pendingName = `pending_${suffix}`;
+    await insert({
+      roleCode: "INGREDIENT_SUPPLIER_ADMIN",
+      username: pendingName,
+      status: "UNVERIFIED",
+    });
+    await rejects(
+      () =>
+        insert({
+          roleCode: "INGREDIENT_SUPPLIER_ADMIN",
+          username: pendingName,
+          status: "UNVERIFIED",
+        }),
+      "uq_users_non_staff_username",
+    );
+    await insert({ supplierId: supplierIds[0], username: `Case_${suffix}` });
+    await insert({ supplierId: supplierIds[0], username: `case_${suffix}` });
+
+    // UPDATE must enforce the same new keys, not only INSERT.
+    await rejects(
+      () =>
+        client.query(
+          "UPDATE foodprint.users SET username=$1 WHERE supplier_id=$2 AND username=$3",
+          [shared, supplierIds[0], `Case_${suffix}`],
+        ),
+      "uq_users_supplier_username",
+    );
+  } finally {
+    await client.query("ROLLBACK");
+  }
+}
+
 void test("versioned migrations on a fresh disposable local PostgreSQL database", async (context) => {
   const url = process.env.MIGRATION_TEST_DATABASE_URL;
   assert(
@@ -3209,6 +3449,282 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
         ).rows.map((row) => row.migration_name);
         assert.deepEqual(completedMigrations, migrationNames);
         assert.deepEqual(await readBaselineSnapshot(), beforeUpgrade);
+        await runPrisma(isolated.toString(), [
+          "migrate",
+          "diff",
+          "--from-config-datasource",
+          "--to-schema",
+          path.join(root, "prisma/schema.prisma"),
+          "--exit-code",
+          "--config",
+          config,
+        ]);
+      } finally {
+        await legacy.end();
+        await rm(temporary, { recursive: true, force: true });
+        await db.query(`DROP DATABASE "${name}"`);
+      }
+    },
+  );
+
+  await context.test(
+    "supplier staff scoped usernames enforce the collision matrix after fresh migration replay",
+    async () => {
+      await verifySupplierStaffUsernameScope(db);
+    },
+  );
+
+  await context.test(
+    "supplier staff username migration upgrades without changing identity, grants or history, rolls back failed DDL and deploy replay is safe",
+    async () => {
+      const migration = "20261120000200_supplier_staff_username_scope";
+      assert(
+        migrationNames.includes(migration),
+        "The versioned supplier staff username migration must exist",
+      );
+      const name = `foodprint_migration_test_usernames_${randomUUID().replaceAll("-", "")}`;
+      await db.query(`CREATE DATABASE "${name}"`);
+      recordLocalTestDatabase(name);
+      const isolated = new URL(url);
+      isolated.pathname = `/${name}`;
+      const temporary = await mkdtemp(
+        path.join(tmpdir(), "foodprint-staff-usernames-"),
+      );
+      const directory = path.join(temporary, "migrations");
+      const config = path.join(temporary, "prisma.config.ts");
+      const legacy = new Client({ connectionString: isolated.toString() });
+      try {
+        await mkdir(directory);
+        await copyFile(
+          path.join(root, "prisma/migrations/migration_lock.toml"),
+          path.join(directory, "migration_lock.toml"),
+        );
+        const copyMigration = async (item: string) => {
+          await mkdir(path.join(directory, item));
+          await copyFile(
+            path.join(root, "prisma/migrations", item, "migration.sql"),
+            path.join(directory, item, "migration.sql"),
+          );
+        };
+        for (const previous of migrationNames.filter(
+          (item) => item < migration,
+        )) {
+          await copyMigration(previous);
+        }
+        await writeFile(
+          config,
+          `import { defineConfig } from ${JSON.stringify(path.join(root, "node_modules/prisma/config.js"))};\nexport default defineConfig({ schema: ${JSON.stringify(path.join(root, "prisma/schema.prisma"))}, migrations: { path: ${JSON.stringify(directory)} }, datasource: { url: process.env.DATABASE_URL } });\n`,
+        );
+        const deploy = () =>
+          runPrisma(isolated.toString(), [
+            "migrate",
+            "deploy",
+            "--config",
+            config,
+          ]);
+        await deploy();
+        await legacy.connect();
+        await legacy.query(`
+          INSERT INTO foodprint.roles(code,name,type) VALUES
+            ('INGREDIENT_SUPPLIER_ADMIN','Preserved supplier admin','SUPPLIER'),
+            ('INGREDIENT_SUPPLIER_STAFF','Preserved supplier staff','SUPPLIER')
+          ON CONFLICT (code) DO NOTHING;
+        `);
+        const roles = (
+          await legacy.query<{ id: string; code: string }>(
+            "SELECT id,code FROM foodprint.roles WHERE code IN ('INGREDIENT_SUPPLIER_ADMIN','INGREDIENT_SUPPLIER_STAFF')",
+          )
+        ).rows;
+        const adminRole = roles.find(
+          (row) => row.code === "INGREDIENT_SUPPLIER_ADMIN",
+        )!.id;
+        const staffRole = roles.find(
+          (row) => row.code === "INGREDIENT_SUPPLIER_STAFF",
+        )!.id;
+        const supplier = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.suppliers(name) VALUES ('Preserved username supplier') RETURNING id",
+          )
+        ).rows[0].id;
+        const otherSupplier = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.suppliers(name) VALUES ('Other username supplier') RETURNING id",
+          )
+        ).rows[0].id;
+        const admin = (
+          await legacy.query<{ id: string }>(
+            `INSERT INTO foodprint.users(role_id,role_code,supplier_id,username,email,password_hash,full_name,status,created_at,updated_at)
+           VALUES ($1,'INGREDIENT_SUPPLIER_ADMIN',$2,'preserved-admin','preserved-admin@example.test','preserved-admin-hash','Preserved Admin','ACTIVE','2026-01-01T01:00:00Z','2026-01-02T02:00:00Z') RETURNING id`,
+            [adminRole, supplier],
+          )
+        ).rows[0].id;
+        const staff = (
+          await legacy.query<{ id: string }>(
+            `INSERT INTO foodprint.users(role_id,role_code,supplier_id,username,email,password_hash,full_name,status,phone,email_verified_at,last_login_at,created_at,updated_at)
+           VALUES ($1,'INGREDIENT_SUPPLIER_STAFF',$2,'preserved-staff','preserved-staff@example.test','preserved-staff-hash','Preserved Staff','LOCKED','0123456789','2026-01-03T03:00:00Z','2026-01-04T04:00:00Z','2026-01-01T01:00:00Z','2026-01-05T05:00:00Z') RETURNING id`,
+            [staffRole, supplier],
+          )
+        ).rows[0].id;
+        const permission = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.permissions(code,name,module,action) VALUES ('username_fixture.view','Preserved grant','username_fixture','view') RETURNING id",
+          )
+        ).rows[0].id;
+        await legacy.query(
+          "INSERT INTO foodprint.role_permissions(role_id,permission_id) VALUES ($1,$2)",
+          [staffRole, permission],
+        );
+        await legacy.query(
+          "INSERT INTO foodprint.user_permission_denials(user_id,permission_id,supplier_id,disabled_by_user_id) VALUES ($1,$2,$3,$4)",
+          [staff, permission, supplier, admin],
+        );
+        // A historical resource retains both creator/updater references to users.
+        await legacy.query(
+          "INSERT INTO foodprint.source_facilities(supplier_id,facility_code,name,created_by_user_id,updated_by_user_id) VALUES ($1,'FP-SF-00001','Preserved history',$2,$3)",
+          [supplier, staff, admin],
+        );
+        const snapshot = async () => {
+          const result: Record<string, unknown> = {};
+          for (const table of [
+            "users",
+            "roles",
+            "suppliers",
+            "permissions",
+            "role_permissions",
+            "user_permission_denials",
+            "source_facilities",
+          ]) {
+            result[table] = (
+              await legacy.query<Record<string, unknown>>(
+                `SELECT to_jsonb(snapshot_row) AS data FROM foodprint.${table} snapshot_row ORDER BY to_jsonb(snapshot_row)::text`,
+              )
+            ).rows;
+          }
+          return result;
+        };
+        const retainedCatalog = async () => ({
+          constraints: (
+            await legacy.query<{
+              conname: string;
+              contype: string;
+              convalidated: boolean;
+              definition: string;
+            }>(
+              `SELECT c.conname,c.contype,c.convalidated,pg_get_constraintdef(c.oid) AS definition
+             FROM pg_constraint c JOIN pg_namespace n ON n.oid=c.connamespace
+             WHERE n.nspname='foodprint' AND c.conname <> 'users_username_key'
+             ORDER BY c.conrelid::regclass::text,c.conname`,
+            )
+          ).rows,
+          indexes: (
+            await legacy.query<{
+              tablename: string;
+              indexname: string;
+              indexdef: string;
+            }>(
+              `SELECT tablename,indexname,indexdef FROM pg_indexes WHERE schemaname='foodprint'
+             AND indexname NOT IN ('users_username_key','uq_users_non_staff_username','uq_users_supplier_username')
+             ORDER BY tablename,indexname`,
+            )
+          ).rows,
+        });
+        const before = await snapshot();
+        const catalogBefore = await retainedCatalog();
+        assert(
+          catalogBefore.indexes.some(
+            (index) => index.indexname === "uq_users_supplier_admin",
+          ),
+        );
+        assert(
+          catalogBefore.indexes.some(
+            (index) => index.indexname === "uq_users_school_admin",
+          ),
+        );
+        assert(
+          catalogBefore.indexes.some(
+            (index) => index.indexname === "uq_users_commune_officer",
+          ),
+        );
+        assert(
+          catalogBefore.constraints.some(
+            (constraint) => constraint.conname === "users_role_id_code_fkey",
+          ),
+        );
+        assert(
+          catalogBefore.constraints.some(
+            (constraint) =>
+              constraint.conname === "chk_user_single_organization",
+          ),
+        );
+        await assert.rejects(
+          legacy.query(
+            `INSERT INTO foodprint.users(role_id,role_code,supplier_id,username,email,password_hash,full_name,status)
+             VALUES ($1,'INGREDIENT_SUPPLIER_STAFF',$2,'preserved-staff','before-upgrade@example.test','fixture-only','Before upgrade','ACTIVE')`,
+            [staffRole, otherSupplier],
+          ),
+          (error) => sqlState(error, "23505", "users_username_key"),
+        );
+        const migrationSql = await readFile(
+          path.join(root, "prisma/migrations", migration, "migration.sql"),
+          "utf8",
+        );
+        assert.match(migrationSql, /BEGIN\s*;/i);
+        assert.match(migrationSql, /COMMIT\s*;\s*$/i);
+        const failBeforeCommit = migrationSql.replace(
+          /COMMIT\s*;\s*$/i,
+          "SELECT 1 / 0;\nCOMMIT;\n",
+        );
+        await assert.rejects(legacy.query(failBeforeCommit), (error) =>
+          sqlState(error, "22012"),
+        );
+        await legacy.query("ROLLBACK");
+        const rollbackConstraints = (
+          await legacy.query<{ conname: string }>(
+            "SELECT conname FROM pg_constraint WHERE conrelid='foodprint.users'::regclass AND conname='users_username_key'",
+          )
+        ).rows;
+        assert.deepEqual(rollbackConstraints, [
+          { conname: "users_username_key" },
+        ]);
+        assert.deepEqual(
+          (
+            await legacy.query(
+              "SELECT indexname FROM pg_indexes WHERE schemaname='foodprint' AND indexname IN ('uq_users_non_staff_username','uq_users_supplier_username')",
+            )
+          ).rows,
+          [],
+        );
+        assert.deepEqual(await snapshot(), before);
+        assert.deepEqual(await retainedCatalog(), catalogBefore);
+
+        await copyMigration(migration);
+        await deploy();
+        assert.deepEqual(await snapshot(), before);
+        assert.deepEqual(await retainedCatalog(), catalogBefore);
+        await verifySupplierStaffUsernameScope(legacy);
+        assert.deepEqual(await snapshot(), before);
+        const readHistory = async () =>
+          (
+            await legacy.query<MigrationHistoryRow>(
+              `SELECT migration_name,checksum,finished_at,rolled_back_at FROM foodprint._prisma_migrations
+           ORDER BY migration_name`,
+            )
+          ).rows;
+        const deployedHistory = await readHistory();
+        assert.equal(deployedHistory.at(-1)?.migration_name, migration);
+        await deploy();
+        assert.deepEqual(
+          await readHistory(),
+          deployedHistory,
+          "Prisma deploy replay does not rerun completed DDL",
+        );
+        assert.deepEqual(await snapshot(), before);
+        for (const subsequent of migrationNames.filter(
+          (item) => item > migration,
+        )) {
+          await copyMigration(subsequent);
+        }
+        await deploy();
         await runPrisma(isolated.toString(), [
           "migrate",
           "diff",

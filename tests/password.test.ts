@@ -6,7 +6,9 @@ import { MemoryStore } from "express-rate-limit";
 import { createApp } from "../src/app";
 import { createSessionAuthenticate } from "../src/middlewares/auth.middleware";
 import { createApiRateLimiter } from "../src/middlewares/rate-limit.middleware";
+import type { Prisma, PrismaClient } from "../src/generated/prisma/client";
 import {
+  createPasswordRepository,
   createPasswordService,
   passwordFingerprint,
   type PasswordAccount,
@@ -217,6 +219,7 @@ void test("password inputs normalize email, preserve password whitespace and rej
   for (const body of [
     { email: "invalid" },
     { email: sessionUser.email, userId: testAdmin.id },
+    { email: sessionUser.email, supplierId: randomUUID() },
   ])
     assert.throws(() => validateForgotPassword(body), status(400));
   for (const code of [123456, "12345", "1234567", " 123456", "１２３４５６"])
@@ -295,6 +298,196 @@ void test("forgot password verifies a purpose-bound HMAC code before issuing a s
   );
   const fresh = await f.sessions.issue(f.account.id);
   await f.sessions.assertAccess(verifyToken(fresh.accessToken));
+});
+void test("recovery isolates shared supplier usernames and email/username collisions by unique email and user id", async () => {
+  const clock = () => Date.now();
+  const { store: codes, records: challenges } = memoryEmailVerification(clock);
+  const memory = memorySessions(clock);
+  const sessions = createAuthSessions(memory.store, clock);
+  const ownerHash = await bcrypt.hash("OwnerOld123!", 4);
+  const sharedHash = await bcrypt.hash("SharedOld123!", 4);
+  const collisionHash = await bcrypt.hash("SchoolOld123!", 4);
+  const owner = {
+    id: randomUUID(),
+    email: "supplier-owner@example.test",
+    username: "shared_staff",
+    supplierId: randomUUID(),
+    roleCode: "INGREDIENT_SUPPLIER_STAFF",
+    status: "ACTIVE",
+    passwordHash: ownerHash,
+  };
+  const shared = {
+    ...owner,
+    id: randomUUID(),
+    email: "other-supplier@example.test",
+    supplierId: randomUUID(),
+    passwordHash: sharedHash,
+  };
+  // School account validation accepts an email-shaped username. Its own email
+  // remains distinct from the supplier account's globally unique email.
+  const collision = {
+    ...owner,
+    id: randomUUID(),
+    email: "school-account@example.test",
+    username: owner.email,
+    supplierId: null,
+    roleCode: "SCHOOL_MANAGEMENT_BOARD",
+    passwordHash: collisionHash,
+  };
+  const accounts = [owner, shared, collision];
+  const reads: { id?: string; email?: string }[] = [];
+  const locked: string[] = [];
+  const writes: string[] = [];
+  const revoked: string[] = [];
+  const observedSessions = {
+    ...sessions,
+    async revokeUser(userId: string) {
+      revoked.push(userId);
+      await sessions.revokeUser(userId);
+    },
+  };
+  const user = {
+    findUnique({ where }: { where: { id?: string; email?: string } }) {
+      reads.push({ ...where });
+      assert.equal(Object.keys(where).length, 1);
+      assert("id" in where || "email" in where);
+      const account = accounts.find((candidate) =>
+        where.email === undefined
+          ? candidate.id === where.id
+          : candidate.email.toLowerCase() === where.email.toLowerCase(),
+      );
+      return Promise.resolve(account ? { ...account } : null);
+    },
+    update({
+      where,
+      data,
+    }: {
+      where: { id: string };
+      data: { passwordHash: string };
+    }) {
+      const account = accounts.find((candidate) => candidate.id === where.id);
+      assert(account);
+      assert(locked.includes(account.id), "replacement holds the user's lock");
+      account.passwordHash = data.passwordHash;
+      writes.push(account.id);
+      return Promise.resolve({ id: account.id });
+    },
+  };
+  const transaction = {
+    user,
+    $queryRaw(_parts: TemplateStringsArray, userId: string) {
+      locked.push(userId);
+      return Promise.resolve([]);
+    },
+  };
+  const database = {
+    user,
+    $transaction<T>(operation: (tx: Prisma.TransactionClient) => Promise<T>) {
+      return operation(transaction as unknown as Prisma.TransactionClient);
+    },
+  };
+  const repository = createPasswordRepository(
+    () => Promise.resolve(database as unknown as PrismaClient),
+    observedSessions,
+  );
+  const sent = new Map<string, string>();
+  const pending = new Map<string, PasswordResetGrant>();
+  const grants: PasswordResetGrants = {
+    issue(token, grant) {
+      pending.set(token, structuredClone(grant));
+      return Promise.resolve();
+    },
+    consume(token) {
+      const grant = pending.get(token);
+      pending.delete(token);
+      return Promise.resolve(grant ?? null);
+    },
+    limitChange: () => Promise.resolve(0),
+  };
+  const service = createPasswordService(
+    codes,
+    grants,
+    {
+      assertConfigured() {},
+      send(email, code) {
+        sent.set(email, code);
+        return Promise.resolve();
+      },
+    },
+    repository,
+    clock,
+  );
+  const tokens = await Promise.all(
+    accounts.map((account) => sessions.issue(account.id)),
+  );
+  const normalized = validateForgotPassword({
+    email: " Supplier-Owner@Example.Test ",
+  }).email;
+  await service.request(normalized);
+  const ownerCode = sent.get(owner.email);
+  assert(ownerCode);
+  assert.deepEqual([...sent.keys()], [owner.email]);
+  assert.deepEqual(reads, [{ email: owner.email }]);
+  assert.equal(challenges.size, 1);
+  for (const account of [shared, collision]) {
+    await assert.rejects(
+      () => service.verify(account.email, ownerCode),
+      status(400),
+    );
+  }
+  assert.equal(challenges.size, 1, "other emails cannot consume A's challenge");
+  const ownerGrant = await service.verify(normalized, ownerCode);
+  assert.deepEqual(pending.get(ownerGrant.resetToken), {
+    userId: owner.id,
+    emailKey: passwordFingerprint("email", owner.email),
+    credentialHash: passwordFingerprint("credential", ownerHash),
+    expiresAt: pending.get(ownerGrant.resetToken)?.expiresAt,
+  });
+  const otherGrants: string[] = [];
+  for (const account of [shared, collision]) {
+    await service.request(account.email);
+    const code = sent.get(account.email);
+    assert(code);
+    const grant = await service.verify(account.email, code);
+    otherGrants.push(grant.resetToken);
+    assert.equal(pending.get(grant.resetToken)?.userId, account.id);
+    assert.equal(
+      pending.get(grant.resetToken)?.emailKey,
+      passwordFingerprint("email", account.email),
+    );
+  }
+  assert.equal(new Set([...pending.values()].map((g) => g.emailKey)).size, 3);
+  assert.equal(writes.length, 0);
+  await service.reset(ownerGrant.resetToken, "OwnerNew123!");
+  assert.deepEqual(writes, [owner.id]);
+  assert.deepEqual(revoked, [owner.id]);
+  assert.deepEqual(locked, [owner.id]);
+  assert(await bcrypt.compare("OwnerNew123!", owner.passwordHash));
+  assert.equal(shared.passwordHash, sharedHash);
+  assert.equal(collision.passwordHash, collisionHash);
+  assert(accounts.every((account) => account.status === "ACTIVE"));
+  for (const token of otherGrants)
+    assert(pending.has(token), "other accounts' reset grants remain valid");
+  await assert.rejects(
+    () => sessions.assertAccess(verifyToken(tokens[0].accessToken)),
+    status(401),
+  );
+  await assert.rejects(
+    () =>
+      sessions.refresh(tokens[0].refreshToken, () => Promise.resolve(owner)),
+    status(401),
+  );
+  for (const index of [1, 2]) {
+    await sessions.assertAccess(verifyToken(tokens[index].accessToken));
+    const refreshed = await sessions.refresh(
+      tokens[index].refreshToken,
+      (id) => {
+        assert.equal(id, accounts[index].id);
+        return Promise.resolve(accounts[index]);
+      },
+    );
+    assert.equal(verifyToken(refreshed.accessToken).sub, accounts[index].id);
+  }
 });
 void test("wrong codes lock after five attempts, expire and resend replaces the original challenge", async () => {
   const f = await fixture();

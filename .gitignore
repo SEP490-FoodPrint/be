@@ -29,3 +29,6 @@ Thumbs.db
 
 # Contract deployment copied from the blockchain repo
 blockchain/*.json
+
+# Local active feature pointer
+.specify/feature.json

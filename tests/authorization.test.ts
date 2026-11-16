@@ -1,3 +1,5 @@
+import type { PrismaClient } from "../src/generated/prisma/client";
+import { setImmediate as yieldTurn } from "node:timers/promises";
 import { bootstrapAuthorization } from "../src/utils/authorization-bootstrap";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -11,6 +13,7 @@ import { createAuthenticate } from "../src/middlewares/auth.middleware";
 import { requirePermission } from "../src/middlewares/permission.middleware";
 import { globalErrorHandler } from "../src/middlewares/error.middleware";
 import {
+  authorizationTransaction,
   principalFromIdentity,
   assertSystemManager,
   assertOrganizationManager,
@@ -18,6 +21,8 @@ import {
 } from "../src/utils/authorization";
 import {
   listScopes,
+  RESOURCE_PERMISSIONS,
+  supplierStaffManagementScope,
   supplierOrderManagementScope,
   supplierOrderReadScope,
 } from "../src/utils/resource-access";
@@ -94,11 +99,60 @@ void test("all list resources deny absent grants, including System Admin", () =>
       ...testAdmin,
       permissions: INITIAL_PERMISSIONS.map((p) => p.code),
     };
-    if (resource === "source-facility") {
+    if (resource === "source-facility" || resource === "supplier-staff") {
       assert.throws(() => scope(grantedSystem), status(403));
     } else {
       assert.deepEqual(scope(grantedSystem), {});
     }
+  }
+});
+void test("supplier staff management requires its admin role, trusted membership and effective permission", () => {
+  const supplierId = "00000000-0000-4000-8000-000000000055";
+  const principal = {
+    ...testAdmin,
+    role: "INGREDIENT_SUPPLIER_ADMIN",
+    orgType: "SUPPLIER" as const,
+    supplierId,
+    permissions: ["supplier_staff.manage"],
+  };
+  assert.deepEqual(RESOURCE_PERMISSIONS["supplier-staff"], [
+    "supplier_staff.manage",
+  ]);
+  assert.deepEqual(supplierStaffManagementScope(principal), { supplierId });
+  assert.deepEqual(listScopes["supplier-staff"](principal), {
+    supplierId,
+    schoolId: null,
+    communeFoodSafetyUnitId: null,
+    roleCode: "INGREDIENT_SUPPLIER_STAFF",
+    Role: { code: "INGREDIENT_SUPPLIER_STAFF", type: "SUPPLIER" },
+  });
+  const otherSupplierId = "00000000-0000-4000-8000-000000000066";
+  assert.deepEqual(
+    supplierStaffManagementScope({ ...principal, supplierId: otherSupplierId }),
+    { supplierId: otherSupplierId },
+  );
+  // The existing directory remains org-wide; the new resource is staff-only.
+  assert.deepEqual(listScopes.user(principal), { supplierId });
+
+  for (const denied of [
+    { ...principal, permissions: [] },
+    { ...principal, permissions: ["user.manage"] },
+    { ...principal, permissions: ["school_user.manage"] },
+    { ...principal, role: "INGREDIENT_SUPPLIER_STAFF" },
+    { ...principal, role: "FUTURE_SUPPLIER_ROLE" },
+    { ...principal, role: "SYSTEM_ADMIN" },
+    { ...principal, role: "SCHOOL_ADMINISTRATION" },
+    { ...principal, role: "COMMUNE_FOOD_SAFETY_OFFICER" },
+    { ...principal, supplierId: null },
+    { ...principal, schoolId: testStaff.schoolId },
+    { ...principal, communeFoodSafetyUnitId: testAdmin.id },
+    { ...principal, orgType: "SYSTEM" as const },
+    { ...principal, orgType: "SCHOOL" as const },
+    { ...principal, orgType: "AUTHORITY" as const },
+    { ...testAdmin, permissions: ["supplier_staff.manage"] },
+  ]) {
+    assert.throws(() => supplierStaffManagementScope(denied), status(403));
+    assert.throws(() => listScopes["supplier-staff"](denied), status(403));
   }
 });
 void test("school grade service requires BGH even when SYSTEM has class.manage", async () => {
@@ -525,4 +579,123 @@ void test("bootstrap preserves existing officer assignments while provisioning n
       !officerExists,
     );
   }
+});
+
+void test("serialization retries wait 20ms then 40ms and stop after three transactions", async (context) => {
+  context.mock.method(console, "error", () => undefined);
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  let attempts = 0;
+  const conflict = Object.assign(new Error("private serialization details"), {
+    code: "P2034",
+  });
+  const client = {
+    $transaction() {
+      attempts++;
+      return Promise.reject(conflict);
+    },
+  } as unknown as PrismaClient;
+  const outcome = assert.rejects(
+    () => authorizationTransaction(client, () => Promise.resolve(true)),
+    (error: unknown) =>
+      error instanceof HttpError &&
+      error.statusCode === 503 &&
+      !error.message.includes("private"),
+  );
+  try {
+    await yieldTurn();
+    assert.equal(attempts, 1);
+    context.mock.timers.tick(19);
+    await yieldTurn();
+    assert.equal(attempts, 1);
+    context.mock.timers.tick(1);
+    await yieldTurn();
+    assert.equal(attempts, 2);
+    context.mock.timers.tick(39);
+    await yieldTurn();
+    assert.equal(attempts, 2);
+    context.mock.timers.tick(1);
+    await outcome;
+    assert.equal(attempts, 3);
+  } finally {
+    context.mock.timers.reset();
+  }
+});
+
+void test("authorization refusals are neither delayed nor retried", async (context) => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  let attempts = 0;
+  const refused = new HttpError(403, "Quyền đã bị thu hồi");
+  const client = {
+    $transaction() {
+      attempts++;
+      return Promise.reject(refused);
+    },
+  } as unknown as PrismaClient;
+  try {
+    await assert.rejects(
+      () => authorizationTransaction(client, () => Promise.resolve(true)),
+      (error) => error === refused,
+    );
+    assert.equal(attempts, 1);
+  } finally {
+    context.mock.timers.reset();
+  }
+});
+
+void test("commit adapter serialization conflicts retry the entire completed callback", async (context) => {
+  context.mock.method(console, "error", () => undefined);
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  let attempts = 0,
+    callbacks = 0;
+  const commitConflict = Object.assign(new Error("private commit details"), {
+    name: "DriverAdapterError",
+    cause: { kind: "TransactionWriteConflict", originalCode: "40001" },
+  });
+  const client = {
+    async $transaction(operation: () => Promise<string>) {
+      attempts++;
+      const result = await operation();
+      if (attempts === 1) throw commitConflict;
+      return result;
+    },
+  } as unknown as PrismaClient;
+  const outcome = authorizationTransaction(client, () => {
+    callbacks++;
+    return Promise.resolve("committed");
+  }).then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
+  try {
+    await yieldTurn();
+    context.mock.timers.tick(20);
+    assert.deepEqual(await outcome, { value: "committed" });
+    assert.equal(attempts, 2);
+    assert.equal(callbacks, 2);
+  } finally {
+    context.mock.timers.reset();
+  }
+});
+
+void test("non-conflict adapter failures are sanitized without retry", async (context) => {
+  context.mock.method(console, "error", () => undefined);
+  let attempts = 0;
+  const failure = Object.assign(new Error("private adapter details"), {
+    name: "DriverAdapterError",
+    cause: { kind: "AuthenticationFailed", originalCode: "28P01" },
+  });
+  const client = {
+    $transaction() {
+      attempts++;
+      return Promise.reject(failure);
+    },
+  } as unknown as PrismaClient;
+  await assert.rejects(
+    () => authorizationTransaction(client, () => Promise.resolve(true)),
+    (error) =>
+      error instanceof HttpError &&
+      error.statusCode === 503 &&
+      !error.message.includes("private"),
+  );
+  assert.equal(attempts, 1);
 });

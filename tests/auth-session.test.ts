@@ -43,6 +43,8 @@ import { requirePermission } from "../src/middlewares/permission.middleware";
 import { globalErrorHandler } from "../src/middlewares/error.middleware";
 import { validateProfileUpdate } from "../src/modules/auth/profile.validation";
 import type { SessionUser } from "../src/types/session-user";
+import { ROLES } from "../src/constants/roles";
+import { validateLogin } from "../src/modules/auth/session.validation";
 
 process.env.NODE_ENV = "test";
 
@@ -100,7 +102,10 @@ async function authApi(context: TestContext, withRegistration = false) {
     },
     session: {
       async login({ identifier, password }, previousRefreshToken) {
-        if (identifier !== "admin" || password !== "correct-password")
+        if (
+          identifier !== "admin@example.test" ||
+          password !== "correct-password"
+        )
           throw new HttpError(401, "Sai thông tin đăng nhập");
         if (previousRefreshToken) await sessions.logout(previousRefreshToken);
         return {
@@ -345,7 +350,10 @@ void test("HTTP login uses HttpOnly cookies, no body tokens, and refresh/logout 
   const response = await http.request("/api/auth/login", {
     method: "POST",
     headers: csrfHeaders,
-    body: JSON.stringify({ identifier: "admin", password: "correct-password" }),
+    body: JSON.stringify({
+      identifier: "admin@example.test",
+      password: "correct-password",
+    }),
   });
   assert.equal(response.status, 200);
   const set = response.headers.getSetCookie();
@@ -425,7 +433,7 @@ void test("HTTP rejects CSRF, untrusted origins and duplicate auth cookies; sign
           method: "POST",
           headers,
           body: JSON.stringify({
-            identifier: "admin",
+            identifier: "admin@example.test",
             password: "correct-password",
           }),
         })
@@ -590,7 +598,10 @@ void test("a malformed old refresh cookie does not prevent a successful new logi
   const response = await http.request("/api/auth/login", {
     method: "POST",
     headers: { ...csrfHeaders, Cookie: `${REFRESH_COOKIE}=invalid-old-value` },
-    body: JSON.stringify({ identifier: "admin", password: "correct-password" }),
+    body: JSON.stringify({
+      identifier: "admin@example.test",
+      password: "correct-password",
+    }),
   });
   assert.equal(response.status, 200);
   assert.equal(response.headers.getSetCookie().length, 2);
@@ -621,6 +632,408 @@ function unverifiedIdentity(): SessionIdentity {
     RegistrationRequestAsApplicantUser: null,
   };
 }
+
+type LoginAccount = { identity: SessionIdentity; passwordHash: string };
+type LoginQuery = {
+  where: {
+    id?: string;
+    email?: string;
+    OR?: { username?: string; email?: string }[];
+  };
+  select: Record<string, unknown>;
+  take?: number;
+};
+
+function emailLoginFixture(accounts: LoginAccount[], beforeLock?: () => void) {
+  const { store, records } = memorySessions();
+  const lookups: LoginQuery[] = [];
+  const lockedReads: LoginQuery[] = [];
+  let locks = 0;
+  let legacyLookups = 0;
+  const matchesEmail = (account: LoginAccount, email: string) =>
+    account.identity.email.toLowerCase() === email.toLowerCase();
+  const project = (account: LoginAccount | undefined, query: LoginQuery) => {
+    if (!account) return null;
+    if (query.select.passwordHash)
+      return {
+        ...(query.select.id ? { id: account.identity.id } : {}),
+        passwordHash: account.passwordHash,
+      };
+    return account.identity;
+  };
+  const client = {
+    user: {
+      findUnique(query: LoginQuery) {
+        if (query.where.email !== undefined) lookups.push(query);
+        const account = accounts.find((entry) =>
+          query.where.email !== undefined
+            ? matchesEmail(entry, query.where.email)
+            : entry.identity.id === query.where.id,
+        );
+        return Promise.resolve(project(account, query));
+      },
+      findFirst(query: LoginQuery) {
+        lockedReads.push(query);
+        const account = accounts.find(
+          (entry) =>
+            entry.identity.id === query.where.id &&
+            query.where.email !== undefined &&
+            matchesEmail(entry, query.where.email),
+        );
+        return Promise.resolve(project(account, query));
+      },
+      // Model the previous query faithfully so policy regressions fail on
+      // authentication behavior, rather than on an absent mock operation.
+      findMany(query: LoginQuery) {
+        legacyLookups++;
+        const candidates = accounts.filter((account) =>
+          query.where.OR?.some(
+            (clause) =>
+              (clause.username !== undefined &&
+                clause.username === account.identity.username) ||
+              (clause.email !== undefined &&
+                matchesEmail(account, clause.email)),
+          ),
+        );
+        return Promise.resolve(
+          candidates.slice(0, query.take).map((entry) => project(entry, query)),
+        );
+      },
+    },
+    $queryRaw() {
+      if (locks++ === 0) beforeLock?.();
+      return Promise.resolve([]);
+    },
+    $transaction(operation: (tx: unknown) => unknown) {
+      return operation(client);
+    },
+  } as unknown as PrismaClient;
+  return {
+    service: createSessionService(
+      () => Promise.resolve(client),
+      createAuthSessions(store),
+    ),
+    records,
+    lookups,
+    lockedReads,
+    legacyLookups: () => legacyLookups,
+  };
+}
+
+function activeLoginAccount(
+  role: (typeof ROLES)[keyof typeof ROLES],
+  passwordHash: string,
+  number = 1,
+): LoginAccount {
+  const identity = unverifiedIdentity();
+  identity.id = `00000000-0000-4000-8000-${String(1000 + number).padStart(12, "0")}`;
+  identity.username = `login_user_${number}`;
+  identity.email = `login-${number}@example.test`;
+  identity.status = "ACTIVE";
+  identity.emailVerifiedAt = null;
+  const kind =
+    role === ROLES.SYSTEM_ADMIN
+      ? "SYSTEM"
+      : role.startsWith("INGREDIENT_SUPPLIER_")
+        ? "SUPPLIER"
+        : role === ROLES.COMMUNE_FOOD_SAFETY_OFFICER
+          ? "AUTHORITY"
+          : "SCHOOL";
+  identity.Role = { ...identity.Role, code: role, type: kind };
+  identity.schoolId = kind === "SCHOOL" ? testAdmin.roleId : null;
+  identity.supplierId = kind === "SUPPLIER" ? testAdmin.roleId : null;
+  identity.communeFoodSafetyUnitId =
+    kind === "AUTHORITY" ? testAdmin.roleId : null;
+  return { identity, passwordHash };
+}
+
+void test("email-only login normalizes identifiers and preserves the legacy password validation contract", () => {
+  assert.deepEqual(
+    validateLogin({ identifier: "  OWNER@Example.test  ", password: " a " }),
+    { identifier: "owner@example.test", password: " a " },
+  );
+  assert.equal(
+    validateLogin({ identifier: "not-an-email", password: "x" }).identifier,
+    "not-an-email",
+  );
+  assert.equal(
+    validateLogin({ identifier: "staff", password: "é".repeat(36) }).password,
+    "é".repeat(36),
+  );
+  for (const body of [
+    {},
+    { identifier: "", password: "x" },
+    { identifier: "  ", password: "x" },
+    { identifier: "x".repeat(321), password: "x" },
+    { identifier: 1, password: "x" },
+    { identifier: "a@example.test" },
+    { identifier: "a@example.test", password: "" },
+    { identifier: "a@example.test", password: "é".repeat(37) },
+    { identifier: "a@example.test", password: 1 },
+    { identifier: "a@example.test", password: "x", email: "a@example.test" },
+    { identifier: "a@example.test", password: "x", username: "staff" },
+    { identifier: "a@example.test", password: "x", supplierId: testAdmin.id },
+    { identifier: "a@example.test", password: "x", role: "SYSTEM_ADMIN" },
+    { identifier: "a@example.test", password: "x", orgType: "SYSTEM" },
+  ])
+    assert.throws(() => validateLogin(body), errorStatus(400));
+});
+
+void test("email-only login authenticates every role by normalized email and never by unmatched username", async (context) => {
+  const password = " Legacy password! ";
+  const passwordHash = await bcrypt.hash(password, 4);
+  for (const [index, role] of Object.values(ROLES).entries()) {
+    await context.test(role, async () => {
+      const account = activeLoginAccount(role, passwordHash, index + 1);
+      const fixture = emailLoginFixture([account]);
+      const result = await fixture.service.login(
+        validateLogin({
+          identifier: ` ${account.identity.email.toUpperCase()} `,
+          password,
+        }),
+      );
+      assert.equal(result.user.id, account.identity.id);
+      assert.equal(result.user.role, role);
+      assert.equal(result.user.status, "ACTIVE");
+      assert.equal(result.user.onboardingRequired, false);
+      assert.equal(result.user.emailVerifiedAt, null);
+      assert.equal(verifyToken(result.accessToken).sub, account.identity.id);
+      await assert.rejects(
+        () =>
+          fixture.service.login(
+            validateLogin({ identifier: account.identity.username, password }),
+          ),
+        errorStatus(401),
+        "A correct password must not allow username authentication",
+      );
+      assert.equal(fixture.lookups.length, 2);
+      assert.deepEqual(fixture.lookups[0].where, {
+        email: account.identity.email,
+      });
+      assert.deepEqual(fixture.lookups[0].select, {
+        id: true,
+        passwordHash: true,
+      });
+      assert.deepEqual(fixture.lockedReads[0].where, {
+        id: account.identity.id,
+        email: account.identity.email,
+      });
+      assert.equal(fixture.legacyLookups(), 0);
+      assert.equal(fixture.records.size, 1);
+    });
+  }
+});
+
+void test("email-only login uses one dummy comparison for unknown email or username and the same failure for a wrong password", async (context) => {
+  const passwordHash = await bcrypt.hash("correct-password", 4);
+  const account = activeLoginAccount(ROLES.SCHOOL_ADMINISTRATION, passwordHash);
+  const fixture = emailLoginFixture([account]);
+  const comparisons = context.mock.method(bcrypt, "compare");
+  for (const identifier of [
+    "unknown@example.test",
+    account.identity.username,
+    account.identity.email,
+  ]) {
+    await assert.rejects(
+      () =>
+        fixture.service.login(validateLogin({ identifier, password: "wrong" })),
+      (error: unknown) =>
+        error instanceof HttpError &&
+        error.statusCode === 401 &&
+        error.message === "Email hoặc mật khẩu không đúng",
+    );
+  }
+  assert.equal(comparisons.mock.callCount(), 3);
+  const hashes = comparisons.mock.calls.map((call) => call.arguments[1]);
+  assert.equal(hashes[0], hashes[1]);
+  assert.notEqual(hashes[0], passwordHash);
+  assert.equal(hashes[2], passwordHash);
+  assert.equal(fixture.records.size, 0);
+  assert.equal(fixture.lockedReads.length, 0);
+});
+
+void test("email-only login resolves email and username cross-field collisions exclusively to the email owner", async () => {
+  const passwordA = "Owner-A123!";
+  const passwordB = "Owner-B456!";
+  const ownerA = activeLoginAccount(
+    ROLES.INGREDIENT_SUPPLIER_STAFF,
+    await bcrypt.hash(passwordA, 4),
+    1,
+  );
+  const ownerB = activeLoginAccount(
+    ROLES.SCHOOL_KITCHEN_STAFF,
+    await bcrypt.hash(passwordB, 4),
+    2,
+  );
+  ownerB.identity.username = ownerA.identity.email;
+  ownerA.identity.username = ownerB.identity.email;
+  const fixture = emailLoginFixture([ownerA, ownerB]);
+  const first = await fixture.service.login(
+    validateLogin({
+      identifier: ownerB.identity.username,
+      password: passwordA,
+    }),
+  );
+  assert.equal(first.user.id, ownerA.identity.id);
+  const second = await fixture.service.login(
+    validateLogin({
+      identifier: ownerA.identity.username,
+      password: passwordB,
+    }),
+  );
+  assert.equal(second.user.id, ownerB.identity.id);
+  for (const [identifier, password] of [
+    [ownerA.identity.email, passwordB],
+    [ownerB.identity.email, passwordA],
+  ])
+    await assert.rejects(
+      () => fixture.service.login(validateLogin({ identifier, password })),
+      errorStatus(401),
+    );
+  assert.equal(fixture.records.size, 2);
+  assert.equal(fixture.legacyLookups(), 0);
+});
+
+void test("email-only login rejects credentials changed between lookup and the User lock before issuing a session", async (context) => {
+  const password = "Owner-A123!";
+  const passwordHash = await bcrypt.hash(password, 4);
+  const replacement = await bcrypt.hash("New-password-456!", 4);
+  for (const change of ["email", "passwordHash"] as const) {
+    await context.test(change, async () => {
+      const account = activeLoginAccount(
+        ROLES.SCHOOL_ADMINISTRATION,
+        passwordHash,
+      );
+      const originalEmail = account.identity.email;
+      const fixture = emailLoginFixture([account], () => {
+        if (change === "email") account.identity.email = "changed@example.test";
+        else account.passwordHash = replacement;
+      });
+      await assert.rejects(
+        () =>
+          fixture.service.login(
+            validateLogin({ identifier: originalEmail, password }),
+          ),
+        errorStatus(401),
+      );
+      assert.equal(fixture.records.size, 0);
+    });
+  }
+});
+
+void test("email-only login loads current role, membership and permissions after the User lock", async () => {
+  const password = "Owner-A123!";
+  const account = activeLoginAccount(
+    ROLES.SCHOOL_ADMINISTRATION,
+    await bcrypt.hash(password, 4),
+  );
+  const currentSupplierId = "00000000-0000-4000-8000-000000004321";
+  const fixture = emailLoginFixture([account], () => {
+    account.identity.Role.code = ROLES.INGREDIENT_SUPPLIER_STAFF;
+    account.identity.Role.type = "SUPPLIER";
+    account.identity.Role.rolePermissions = [
+      { permission: { code: "delivery.manage", isActive: true } },
+      { permission: { code: "dashboard.view", isActive: true } },
+    ];
+    account.identity.schoolId = null;
+    account.identity.supplierId = currentSupplierId;
+    account.identity.permissionDenials = [
+      {
+        supplierId: currentSupplierId,
+        schoolId: null,
+        communeFoodSafetyUnitId: null,
+        permission: { code: "delivery.manage" },
+      },
+    ];
+  });
+  const result = await fixture.service.login(
+    validateLogin({ identifier: account.identity.email, password }),
+  );
+  assert.equal(result.user.role, ROLES.INGREDIENT_SUPPLIER_STAFF);
+  assert.equal(result.user.orgType, "SUPPLIER");
+  assert.equal(result.user.schoolId, null);
+  assert.equal(result.user.supplierId, currentSupplierId);
+  assert.equal(result.user.status, "ACTIVE");
+  if (result.user.status === "ACTIVE")
+    assert.deepEqual(result.user.permissions, ["dashboard.view"]);
+});
+
+void test("email-only login preserves status and verified-admin onboarding checks when identity changes under the lock", async (context) => {
+  const password = "Owner-A123!";
+  const passwordHash = await bcrypt.hash(password, 4);
+  for (const status of ["LOCKED", "INACTIVE", "DEACTIVATED"] as const) {
+    await context.test(status, async () => {
+      const account = activeLoginAccount(
+        ROLES.INGREDIENT_SUPPLIER_STAFF,
+        passwordHash,
+      );
+      const fixture = emailLoginFixture([account], () => {
+        account.identity.status = status;
+      });
+      await assert.rejects(
+        () =>
+          fixture.service.login(
+            validateLogin({ identifier: account.identity.email, password }),
+          ),
+        errorStatus(403),
+      );
+      assert.equal(fixture.records.size, 0);
+    });
+  }
+  for (const role of [
+    ROLES.SCHOOL_ADMINISTRATION,
+    ROLES.INGREDIENT_SUPPLIER_ADMIN,
+  ]) {
+    await context.test(`verified onboarding ${role}`, async () => {
+      const account = activeLoginAccount(role, passwordHash);
+      const fixture = emailLoginFixture([account], () => {
+        account.identity.status = "UNVERIFIED";
+        account.identity.schoolId = null;
+        account.identity.supplierId = null;
+        account.identity.emailVerifiedAt = new Date("2026-01-01T00:00:00Z");
+      });
+      const result = await fixture.service.login(
+        validateLogin({ identifier: account.identity.email, password }),
+      );
+      assert.equal(result.user.status, "UNVERIFIED");
+      assert.equal(result.user.onboardingRequired, true);
+      assert(!("permissions" in result.user));
+    });
+  }
+  for (const state of [
+    "unverified-admin",
+    "unverified-staff",
+    "invalid-membership",
+  ] as const) {
+    await context.test(state, async () => {
+      const account = activeLoginAccount(
+        ROLES.INGREDIENT_SUPPLIER_STAFF,
+        passwordHash,
+      );
+      const fixture = emailLoginFixture([account], () => {
+        if (state === "invalid-membership") {
+          account.identity.schoolId = testAdmin.id;
+        } else {
+          account.identity.status = "UNVERIFIED";
+          if (state === "unverified-admin") {
+            account.identity.Role.code = ROLES.INGREDIENT_SUPPLIER_ADMIN;
+            account.identity.supplierId = null;
+          } else {
+            account.identity.emailVerifiedAt = new Date("2026-01-01T00:00:00Z");
+          }
+        }
+      });
+      await assert.rejects(
+        () =>
+          fixture.service.login(
+            validateLogin({ identifier: account.identity.email, password }),
+          ),
+        errorStatus(403),
+      );
+      assert.equal(fixture.records.size, 0);
+    });
+  }
+});
 
 void test("UNVERIFIED school/supplier admins receive onboarding identity without business permissions", () => {
   const unconfirmed = unverifiedIdentity();
@@ -761,24 +1174,9 @@ void test("login, refresh and current user recheck live account status", async (
   identity.status = "ACTIVE";
   identity.schoolId = testAdmin.roleId;
   const passwordHash = await bcrypt.hash("correct-password", 4);
-  const client = {
-    user: {
-      findMany: () => Promise.resolve([{ id: identity.id, passwordHash }]),
-      findUnique: (query: { select: Record<string, unknown> }) =>
-        Promise.resolve(
-          query.select.passwordHash ? { passwordHash } : identity,
-        ),
-    },
-    $queryRaw: () => Promise.resolve([]),
-    $transaction: (operation: (tx: unknown) => unknown) => operation(client),
-  } as unknown as PrismaClient;
-  const { store } = memorySessions();
-  const service = createSessionService(
-    () => Promise.resolve(client),
-    createAuthSessions(store),
-  );
+  const { service } = emailLoginFixture([{ identity, passwordHash }]);
   const login = await service.login({
-    identifier: identity.username,
+    identifier: identity.email,
     password: "correct-password",
   });
   assert.equal(login.user.status, "ACTIVE");
@@ -786,7 +1184,7 @@ void test("login, refresh and current user recheck live account status", async (
     School: { intakeState: "PAUSED" },
   });
   const pausedLogin = await service.login({
-    identifier: identity.username,
+    identifier: identity.email,
     password: "correct-password",
   });
   assert.equal(pausedLogin.user.status, "ACTIVE");
@@ -799,7 +1197,7 @@ void test("login, refresh and current user recheck live account status", async (
   await assert.rejects(
     () =>
       service.login({
-        identifier: identity.username,
+        identifier: identity.email,
         password: "correct-password",
       }),
     errorStatus(403),
@@ -819,7 +1217,10 @@ void test("session responses expose the same registration code without bigint ac
   const login = await http.request("/api/auth/login", {
     method: "POST",
     headers: csrfHeaders,
-    body: JSON.stringify({ identifier: "admin", password: "correct-password" }),
+    body: JSON.stringify({
+      identifier: "admin@example.test",
+      password: "correct-password",
+    }),
   });
   assert.equal(login.status, 200);
   let cookies = cookieHeader(login.headers);
