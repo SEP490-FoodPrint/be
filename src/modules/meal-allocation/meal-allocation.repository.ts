@@ -24,7 +24,11 @@ export async function readAllocationDay(
           },
         },
         menuDayDishes: {
-          select: { dishId: true, mealType: true },
+          select: {
+            dishId: true,
+            mealType: true,
+            Dish: { select: { name: true } },
+          },
           orderBy: [{ mealType: "asc" }, { dishId: "asc" }],
         },
         portionGroups: {
@@ -38,6 +42,7 @@ export async function readAllocationDay(
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       select: {
         id: true,
+        batchCode: true,
         menuDayId: true,
         mealType: true,
         status: true,
@@ -68,7 +73,14 @@ export async function readAllocationDay(
         mealType: true,
         totalPortions: true,
         status: true,
-        Class: { select: { id: true, name: true, gradeId: true } },
+        Class: {
+          select: {
+            id: true,
+            name: true,
+            gradeId: true,
+            grade: { select: { name: true } },
+          },
+        },
         portionGroups: {
           orderBy: { portionGroupId: "asc" },
           select: { portionGroupId: true, portionCount: true },
@@ -104,7 +116,12 @@ export type AllocationDay = Omit<RawAllocationDay, "menus" | "demands"> & {
     WeeklyMenu?: RawAllocationDay["menus"][number]["WeeklyMenu"];
   })[];
   demands: (Omit<RawAllocationDay["demands"][number], "Class"> & {
-    Class: { id: string; name: string; gradeId?: string | null };
+    Class: {
+      id: string;
+      name: string;
+      gradeId?: string | null;
+      grade?: { name: string } | null;
+    };
   })[];
 };
 

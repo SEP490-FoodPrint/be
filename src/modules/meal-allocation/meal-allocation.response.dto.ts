@@ -14,6 +14,42 @@ interface Totals {
   sampled: number;
 }
 
+export interface DishBatchSlot {
+  cookingBatchId: string;
+  batchCode?: string;
+  plannedPortions: number;
+  availablePortions: number;
+  autoAssigned: boolean;
+  entries: {
+    dailyMealPortionId: string;
+    className?: string;
+    allocatedPortions: number;
+    locked: boolean;
+  }[];
+}
+
+export interface DishAllocationGroup {
+  dishId: string;
+  dishName: string;
+  mealType: MealType;
+  totalRequiredPortions: number;
+  autoAssigned: boolean;
+  batches: DishBatchSlot[];
+}
+
+export interface GradeAllocationGroup {
+  gradeId: string;
+  gradeName: string;
+  demands: {
+    id: string;
+    classId: string;
+    className: string;
+    totalPortions: number;
+    locked: boolean;
+  }[];
+  dishes: DishAllocationGroup[];
+}
+
 export interface AllocationDayResponse {
   date: string;
   status: Status;
@@ -63,4 +99,5 @@ export interface AllocationDayResponse {
     totalPortions: number;
     locked: boolean;
   }[];
+  grades?: GradeAllocationGroup[];
 }

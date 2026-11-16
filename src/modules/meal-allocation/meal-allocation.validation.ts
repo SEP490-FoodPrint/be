@@ -15,6 +15,7 @@ export const allocationApplySchema = z.strictObject({
   batches: z.array(
     z.strictObject({
       cookingBatchId: requestUuidSchema,
+      dishId: requestUuidSchema.optional(),
       entries: z.array(
         z.strictObject({
           dailyMealPortionId: requestUuidSchema,

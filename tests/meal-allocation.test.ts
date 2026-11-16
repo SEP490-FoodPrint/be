@@ -15,6 +15,7 @@ function fixture(): AllocationDay {
         menuDayDishes: ["rice", "main"].map((dishId) => ({
           mealType: "LUNCH",
           dishId,
+          Dish: { name: dishId },
         })),
       },
     ],
@@ -30,6 +31,7 @@ function fixture(): AllocationDay {
     })),
     batches: [60, 40].map((plannedPortions, index) => ({
       id: `b${index}`,
+      batchCode: `b${index}`,
       menuDayId: "menu",
       mealType: "LUNCH",
       status: "COMPLETED",
@@ -62,7 +64,13 @@ function gradeFixture(): AllocationDay {
         { gradeId: `grade${index}`, grade: { name: `Khối ${index + 1}` } },
       ],
     },
-    menuDayDishes: [{ dishId: `dish${index}`, mealType: "LUNCH" }],
+    menuDayDishes: [
+      {
+        dishId: `dish${index}`,
+        mealType: "LUNCH",
+        Dish: { name: `dish${index}` },
+      },
+    ],
   }));
   data.batches.forEach((batch, index) => {
     batch.menuDayId = `menu${index}`;
@@ -141,6 +149,7 @@ void test("chỉ mở xác nhận khi cả ngày đủ suất và không cộng 
     ...afternoon.dishes.map(({ dishId }) => ({
       mealType: "AFTERNOON" as const,
       dishId,
+      Dish: { name: dishId },
     })),
   );
   data.demands[2].mealType = "AFTERNOON";
@@ -179,6 +188,7 @@ void test("không bù số suất giữa hai bữa và không đoán số suất
     ...["rice", "main"].map((dishId) => ({
       dishId,
       mealType: "AFTERNOON" as const,
+      Dish: { name: dishId },
     })),
   );
   data.demands[2].mealType = "AFTERNOON";
