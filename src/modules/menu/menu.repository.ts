@@ -116,6 +116,8 @@ const menuDetail = {
                   ingredientCategory: { select: { categoryName: true } },
 
                   defaultUnit: true,
+                  supplierId: true,
+                  Supplier: { select: { id: true, name: true, phone: true } },
                 },
               },
             },
@@ -179,14 +181,15 @@ const menuListInclude = {
           ingredients: {
             orderBy: { ingredientId: "asc" },
 
-            take: 3,
-
             include: {
               ingredient: {
                 select: {
                   id: true,
-
                   name: true,
+                  defaultUnit: true,
+                  supplierId: true,
+                  Supplier: { select: { id: true, name: true, phone: true } },
+                  ingredientCategory: { select: { categoryName: true } },
                 },
               },
             },

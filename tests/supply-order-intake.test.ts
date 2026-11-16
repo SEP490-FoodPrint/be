@@ -53,6 +53,8 @@ function setup() {
     list: () => Promise.resolve([]),
     listForSupplier: () => Promise.resolve([]),
     findDetailForSupplier: () => Promise.resolve(null),
+    findDetailForSchool: () => Promise.resolve(null),
+    findDetailById: () => Promise.resolve(null),
     findForSupplier: (
       _tx: Prisma.TransactionClient,
       orderId: string,
@@ -454,7 +456,7 @@ void test("supplier read roles and permissions are enforced without a system det
   const f = reads();
   for (const actor of [
     { ...testAdmin, permissions: ["supply_request.view"] },
-    { ...testStaff, permissions: ["supply_request.view"] },
+    { ...testStaff, schoolId: null, permissions: ["supply_request.view"] },
   ])
     await assert.rejects(f.service.getDetail({ id }, actor), statusError(403));
 });
@@ -1124,6 +1126,12 @@ void test("T111 accept preserves 4-field receipt without creating delivery and p
           acceptedAt: timestamp,
           createdAt: timestamp,
           updatedAt: timestamp,
+          requestedDeliveryDate: new Date("2026-11-20T00:00:00.000Z"),
+          sentAt: timestamp,
+          note: null,
+          Supplier: { id: supplierId, name: "NCC A", phone: "0900000000" },
+          School: { id: testStaff.schoolId!, name: "Trường A" },
+          supplyRequestItems: [],
         },
       ]),
   };
