@@ -2,7 +2,7 @@
 export { parseListQuery as validateDishListQuery } from "../../utils/list-query";
 
 import { z } from "zod";
-import { DishCategory } from "../../generated/prisma/enums";
+import { DishCategory, DishMealType } from "../../generated/prisma/enums";
 import {
   parseRequest,
   requestUuidSchema,
@@ -42,6 +42,12 @@ export const dishRecipeWriteSchema = z.strictObject({
     )
     .optional(),
   name: requiredText(255),
+  mealType: z
+    .enum(DishMealType, {
+      error: "Bữa ăn phải là bữa trưa, bữa xế hoặc cả hai bữa",
+    })
+    .nullable()
+    .optional(),
   category: z
     .union([requestUuidSchema, z.enum(DishCategory)])
     .nullable()

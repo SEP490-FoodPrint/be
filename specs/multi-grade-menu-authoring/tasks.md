@@ -26,4 +26,13 @@
 
 ## Dependencies
 
+- [x] T013 Correct explicit grade scope and reopening safeguards in FE/BE.
+- [x] T014 Share complete-week checks for submission and both approval paths; keep holiday exemptions.
+- [x] T015 Separate week/day presentation and add regressions, then run checks and commit.
+- [x] T016 Hide unassigned menus before pagination/counts and from all frontend choices; verify and commit without deleting database records.
+- [x] T017 Add versioned dish meal classification, validation, persistence and DTOs without changing historical menu meal types.
+- [x] T018 Add the catalogue column, create/edit input and detail label using existing FoodPrint styling.
+- [x] T019 Verify API, legacy preservation and browser workflows; add migration coverage for CI and commit on the current branches.
+- [ ] T020 Apply the reviewed migration to Azure dev after explicit task-specific confirmation and verify legacy rows and migration history.
+
 T003 -> T004/T005 -> T006; T007 -> T008 -> T009 -> T010; T011/T012 sau tất cả. Có thể kiểm tra FE và BE độc lập; không yêu cầu phân công agent.

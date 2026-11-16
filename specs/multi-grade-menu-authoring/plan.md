@@ -27,4 +27,14 @@ VI. Spec/branch: spec cùng slug với nhánh; không thay scaffold; PR BE vào 
 
 ## Validation Strategy
 
+### Dish meal classification
+
+Add nullable Dish.mealType with a separate DishMealType enum (LUNCH, AFTERNOON, BOTH) through a new additive versioned migration. No guessed backfill. Extend recipe request validation, repository persistence and explicit response mapping; omitted values preserve existing classification on update, null clears legacy metadata. FE requires choosing one of the three options when saving the current form, keeps grouping/newest ordering and grade quantities, and shows the saved value in list/detail. Validate enum rejection, create/update/preserve/null behavior, API round-trip and migration preservation of legacy dishes. Work remains on the current branch by user instruction; remote migration deployment follows AGENTS.md database authorization policy.
+
+### Reopening fix
+
+User follow-up: apply an assigned-scope predicate (school-wide flag or at least one grade relation) to repository list/count, summaries and week choices. Add the same guard to frontend cards, grade options and comparison for compatibility with cached/older responses. Preserve legitimate school-wide menus and school grade options without menus. No data deletion.
+
+Share pure holiday/week completeness checks between menu submission and both approval services, using school-scoped calendar reads inside the existing transaction. Preserve `isSchoolWide` through the week API and frontend adapters. Exclude unassigned records from selected-grade authoring, retain status guards and grade snapshots, and render daily progress from actual daily data. Test a one-day draft, a five-day lunch-only week, calendar holidays, reopening with an unassigned legacy record, and mixed daily/weekly states. No migration or Azure writes.
+
 Unit phải chứng minh recipe khác định lượng, shared selection, khối ngoại trường, thiếu recipe, dị ứng một khối, khóa đã duyệt, submit rollback và gửi đúng API. Chạy npm run validate, npm run test:unit và FE test/build. Test PostgreSQL thật chỉ dùng DB local disposable cấu hình rõ; không dùng Azure để chạy test.

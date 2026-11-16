@@ -236,9 +236,10 @@ function fixture(
         assert.deepEqual(
           new Set(args.where.IngredientEntry.ingredientId.in),
           new Set([
-            id(7),
+            ...menu.menuDays[0].menuDayDishes.flatMap((dish) =>
+              dish.ingredients.map((line) => line.ingredientId),
+            ),
             id(9),
-            ...(menu.menuDays[0].menuDayDishes.length > 1 ? [id(22)] : []),
           ]),
         );
         return failRead
@@ -436,9 +437,10 @@ void test("saving an unchanged grade menu preserves its recipe snapshot without 
   assert.equal(f.counts().committedWrites, 1);
 });
 
-void test("dish category persists through create/read/update and old updates do not clear it", async (t) => {
+void test("dish category and meal classification persist through create/read/update without clearing omitted values", async (t) => {
   const f = fixture(t);
   let category: string | null = null;
+  let mealType: "LUNCH" | "AFTERNOON" | "BOTH" | null = null;
   const categories = [
     { id: id(90), name: "Cơm / Tinh bột" },
     { id: id(91), name: "Món canh" },
@@ -466,6 +468,7 @@ void test("dish category persists through create/read/update and old updates do 
     name: "Rice",
     description: null,
     categoryId: category,
+    mealType,
     schoolCategory: categories.find((item) => item.id === category) ?? null,
     dishIngredientEntries: [
       {
@@ -477,8 +480,13 @@ void test("dish category persists through create/read/update and old updates do 
       },
     ],
   });
-  const save = ({ data }: { data: { categoryId?: string | null } }) => {
+  const save = ({
+    data,
+  }: {
+    data: { categoryId?: string | null; mealType?: typeof mealType };
+  }) => {
     if (data.categoryId !== undefined) category = data.categoryId;
+    if (data.mealType !== undefined) mealType = data.mealType;
     return Promise.resolve(row());
   };
   Object.assign(f.tx, {
@@ -530,36 +538,52 @@ void test("dish category persists through create/read/update and old updates do 
   };
   const created = await service.save(
     undefined,
-    validateDishRecipe({ ...input, category: "RICE_STARCH" }),
+    validateDishRecipe({
+      ...input,
+      category: "RICE_STARCH",
+      mealType: "LUNCH",
+    }),
     f.principal,
   );
   assert.equal(created.category, id(90));
   assert.equal(created.categoryLabel, "Cơm / Tinh bột");
+  assert.equal(created.mealType, "LUNCH");
   const legacyUpdate = await service.save(
     id(6),
     validateDishRecipe(input),
     f.principal,
   );
   assert.equal(legacyUpdate.category, id(90));
+  assert.equal(legacyUpdate.mealType, "LUNCH");
   const changed = await service.save(
     id(6),
-    validateDishRecipe({ ...input, category: "SOUP" }),
+    validateDishRecipe({ ...input, category: "SOUP", mealType: "BOTH" }),
     f.principal,
   );
   assert.equal(changed.category, id(91));
+  assert.equal(changed.mealType, "BOTH");
   const catalog = await service.catalog({ page: 1, limit: 10 }, f.principal);
   assert.equal(catalog.items[0].categoryLabel, "Món canh");
   assert.equal(catalog.categories.length, 2);
+  assert.equal(catalog.items[0].mealType, "BOTH");
+  const afternoon = await service.save(
+    id(6),
+    validateDishRecipe({ ...input, mealType: "AFTERNOON" }),
+    f.principal,
+  );
+  assert.equal(afternoon.mealType, "AFTERNOON");
   const cleared = await service.save(
     id(6),
-    validateDishRecipe({ ...input, category: null }),
+    validateDishRecipe({ ...input, category: null, mealType: null }),
     f.principal,
   );
   assert.equal(cleared.category, null);
   assert.equal(cleared.categoryLabel, null);
+  assert.equal(cleared.mealType, null);
   assert.throws(() =>
     validateDishRecipe({ ...input, category: "AUTOMATIC_FROM_NAME" }),
   );
+  assert.throws(() => validateDishRecipe({ ...input, mealType: "BREAKFAST" }));
 });
 
 for (const references of [0, 1])
@@ -747,6 +771,14 @@ void test("explicit draft save updates the same pending week and clears its subm
 
 void test("save and resubmit preserves the menu identity, checks every weekday and advances submission version", async (t) => {
   const f = pendingRevision(t);
+  f.menu.menuDays[0].menuDayDishes.push({
+    ...f.menu.menuDays[0].menuDayDishes[0],
+    mealType: "AFTERNOON",
+  });
+  f.menu.menuDays[0].mealSeasonings.push({
+    ...f.menu.menuDays[0].mealSeasonings[0],
+    mealType: "AFTERNOON",
+  });
   const previous = f.menu.submittedAt!;
   for (let offset = 1; offset < 5; offset++)
     f.menu.menuDays.push({
@@ -783,6 +815,39 @@ void test("incomplete resubmission rolls back writes rather than committing a dr
   assert.equal(f.counts().committedWrites, 0);
   assert.equal(f.menu.status, "PENDING_APPROVAL");
   assert.equal(f.menu.submittedAt?.toISOString(), "2026-11-09T01:00:00.000Z");
+  assert.equal(f.submission.mock.callCount(), 0);
+});
+
+void test("five saved weekdays with lunch only cannot be submitted or approved", async (t) => {
+  const f = pendingRevision(t);
+  f.allergyRows.splice(0);
+  f.menu.menuDays = Array.from({ length: 5 }, (_, index) => ({
+    ...structuredClone(f.menu.menuDays[0]),
+    id: id(40 + index),
+    menuDate: new Date(Date.UTC(2026, 10, 9 + index)),
+  }));
+  f.menu.status = "DRAFT";
+  await assert.rejects(f.service.submit(f.menu.id, f.principal), {
+    statusCode: 422,
+  });
+  f.menu.status = "PENDING_APPROVAL";
+  const identity = await f.tx.user.findUnique();
+  assert(identity);
+  identity.Role.rolePermissions.push({
+    permission: { code: "menu.approve", isActive: true },
+  });
+  const reviewer = {
+    ...f.principal,
+    permissions: [...f.principal.permissions, "menu.approve"],
+  };
+  await assert.rejects(
+    f.service.review(
+      f.menu.id,
+      { decision: "APPROVED", feedback: null, menuDayId: null },
+      reviewer,
+    ),
+    /chưa đầy đủ/,
+  );
   assert.equal(f.submission.mock.callCount(), 0);
 });
 
@@ -960,6 +1025,10 @@ void test("grade batch writes separate per-serving snapshots from one menu selec
     ["Khối 1–3", "Khối 4–5"],
   );
   assert.equal(result.submitted, false);
+  assert.deepEqual(
+    result.menus.map((menu) => menu.status),
+    ["DRAFT", "DRAFT"],
+  );
   assert.equal(result.hasUnresolvedAllergies, false);
   assert.equal(f.counts().committedWrites, 2);
   assert.equal(
@@ -1057,6 +1126,14 @@ void test("combined submission keeps every grade in draft when only one grade ha
 
 void test("group submission checks ownership first and rolls back a successful first submission if a later menu is incomplete", async (t) => {
   const f = fixture(t);
+  f.menu.menuDays[0].menuDayDishes.push({
+    ...f.menu.menuDays[0].menuDayDishes[0],
+    mealType: "AFTERNOON",
+  });
+  f.menu.menuDays[0].mealSeasonings.push({
+    ...f.menu.menuDays[0].mealSeasonings[0],
+    mealType: "AFTERNOON",
+  });
   f.allergyRows.length = 0;
   f.menu.grades = [];
   const before = structuredClone(f.menu);
@@ -1133,6 +1210,14 @@ void test("reopening an unchanged per-grade draft keeps frozen norms rather than
 
 void test("a complete grade batch submits all grade snapshots together", async (t) => {
   const f = gradeFixture(t);
+  f.menu.menuDays[0].menuDayDishes.push({
+    ...f.menu.menuDays[0].menuDayDishes[0],
+    mealType: "AFTERNOON",
+  });
+  f.menu.menuDays[0].mealSeasonings.push({
+    ...f.menu.menuDays[0].mealSeasonings[0],
+    mealType: "AFTERNOON",
+  });
   const stored = new Map<string, typeof f.menu>();
   f.menu.menuDays = Array.from({ length: 5 }, (_, index) => ({
     ...structuredClone(f.menu.menuDays[0]),

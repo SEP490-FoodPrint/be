@@ -1552,6 +1552,108 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
     },
   );
   await context.test(
+    "dish meal classification preserves legacy dishes and keeps cooking meal types unchanged",
+    async () => {
+      const name = `foodprint_migration_test_dishmeal_${randomUUID().replaceAll("-", "")}`;
+      await db.query(`CREATE DATABASE "${name}"`);
+      recordLocalTestDatabase(name);
+      const target = new URL(url);
+      target.pathname = `/${name}`;
+      const local = new Client({ connectionString: target.toString() });
+      await local.connect();
+      try {
+        const migration = "20261120000100_dish_meal_classification";
+        for (const folder of migrationNames.filter(
+          (value) => value < migration,
+        )) {
+          await local.query("SET search_path TO foodprint, public");
+          await local.query(
+            await readFile(
+              path.join(root, "prisma/migrations", folder, "migration.sql"),
+              "utf8",
+            ),
+          );
+        }
+        const school = (
+          await local.query<{ id: string }>(
+            "INSERT INTO foodprint.schools(name) VALUES ('Dish meal school') RETURNING id",
+          )
+        ).rows[0].id;
+        const dish = (
+          await local.query<{ id: string }>(
+            "INSERT INTO foodprint.dishes(school_id,name,description) VALUES ($1,'Existing dish','Preserve recipe history') RETURNING id",
+            [school],
+          )
+        ).rows[0].id;
+        const fields =
+          "id, school_id, name, category, category_id, description, status, created_at, updated_at";
+        const before = (
+          await local.query<Record<string, unknown>>(
+            `SELECT ${fields} FROM foodprint.dishes WHERE id=$1`,
+            [dish],
+          )
+        ).rows[0];
+        await local.query(
+          await readFile(
+            path.join(root, "prisma/migrations", migration, "migration.sql"),
+            "utf8",
+          ),
+        );
+        assert.deepEqual(
+          (
+            await local.query<Record<string, unknown>>(
+              `SELECT ${fields} FROM foodprint.dishes WHERE id=$1`,
+              [dish],
+            )
+          ).rows[0],
+          before,
+        );
+        assert.equal(
+          (
+            await local.query<{ meal_type: string | null }>(
+              "SELECT meal_type FROM foodprint.dishes WHERE id=$1",
+              [dish],
+            )
+          ).rows[0].meal_type,
+          null,
+        );
+        for (const mealType of ["LUNCH", "AFTERNOON", "BOTH", null]) {
+          await local.query(
+            "UPDATE foodprint.dishes SET meal_type=$2 WHERE id=$1",
+            [dish, mealType],
+          );
+          assert.equal(
+            (
+              await local.query<{ meal_type: string | null }>(
+                "SELECT meal_type FROM foodprint.dishes WHERE id=$1",
+                [dish],
+              )
+            ).rows[0].meal_type,
+            mealType,
+          );
+        }
+        assert.deepEqual(
+          (
+            await local.query<{ value: string }>(
+              "SELECT unnest(enum_range(NULL::foodprint.meal_type))::text value",
+            )
+          ).rows.map((row) => row.value),
+          ["LUNCH", "AFTERNOON"],
+        );
+        await assert.rejects(
+          local.query(
+            "UPDATE foodprint.dishes SET meal_type='BREAKFAST' WHERE id=$1",
+            [dish],
+          ),
+          (error) => sqlState(error, "22P02"),
+        );
+      } finally {
+        await local.end();
+        await db.query(`DROP DATABASE "${name}"`);
+      }
+    },
+  );
+  await context.test(
     "new batches require exactly one dish while legacy multi-dish history survives",
     async () => {
       const name = `foodprint_migration_test_single_${randomUUID().replaceAll("-", "")}`;

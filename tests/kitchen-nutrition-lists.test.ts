@@ -13,7 +13,10 @@ import {
   validateMenuWeekSchedule,
   validateAllergyCheck,
 } from "../src/modules/menu/menu.validation";
-import { menuRepository } from "../src/modules/menu/menu.repository";
+import {
+  menuRepository,
+  createMenuSummaryRepository,
+} from "../src/modules/menu/menu.repository";
 import {
   createKitchenService,
   readPlanningStock,
@@ -101,6 +104,10 @@ void test("week schedule keeps grade menus separate and selects only an exact gr
   });
   assert.equal(selected.days[0].menuDayId, "day-two");
   assert.equal(selected.targetScope, "Khối 5");
+  assert.equal(selected.completedDays, 0);
+  assert.equal(selected.days[0].isComplete, false);
+  assert.equal(selected.isWeekComplete, false);
+  assert.equal(selected.missingDays.length, 5);
   const exact = await service.getWeekSchedule("2026-11-09", principal, {
     gradeIds: [testAdmin.id],
   });
@@ -114,6 +121,58 @@ void test("week schedule keeps grade menus separate and selects only an exact gr
       menuId: "foreign-menu",
     }),
     (error: unknown) => error instanceof HttpError && error.statusCode === 404,
+  );
+});
+
+void test("weekly choices hide unassigned records while preserving real school-wide menus", async () => {
+  const { db } = academicCalendarDatabase();
+  const row = {
+    id: testStaff.id,
+    title: "Legacy",
+    status: "DRAFT",
+    isSchoolWide: false,
+    grades: [],
+    menuDays: [],
+  };
+  db.weeklyMenu.findMany = ((args: { where: { AND: unknown[] } }) => {
+    assert.deepEqual(args.where.AND[0], { schoolId: principal.schoolId });
+    assert.deepEqual(args.where.AND[2], {
+      OR: [{ isSchoolWide: true }, { grades: { some: {} } }],
+    });
+    return Promise.resolve(row.isSchoolWide ? [row] : []);
+  }) as never;
+  const service = createMenuService(undefined, () =>
+    Promise.resolve(db as never),
+  );
+  const schedule = await service.getWeekSchedule("2026-11-09", principal);
+  assert.equal(schedule.targetScope, "");
+  assert.equal(schedule.isSchoolWide, false);
+  assert.deepEqual(schedule.availableMenus, []);
+  assert.equal(schedule.weeklyMenuId, null);
+  row.isSchoolWide = true;
+  assert.equal(
+    (await service.getWeekSchedule("2026-11-09", principal)).targetScope,
+    "Toàn trường",
+  );
+});
+
+void test("menu summaries filter scope before applying the pagination window", async () => {
+  const schoolId = principal.schoolId;
+  assert(schoolId);
+  const repository = createMenuSummaryRepository((args) => {
+    assert.deepEqual(args.where, {
+      AND: [
+        { schoolId: principal.schoolId },
+        { OR: [{ isSchoolWide: true }, { grades: { some: {} } }] },
+      ],
+    });
+    assert.equal(args.skip, 2);
+    assert.equal(args.take, 3);
+    return Promise.resolve([]);
+  });
+  assert.deepEqual(
+    await repository.list({ page: 2, limit: 2 }, { schoolId }),
+    [],
   );
 });
 
@@ -403,7 +462,9 @@ void test("menu search, status and dates combine with school scope for both page
     search: "  Cá  ",
   });
   const result = await service.list(query, principal);
-  const where = calls[0].where as { AND: [unknown, Record<string, unknown>] };
+  const where = calls[0].where as {
+    AND: [unknown, Record<string, unknown>, unknown];
+  };
   assert.deepEqual(where.AND[0], { schoolId: principal.schoolId });
   assert.equal(where.AND[1].status, "APPROVED");
   assert.deepEqual(where.AND[1].weekStartDate, query.weekStartDate);
@@ -421,6 +482,9 @@ void test("menu search, status and dates combine with school scope for both page
     },
   ]);
   assert.deepEqual(calls[1].where, calls[0].where);
+  assert.deepEqual(where.AND[2], {
+    OR: [{ isSchoolWide: true }, { grades: { some: {} } }],
+  });
   assert.equal(calls[0].skip, 2);
   assert.equal(calls[0].take, 2);
   assert.deepEqual(calls[0].orderBy, [

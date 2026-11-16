@@ -1,4 +1,4 @@
-import type { DishCategory } from "../../generated/prisma/enums";
+import type { DishCategory, DishMealType } from "../../generated/prisma/enums";
 
 export interface DishCategoryOptionDTO {
   key: DishCategory;
@@ -8,6 +8,7 @@ export interface DishCategoryOptionDTO {
 export interface DishRecipeDTO {
   id: string;
   name: string;
+  mealType: DishMealType | null;
   category: string | null;
   categoryLabel: string | null;
   description: string | null;

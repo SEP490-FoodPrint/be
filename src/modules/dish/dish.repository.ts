@@ -1,4 +1,5 @@
 import type { Prisma } from "../../generated/prisma/client";
+import type { DishMealType } from "../../generated/prisma/enums";
 type Tx = Prisma.TransactionClient;
 const recipeInclude = {
   gradeRecipes: {
@@ -162,6 +163,7 @@ export const dishRecipeRepository = {
       requiredQuantity: string;
       unit: string;
     }[],
+    mealType?: DishMealType | null,
   ) {
     if (id) {
       const found = await tx.dish.findFirst({
@@ -174,6 +176,7 @@ export const dishRecipeRepository = {
     const data = {
       name,
       description,
+      ...(mealType !== undefined ? { mealType } : {}),
       ...(categoryId !== undefined ? { categoryId, category: null } : {}),
       dishIngredientEntries: { create: lines },
     };

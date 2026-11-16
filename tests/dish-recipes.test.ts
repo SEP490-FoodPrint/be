@@ -16,6 +16,32 @@ import {
 
 type Rows = Parameters<typeof aggregateDishRecipes>[0];
 
+void test("dish meal classification validates only lunch, afternoon and both while preserving legacy omission", () => {
+  const input = {
+    name: "Món mẫu",
+    lines: [
+      {
+        ingredientEntryId: "00000000-0000-4000-8000-000000000001",
+        ingredientRole: "MAIN",
+        requiredQuantity: "80",
+        unit: "g",
+      },
+    ],
+  };
+  for (const mealType of ["LUNCH", "AFTERNOON", "BOTH", null])
+    assert.equal(validateDishRecipe({ ...input, mealType }).mealType, mealType);
+  assert.equal(validateDishRecipe(input).mealType, undefined);
+  for (const mealType of [
+    "BREAKFAST",
+    "lunch",
+    "",
+    ["LUNCH"],
+    1,
+    { value: "BOTH" },
+  ])
+    assert.throws(() => validateDishRecipe({ ...input, mealType }));
+});
+
 void test("dish catalogue requests newest first with stable pagination within the school", async () => {
   let captured: Record<string, unknown> | undefined;
   const tx = {

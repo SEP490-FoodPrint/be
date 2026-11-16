@@ -47,7 +47,18 @@ Nhân viên dinh dưỡng chọn các khối và lập lịch món chung; mỗi 
 
 ## Requirements
 
+### Reopening and approval safeguards (2026-11-16)
+
+- A menu with no grade links is school-wide only when `isSchoolWide` is true. Unassigned legacy records are excluded from menu lists, weekly choices, grade comparison and authoring, including the all-grades view. Filter before pagination/counting. Do not display an extra “Chưa gán khối” item or delete its stored history.
+- Reopening matching grade drafts restores their own snapshots; genuinely different schedules or approval states remain protected with an actionable message identifying the affected grades.
+- Saving a day keeps the week in draft. Submission and either approval endpoint require every non-holiday weekday to contain both lunch and afternoon dishes. Calendar holidays remain exempt.
+- Weekly and daily status must remain separate in the frontend. Missing days display “Chưa tạo”, even for inconsistent historical records already marked approved; approved content stays locked.
+- Inspection of Azure is read-only for this fix. Existing inconsistent records are reported, never automatically repaired or deleted.
+
 ### Functional Requirements
+
+- **FR-007**: Danh mục món ăn có phân loại Bữa trưa, Bữa xế hoặc Cả hai bữa. Hiển thị cột Bữa ăn, nhập ở form thêm/chỉnh sửa và xem lại trong chi tiết. Người dùng xác nhận cho phép cả hai bữa.
+- **FR-008**: Phân loại lưu tại món ăn, dùng enum riêng không mở rộng MealType của thực đơn/lô chế biến. Món cũ để null (chưa phân loại); request cũ không gửi trường này khi cập nhật phải giữ giá trị hiện có. Không đổi công thức, định lượng từng khối, lịch món lịch sử hoặc tự giới hạn chọn món khi soạn thực đơn.
 
 - **FR-001**: Tạo lịch món chung và xem định lượng theo từng khối từ công thức đã cấu hình.
 - **FR-002**: Lưu riêng ảnh chụp định lượng cho mỗi khối; sửa danh mục sau đó không đổi thực đơn đã lưu.

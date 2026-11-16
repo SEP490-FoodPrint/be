@@ -1139,6 +1139,21 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             menuDate: "2032-01-05",
             meals: [
               {
+                mealType: "AFTERNOON",
+                dishes: [
+                  {
+                    name: "Group afternoon",
+                    ingredients: [
+                      {
+                        ingredientId: grRice.ingredient.id,
+                        quantityPerPortion: 80,
+                        unit: "g",
+                      },
+                    ],
+                  },
+                ],
+              },
+              {
                 mealType: "LUNCH",
                 dishes: [
                   {

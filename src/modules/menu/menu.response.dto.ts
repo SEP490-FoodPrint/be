@@ -25,6 +25,7 @@ export interface MenuAcademicCalendarDTO {
 }
 
 export interface MenuWeekScheduleDTO {
+  isSchoolWide: boolean;
   availableMenus: {
     id: string;
     title: string | null;
@@ -58,6 +59,7 @@ export interface MenuWeekScheduleDTO {
     menuDayId: string | null;
     status: string;
     dishCount: number;
+    isComplete: boolean;
   }[];
   totalSchoolDays: number;
   completedDays: number;
