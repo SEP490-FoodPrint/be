@@ -5,7 +5,7 @@ import type {
 import { getPrisma } from "../../utils/database";
 import { listWindow, type ListQuery } from "../../utils/list-query";
 
-const baseListSelect = {
+const listSelect = {
   id: true,
   requestNo: true,
   schoolId: true,
@@ -14,31 +14,6 @@ const baseListSelect = {
   acceptedAt: true,
   createdAt: true,
   updatedAt: true,
-} as const satisfies Prisma.SupplyRequestSelect;
-
-const listSelect = {
-  ...baseListSelect,
-  requestedDeliveryDate: true,
-  note: true,
-  sentAt: true,
-  Supplier: { select: { id: true, name: true, phone: true } },
-  School: { select: { id: true, name: true } },
-  supplyRequestItems: {
-    select: {
-      id: true,
-      ingredientEntryId: true,
-      requestedQuantity: true,
-      unit: true,
-      note: true,
-      IngredientEntry: {
-        select: {
-          ingredientId: true,
-          Ingredient: { select: { id: true, name: true, defaultUnit: true } },
-        },
-      },
-    },
-    orderBy: [{ id: "asc" }],
-  },
 } as const satisfies Prisma.SupplyRequestSelect;
 const supplierOrderStatuses = [
   "SENT",
@@ -51,7 +26,7 @@ type SupplierOrderListQuery = ListQuery & {
   status?: Exclude<SupplyRequestStatus, "DRAFT">;
 };
 const supplierListSelect = {
-  ...baseListSelect,
+  ...listSelect,
   requestedDeliveryDate: true,
   sentAt: true,
   School: { select: { id: true, name: true } },

@@ -165,28 +165,10 @@ export function createSupplyOrderService(
           requestNo: row.requestNo,
           schoolId: row.schoolId,
           supplierId: row.supplierId,
-          supplierName: row.Supplier?.name ?? null,
-          supplierPhone: row.Supplier?.phone ?? null,
-          requestedDeliveryDate:
-            row.requestedDeliveryDate?.toISOString().slice(0, 10) ?? null,
-          note: row.note,
           status: row.status,
-          sentAt: row.sentAt?.toISOString() ?? null,
           acceptedAt: row.acceptedAt?.toISOString() ?? null,
           createdAt: row.createdAt.toISOString(),
           updatedAt: row.updatedAt.toISOString(),
-          items:
-            row.supplyRequestItems?.map((item) => ({
-              id: item.id,
-              ingredientEntryId: item.ingredientEntryId,
-              ingredientName:
-                item.IngredientEntry?.Ingredient?.name ?? "Nguyên liệu",
-              name: item.IngredientEntry?.Ingredient?.name ?? "Nguyên liệu",
-              quantity: Number(item.requestedQuantity),
-              requestedQuantity: item.requestedQuantity.toString(),
-              unit: item.unit,
-              note: item.note,
-            })) ?? [],
         })),
         pagination: page.pagination,
       };
