@@ -4,7 +4,7 @@ import {
   validateIngredientCreate,
   validateIngredientUpdate,
   validateIngredientQuery,
-  validateIngredientHide,
+  validateIngredientChangeStatus,
 } from "../src/modules/ingredient/ingredient.validation";
 import { RequestValidationError } from "../src/utils/request-validation";
 
@@ -91,7 +91,7 @@ void test("ingredient validation aggregates paths and rejects unsafe image refer
       RequestValidationError,
     );
 });
-void test("management queries and hide bodies are strict and bounded", () => {
+void test("management queries and status bodies are strict and bounded", () => {
   assert.deepEqual(validateIngredientQuery({}), { page: 1, limit: 20 });
   for (const value of [
     { page: "0" },
@@ -101,11 +101,24 @@ void test("management queries and hide bodies are strict and bounded", () => {
     { page: ["1"] },
   ])
     assert.throws(() => validateIngredientQuery(value), RequestValidationError);
-  assert.deepEqual(validateIngredientHide(undefined), {});
-  assert.throws(
-    () => validateIngredientHide({ status: "ACTIVE" }),
-    RequestValidationError,
-  );
+  for (const status of ["ACTIVE", "INACTIVE"])
+    assert.deepEqual(validateIngredientChangeStatus({ status }), { status });
+  for (const input of [
+    undefined,
+    null,
+    {},
+    [],
+    { status: null },
+    { status: "" },
+    { status: "active" },
+    { status: " ACTIVE" },
+    { status: 1 },
+    { status: "ACTIVE", supplierId: "secret" },
+  ])
+    assert.throws(
+      () => validateIngredientChangeStatus(input),
+      RequestValidationError,
+    );
 });
 
 import express from "express";
@@ -120,7 +133,10 @@ import {
   type IngredientRepository,
   type IngredientRow,
 } from "../src/modules/ingredient/ingredient.repository";
-import { globalErrorHandler } from "../src/middlewares/error.middleware";
+import {
+  globalErrorHandler,
+  notFoundHandler,
+} from "../src/middlewares/error.middleware";
 import { HttpError } from "../src/utils/http-error";
 import { startHttp } from "./helpers/http";
 import { testAdmin } from "./helpers/authorization";
@@ -139,6 +155,7 @@ function fixture() {
   const timestamp = new Date("2026-11-08T00:00:00Z");
   let current = principal;
   let status = "ACTIVE";
+  let mutationCount = 0;
   const tx = {} as Prisma.TransactionClient;
   const seen: unknown[] = [];
   const rows: IngredientRow[] = [
@@ -186,12 +203,14 @@ function fixture() {
       );
     },
     categories: () => Promise.resolve([]),
-    find: (scope, id) =>
-      Promise.resolve(
+    find: (scope, id, client) => {
+      if (client) assert.equal(client, tx);
+      return Promise.resolve(
         rows.find(
           (row) => row.id === id && row.supplierId === scope.supplierId,
         ) ?? null,
-      ),
+      );
+    },
     create: (scope, input, client) => {
       assert.equal(client, tx);
       const row = { ...rows[0], ...input, supplierId: scope.supplierId };
@@ -206,12 +225,13 @@ function fixture() {
       if (row) Object.assign(row, input);
       return Promise.resolve(row ?? null);
     },
-    hide: (scope, id, client) => {
+    changeStatus: (scope, id, targetStatus, client) => {
       assert.equal(client, tx);
+      mutationCount++;
       const row = rows.find(
         (r) => r.id === id && r.supplierId === scope.supplierId,
       );
-      if (row) row.status = "INACTIVE";
+      if (row) row.status = targetStatus;
       return Promise.resolve(row ?? null);
     },
   };
@@ -226,6 +246,7 @@ function fixture() {
     repo,
     rows,
     seen,
+    mutationCount: () => mutationCount,
     setActor: (actor: AuthPrincipal) => {
       current = actor;
     },
@@ -327,6 +348,18 @@ void test("management services enforce supplier scopes, safe serialization and P
     () => f.service.getDetail({ ingredientId }, other),
     statusIs(404),
   );
+  f.setActor(other);
+  for (const id of [ingredientId, "44444444-4444-4444-8444-444444444444"])
+    await assert.rejects(
+      () =>
+        f.service.changeStatus(
+          { ingredientId: id },
+          { status: "ACTIVE" },
+          other,
+        ),
+      statusIs(404),
+    );
+  assert.equal(f.mutationCount(), 0);
 });
 
 void test("every management operation rejects staff even with manage and inactive suppliers", async () => {
@@ -342,7 +375,9 @@ void test("every management operation rejects staff even with manage and inactiv
         actor,
       ),
     () => f.service.update({ ingredientId }, { name: "X" }, actor),
-    () => f.service.hide({ ingredientId }, {}, actor),
+    () =>
+      f.service.changeStatus({ ingredientId }, { status: "INACTIVE" }, actor),
+    () => f.service.changeStatus({ ingredientId }, { status: "ACTIVE" }, actor),
   ];
   for (const actor of [
     staff,
@@ -369,18 +404,46 @@ void test("write rechecks live role, membership and permissions inside the share
       statusIs(403),
     );
     assert.equal(f.rows[0].name, "Rice");
+    for (const status of ["ACTIVE", "INACTIVE"] as const)
+      await assert.rejects(
+        () => f.service.changeStatus({ ingredientId }, { status }, principal),
+        statusIs(403),
+      );
+    assert.equal(f.mutationCount(), 0);
   }
 });
-void test("hide is idempotent, keeps rows and does not reactivate on edit", async () => {
+void test("status changes are idempotent and preserve data across cycles", async () => {
   const f = fixture();
-  const before = f.rows[0].updatedAt;
-  assert.equal(
-    (await f.service.hide({ ingredientId }, {}, principal)).status,
-    "INACTIVE",
-  );
-  await f.service.hide({ ingredientId }, {}, principal);
+  f.rows[0].coverImage = "/cover.jpg";
+  f.rows[0].imageDescription = ["/first.jpg", "/second.jpg"];
+  const before = {
+    ...f.rows[0],
+    imageDescription: [...f.rows[0].imageDescription],
+  };
+  for (let i = 0; i < 3; i++) {
+    for (const status of ["INACTIVE", "ACTIVE"] as const) {
+      const result = await f.service.changeStatus(
+        { ingredientId },
+        { status },
+        principal,
+      );
+      assert.equal(result.status, status);
+      const count = f.mutationCount();
+      assert.equal(
+        (await f.service.changeStatus({ ingredientId }, { status }, principal))
+          .status,
+        status,
+      );
+      assert.equal(f.mutationCount(), count);
+    }
+  }
   assert.equal(f.rows.length, 1);
-  assert.equal(f.rows[0].updatedAt, before);
+  assert.deepEqual(f.rows[0], before);
+  await f.service.changeStatus(
+    { ingredientId },
+    { status: "INACTIVE" },
+    principal,
+  );
   await f.service.update(
     { ingredientId },
     { description: "Hidden edit" },
@@ -410,6 +473,7 @@ void test("HTTP routes guard all management actions and preserve validation erro
       next();
     }),
   );
+  app.use(notFoundHandler);
   app.use(globalErrorHandler);
   const http = await startHttp(app);
   context.after(() => http.close());
@@ -419,7 +483,7 @@ void test("HTTP routes guard all management actions and preserve validation erro
     ["GET", "/" + ingredientId],
     ["POST", ""],
     ["PATCH", "/" + ingredientId],
-    ["POST", "/" + ingredientId + "/hide"],
+    ["PATCH", "/" + ingredientId + "/status"],
   ];
   actor = { ...principal, role: "INGREDIENT_SUPPLIER_STAFF" };
   for (const [method, suffix] of endpoints)
@@ -429,6 +493,39 @@ void test("HTTP routes guard all management actions and preserve validation erro
       403,
     );
   actor = principal;
+  const base = "/api/ingredients/management/" + ingredientId;
+  const oldRoute = await http.request(base + "/hide", { method: "POST" });
+  assert.equal(oldRoute.status, 404);
+  assert.equal(f.mutationCount(), 0);
+  for (const status of ["INACTIVE", "ACTIVE"] as const) {
+    const changed = await http.request(base + "/status", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status }),
+    });
+    assert.equal(changed.status, 200);
+    assert.equal(
+      (changed.body as { data: { status: string } }).data.status,
+      status,
+    );
+    const detail = await http.request(base);
+    assert.equal(
+      (detail.body as { data: { status: string } }).data.status,
+      status,
+    );
+  }
+  const invalidStatus = await http.request(base + "/status", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status: "secret", supplierId: "secret" }),
+  });
+  assert.equal(invalidStatus.status, 400);
+  assert(!JSON.stringify(invalidStatus.body).includes("secret"));
+  const fields = (
+    invalidStatus.body as { error: { fields: { field: string }[] } }
+  ).error.fields;
+  assert(fields.some((issue) => issue.field === "status"));
+  assert(fields.some((issue) => issue.field === "supplierId"));
   assert.equal(
     (await http.request("/api/ingredients/management/categories")).status,
     200,
@@ -453,14 +550,14 @@ void test("HTTP routes guard all management actions and preserve validation erro
 });
 
 void test("repository applies supplier ownership to reads and writes using the supplied tx", async () => {
-  const calls: { where?: unknown }[] = [];
+  const calls: { where?: unknown; data?: unknown }[] = [];
   const tx = {
     ingredient: {
       findFirst: (args: { where: unknown }) => {
         calls.push(args);
         return Promise.resolve(null);
       },
-      updateMany: (args: { where: unknown }) => {
+      updateMany: (args: { where: unknown; data: unknown }) => {
         calls.push(args);
         return Promise.resolve({ count: 0 });
       },
@@ -469,16 +566,17 @@ void test("repository applies supplier ownership to reads and writes using the s
   const repo = createIngredientRepository();
   await repo.find({ supplierId }, ingredientId, tx);
   await repo.update({ supplierId }, ingredientId, { name: "X" }, tx);
-  await repo.hide({ supplierId }, ingredientId, tx);
+  await repo.changeStatus({ supplierId }, ingredientId, "INACTIVE", tx);
   assert.deepEqual(
     calls.map((c) => c.where),
     [
       { id: ingredientId, supplierId },
       { id: ingredientId, supplierId },
-      { id: ingredientId, supplierId, status: "ACTIVE" },
+      { id: ingredientId, supplierId, status: { not: "INACTIVE" } },
       { id: ingredientId, supplierId },
     ],
   );
+  assert.deepEqual(calls[2].data, { status: "INACTIVE" });
 });
 
 void test("management pagination bounds results and database errors never leak driver details", async () => {

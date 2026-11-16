@@ -875,9 +875,10 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
         await db.supplyRequest.findUniqueOrThrow({ where: { id: sentId } })
       ).contractSnapshot;
       const hidden = await call(
-        "/ingredients/management/" + ingredientA + "/hide",
+        "/ingredients/management/" + ingredientA + "/status",
         admin,
-        "POST",
+        "PATCH",
+        { status: "INACTIVE" },
       );
       assert.equal(hidden.status, 200);
       for (const kind of ["main", "seasoning"]) {
@@ -937,6 +938,28 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
         (await db.ingredientEntry.findUniqueOrThrow({ where: { id: entryA } }))
           .ingredientId,
         ingredientA,
+      );
+      const restored = await call(
+        "/ingredients/management/" + ingredientA + "/status",
+        admin,
+        "PATCH",
+        { status: "ACTIVE" },
+      );
+      assert.equal(restored.status, 200);
+      const restoredChoices = await call(
+        "/v1/menus/ingredient-options/main",
+        health,
+      );
+      assert.equal(restoredChoices.status, 200);
+      assert(
+        (restoredChoices.data.items as { id: string }[]).some(
+          (row) => row.id === ingredientA,
+        ),
+      );
+      assert.deepEqual(
+        (await db.supplyRequest.findUniqueOrThrow({ where: { id: sentId } }))
+          .contractSnapshot,
+        oldSnapshot,
       );
     },
   );
