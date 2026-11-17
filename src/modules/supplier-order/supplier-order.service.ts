@@ -1,6 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readPublicTraceOrigin } from "../../config/env";
 import { Prisma } from "../../generated/prisma/client";
+import {
+  blockchainProofService,
+  type BlockchainProofService,
+  type ProofRef,
+} from "../blockchain-proof/blockchain-proof.service";
 import type { AuthPrincipal } from "../../types/auth";
 import { databaseOperation, loadPrincipal } from "../../utils/authorization";
 import { formatDeliveryCode } from "../../utils/delivery-code";
@@ -63,6 +68,11 @@ import type {
 } from "./supplier-order.response.dto";
 
 type Dependencies = {
+  /** Anchors the dispatch declaration (UC-50, UC-51) after commit. */
+  proofs?: Pick<
+    BlockchainProofService,
+    "prepareDeliveryDeclared" | "scheduleAnchor"
+  >;
   transaction?: <T>(
     fn: (tx: Prisma.TransactionClient) => Promise<T>,
   ) => Promise<T>;
@@ -374,6 +384,7 @@ export function createSupplierOrderService(
         }
       }
     });
+  const proofs = dependencies?.proofs ?? blockchainProofService;
   const guard = dependencies?.guard ?? createIntakeAccessService();
   const fallbackGuard = dependencies?.guard?.assertDeliveryContinuation
     ? null
@@ -1054,7 +1065,9 @@ export function createSupplierOrderService(
         currentExpectedArrival.getTime() === expectedArrivalAt.getTime() &&
         currentPlate === body.vehiclePlate;
 
-      return transaction(async (tx) => {
+      let proof: ProofRef | null = null;
+      const result = await transaction(async (tx) => {
+        proof = null;
         const continuation = await assertDeliveryContinuation(tx, principal, {
           deliveryId: params.id,
           requiredPermission: "delivery.manage",
@@ -1170,8 +1183,15 @@ export function createSupplierOrderService(
           );
         }
 
+        proof = await proofs.prepareDeliveryDeclared(
+          tx,
+          params.id,
+          continuation.actor.id,
+        );
         return mapSupplierOrderDetail(current, continuation.actor);
       });
+      proofs.scheduleAnchor(proof);
+      return result;
     },
   };
 }

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { id as keccakId } from "ethers";
 import { Prisma } from "../src/generated/prisma/client";
 import {
   buildCookingCompletedPayload,
@@ -15,12 +16,16 @@ import {
 } from "../src/modules/blockchain-proof/blockchain-proof.payload";
 import {
   createBlockchainProofService,
+  linkChecks,
   explorerUrl,
   proofRecordId,
   safeError,
   type ProofChain,
 } from "../src/modules/blockchain-proof/blockchain-proof.service";
-import type { VersionRow } from "../src/modules/blockchain-proof/blockchain-proof.repository";
+import {
+  mealStatus,
+  type VersionRow,
+} from "../src/modules/blockchain-proof/blockchain-proof.repository";
 import { createRetainedSampleService } from "../src/modules/retained-sample/retained-sample.service";
 import { testStaff } from "./helpers/authorization";
 
@@ -30,7 +35,7 @@ const C = "33333333-3333-4333-8333-333333333333";
 const hashOf = (char: string) => `0x${char.repeat(64)}`;
 const at = new Date("2026-11-15T01:02:03.000Z");
 const DELIVERY_VECTOR =
-  "0xde533aa1a99092fc5caf8a326a74af3441943c8b64233f46883d1e19142c7161";
+  "0xc36c09fe9cbb4c23bf441044347a46a7cdbe488385dd11e63eec39f325ee3e1d";
 
 const delivery = (): DeliveryInspectedInput => ({
   id: A,
@@ -45,6 +50,7 @@ const delivery = (): DeliveryInspectedInput => ({
   receivedAt: at,
   receivedByUserId: B,
   vehiclePlate: "29A-12345",
+  declarationHash: null,
   approvals: [
     {
       roleCode: "SCHOOL_NUTRITION_OFFICER",
@@ -124,7 +130,8 @@ void test("delivery payload sorts arrays, formats Decimal and @db.Date, and has 
     (lots[1] as unknown as { manufactureDate: string }).manufactureDate,
     "2026-11-01",
   );
-  assert.equal(payload.v, 1);
+  assert.equal(payload.v, 2);
+  assert.equal(payload.declarationHash, null);
   assert.equal(payload.type, "DELIVERY_INSPECTED");
   assert.match(hashPayload(payload), /^0x[0-9a-f]{64}$/);
   assert.equal(hashPayload(payload), DELIVERY_VECTOR);
@@ -217,14 +224,8 @@ void test("cooking, stored and disposed payloads keep their reference hashes and
 });
 
 void test("record id, explorer link and stored errors follow the spec", () => {
-  assert.equal(
-    proofRecordId("deliveries", A),
-    proofRecordId("deliveries", A.toString()),
-  );
-  assert.notEqual(
-    proofRecordId("deliveries", A),
-    proofRecordId("cooking-batches", A),
-  );
+  assert.equal(proofRecordId(A), keccakId(`foodprint:blockchain_proofs:${A}`));
+  assert.notEqual(proofRecordId(A), proofRecordId(B));
   assert.equal(explorerUrl("localhost", hashOf("a")), null);
   assert.equal(
     explorerUrl("sepolia", hashOf("a")),
@@ -304,21 +305,103 @@ function proofHarness(
       },
     ],
   };
+  const distribution = [
+    {
+      id: A,
+      dailyMealPortionId: C,
+      distributedAt: at,
+      distributedByUserId: B,
+      DailyMealPortion: { classId: A, mealType: "LUNCH", totalPortions: 8 },
+      mealAllocationBatches: [
+        { cookingBatchId: B, dishId: A, allocatedPortions: 8 },
+      ],
+    },
+  ];
+  const saved: string[] = [];
+  const chainSubjects = {
+    schoolId: C,
+    date: "2026-11-15",
+    cookingBatchIds: [B],
+    sampleIds: [],
+    deliveryIds: [A],
+    lotDeliveries: new Map([[C, A]]),
+    meal: {
+      gradeId: A,
+      gradeName: "Khối 3",
+      mealType: "LUNCH",
+      portions: 8,
+      status: "DISTRIBUTED",
+      distributedAt: null,
+      classes: [
+        {
+          id: A,
+          className: "3A",
+          portions: 8,
+          status: "DISTRIBUTED",
+          distributedAt: null,
+        },
+      ],
+    },
+    steps: {
+      deliveries: [
+        {
+          id: A,
+          deliveryNo: "DL-1",
+          supplierName: "NCC A",
+          status: "RECEIVED",
+          vehiclePlate: "51C-123.45",
+          expectedArrivalAt: null,
+          receivedAt: null,
+        },
+      ],
+      cookingBatches: [
+        {
+          id: B,
+          batchCode: "B-1",
+          status: "COMPLETED",
+          dishes: ["Canh"],
+          plannedPortions: 10,
+          allocatedPortions: 8,
+          completedAt: null,
+        },
+      ],
+      retainedSamples: [],
+      distribution: { recordId: `${C}:2026-11-15`, date: "2026-11-15" },
+    },
+  };
   let nextId = 0;
-  const create =
-    (kind: VersionRow["kind"], eventType: VersionRow["eventType"]) =>
-    (_db: unknown, recordId: string, ...rest: unknown[]) => {
-      const data = rest[rest.length - 1] as Stored;
-      const id = `00000000-0000-4000-8000-${String(++nextId).padStart(12, "0")}`;
+  const events: Record<string, VersionRow["eventType"]> = {
+    INSPECTED: "DELIVERY_INSPECTED",
+    DECLARED: "DELIVERY_DECLARED",
+    COMPLETED: "COOKING_COMPLETED",
+    STORED: "SAMPLE_STORED",
+    DISPOSED: "SAMPLE_DISPOSED",
+    DISTRIBUTED: "MEAL_DISTRIBUTED",
+  };
+  const createVersion = (
+    _db: unknown,
+    subject: Record<string, string> & { kind: VersionRow["kind"] },
+    data: Stored & { eventType: string },
+  ) => {
+    const { kind, ...link } = subject;
+    const id =
+      data.id ??
+      `00000000-0000-4000-8000-${String(++nextId).padStart(12, "0")}`;
+    const subjectOf =
+      kind === "meal-distributions"
+        ? { subject: { schoolId: link.schoolId, date: link.date } }
+        : {};
+    {
       versions.push({
         ...data,
         id,
         kind,
-        recordId,
-        eventType:
-          kind === "retained-samples" && rest[0] === "DISPOSED"
-            ? "SAMPLE_DISPOSED"
-            : eventType,
+        recordId:
+          kind === "meal-distributions"
+            ? `${link.schoolId}:${link.date}`
+            : Object.values(link)[0],
+        ...subjectOf,
+        eventType: events[data.eventType],
         transactionHash: null,
         blockNumber: null,
         transactionStatus: "PREPARED",
@@ -331,7 +414,8 @@ function proofHarness(
         createdAt: at,
       });
       return Promise.resolve(id);
-    };
+    }
+  };
   const find = (id: string) => versions.find((v) => v.id === id) ?? null;
   const repository = {
     readDelivery: () => Promise.resolve(deliveryRow),
@@ -349,6 +433,36 @@ function proofHarness(
       Promise.resolve(
         versions.find((v) => v.kind === "cooking-batches")?.dataHash ?? null,
       ),
+    declarationHash: (_db: unknown, id: string) =>
+      Promise.resolve(
+        versions.find(
+          (v) => v.kind === "delivery-declarations" && v.recordId === id,
+        )?.dataHash ?? null,
+      ),
+    hasDeclarationVersion: (_db: unknown, id: string) =>
+      Promise.resolve(
+        versions.some(
+          (v) => v.kind === "delivery-declarations" && v.recordId === id,
+        ),
+      ),
+    hasDistributionVersion: (_db: unknown, school: string, date: string) =>
+      Promise.resolve(
+        versions.some(
+          (v) =>
+            v.kind === "meal-distributions" &&
+            v.recordId === `${school}:${date}`,
+        ),
+      ),
+    readDistribution: () => Promise.resolve(distribution),
+    cookingBatchHashes: () =>
+      Promise.resolve(
+        new Map(
+          versions
+            .filter((v) => v.kind === "cooking-batches")
+            .map((v) => [v.recordId, v.dataHash]),
+        ),
+      ),
+    plannedPortions: () => Promise.resolve(new Map([[B, 10]])),
     hasDeliveryVersion: (_db: unknown, id: string) =>
       Promise.resolve(
         versions.some((v) => v.kind === "deliveries" && v.recordId === id),
@@ -366,12 +480,17 @@ function proofHarness(
             v.eventType === `SAMPLE_${event}`,
         ) ?? null,
       ),
-    createDeliveryVersion: create("deliveries", "DELIVERY_INSPECTED"),
-    createCookingBatchVersion: create("cooking-batches", "COOKING_COMPLETED"),
-    createSampleVersion: create("retained-samples", "SAMPLE_STORED"),
-    findVersion: (_db: unknown, _kind: string, id: string, school: unknown) =>
-      Promise.resolve(school === "foreign" ? null : find(id)),
-    listVersions: () => Promise.resolve(versions),
+    createVersion,
+    findVersion: (
+      _db: unknown,
+      _kind: string,
+      id: string,
+      scope: { schoolId?: string } | null,
+    ) => Promise.resolve(scope?.schoolId === "foreign" ? null : find(id)),
+    listVersions: (_db: unknown, kind: string, recordId: string) =>
+      Promise.resolve(
+        versions.filter((v) => v.kind === kind && v.recordId === recordId),
+      ),
     markSubmitted: (
       _db: unknown,
       _kind: string,
@@ -410,9 +529,24 @@ function proofHarness(
       id: string,
       data: object,
     ) => {
+      saved.push(id);
       Object.assign(find(id)!, data);
       return Promise.resolve();
     },
+    findPublicSchool: (_db: unknown, code: string) =>
+      Promise.resolve(
+        code.toLowerCase() === "th-demo" ? { id: C, name: "TH Demo" } : null,
+      ),
+    chainSubjects: (_db: unknown, id: string, school: string | null) =>
+      Promise.resolve(id === A && school === C ? chainSubjects : null),
+    gradeChainSubjects: (
+      _db: unknown,
+      query: { schoolId: string | null; gradeId: string | null },
+    ) =>
+      Promise.resolve(
+        query.schoolId === C && query.gradeId === A ? chainSubjects : null,
+      ),
+    listChain: () => Promise.resolve(versions),
   };
   const chain: ProofChain = {
     contractAddress: () => "0xRegistry",
@@ -451,11 +585,13 @@ function proofHarness(
   return {
     service,
     versions,
+    saved,
     anchored,
     onChain,
     txStates,
     sampleRow,
     deliveryRow,
+    distribution,
   };
 }
 
@@ -548,10 +684,7 @@ void test("anchorVersion confirms once, reuses a matching on-chain hash and fail
   // Crash after the chain write: the hash is found on chain and not sent again.
   const crashed = proofHarness();
   const lost = (await crashed.service.prepareDeliveryInspected(tx, A, B))!;
-  crashed.onChain.set(
-    proofRecordId("deliveries", lost.id),
-    crashed.versions[0].dataHash,
-  );
+  crashed.onChain.set(proofRecordId(lost.id), crashed.versions[0].dataHash);
   const recovered = await crashed.service.anchorVersion(lost);
   assert.equal(recovered?.transactionStatus, "CONFIRMED");
   assert.equal(recovered?.transactionHash, null);
@@ -559,7 +692,7 @@ void test("anchorVersion confirms once, reuses a matching on-chain hash and fail
 
   const mismatch = proofHarness();
   const other = (await mismatch.service.prepareDeliveryInspected(tx, A, B))!;
-  mismatch.onChain.set(proofRecordId("deliveries", other.id), hashOf("d"));
+  mismatch.onChain.set(proofRecordId(other.id), hashOf("d"));
   assert.equal(
     (await mismatch.service.anchorVersion(other))?.transactionStatus,
     "FAILED",
@@ -589,7 +722,7 @@ void test("a receipt timeout keeps the sent tx hash and is reconciled without re
   assert.match(waiting?.lastError ?? "", /đang chờ xác nhận/);
 
   // Mined later: the retry confirms with the original tx and block.
-  h.onChain.set(proofRecordId("deliveries", ref.id), h.versions[0].dataHash);
+  h.onChain.set(proofRecordId(ref.id), h.versions[0].dataHash);
   h.txStates.set(sent, { state: "mined", blockNumber: 9 });
   const confirmed = await h.service.anchorVersion(ref);
   assert.equal(h.anchored.length, 1);
@@ -668,7 +801,7 @@ void test("verify reports VERIFIED, each MISMATCH cause, FAILED and scope errors
   );
   h.deliveryRow.vehiclePlate = delivery().vehiclePlate;
 
-  const recordId = proofRecordId("deliveries", ref.id);
+  const recordId = proofRecordId(ref.id);
   h.onChain.set(recordId, hashOf("e"));
   assert.equal(
     (await h.service.verify(params, verifier)).verificationResult,
@@ -720,8 +853,8 @@ void test("verify hides versions outside the school scope", async () => {
   const service = createBlockchainProofService({
     connect: () => Promise.resolve({} as never),
     repository: {
-      findVersion: (_db: unknown, _k: string, _id: string, school: string) => {
-        assert.equal(school, verifier.schoolId);
+      findVersion: (_db: unknown, _k: string, _id: string, scope: unknown) => {
+        assert.deepEqual(scope, { schoolId: verifier.schoolId });
         return Promise.resolve(null);
       },
     } as never,
@@ -865,4 +998,407 @@ void test("sample create and dispose prepare a version once and schedule it afte
     again.principal,
   );
   assert.deepEqual(again.calls, []);
+});
+
+void test("dispatch declaration is anchored once and linked from the inspection", async () => {
+  const h = proofHarness();
+  const declared = await h.service.prepareDeliveryDeclared(tx, A, C);
+  assert.equal(declared?.kind, "delivery-declarations");
+  assert.equal(await h.service.prepareDeliveryDeclared(tx, A, C), null);
+  const declaration = h.versions[0];
+  const payload = declaration.snapshot as {
+    type: string;
+    declaredByUserId: string;
+    declaredAt: string;
+    vehiclePlate: string;
+    items: { quantity: string; lots: { quantity: string }[] }[];
+  };
+  assert.equal(payload.type, "DELIVERY_DECLARED");
+  assert.equal(payload.declaredByUserId, C);
+  assert.equal(payload.declaredAt, at.toISOString());
+  assert.equal(payload.vehiclePlate, "29A-12345");
+  assert.equal(payload.items[0].quantity, "6.100");
+  assert.equal(declaration.payloadVersion, 1);
+
+  await h.service.prepareDeliveryInspected(tx, A, B);
+  const inspection = h.versions[1];
+  assert.equal(inspection.payloadVersion, 2);
+  assert.equal(
+    (inspection.snapshot as { declarationHash: string }).declarationHash,
+    declaration.dataHash,
+  );
+
+  // Both verify; the inspection also reports the business cross-check.
+  await h.service.anchorVersion(declared);
+  const declarationCheck = await h.service.verify(
+    { kind: "delivery-declarations", versionId: declared.id },
+    verifier,
+  );
+  assert.equal(declarationCheck.verificationStatus, "VERIFIED");
+  await h.service.anchorVersion({ kind: "deliveries", id: inspection.id });
+  const inspectionCheck = await h.service.verify(
+    { kind: "deliveries", versionId: inspection.id },
+    verifier,
+  );
+  assert.equal(inspectionCheck.verificationStatus, "VERIFIED");
+  assert.match(
+    inspectionCheck.verificationResult ?? "",
+    /Khớp khai báo giao hàng của NCC/,
+  );
+
+  // Changing the vehicle plate breaks the declaration, whose hash it fixed.
+  h.deliveryRow.vehiclePlate = "30A-00000";
+  const edited = await h.service.verify(
+    { kind: "delivery-declarations", versionId: declared.id },
+    verifier,
+  );
+  assert.equal(edited.verificationStatus, "MISMATCH");
+  assert.match(edited.verificationResult ?? "", /vehiclePlate/);
+});
+
+void test("meal distribution is one proof per school-day, linked to its cooking batches", async () => {
+  const h = proofHarness();
+  await h.service.prepareCookingCompleted(tx, B, B);
+  const cookingHash = h.versions[0].dataHash;
+  const ref = await h.service.prepareMealDistributed(tx, C, "2026-11-15", B);
+  assert.equal(ref?.kind, "meal-distributions");
+  assert.equal(
+    await h.service.prepareMealDistributed(tx, C, "2026-11-15", B),
+    null,
+  );
+  const proof = h.versions[1];
+  assert.equal(proof.recordId, `${C}:2026-11-15`);
+  const payload = proof.snapshot as {
+    type: string;
+    totalPortions: number;
+    distributedAt: string;
+    batches: { cookingBatchId: string; cookingCompletedHash: string }[];
+  };
+  assert.equal(payload.type, "MEAL_DISTRIBUTED");
+  assert.equal(payload.totalPortions, 8);
+  assert.equal(payload.distributedAt, at.toISOString());
+  assert.equal(payload.batches[0].cookingCompletedHash, cookingHash);
+
+  await h.service.anchorVersion(ref);
+  const ok = await h.service.verify(
+    { kind: "meal-distributions", versionId: ref.id },
+    verifier,
+  );
+  assert.equal(ok.verificationStatus, "VERIFIED");
+  assert.equal(
+    ok.verificationResult,
+    "Dữ liệu khớp với bản ghi trên blockchain",
+  );
+
+  // Serving more portions than the batch planned is reported, not hidden.
+  const busy = proofHarness();
+  busy.distribution[0].mealAllocationBatches[0].allocatedPortions = 12;
+  const busyRef = await busy.service.prepareMealDistributed(
+    tx,
+    C,
+    "2026-11-15",
+    B,
+  );
+  await busy.service.anchorVersion(busyRef!);
+  const over = await busy.service.verify(
+    { kind: "meal-distributions", versionId: busyRef!.id },
+    verifier,
+  );
+  assert.equal(over.verificationStatus, "VERIFIED");
+  assert.match(over.verificationResult ?? "", /vượt số suất của mẻ: .*12\/10/);
+
+  const disabled = proofHarness({ enabled: false });
+  assert.equal(
+    await disabled.service.prepareMealDistributed(tx, C, "2026-11-15", B),
+    null,
+  );
+  assert.equal(await disabled.service.prepareDeliveryDeclared(tx, A, C), null);
+});
+
+void test("chain links match, break on a tampered reference and skip unanchored ones", async () => {
+  const h = proofHarness();
+  await h.service.prepareDeliveryDeclared(tx, A, C);
+  await h.service.prepareDeliveryInspected(tx, A, B);
+  await h.service.prepareCookingCompleted(tx, B, B);
+  await h.service.prepareSampleStored(tx, C, B);
+  await h.service.prepareMealDistributed(tx, C, "2026-11-15", B);
+  const lots = new Map([[C, A]]);
+  const statuses = () =>
+    [...linkChecks(h.versions, lots).values()].flat().map((l) => l.status);
+  assert.deepEqual(statuses(), ["MATCH", "MATCH", "MATCH", "MATCH"]);
+
+  const cooking = h.versions[2].snapshot as {
+    lots: { deliveryInspectionHash: string | null }[];
+  };
+  cooking.lots[0].deliveryInspectionHash = hashOf("f");
+  assert.deepEqual(statuses(), ["MATCH", "MISMATCH", "MATCH", "MATCH"]);
+  cooking.lots[0].deliveryInspectionHash = null;
+  assert.deepEqual(statuses(), ["MATCH", "NOT_LINKED", "MATCH", "MATCH"]);
+});
+
+void test("suppliers see only their own declarations and no other proof kind", async () => {
+  const scopes: unknown[] = [];
+  const service = createBlockchainProofService({
+    connect: () => Promise.resolve({} as never),
+    repository: {
+      listVersions: (_db: unknown, _k: string, _r: string, scope: unknown) => {
+        scopes.push(scope);
+        return Promise.resolve([]);
+      },
+    } as never,
+    enabled: () => true,
+  });
+  const supplier = {
+    ...testStaff,
+    role: "INGREDIENT_SUPPLIER_STAFF",
+    orgType: "SUPPLIER" as const,
+    schoolId: null,
+    supplierId: C,
+    permissions: ["delivery.manage"],
+  };
+  await service.listVersions(
+    { kind: "delivery-declarations", recordId: A },
+    supplier,
+  );
+  assert.deepEqual(scopes, [{ supplierId: C }]);
+  await assert.rejects(
+    () => service.listVersions({ kind: "deliveries", recordId: A }, supplier),
+    { statusCode: 403 },
+  );
+  await assert.rejects(
+    () =>
+      service.listVersions(
+        { kind: "delivery-declarations", recordId: A },
+        { ...supplier, permissions: ["delivery.view"] },
+      ),
+    { statusCode: 403 },
+  );
+  await service.listVersions(
+    { kind: "delivery-declarations", recordId: A },
+    verifier,
+  );
+  assert.deepEqual(scopes.at(-1), { schoolId: verifier.schoolId });
+});
+
+void test("chain API lists a meal's proofs in scope and flags a broken link", async () => {
+  const h = proofHarness();
+  await h.service.prepareDeliveryInspected(tx, A, B);
+  await h.service.prepareCookingCompleted(tx, B, B);
+  const subjects = {
+    schoolId: C,
+    date: "2026-11-15",
+    cookingBatchIds: [B],
+    sampleIds: [],
+    deliveryIds: [A],
+    lotDeliveries: new Map([[C, A]]),
+    meal: {
+      gradeId: A,
+      gradeName: "Khối 3",
+      mealType: "LUNCH",
+      portions: 30,
+      status: "DISTRIBUTED",
+      distributedAt: null,
+      classes: [
+        {
+          id: A,
+          className: "3A",
+          portions: 30,
+          status: "DISTRIBUTED",
+          distributedAt: null,
+        },
+      ],
+    },
+    steps: {
+      deliveries: [],
+      cookingBatches: [],
+      retainedSamples: [],
+      distribution: { recordId: `${C}:2026-11-15`, date: "2026-11-15" },
+    },
+  };
+  const seen: unknown[] = [];
+  const service = createBlockchainProofService({
+    connect: () => Promise.resolve({} as never),
+    repository: {
+      chainSubjects: (_db: unknown, id: string, school: unknown) => {
+        seen.push(school);
+        return Promise.resolve(id === A ? subjects : null);
+      },
+      listChain: () => Promise.resolve(h.versions),
+    } as never,
+    enabled: () => false,
+  });
+  const chain = await service.chain(
+    { mealAllocationId: A },
+    { verify: false },
+    verifier,
+  );
+  assert.deepEqual(seen, [verifier.schoolId]);
+  assert.equal(chain.intact, true);
+  // Steps and the meal header come back even for steps without a proof.
+  assert.equal(chain.meal.classes[0].className, "3A");
+  assert.equal(chain.mealAllocationId, A);
+  assert.equal(chain.steps.distribution.recordId, `${C}:2026-11-15`);
+  assert.deepEqual(
+    chain.nodes.map((node) => [node.kind, node.links.map((l) => l.status)]),
+    [
+      ["deliveries", ["NOT_LINKED"]],
+      ["cooking-batches", ["MATCH"]],
+    ],
+  );
+  (
+    h.versions[1].snapshot as { lots: { deliveryInspectionHash: string }[] }
+  ).lots[0].deliveryInspectionHash = hashOf("f");
+  assert.equal(
+    (await service.chain({ mealAllocationId: A }, { verify: false }, verifier))
+      .intact,
+    false,
+  );
+  await assert.rejects(
+    () => service.chain({ mealAllocationId: B }, { verify: false }, verifier),
+    { statusCode: 404 },
+  );
+  // Verifying needs the chain switched on and the verify permission.
+  await assert.rejects(
+    () => service.chain({ mealAllocationId: A }, { verify: true }, verifier),
+    { statusCode: 409 },
+  );
+  await assert.rejects(
+    () =>
+      service.chain(
+        { mealAllocationId: A },
+        { verify: true },
+        { ...verifier, permissions: ["traceability.view"] },
+      ),
+    { statusCode: 403 },
+  );
+});
+
+void test("grade meals keep a school to its own grades", async () => {
+  const queries: unknown[] = [];
+  const service = createBlockchainProofService({
+    connect: () => Promise.resolve({} as never),
+    repository: {
+      listGradeMeals: (_db: unknown, query: unknown) => {
+        queries.push(query);
+        return Promise.resolve([]);
+      },
+      gradeChainSubjects: (_db: unknown, query: unknown) => {
+        queries.push(query);
+        return Promise.resolve(null);
+      },
+    } as never,
+    enabled: () => false,
+  });
+  // A school cannot widen its scope with another schoolId.
+  await service.gradeMeals({ date: "2026-11-16", schoolId: A }, verifier);
+  const system = {
+    ...verifier,
+    orgType: "SYSTEM",
+    schoolId: null,
+  } as typeof verifier;
+  await service.gradeMeals({ date: "2026-11-16", schoolId: A }, system);
+  await service.gradeMeals({ date: "2026-11-16" }, system);
+  await assert.rejects(
+    () =>
+      service.gradeChain(
+        { gradeId: null },
+        { date: "2026-11-16", mealType: "LUNCH", verify: false, schoolId: A },
+        verifier,
+      ),
+    { statusCode: 404 },
+  );
+  assert.deepEqual(queries, [
+    { date: "2026-11-16", schoolId: verifier.schoolId },
+    { date: "2026-11-16", schoolId: A },
+    { date: "2026-11-16", schoolId: null },
+    {
+      schoolId: verifier.schoolId,
+      gradeId: null,
+      date: "2026-11-16",
+      mealType: "LUNCH",
+    },
+  ]);
+  // Ungraded classes exist in every school, so the system must pick one.
+  await assert.rejects(
+    () =>
+      service.gradeChain(
+        { gradeId: null },
+        { date: "2026-11-16", mealType: "LUNCH", verify: false },
+        system,
+      ),
+    { statusCode: 400 },
+  );
+  await assert.rejects(
+    () =>
+      service.gradeMeals(
+        { date: "2026-11-16" },
+        { ...verifier, permissions: [] },
+      ),
+    { statusCode: 403 },
+  );
+});
+
+void test("meal status sums up the classes of a grade", () => {
+  assert.equal(mealStatus(["FINALIZED", "FINALIZED"]), "FINALIZED");
+  assert.equal(mealStatus(["FINALIZED", "DISTRIBUTED"]), "DISTRIBUTED");
+  assert.equal(mealStatus(["DISTRIBUTED", "ALLOCATED"]), "PARTIAL");
+  assert.equal(mealStatus(["ALLOCATED", "CANCELLED"]), "ALLOCATED");
+  assert.equal(mealStatus(["CANCELLED"]), "CANCELLED");
+});
+
+void test("public journey hides operational details and never saves a check", async () => {
+  const h = proofHarness();
+  const ref = await h.service.prepareCookingCompleted(tx, B, B);
+  await h.service.anchorVersion(ref!);
+  h.versions[0].lastError = "RPC down at https://rpc.example/key";
+  const lunch = { date: "2026-11-15", mealType: "LUNCH" as const };
+
+  const chain = await h.service.publicGradeChain(
+    { schoolCode: "TH-DEMO", gradeId: A },
+    { ...lunch, verify: true },
+  );
+  assert.equal(chain.nodes[0].verificationStatus, "VERIFIED");
+  assert.deepEqual(h.saved, []);
+  assert.equal(h.versions[0].verificationStatus, "NOT_VERIFIED");
+  assert.equal(chain.nodes[0].lastError, null);
+  assert.equal(chain.mealAllocationId, null);
+  assert.equal(chain.meal.gradeName, "Khối 3");
+  assert.equal(chain.steps.deliveries[0].vehiclePlate, null);
+  assert.equal(chain.steps.deliveries[0].deliveryNo, null);
+  assert.equal(chain.steps.deliveries[0].supplierName, "NCC A");
+  assert.equal(chain.steps.cookingBatches[0].batchCode, null);
+
+  // Staff checks are still saved.
+  await h.service.gradeChain(
+    { gradeId: A },
+    { ...lunch, verify: true },
+    { ...verifier, schoolId: C },
+  );
+  assert.equal(h.saved.length, 1);
+
+  await assert.rejects(
+    () =>
+      h.service.publicGradeChain(
+        { schoolCode: "khac", gradeId: A },
+        { ...lunch, verify: false },
+      ),
+    { statusCode: 404 },
+  );
+  await assert.rejects(
+    () =>
+      h.service.publicGradeChain(
+        { schoolCode: "TH-DEMO", gradeId: B },
+        { ...lunch, verify: false },
+      ),
+    { statusCode: 404 },
+  );
+  const disabled = proofHarness({ enabled: false });
+  await assert.rejects(
+    () =>
+      disabled.service.publicGradeChain(
+        { schoolCode: "TH-DEMO", gradeId: A },
+        { ...lunch, verify: true },
+      ),
+    { statusCode: 409 },
+  );
 });

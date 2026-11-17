@@ -8,6 +8,7 @@ import {
   validateDeliveryArrivalQuery,
   validateDeliveryListQuery,
   validateDeliveryInspectionQuery,
+  validateDeliveryInspectionLookup,
   validateDeliveryId,
   validateDeliveryInspectionDecision,
 } from "./delivery.validation";
@@ -49,6 +50,15 @@ export function createDeliveryInspectionController(
         res,
         await service.list(
           validateDeliveryInspectionQuery(req.query),
+          requirePrincipal(req),
+        ),
+      );
+    }),
+    lookup: asyncHandler(async (req, res) => {
+      sendSuccess(
+        res,
+        await service.lookup(
+          validateDeliveryInspectionLookup(req.query),
           requirePrincipal(req),
         ),
       );

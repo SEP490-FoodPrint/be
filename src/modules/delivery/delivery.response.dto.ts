@@ -61,6 +61,11 @@ export interface DeliveryInspectionDTO {
   }[];
 }
 
+export interface DeliveryInspectionLookupResultDTO {
+  id: string;
+  deliveryNo: string;
+}
+
 export interface DeliveryApprovalItemDTO {
   id: string;
   roleId: string;

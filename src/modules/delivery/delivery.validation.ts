@@ -20,6 +20,16 @@ export const deliveryInspectionQuerySchema = paginationSchema.safeExtend({
 });
 export const validateDeliveryInspectionQuery = (value: unknown) =>
   parseRequest(deliveryInspectionQuerySchema, value);
+// Nội dung quét được từ tem QR (link truy xuất), mã QR lô hoặc mã đợt giao nhập tay.
+export const deliveryInspectionLookupSchema = z.strictObject({
+  code: z
+    .string({ error: "Cần mã QR hoặc mã đợt giao" })
+    .trim()
+    .min(1, { error: "Cần mã QR hoặc mã đợt giao" })
+    .max(2048, { error: "Mã QR quá dài" }),
+});
+export const validateDeliveryInspectionLookup = (value: unknown) =>
+  parseRequest(deliveryInspectionLookupSchema, value);
 export const validateDeliveryId = (value: unknown) =>
   parseRequest(idParamsSchema, value);
 
