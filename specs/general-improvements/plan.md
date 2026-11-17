@@ -10,7 +10,7 @@
 
 1. Schema & Migration:
    - Thêm `batchNumber Int? @map("batch_number") @db.Integer` vào model `CookingBatch` trong `prisma/schema.prisma`.
-   - Tạo migration `20261121000100_cooking_batch_number` với câu lệnh `ALTER TABLE "foodprint"."cooking_batches" ADD COLUMN "batch_number" INTEGER;`.
+   - Tạo migration `20261121000200_cooking_batch_number` với câu lệnh `ALTER TABLE "foodprint"."cooking_batches" ADD COLUMN "batch_number" INTEGER;`.
 2. Backend Repository & Service:
    - Thêm `batchNumber: true` vào `kitchenDetailSelect` và `kitchenSummarySelect`.
    - Gán `batchNumber: i + 1` khi tạo danh sách các mẻ con `CookingBatch`.
