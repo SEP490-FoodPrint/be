@@ -115,41 +115,41 @@ Cooking Batch Phương án A bổ sung GET `/api/cooking-batches/:id` với `coo
 
 Mọi dòng đều yêu cầu một trong các permission liệt kê. SYSTEM có phạm vi toàn hệ thống **khi được gán quyền**, trừ các chức năng giới hạn vai trò được nêu riêng, bao gồm quản lý cơ sở cung cấp và nhân viên nhà cung cấp chỉ dành INGREDIENT_SUPPLIER_ADMIN. Tổ chức khác theo quan hệ sở hữu trong resource-access.ts. Phạm vi dưới đây là org-level, không tự suy diễn lớp được giao cho giáo viên.
 
-| Module                        | Permission (OR)                                                                    | Tổ chức ngoài SYSTEM được mở            |
-| ----------------------------- | ---------------------------------------------------------------------------------- | --------------------------------------- |
-| `auth`                        | `role.view`                                                                        | Không                                   |
-| `user`                        | `user.manage`, `school_user.manage`, `supplier_staff.manage`                       | SCHOOL, SUPPLIER                        |
-| `supplier-staff`              | `supplier_staff.manage`                                                            | SUPPLIER, chỉ INGREDIENT_SUPPLIER_ADMIN |
-| `organization`                | `school.manage`                                                                    | SCHOOL                                  |
-| `ingredient`                  | `ingredient.view`, `ingredient.manage`                                             | SCHOOL, SUPPLIER                        |
-| `menu`                        | `menu.view`                                                                        | SCHOOL                                  |
-| `supply-order`                | `supply_request.view`                                                              | SCHOOL, SUPPLIER                        |
-| `warehouse`                   | `inventory.view`                                                                   | SCHOOL, SUPPLIER                        |
-| `kitchen`                     | `cooking_batch.view`                                                               | SCHOOL                                  |
-| `meal-attendance`             | `daily_meal_portion.view`                                                          | SCHOOL                                  |
-| `feedback`                    | `meal_complaint.view`                                                              | SYSTEM, SCHOOL                          |
-| `inspection`                  | `food_safety_incident.view`                                                        | SCHOOL, AUTHORITY                       |
-| `supplier`                    | `supplier.view`, `supplier.manage`                                                 | SUPPLIER, SCHOOL                        |
-| `authority`                   | `authority.view`, `food_safety_report.view`                                        | AUTHORITY                               |
-| `class`                       | `class.view`                                                                       | SCHOOL                                  |
-| `source-facility`             | `source_facility.manage`                                                           | SUPPLIER (chỉ admin)                    |
-| `supplier-certification`      | `supplier_certification.view`                                                      | SUPPLIER                                |
-| `registration`                | `registration.view`                                                                | Không                                   |
-| `school-supplier`             | `supplier_relationship.view`, `supplier_relationship.manage`                       | SCHOOL, SUPPLIER                        |
-| `supplier-school`             | `supplier_relationship.view`, `supplier_relationship.manage`                       | SUPPLIER, chỉ INGREDIENT_SUPPLIER_ADMIN |
-| `ingredient-entry`            | `ingredient.view`, `ingredient.manage`                                             | SCHOOL                                  |
-| `allergy`                     | `class_allergy.view`                                                               | SCHOOL                                  |
-| `delivery`                    | `delivery.view`, `delivery.manage`, `delivery.receive`                             | SCHOOL, SUPPLIER                        |
-| `dish`                        | `menu.view`                                                                        | SCHOOL                                  |
-| `inventory`                   | `inventory.view`                                                                   | SCHOOL, SUPPLIER                        |
-| `retained-sample`             | `retained_sample.view`                                                             | SCHOOL                                  |
-| `meal-allocation`             | `meal_allocation.view`                                                             | SCHOOL                                  |
-| `ingredient-quality-feedback` | `ingredient_quality_feedback.view_own`, `ingredient_quality_feedback.view_details` | SCHOOL, SUPPLIER                        |
-| `reporting`                   | `food_safety_report.view`                                                          | SCHOOL, AUTHORITY                       |
-| `food-analysis`               | `food_analysis_result.view`                                                        | SCHOOL, AUTHORITY                       |
-| `school-alert`                | `school_alert.view`                                                                | SCHOOL                                  |
-| `menu-review`                 | `menu.view`, `menu.review`, `menu.approve`                                         | SCHOOL                                  |
-| `traceability`                | `traceability.view`                                                                | SCHOOL, SUPPLIER, AUTHORITY             |
+| Module                        | Permission (OR)                                                                                                           | Tổ chức ngoài SYSTEM được mở                          |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `auth`                        | `role.view`                                                                                                               | Không                                                 |
+| `user`                        | `user.manage`, `school_user.manage`, `supplier_staff.manage`                                                              | SCHOOL, SUPPLIER                                      |
+| `supplier-staff`              | `supplier_staff.manage`                                                                                                   | SUPPLIER, chỉ INGREDIENT_SUPPLIER_ADMIN               |
+| `organization`                | `school.manage`                                                                                                           | SCHOOL                                                |
+| `ingredient`                  | `ingredient.view`, `ingredient.manage`                                                                                    | SCHOOL, SUPPLIER                                      |
+| `menu`                        | `menu.view`                                                                                                               | SCHOOL                                                |
+| `supply-order`                | `supply_request.view`                                                                                                     | SCHOOL, SUPPLIER                                      |
+| `warehouse`                   | `inventory.view`                                                                                                          | SCHOOL, SUPPLIER                                      |
+| `kitchen`                     | `cooking_batch.view`                                                                                                      | SCHOOL                                                |
+| `meal-attendance`             | `daily_meal_portion.view`                                                                                                 | SCHOOL                                                |
+| `feedback`                    | `meal_complaint.view`                                                                                                     | SYSTEM, SCHOOL                                        |
+| `inspection`                  | `food_safety_incident.view`                                                                                               | SCHOOL, AUTHORITY                                     |
+| `supplier`                    | `supplier.view`, `supplier.manage`                                                                                        | SUPPLIER, SCHOOL                                      |
+| `authority`                   | `authority.view`, `food_safety_report.view`                                                                               | AUTHORITY                                             |
+| `class`                       | `class.view`                                                                                                              | SCHOOL                                                |
+| `source-facility`             | `source_facility.manage`                                                                                                  | SUPPLIER (chỉ admin)                                  |
+| `supplier-certification`      | `supplier_certification.view`                                                                                             | SUPPLIER                                              |
+| `registration`                | `registration.view`                                                                                                       | Không                                                 |
+| `school-supplier`             | `supplier_relationship.view`, `supplier_relationship.manage`                                                              | SCHOOL, SUPPLIER                                      |
+| `supplier-school`             | `supplier_relationship.view`, `supplier_relationship.manage`                                                              | SUPPLIER, chỉ INGREDIENT_SUPPLIER_ADMIN               |
+| `ingredient-entry`            | `ingredient.view`, `ingredient.manage`                                                                                    | SCHOOL                                                |
+| `allergy`                     | `class_allergy.view`                                                                                                      | SCHOOL                                                |
+| `delivery`                    | `delivery.view`, `delivery.manage`, `delivery.receive`                                                                    | SCHOOL, SUPPLIER                                      |
+| `dish`                        | `menu.view`                                                                                                               | SCHOOL                                                |
+| `inventory`                   | `inventory.view`                                                                                                          | SCHOOL, SUPPLIER                                      |
+| `retained-sample`             | `retained_sample.view`                                                                                                    | SCHOOL                                                |
+| `meal-allocation`             | `meal_allocation.view`                                                                                                    | SCHOOL                                                |
+| `ingredient-quality-feedback` | `ingredient_quality_feedback.view_own`, `ingredient_quality_feedback.view_details`, `ingredient_quality_feedback.respond` | SCHOOL (chỉ xem), SUPPLIER (`view_details`/`respond`) |
+| `reporting`                   | `food_safety_report.view`                                                                                                 | SCHOOL, AUTHORITY                                     |
+| `food-analysis`               | `food_analysis_result.view`                                                                                               | SCHOOL, AUTHORITY                                     |
+| `school-alert`                | `school_alert.view`                                                                                                       | SCHOOL                                                |
+| `menu-review`                 | `menu.view`, `menu.review`, `menu.approve`                                                                                | SCHOOL                                                |
+| `traceability`                | `traceability.view`                                                                                                       | SCHOOL, SUPPLIER, AUTHORITY                           |
 
 Bằng chứng blockchain (`/api/blockchain-proofs`): xem danh sách version cần `traceability.view`; gửi lại (`POST …/versions/:versionId/anchor`) và xác minh (`POST …/versions/:versionId/verify`) cần `traceability.verify`, cấp cho `SCHOOL_MANAGEMENT_BOARD` và `SCHOOL_NUTRITION_OFFICER`. Chỉ SCHOOL (theo trường của Delivery, hoặc CookingBatch → MenuDay → WeeklyMenu) và SYSTEM; ngoài phạm vi trả 404.
 
@@ -435,3 +435,17 @@ Module `supplier-school` cung cấp năm endpoint GET chỉ đọc dưới `/api
 Bản nháp `DRAFT`, tài liệu `COMPLIANCE`, trường chỉ có nháp hoặc tài nguyên thuộc cặp/nhà cung cấp khác đều trả `404` thống nhất (`Không tìm thấy dữ liệu trong phạm vi được phép`), không làm lộ tên tệp hay metadata. Endpoint binary trả `Content-Type` (`application/pdf`, `image/png`, `image/jpeg`), `Content-Length`, `Content-Disposition` UTF-8 RFC 5987, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox` và `Cache-Control: private, no-store`; lỗi đọc hoặc bytes hỏng trả JSON `503` trước khi gửi headers thành công. Các endpoint JSON cũng đặt `Cache-Control: private, no-store`.
 
 Catalog chỉ thêm default grant `supplier_relationship.view` cho role `INGREDIENT_SUPPLIER_ADMIN` khởi tạo mới. Các hệ thống đã tồn tại role này không được `auth:bootstrap` tự cấp lại để bảo toàn cấu hình hiện hữu; operator phải cấp quyền theo quy trình quản lý role trong [quickstart](../specs/supplier-linked-schools/quickstart.md). Hợp đồng API đầy đủ: [supplier-schools-api.md](../specs/supplier-linked-schools/contracts/supplier-schools-api.md).
+
+## Phản hồi khiếu nại chất lượng nguyên liệu (`ingredient-quality-feedback`)
+
+Module `ingredient-quality-feedback` dùng phân quyền động theo DB trên từng request (tài khoản `ACTIVE`, membership tổ chức duy nhất, `Permission.isActive`, `RolePermission` trừ `UserPermissionDenial`, không cache phân quyền và không SYSTEM bypass). Quyền mặc định cho `INGREDIENT_SUPPLIER_ADMIN` và `INGREDIENT_SUPPLIER_STAFF` (`view_details`, `respond`) đã có trong `src/constants/permission-catalog.ts`; tính năng không sửa catalog hay tự cấp quyền cho role/tài khoản hiện có.
+
+| Method | Path                                                    | Nhóm được gọi                    | Quyền và phạm vi                                                                                                                              |
+| ------ | ------------------------------------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/ingredient-quality-feedback`                      | `SUPPLIER` (`ADMIN`/`STAFF`)     | `ingredient_quality_feedback.view_details` (`view_own` đơn lẻ bị `403`); phạm vi `Delivery.supplierId`                                        |
+| GET    | `/api/ingredient-quality-feedback`                      | `SCHOOL`, `SYSTEM` (legacy list) | `view_own` (thêm `submittedByUserId = actor.id`) hoặc `view_details` (toàn trường); `SYSTEM` cần quyền được gán                               |
+| GET    | `/api/ingredient-quality-feedback/:feedbackId`          | `SUPPLIER` (`ADMIN`/`STAFF`)     | `ingredient_quality_feedback.view_details`; phạm vi `Delivery.supplierId`; hỗ trợ lịch sử sau `SUSPENDED`/`UNLINKED`                          |
+| GET    | `/api/ingredient-quality-feedback/:feedbackId`          | `SCHOOL` (`FR-011`)              | `view_details`: toàn trường (`Delivery.schoolId`); chỉ `view_own`: đúng `submittedByUserId`; `SYSTEM`/`AUTHORITY` bị `403`                    |
+| POST   | `/api/ingredient-quality-feedback/:feedbackId/response` | `SUPPLIER` (`ADMIN`/`STAFF`)     | Bắt buộc **đồng thời** `ingredient_quality_feedback.view_details` **và** `ingredient_quality_feedback.respond`; phạm vi `Delivery.supplierId` |
+
+Điểm chấp nhận ghi phản hồi thực hiện trong transaction `Serializable`: đọc lại actor trực tiếp qua `identitySelect` -> khóa `school -> supplier -> actor user -> actor role (FOR SHARE) -> permission rows (view_details/respond FOR SHARE theo id) -> delivery -> complaint` -> kiểm lại actor (cùng `roleId`/`role`/`orgType`/`supplierId` và đủ cả hai quyền), trạng thái `SUBMITTED` và update có điều kiện. Thu hồi quyền, khóa user hoặc thay role grant hoàn tất trước điểm khóa khiến transaction retry đọc snapshot mới và từ chối `403`. `SCHOOL`, `SYSTEM`, `AUTHORITY` và supplier thiếu một trong hai quyền đều nhận `403` trên POST; mọi UUID ngoài phạm vi/không tồn tại trả cùng `404`. Producer HTTP/service tạo khiếu nại cho Ban Giám hiệu và default grants tương ứng nằm ngoài phạm vi và chưa được thêm vào repo. Chi tiết: [ingredient-quality-feedback-api.md](../specs/supplier-complaint-response/contracts/ingredient-quality-feedback-api.md).

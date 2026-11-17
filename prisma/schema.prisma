@@ -671,6 +671,7 @@ model IngredientLot {
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
 model IngredientQualityFeedback {
   id                String                          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  complaintCode     String                          @unique(map: "ingredient_quality_feedback_complaint_code_key") @map("complaint_code") @db.VarChar(25)
   deliveryId        String                          @map("delivery_id") @db.Uuid
   ingredientLotId   String?                         @map("ingredient_lot_id") @db.Uuid
   submittedByUserId String                          @map("submitted_by_user_id") @db.Uuid
