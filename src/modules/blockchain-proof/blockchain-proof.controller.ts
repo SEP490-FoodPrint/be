@@ -7,6 +7,13 @@ import {
 } from "./blockchain-proof.service";
 import {
   validateChainParams,
+  validateGradeChainQuery,
+  validateGradeMealsQuery,
+  validateGradeParams,
+  validatePublicGradeChainQuery,
+  validatePublicGradeMealsQuery,
+  validatePublicGradeParams,
+  validatePublicSchoolParams,
   validateChainQuery,
   validateRecordParams,
   validateVersionParams,
@@ -34,6 +41,33 @@ export function createBlockchainProofController(
       const params = validateVersionParams(req.params);
       const result = await service.verify(params, requirePrincipal(req));
       sendSuccess(res, result, "Đã xác minh bằng chứng blockchain");
+    }),
+    gradeMeals: asyncHandler(async (req, res) => {
+      const query = validateGradeMealsQuery(req.query);
+      const result = await service.gradeMeals(query, requirePrincipal(req));
+      sendSuccess(res, result, "Lấy danh sách bữa ăn theo khối thành công");
+    }),
+    gradeChain: asyncHandler(async (req, res) => {
+      const params = validateGradeParams(req.params);
+      const query = validateGradeChainQuery(req.query);
+      const result = await service.gradeChain(
+        params,
+        query,
+        requirePrincipal(req),
+      );
+      sendSuccess(res, result, "Lấy hành trình bữa ăn của khối thành công");
+    }),
+    publicGradeMeals: asyncHandler(async (req, res) => {
+      const params = validatePublicSchoolParams(req.params);
+      const query = validatePublicGradeMealsQuery(req.query);
+      const result = await service.publicGradeMeals(params, query);
+      sendSuccess(res, result, "Lấy danh sách bữa ăn theo khối thành công");
+    }),
+    publicGradeChain: asyncHandler(async (req, res) => {
+      const params = validatePublicGradeParams(req.params);
+      const query = validatePublicGradeChainQuery(req.query);
+      const result = await service.publicGradeChain(params, query);
+      sendSuccess(res, result, "Lấy hành trình bữa ăn của khối thành công");
     }),
     chain: asyncHandler(async (req, res) => {
       const params = validateChainParams(req.params);

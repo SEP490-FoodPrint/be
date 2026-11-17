@@ -164,6 +164,15 @@ NCC (`INGREDIENT_SUPPLIER_ADMIN`/`INGREDIENT_SUPPLIER_STAFF` có `delivery.manag
 
 `GET /api/blockchain-proofs/chains/meal-allocations/:mealAllocationId` trả mọi bằng chứng trên chuỗi khai báo → kiểm nhận → mẻ → mẫu → phân phối của một suất ăn, kèm trạng thái liên kết hash giữa các bước. Cần `traceability.view` trong phạm vi trường; thêm `?verify=true` thì cần `traceability.verify` và xác minh từng bằng chứng với chain.
 
+Truy xuất theo khối (đơn vị nhỏ nhất trên giao diện): `GET /api/blockchain-proofs/chains/grade-meals?date=YYYY-MM-DD` liệt kê bữa ăn của ngày theo khối; `GET /api/blockchain-proofs/chains/grade-meals/:gradeId?date=&mealType=LUNCH|AFTERNOON` (`gradeId` là UUID hoặc `none` cho lớp chưa xếp khối) trả hành trình của mọi lớp trong khối. Cần `traceability.view`, thêm `?verify=true` thì cần `traceability.verify`; tài khoản trường chỉ thấy trường mình, `schoolId` chỉ có tác dụng với tài khoản hệ thống (bắt buộc khi xem `none`).
+
+Truy xuất công khai không cần đăng nhập, theo mã trường `ACTIVE`:
+
+- `GET /api/blockchain-proofs/public/schools/:schoolCode/grade-meals?date=YYYY-MM-DD`
+- `GET /api/blockchain-proofs/public/schools/:schoolCode/grade-meals/:gradeId?date=YYYY-MM-DD&mealType=LUNCH|AFTERNOON&verify=true|false`
+
+Phản hồi công khai ẩn biển số xe, mã phiếu giao, mã mẻ nấu và lỗi gửi giao dịch. `verify=true` đọc chain nhưng không lưu kết quả kiểm chứng. Khối không có bữa trong ngày của trường trả 404.
+
 Riêng kind `registrations` (hồ sơ đăng ký NCC/trường, UC-01/UC-02) không thuộc trường nào nên chỉ `SYSTEM_ADMIN` thuộc tổ chức SYSTEM được dùng: xem và xác minh cần `registration.view`, gửi lại cần `registration.approve`. Vai trò trường có `traceability.*` vẫn nhận 403.
 
 School xem supplier qua quan hệ ACTIVE/SUSPENDED; ingredient qua IngredientEntry của trường. Supplier xem tài nguyên supplier-owned hoặc delivery của supplier khi có permission phù hợp. ATTP xã chỉ thấy incident/report chuyển tới đơn vị mình; traceability chỉ mở phần liên quan trực tiếp. Với ingredient_quality_feedback.view_own, thêm điều kiện submittedByUserId; view_details vẫn giới hạn tổ chức. Các API cũ giữ phân trang, safe select và serialization Date/Decimal/BigInt.

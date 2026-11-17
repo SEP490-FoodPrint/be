@@ -42,6 +42,7 @@ import {
 import {
   createBlockchainProofRepository,
   type BlockchainProofRepository,
+  type ChainSubjects,
   type NewVersion,
   type ProofKind,
   type ProofScope,
@@ -50,10 +51,18 @@ import {
 import type {
   BlockchainProofChainParamsDTO,
   BlockchainProofChainQueryDTO,
+  BlockchainProofGradeChainQueryDTO,
+  BlockchainProofGradeMealsQueryDTO,
+  BlockchainProofGradeParamsDTO,
+  BlockchainProofPublicGradeChainQueryDTO,
+  BlockchainProofPublicGradeMealsQueryDTO,
+  BlockchainProofPublicGradeParamsDTO,
+  BlockchainProofPublicSchoolParamsDTO,
   BlockchainProofRecordParamsDTO,
   BlockchainProofVersionParamsDTO,
 } from "./blockchain-proof.request.dto";
 import type {
+  BlockchainProofGradeMealDTO,
   BlockchainProofChainResponseDTO,
   BlockchainProofVersionResponseDTO,
   ProofLinkCheckDTO,
@@ -914,6 +923,83 @@ export function createBlockchainProofService(
       const { db, row } = await scopedVersion(params, principal, "verify");
       return verifyRow(db, row);
     },
+    /** Grade meals of a day to pick from; a school only sees its own. */
+    async gradeMeals(
+      query: BlockchainProofGradeMealsQueryDTO,
+      principal: AuthPrincipal,
+    ): Promise<BlockchainProofGradeMealDTO[]> {
+      assertPermission(principal, "traceability.view");
+      const scope = blockchainProofScope(principal);
+      const db = await connect();
+      return repo.listGradeMeals(db, {
+        date: query.date,
+        schoolId: scope ?? query.schoolId ?? null,
+      });
+    },
+    /** Journey of one grade's meal on a day, every class of the grade together. */
+    async gradeChain(
+      params: BlockchainProofGradeParamsDTO,
+      query: BlockchainProofGradeChainQueryDTO,
+      principal: AuthPrincipal,
+    ): Promise<BlockchainProofChainResponseDTO> {
+      assertPermission(
+        principal,
+        query.verify ? "traceability.verify" : "traceability.view",
+      );
+      const scope = blockchainProofScope(principal);
+      const schoolId = scope ?? query.schoolId ?? null;
+      // Classes without a grade exist in every school; pick one first.
+      if (params.gradeId === null && schoolId === null)
+        throw new HttpError(400, "Cần chọn trường để xem lớp chưa xếp khối");
+      if (query.verify) requireEnabled();
+      const db = await connect();
+      const subjects = await repo.gradeChainSubjects(db, {
+        schoolId,
+        gradeId: params.gradeId,
+        date: query.date,
+        mealType: query.mealType,
+      });
+      return buildChain(db, subjects, null, {
+        verify: query.verify,
+        persist: true,
+      });
+    },
+    /** Grade meals of a day for the public page of one school; no login needed. */
+    async publicGradeMeals(
+      params: BlockchainProofPublicSchoolParamsDTO,
+      query: BlockchainProofPublicGradeMealsQueryDTO,
+    ): Promise<BlockchainProofGradeMealDTO[]> {
+      const db = await connect();
+      const school = await publicSchool(db, params.schoolCode);
+      return repo.listGradeMeals(db, {
+        date: query.date,
+        schoolId: school.id,
+      });
+    },
+    /**
+     * Public journey of one grade's meal. Operational details are left out, and
+     * a check reads the chain without saving its result, so visitors cannot
+     * change what staff see.
+     */
+    async publicGradeChain(
+      params: BlockchainProofPublicGradeParamsDTO,
+      query: BlockchainProofPublicGradeChainQueryDTO,
+    ): Promise<BlockchainProofChainResponseDTO> {
+      if (query.verify) requireEnabled();
+      const db = await connect();
+      const school = await publicSchool(db, params.schoolCode);
+      const subjects = await repo.gradeChainSubjects(db, {
+        schoolId: school.id,
+        gradeId: params.gradeId,
+        date: query.date,
+        mealType: query.mealType,
+      });
+      const chain = await buildChain(db, subjects, null, {
+        verify: query.verify,
+        persist: false,
+      });
+      return publicView(chain);
+    },
     async chain(
       params: BlockchainProofChainParamsDTO,
       query: BlockchainProofChainQueryDTO,
@@ -931,46 +1017,68 @@ export function createBlockchainProofService(
         params.mealAllocationId,
         schoolId,
       );
-      if (!subjects)
-        throw new HttpError(404, "Không tìm thấy suất ăn trong phạm vi");
-      const rows = await repo.listChain(db, subjects);
-      const links = linkChecks(rows, subjects.lotDeliveries);
-      const nodes: BlockchainProofChainResponseDTO["nodes"] = [];
-      for (const row of rows) {
-        let checked = toDTO(row);
-        if (query.verify && row.transactionStatus === "CONFIRMED")
-          try {
-            checked = await verifyRow(db, row);
-          } catch (error) {
-            // One proof on another network or contract must not hide the rest.
-            if (!(error instanceof HttpError)) throw error;
-            checked = {
-              ...checked,
-              verificationStatus: "FAILED",
-              verificationResult: error.message,
-            };
-          }
-        nodes.push({ ...checked, links: links.get(row.id) ?? [] });
-      }
-      return {
-        mealAllocationId: params.mealAllocationId,
-        schoolId: subjects.schoolId,
-        date: subjects.date,
-        intact: nodes.every(
-          (node) =>
-            node.links.every((link) => link.status !== "MISMATCH") &&
-            (!query.verify ||
-              node.transactionStatus !== "CONFIRMED" ||
-              node.verificationStatus === "VERIFIED"),
-        ),
-        nodes,
-      };
+      return buildChain(db, subjects, params.mealAllocationId, {
+        verify: query.verify,
+        persist: true,
+      });
     },
   };
+
+  async function publicSchool(db: Tx, code: string) {
+    const school = await repo.findPublicSchool(db, code);
+    if (!school) throw new HttpError(404, "Không tìm thấy trường");
+    return school;
+  }
+
+  /** One meal's steps and proofs; `persist: false` keeps checks out of the database. */
+  async function buildChain(
+    db: Tx,
+    subjects: ChainSubjects | null,
+    mealAllocationId: string | null,
+    options: { verify: boolean; persist: boolean },
+  ): Promise<BlockchainProofChainResponseDTO> {
+    if (!subjects)
+      throw new HttpError(404, "Không tìm thấy bữa ăn trong phạm vi");
+    const rows = await repo.listChain(db, subjects);
+    const links = linkChecks(rows, subjects.lotDeliveries);
+    const nodes: BlockchainProofChainResponseDTO["nodes"] = [];
+    for (const row of rows) {
+      let checked = toDTO(row);
+      if (options.verify && row.transactionStatus === "CONFIRMED")
+        try {
+          checked = await verifyRow(db, row, options.persist);
+        } catch (error) {
+          // One proof on another network or contract must not hide the rest.
+          if (!(error instanceof HttpError)) throw error;
+          checked = {
+            ...checked,
+            verificationStatus: "FAILED",
+            verificationResult: error.message,
+          };
+        }
+      nodes.push({ ...checked, links: links.get(row.id) ?? [] });
+    }
+    return {
+      mealAllocationId,
+      schoolId: subjects.schoolId,
+      date: subjects.date,
+      meal: subjects.meal,
+      steps: subjects.steps,
+      intact: nodes.every(
+        (node) =>
+          node.links.every((link) => link.status !== "MISMATCH") &&
+          (!options.verify ||
+            node.transactionStatus !== "CONFIRMED" ||
+            node.verificationStatus === "VERIFIED"),
+      ),
+      nodes,
+    };
+  }
 
   async function verifyRow(
     db: Tx,
     row: VersionRow,
+    persist = true,
   ): Promise<BlockchainProofVersionResponseDTO> {
     if (row.transactionStatus !== "CONFIRMED")
       throw new HttpError(409, "Bằng chứng chưa được xác nhận trên blockchain");
@@ -1045,10 +1153,11 @@ export function createBlockchainProofService(
     if (outcome.verificationStatus !== "FAILED")
       outcome = withNotes(outcome, await reconcile(db, row));
     const verifiedAt = now();
-    await repo.setVerification(db, row.kind, row.id, {
-      ...outcome,
-      verifiedAt,
-    });
+    if (persist)
+      await repo.setVerification(db, row.kind, row.id, {
+        ...outcome,
+        verifiedAt,
+      });
     return {
       ...toDTO({ ...row, ...outcome, verifiedAt }),
       ...(documents ? { documents } : {}),
@@ -1282,3 +1391,28 @@ export const blockchainProofService = createBlockchainProofService();
 export type BlockchainProofService = ReturnType<
   typeof createBlockchainProofService
 >;
+
+/**
+ * What the public page may show of a meal's journey: vehicle plates, slip and
+ * batch codes and send errors are operational details for staff only.
+ */
+export function publicView(
+  chain: BlockchainProofChainResponseDTO,
+): BlockchainProofChainResponseDTO {
+  return {
+    ...chain,
+    steps: {
+      ...chain.steps,
+      deliveries: chain.steps.deliveries.map((delivery) => ({
+        ...delivery,
+        deliveryNo: null,
+        vehiclePlate: null,
+      })),
+      cookingBatches: chain.steps.cookingBatches.map((batch) => ({
+        ...batch,
+        batchCode: null,
+      })),
+    },
+    nodes: chain.nodes.map((node) => ({ ...node, lastError: null })),
+  };
+}
