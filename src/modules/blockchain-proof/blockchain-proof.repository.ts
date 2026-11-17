@@ -116,6 +116,7 @@ export type VersionRow = Omit<
 };
 
 const day = (value: Date) => value.toISOString().slice(0, 10);
+const iso = (value: Date | null) => (value ? value.toISOString() : null);
 
 function toVersion(row: ProofRow): VersionRow {
   const {
@@ -146,6 +147,238 @@ function toVersion(row: ProofRow): VersionRow {
     ...(subject ? { subject } : {}),
   };
 }
+
+/** Readable facts of each step of a meal, shown even when a step has no proof. */
+export type ChainDeliveryStep = {
+  id: string;
+  deliveryNo: string;
+  supplierName: string;
+  status: string;
+  vehiclePlate: string | null;
+  expectedArrivalAt: string | null;
+  receivedAt: string | null;
+};
+export type ChainCookingBatchStep = {
+  id: string;
+  batchCode: string;
+  status: string;
+  dishes: string[];
+  plannedPortions: number | null;
+  allocatedPortions: number;
+  completedAt: string | null;
+};
+export type ChainSampleStep = {
+  id: string;
+  cookingBatchId: string;
+  dishName: string;
+  status: string;
+  sampledAt: string | null;
+  disposedAt: string | null;
+};
+export type ChainGradeMealSummary = {
+  /** `<gradeId|none>:<mealType>`, unique within one school and day. */
+  key: string;
+  schoolId: string;
+  schoolName: string;
+  gradeId: string | null;
+  gradeName: string | null;
+  mealType: string;
+  classCount: number;
+  portions: number;
+  status: string;
+  distributedAt: string | null;
+};
+
+/**
+ * One status for the classes of a meal: FINALIZED or DISTRIBUTED when every
+ * class is, PARTIAL when only some are, CANCELLED when all are, else ALLOCATED.
+ */
+export function mealStatus(statuses: string[]): string {
+  const open = statuses.filter((status) => status !== "CANCELLED");
+  if (!open.length) return "CANCELLED";
+  if (open.every((status) => status === "FINALIZED")) return "FINALIZED";
+  const served = open.filter(
+    (status) => status === "DISTRIBUTED" || status === "FINALIZED",
+  ).length;
+  if (served === open.length) return "DISTRIBUTED";
+  return served ? "PARTIAL" : "ALLOCATED";
+}
+
+const earliest = (times: Date[]) =>
+  times.length
+    ? times.reduce((a, b) => (a.getTime() <= b.getTime() ? a : b))
+    : null;
+
+/**
+ * Steps of the meals matched by `where`, which must stay within one school and
+ * day: deliveries, batches and samples behind them, merged across classes.
+ */
+async function mealSubjects(db: Db, where: Prisma.MealAllocationWhereInput) {
+  const allocations = await db.mealAllocation.findMany({
+    where,
+    select: {
+      id: true,
+      status: true,
+      distributedAt: true,
+      DailyMealPortion: {
+        select: {
+          mealDate: true,
+          mealType: true,
+          totalPortions: true,
+          Class: {
+            select: {
+              schoolId: true,
+              name: true,
+              gradeId: true,
+              grade: { select: { name: true } },
+            },
+          },
+        },
+      },
+      mealAllocationBatches: {
+        select: {
+          allocatedPortions: true,
+          CookingBatchDish: { select: { Dish: { select: { name: true } } } },
+          CookingBatch: {
+            select: {
+              id: true,
+              batchCode: true,
+              status: true,
+              plannedPortions: true,
+              completedAt: true,
+              RetainedFoodSample: {
+                select: {
+                  id: true,
+                  status: true,
+                  sampledAt: true,
+                  disposedAt: true,
+                  CookingBatchDish: {
+                    select: { Dish: { select: { name: true } } },
+                  },
+                },
+              },
+              cookingBatchLots: {
+                select: {
+                  ingredientLotId: true,
+                  IngredientLot: {
+                    select: {
+                      DeliveryItem: {
+                        select: {
+                          Delivery: {
+                            select: {
+                              id: true,
+                              deliveryNo: true,
+                              status: true,
+                              vehiclePlate: true,
+                              expectedArrivalAt: true,
+                              receivedAt: true,
+                              Supplier: { select: { name: true } },
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+  if (!allocations.length) return null;
+  const first = allocations[0].DailyMealPortion;
+  const lotDeliveries = new Map<string, string>();
+  const deliveries = new Map<string, ChainDeliveryStep>();
+  const batches = new Map<string, ChainCookingBatchStep>();
+  const samples = new Map<string, ChainSampleStep>();
+  for (const allocation of allocations)
+    for (const row of allocation.mealAllocationBatches) {
+      const batch = row.CookingBatch;
+      const step = batches.get(batch.id) ?? {
+        id: batch.id,
+        batchCode: batch.batchCode,
+        status: batch.status,
+        dishes: [],
+        plannedPortions: batch.plannedPortions,
+        allocatedPortions: 0,
+        completedAt: iso(batch.completedAt),
+      };
+      step.allocatedPortions += row.allocatedPortions;
+      const dish = row.CookingBatchDish.Dish.name;
+      if (!step.dishes.includes(dish)) step.dishes.push(dish);
+      batches.set(batch.id, step);
+      for (const sample of batch.RetainedFoodSample)
+        samples.set(sample.id, {
+          id: sample.id,
+          cookingBatchId: batch.id,
+          dishName: sample.CookingBatchDish.Dish.name,
+          status: sample.status,
+          sampledAt: iso(sample.sampledAt),
+          disposedAt: iso(sample.disposedAt),
+        });
+      for (const lot of batch.cookingBatchLots) {
+        const delivery = lot.IngredientLot.DeliveryItem.Delivery;
+        lotDeliveries.set(lot.ingredientLotId, delivery.id);
+        deliveries.set(delivery.id, {
+          id: delivery.id,
+          deliveryNo: delivery.deliveryNo,
+          supplierName: delivery.Supplier.name,
+          status: delivery.status,
+          vehiclePlate: delivery.vehiclePlate,
+          expectedArrivalAt: iso(delivery.expectedArrivalAt),
+          receivedAt: iso(delivery.receivedAt),
+        });
+      }
+    }
+  const schoolId = first.Class.schoolId;
+  const date = day(first.mealDate);
+  const classes = allocations
+    .map((allocation) => ({
+      id: allocation.id,
+      className: allocation.DailyMealPortion.Class.name,
+      portions: allocation.DailyMealPortion.totalPortions,
+      status: allocation.status,
+      distributedAt: iso(allocation.distributedAt),
+    }))
+    .sort((a, b) =>
+      a.className.localeCompare(b.className, "vi", { numeric: true }),
+    );
+  return {
+    schoolId,
+    date,
+    cookingBatchIds: [...batches.keys()],
+    sampleIds: [...samples.keys()],
+    deliveryIds: [...deliveries.keys()],
+    lotDeliveries,
+    meal: {
+      gradeId: first.Class.gradeId,
+      gradeName: first.Class.grade?.name ?? null,
+      mealType: first.mealType,
+      portions: classes.reduce((sum, item) => sum + item.portions, 0),
+      status: mealStatus(classes.map((item) => item.status)),
+      distributedAt: iso(
+        earliest(
+          allocations
+            .map((allocation) => allocation.distributedAt)
+            .filter((value): value is Date => value !== null),
+        ),
+      ),
+      classes,
+    },
+    steps: {
+      deliveries: [...deliveries.values()],
+      cookingBatches: [...batches.values()],
+      retainedSamples: [...samples.values()],
+      distribution: { recordId: `${schoolId}:${date}`, date },
+    },
+  };
+}
+
+export type ChainSubjects = NonNullable<
+  Awaited<ReturnType<typeof mealSubjects>>
+>;
 
 /** Business link of a new proof; exactly one per entity type (CHECK in SQL). */
 export type ProofSubject =
@@ -585,69 +818,125 @@ export function createBlockchainProofRepository() {
      * Business records behind one served meal: its distribution day, the cooking
      * batches it came from, their samples, and the deliveries of their lots.
      */
+    /** Steps of one class meal (kept for the per-allocation chain API). */
     async chainSubjects(
       db: Db,
       mealAllocationId: string,
       schoolId: string | null,
     ) {
-      const allocation = await db.mealAllocation.findFirst({
+      return mealSubjects(db, {
+        id: mealAllocationId,
+        ...(schoolId ? { DailyMealPortion: { Class: { schoolId } } } : {}),
+      });
+    },
+    /** Steps of one grade's meal on a day: every class of the grade together. */
+    async gradeChainSubjects(
+      db: Db,
+      query: {
+        schoolId: string | null;
+        gradeId: string | null;
+        date: string;
+        mealType: "LUNCH" | "AFTERNOON";
+      },
+    ) {
+      return mealSubjects(db, {
+        DailyMealPortion: {
+          mealDate: new Date(`${query.date}T00:00:00.000Z`),
+          mealType: query.mealType,
+          Class: {
+            gradeId: query.gradeId,
+            ...(query.schoolId ? { schoolId: query.schoolId } : {}),
+          },
+        },
+      });
+    },
+    /** An active school by its public code, as the public school pages find it. */
+    async findPublicSchool(db: Db, code: string) {
+      return db.school.findFirst({
         where: {
-          id: mealAllocationId,
-          ...(schoolId
-            ? { DailyMealPortion: { Class: { schoolId } } }
-            : undefined),
+          code: { equals: code.trim(), mode: "insensitive" },
+          status: "ACTIVE",
+        },
+        select: { id: true, name: true },
+      });
+    },
+    /** Grade meals of one day that can be traced, by school, grade and meal. */
+    async listGradeMeals(
+      db: Db,
+      query: { date: string; schoolId: string | null },
+    ): Promise<ChainGradeMealSummary[]> {
+      const rows = await db.mealAllocation.findMany({
+        where: {
+          DailyMealPortion: {
+            mealDate: new Date(`${query.date}T00:00:00.000Z`),
+            ...(query.schoolId
+              ? { Class: { schoolId: query.schoolId } }
+              : undefined),
+          },
         },
         select: {
+          status: true,
+          distributedAt: true,
           DailyMealPortion: {
-            select: { mealDate: true, Class: { select: { schoolId: true } } },
-          },
-          mealAllocationBatches: {
             select: {
-              CookingBatch: {
+              mealType: true,
+              totalPortions: true,
+              Class: {
                 select: {
-                  id: true,
-                  RetainedFoodSample: { select: { id: true } },
-                  cookingBatchLots: {
-                    select: {
-                      ingredientLotId: true,
-                      IngredientLot: {
-                        select: {
-                          DeliveryItem: { select: { deliveryId: true } },
-                        },
-                      },
-                    },
-                  },
+                  schoolId: true,
+                  gradeId: true,
+                  grade: { select: { name: true } },
+                  School: { select: { name: true } },
                 },
               },
             },
           },
         },
       });
-      if (!allocation) return null;
-      const batches = allocation.mealAllocationBatches.map(
-        (row) => row.CookingBatch,
-      );
-      const lotDeliveries = new Map<string, string>();
-      for (const batch of batches)
-        for (const lot of batch.cookingBatchLots)
-          lotDeliveries.set(
-            lot.ingredientLotId,
-            lot.IngredientLot.DeliveryItem.deliveryId,
-          );
-      return {
-        schoolId: allocation.DailyMealPortion.Class.schoolId,
-        date: day(allocation.DailyMealPortion.mealDate),
-        cookingBatchIds: [...new Set(batches.map((batch) => batch.id))],
-        sampleIds: [
-          ...new Set(
-            batches.flatMap((batch) =>
-              batch.RetainedFoodSample.map((sample) => sample.id),
-            ),
-          ),
-        ],
-        deliveryIds: [...new Set(lotDeliveries.values())],
-        lotDeliveries,
-      };
+      const groups = new Map<
+        string,
+        Omit<ChainGradeMealSummary, "status" | "distributedAt"> & {
+          statuses: string[];
+          times: Date[];
+        }
+      >();
+      for (const row of rows) {
+        const portion = row.DailyMealPortion;
+        const klass = portion.Class;
+        const id = `${klass.schoolId}|${klass.gradeId ?? "none"}|${portion.mealType}`;
+        const group = groups.get(id) ?? {
+          key: `${klass.gradeId ?? "none"}:${portion.mealType}`,
+          schoolId: klass.schoolId,
+          schoolName: klass.School.name,
+          gradeId: klass.gradeId,
+          gradeName: klass.grade?.name ?? null,
+          mealType: portion.mealType,
+          classCount: 0,
+          portions: 0,
+          statuses: [],
+          times: [],
+        };
+        group.classCount += 1;
+        group.portions += portion.totalPortions;
+        group.statuses.push(row.status);
+        if (row.distributedAt) group.times.push(row.distributedAt);
+        groups.set(id, group);
+      }
+      return [...groups.values()]
+        .map(({ statuses, times, ...group }) => ({
+          ...group,
+          status: mealStatus(statuses),
+          distributedAt: iso(earliest(times)),
+        }))
+        .sort(
+          (a, b) =>
+            a.schoolName.localeCompare(b.schoolName, "vi") ||
+            Number(a.gradeId === null) - Number(b.gradeId === null) ||
+            (a.gradeName ?? "").localeCompare(b.gradeName ?? "", "vi", {
+              numeric: true,
+            }) ||
+            a.mealType.localeCompare(b.mealType),
+        );
     },
     async listChain(
       db: Db,

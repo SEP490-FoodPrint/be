@@ -49,6 +49,27 @@ export function createBlockchainProofRouter(
 ) {
   const router = Router();
   const controller = createBlockchainProofController(service);
+  // Public journey of a school's meals by grade: no login, operational details removed.
+  router.get(
+    "/public/schools/:schoolCode/grade-meals",
+    controller.publicGradeMeals,
+  );
+  router.get(
+    "/public/schools/:schoolCode/grade-meals/:gradeId",
+    controller.publicGradeChain,
+  );
+  router.get(
+    "/chains/grade-meals",
+    authHandler,
+    requireChainPermission,
+    controller.gradeMeals,
+  );
+  router.get(
+    "/chains/grade-meals/:gradeId",
+    authHandler,
+    requireChainPermission,
+    controller.gradeChain,
+  );
   router.get(
     "/chains/meal-allocations/:mealAllocationId",
     authHandler,
