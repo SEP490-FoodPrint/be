@@ -32,6 +32,7 @@ import { withReadTransaction } from "../src/utils/read-transaction";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
@@ -9059,6 +9060,395 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       } finally {
         await sql.query("ROLLBACK");
         await sql.end();
+      }
+    },
+  );
+  await context.test(
+    "supplier-school endpoints enforce real-login default view, OR view/manage, admin-only role and live session recheck for JSON and binary",
+    async () => {
+      const localStore = new MemoryStore();
+      const srv = createApp(
+        createApiRateLimiter(localStore, { windowMs: 60_000, limit: 5000 }),
+        undefined,
+        {
+          session: sessionService,
+          signup: createSignupService(undefined, verification),
+          emailVerification: verification,
+          password: passwords,
+          onboarding: createOnboardingService(getPrisma, testDocumentStorage),
+        },
+      ).listen(0, "127.0.0.1");
+      await once(srv, "listening");
+      const addr = srv.address();
+      assert(addr && typeof addr !== "string");
+      const base = `http://127.0.0.1:${addr.port}/api`;
+      const loginReal = async (email: string) => {
+        const res = await fetch(base + "/auth/login", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-CSRF-Protection": "1",
+          },
+          body: JSON.stringify({ identifier: email, password }),
+        });
+        assert.equal(res.status, 200);
+        const cookie = res.headers
+          .getSetCookie()
+          .map((c) => c.split(";")[0])
+          .join("; ");
+        const refresh = parseCookie(cookie)[REFRESH_COOKIE];
+        assert(refresh);
+        refreshTokens.push(refresh);
+        return cookie;
+      };
+      try {
+        const sup1 = await db.supplier.create({
+          data: { name: "AuthZ Supplier School 1" },
+        });
+        const sup2 = await db.supplier.create({
+          data: { name: "AuthZ Supplier School 2" },
+        });
+        const sup3 = await db.supplier.create({
+          data: { name: "AuthZ Supplier School 3" },
+        });
+        const sch1 = await db.school.create({
+          data: { name: "AuthZ Linked School 1", code: "AZ-SCH-1" },
+        });
+        const rel1 = await db.schoolSupplierRelationship.create({
+          data: { schoolId: sch1.id, supplierId: sup1.id, status: "ACTIVE" },
+        });
+        const rel2 = await db.schoolSupplierRelationship.create({
+          data: { schoolId: sch1.id, supplierId: sup2.id, status: "ACTIVE" },
+        });
+        const pdfBytes = Buffer.from("%PDF-1.4\nAuthZ check bytes");
+        const c1 = await db.supplierContract.create({
+          data: {
+            schoolId: sch1.id,
+            supplierId: sup1.id,
+            relationshipId: rel1.id,
+            number: "AZ-HD-1",
+            status: "ACTIVE",
+            signedOn: new Date("2026-11-01"),
+            startsOn: new Date("2026-11-01"),
+            endsOn: new Date("2026-12-31"),
+            snapshot: {},
+            createdByUserId: system.id,
+            activatedByUserId: system.id,
+            activatedAt: new Date("2026-11-01T08:00:00Z"),
+          },
+        });
+        const d1 = await db.supplierContractDocument.create({
+          data: {
+            contractId: c1.id,
+            kind: "SIGNED_CONTRACT",
+            fileName: "az-1.pdf",
+            mimeType: "application/pdf",
+            size: pdfBytes.length,
+            sha256: "a".repeat(64),
+            content: pdfBytes,
+            uploadedByUserId: system.id,
+          },
+        });
+        const c2 = await db.supplierContract.create({
+          data: {
+            schoolId: sch1.id,
+            supplierId: sup2.id,
+            relationshipId: rel2.id,
+            number: "AZ-HD-2",
+            status: "ACTIVE",
+            signedOn: new Date("2026-11-01"),
+            startsOn: new Date("2026-11-01"),
+            endsOn: new Date("2026-12-31"),
+            snapshot: {},
+            createdByUserId: system.id,
+            activatedByUserId: system.id,
+            activatedAt: new Date("2026-11-01T08:00:00Z"),
+          },
+        });
+        const d2 = await db.supplierContractDocument.create({
+          data: {
+            contractId: c2.id,
+            kind: "SIGNED_CONTRACT",
+            fileName: "az-2.pdf",
+            mimeType: "application/pdf",
+            size: pdfBytes.length,
+            sha256: "b".repeat(64),
+            content: pdfBytes,
+            uploadedByUserId: system.id,
+          },
+        });
+
+        const admin1 = await user("INGREDIENT_SUPPLIER_ADMIN", {
+          supplierId: sup1.id,
+        });
+        const admin2 = await user("INGREDIENT_SUPPLIER_ADMIN", {
+          supplierId: sup2.id,
+        });
+        const staffSup1 = await user("INGREDIENT_SUPPLIER_STAFF", {
+          supplierId: sup1.id,
+        });
+        const cookieAdmin1 = await loginReal(admin1.email);
+        const cookieAdmin2 = await loginReal(admin2.email);
+        const cookieStaff1 = await loginReal(staffSup1.email);
+        const cookieSystem = await loginReal(system.email);
+
+        const viewPerm = await permission("supplier_relationship.view");
+        const managePerm = await permission("supplier_relationship.manage");
+        const supAdminRoleId = admin1.roleId;
+        const supStaffRoleId = staffSup1.roleId;
+
+        const callCookie = (urlPath: string, cookie: string) =>
+          fetch(base + urlPath, { headers: { Cookie: cookie } });
+
+        // 1. Fresh admin default view grant works on JSON and binary
+        assert.equal(
+          (await callCookie("/supplier-schools", cookieAdmin1)).status,
+          200,
+        );
+        assert.equal(
+          (await callCookie(`/supplier-schools/${sch1.id}`, cookieAdmin1))
+            .status,
+          200,
+        );
+        assert.equal(
+          (
+            await callCookie(
+              `/supplier-schools/${sch1.id}/contracts`,
+              cookieAdmin1,
+            )
+          ).status,
+          200,
+        );
+        assert.equal(
+          (
+            await callCookie(
+              `/supplier-schools/${sch1.id}/contracts/${c1.id}`,
+              cookieAdmin1,
+            )
+          ).status,
+          200,
+        );
+        assert.equal(
+          (
+            await callCookie(
+              `/supplier-schools/${sch1.id}/contracts/${c1.id}/documents/${d1.id}`,
+              cookieAdmin1,
+            )
+          ).status,
+          200,
+        );
+
+        // 2. Staff and SYSTEM_ADMIN get 403 even when granted both view & manage permissions
+        await db.rolePermission.createMany({
+          data: [
+            { roleId: supStaffRoleId, permissionId: viewPerm.id },
+            { roleId: supStaffRoleId, permissionId: managePerm.id },
+            { roleId: system.roleId, permissionId: viewPerm.id },
+            { roleId: system.roleId, permissionId: managePerm.id },
+          ],
+          skipDuplicates: true,
+        });
+        try {
+          for (const actorCookie of [cookieStaff1, cookieSystem]) {
+            assert.equal(
+              (await callCookie("/supplier-schools", actorCookie)).status,
+              403,
+            );
+            assert.equal(
+              (
+                await callCookie(
+                  `/supplier-schools/${sch1.id}/contracts/${c1.id}/documents/${d1.id}`,
+                  actorCookie,
+                )
+              ).status,
+              403,
+            );
+          }
+
+          // 3. OR view/manage + current-org denial + inactive permission on SAME session (cookieAdmin2)
+          await db.userPermissionDenial.create({
+            data: {
+              userId: admin2.id,
+              permissionId: viewPerm.id,
+              supplierId: sup2.id,
+              disabledByUserId: system.id,
+            },
+          });
+          assert.equal(
+            (await callCookie("/supplier-schools", cookieAdmin2)).status,
+            403,
+          );
+          assert.equal(
+            (
+              await callCookie(
+                `/supplier-schools/${sch1.id}/contracts/${c2.id}/documents/${d2.id}`,
+                cookieAdmin2,
+              )
+            ).status,
+            403,
+          );
+
+          // Grant manage to INGREDIENT_SUPPLIER_ADMIN -> admin2 with view denied can STILL read via manage OR
+          await db.rolePermission.create({
+            data: { roleId: supAdminRoleId, permissionId: managePerm.id },
+          });
+          assert.equal(
+            (await callCookie("/supplier-schools", cookieAdmin2)).status,
+            200,
+          );
+          assert.equal(
+            (
+              await callCookie(
+                `/supplier-schools/${sch1.id}/contracts/${c2.id}/documents/${d2.id}`,
+                cookieAdmin2,
+              )
+            ).status,
+            200,
+          );
+
+          // Inactive manage permission while view is denied -> 403 for JSON and binary
+          await db.permission.update({
+            where: { id: managePerm.id },
+            data: { isActive: false },
+          });
+          assert.equal(
+            (await callCookie("/supplier-schools", cookieAdmin2)).status,
+            403,
+          );
+          assert.equal(
+            (
+              await callCookie(
+                `/supplier-schools/${sch1.id}/contracts/${c2.id}/documents/${d2.id}`,
+                cookieAdmin2,
+              )
+            ).status,
+            403,
+          );
+          await db.permission.update({
+            where: { id: managePerm.id },
+            data: { isActive: true },
+          });
+
+          // Denying both view and manage -> 403
+          await db.userPermissionDenial.create({
+            data: {
+              userId: admin2.id,
+              permissionId: managePerm.id,
+              supplierId: sup2.id,
+              disabledByUserId: system.id,
+            },
+          });
+          assert.equal(
+            (await callCookie("/supplier-schools", cookieAdmin2)).status,
+            403,
+          );
+
+          // 4. Same live session (cookieAdmin1) observes lock, supplier change, role change (JSON + binary)
+          await db.user.update({
+            where: { id: admin1.id },
+            data: { status: "LOCKED" },
+          });
+          assert.equal(
+            (await callCookie("/supplier-schools", cookieAdmin1)).status,
+            403,
+          );
+          assert.equal(
+            (
+              await callCookie(
+                `/supplier-schools/${sch1.id}/contracts/${c1.id}/documents/${d1.id}`,
+                cookieAdmin1,
+              )
+            ).status,
+            403,
+          );
+          await db.user.update({
+            where: { id: admin1.id },
+            data: { status: "ACTIVE" },
+          });
+
+          // Move admin1 to sup3 (unlinked) -> same session loses access to sup1's school/file
+          await db.user.update({
+            where: { id: admin1.id },
+            data: { supplierId: sup3.id },
+          });
+          const movedList = await callCookie("/supplier-schools", cookieAdmin1);
+          assert.equal(movedList.status, 200);
+          assert.deepEqual(
+            ((await movedList.json()) as { data: { items: unknown[] } }).data
+              .items,
+            [],
+          );
+          assert.equal(
+            (await callCookie(`/supplier-schools/${sch1.id}`, cookieAdmin1))
+              .status,
+            404,
+          );
+          assert.equal(
+            (
+              await callCookie(
+                `/supplier-schools/${sch1.id}/contracts/${c1.id}/documents/${d1.id}`,
+                cookieAdmin1,
+              )
+            ).status,
+            404,
+          );
+
+          // Move back to sup1 and downgrade role to INGREDIENT_SUPPLIER_STAFF -> 403 JSON & binary
+          await db.user.update({
+            where: { id: admin1.id },
+            data: {
+              supplierId: sup1.id,
+              roleId: supStaffRoleId,
+              roleCode: "INGREDIENT_SUPPLIER_STAFF",
+            },
+          });
+          assert.equal(
+            (await callCookie("/supplier-schools", cookieAdmin1)).status,
+            403,
+          );
+          assert.equal(
+            (
+              await callCookie(
+                `/supplier-schools/${sch1.id}/contracts/${c1.id}/documents/${d1.id}`,
+                cookieAdmin1,
+              )
+            ).status,
+            403,
+          );
+        } finally {
+          await db.user.update({
+            where: { id: admin1.id },
+            data: {
+              supplierId: sup1.id,
+              roleId: supAdminRoleId,
+              roleCode: "INGREDIENT_SUPPLIER_ADMIN",
+              status: "ACTIVE",
+            },
+          });
+          await db.permission.update({
+            where: { id: managePerm.id },
+            data: { isActive: true },
+          });
+          await db.userPermissionDenial.deleteMany({
+            where: { userId: admin2.id },
+          });
+          await db.rolePermission.deleteMany({
+            where: {
+              OR: [
+                { roleId: supAdminRoleId, permissionId: managePerm.id },
+                { roleId: supStaffRoleId, permissionId: viewPerm.id },
+                { roleId: supStaffRoleId, permissionId: managePerm.id },
+                { roleId: system.roleId, permissionId: managePerm.id },
+              ],
+            },
+          });
+        }
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          srv.close((err) => (err ? reject(err) : resolve()));
+          srv.closeAllConnections();
+        });
+        localStore.shutdown();
       }
     },
   );

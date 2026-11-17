@@ -50,6 +50,10 @@ export const RESOURCE_PERMISSIONS = {
     "supplier_relationship.view",
     "supplier_relationship.manage",
   ],
+  "supplier-school": [
+    "supplier_relationship.view",
+    "supplier_relationship.manage",
+  ],
   "ingredient-entry": ["ingredient.view", "ingredient.manage"],
   allergy: ["class_allergy.view"],
   delivery: ["delivery.view", "delivery.manage", "delivery.receive"],
@@ -303,6 +307,11 @@ export const listScopes = {
       "Loại tổ chức không có phạm vi truy cập tài nguyên này",
     );
   },
+  "supplier-school": (
+    p: AuthPrincipal,
+  ): Prisma.SchoolSupplierRelationshipWhereInput => {
+    return { supplierId: supplierSchoolReadScope(p).supplierId };
+  },
   "ingredient-entry": (p: AuthPrincipal): Prisma.IngredientEntryWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["ingredient-entry"]);
     if (p.orgType === "SYSTEM") return {};
@@ -530,6 +539,28 @@ export function supplierStaffManagementScope(
       "Chỉ quản trị viên nhà cung cấp được quản lý nhân viên",
     );
   assertPermission(principal, ...RESOURCE_PERMISSIONS["supplier-staff"]);
+  return { supplierId: principal.supplierId };
+}
+
+export interface SupplierSchoolReadScope {
+  readonly supplierId: string;
+}
+
+export function supplierSchoolReadScope(
+  principal: AuthPrincipal,
+): SupplierSchoolReadScope {
+  if (
+    principal.role !== ROLES.INGREDIENT_SUPPLIER_ADMIN ||
+    principal.orgType !== ORG_TYPES.SUPPLIER ||
+    !principal.supplierId ||
+    principal.schoolId ||
+    principal.communeFoodSafetyUnitId
+  )
+    throw new HttpError(
+      403,
+      "Chỉ quản trị viên nhà cung cấp được xem trường đã liên kết",
+    );
+  assertPermission(principal, ...RESOURCE_PERMISSIONS["supplier-school"]);
   return { supplierId: principal.supplierId };
 }
 
