@@ -45,6 +45,12 @@ export function createDeliveryRouter(
     inspectionController.list,
   );
   router.get(
+    "/inspections/lookup",
+    authHandler,
+    requirePermission("delivery.view"),
+    inspectionController.lookup,
+  );
+  router.get(
     "/:id/inspection",
     authHandler,
     requirePermission("delivery.view"),
