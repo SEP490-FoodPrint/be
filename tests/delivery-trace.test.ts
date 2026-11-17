@@ -461,7 +461,9 @@ void test("US4 full createApp wiring serves public HTML/JSON/HEAD without auth, 
   dbOutage = false;
 
   // 8. Protected route stays protected
-  const anchorsRes = await http.request("/api/traceability-anchors");
+  const anchorsRes = await http.request(
+    "/api/blockchain-proofs/deliveries/11111111-1111-4111-8111-111111111111/versions",
+  );
   assert.equal(anchorsRes.status, 401);
 
   // 9. URL redaction + morgan/error log redaction

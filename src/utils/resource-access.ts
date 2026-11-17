@@ -498,55 +498,6 @@ export const listScopes = {
       "Loại tổ chức không có phạm vi truy cập tài nguyên này",
     );
   },
-  traceability: (p: AuthPrincipal): Prisma.TraceabilityAnchorWhereInput => {
-    assertPermission(p, ...RESOURCE_PERMISSIONS["traceability"]);
-    if (p.orgType === "SYSTEM") return {};
-    if (p.orgType === "SCHOOL")
-      return {
-        OR: [
-          { Delivery: { schoolId: school(p) } },
-          {
-            IngredientLot: {
-              DeliveryItem: {
-                Delivery: { schoolId: school(p) },
-              },
-            },
-          },
-          {
-            CookingBatch: { MenuDay: { WeeklyMenu: { schoolId: school(p) } } },
-          },
-          {
-            MealAllocation: {
-              DailyMealPortion: { Class: { schoolId: school(p) } },
-            },
-          },
-          { FoodSafetyIncident: { schoolId: school(p) } },
-        ],
-      };
-    if (p.orgType === "SUPPLIER")
-      return {
-        OR: [
-          { Delivery: { supplierId: supplier(p) } },
-          {
-            IngredientLot: {
-              DeliveryItem: { Delivery: { supplierId: supplier(p) } },
-            },
-          },
-        ],
-      };
-    if (p.orgType === "AUTHORITY")
-      return {
-        FoodSafetyIncident: {
-          foodSafetyReportForwardings: {
-            some: authorityReports(p),
-          },
-        },
-      };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
-  },
 };
 export type Resource = keyof typeof listScopes;
 

@@ -92,13 +92,16 @@ function harness(options: { enabled?: boolean } = {}) {
   const repository = {
     readRegistration: () => Promise.resolve(registration),
     latestRegistrationVersion: () => Promise.resolve(latest()),
-    createRegistrationVersion: (
+    createVersion: (
       _db: unknown,
-      recordId: string,
-      eventType: "SUBMITTED" | "APPROVED",
-      data: Stored,
+      subject: { registrationRequestId: string },
+      data: Omit<Stored, "eventType"> & { eventType: "SUBMITTED" | "APPROVED" },
     ) => {
-      const id = `00000000-0000-4000-8000-${String(++nextId).padStart(12, "0")}`;
+      const recordId = subject.registrationRequestId;
+      const eventType = data.eventType;
+      const id =
+        data.id ??
+        `00000000-0000-4000-8000-${String(++nextId).padStart(12, "0")}`;
       versions.push({
         ...data,
         id,
@@ -275,10 +278,7 @@ void test("each resubmission adds a linked version and approval closes the chain
     SUPPLIER,
   );
   assert(h.versions.every((v) => v.transactionStatus === "CONFIRMED"));
-  assert.equal(
-    h.onChain.get(proofRecordId("registrations", first)),
-    v1?.dataHash,
-  );
+  assert.equal(h.onChain.get(proofRecordId(first)), v1?.dataHash);
   // Nothing more is anchored once approved.
   assert.equal(
     await h.service.prepareRegistrationSubmitted(h.tx, REQUEST, APPLICANT),

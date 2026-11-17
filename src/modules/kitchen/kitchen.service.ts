@@ -1545,7 +1545,7 @@ export function createKitchenLifecycle(
             (await tx.retainedFoodSample.count({
               where: { cookingBatchId: id },
             })) ||
-            (await tx.traceabilityAnchor.count({
+            (await tx.blockchainProof.count({
               where: { cookingBatchId: id },
             }))
           )

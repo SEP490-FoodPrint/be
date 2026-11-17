@@ -120,7 +120,7 @@ Payload mới:
 **`MEAL_DISTRIBUTED`** (mục 7): `schoolId, date (YYYY-MM-DD), distributedAt, distributedByUserId, totalPortions`, cùng:
 
 - `allocations[]`: `{ mealAllocationId, dailyMealPortionId, classId, mealType, portions }`, sắp theo `mealAllocationId`;
-- `batches[]`: `{ mealAllocationId, cookingBatchId, portions, cookingCompletedHash }`, sắp theo `mealAllocationId` rồi `cookingBatchId`. `cookingCompletedHash` là `data_hash` của bằng chứng `COOKING_BATCH`, hoặc `null`.
+- `batches[]`: `{ mealAllocationId, cookingBatchId, dishId, portions, cookingCompletedHash }`, sắp theo `mealAllocationId`, `cookingBatchId` rồi `dishId`. `cookingCompletedHash` là `data_hash` của bằng chứng `COOKING_BATCH`, hoặc `null`.
 
 Quy tắc chung giữ nguyên: chỉ kiểu nguyên thủy, Date thành ISO UTC, Decimal thành chuỗi `toFixed(3)`, không có `undefined`, chỉ id người dùng.
 
@@ -144,10 +144,10 @@ Cách gắn như các điểm hiện có: tạo bằng chứng `PREPARED` trong 
 
 Giữ nguyên route, phản hồi và mã lỗi của `/api/blockchain-proofs/:kind/...`. `kind` thêm 2 giá trị:
 
-| `kind`                  | `recordId` trong URL                    | Đọc / xác minh                                                                                                             | Gửi lại               |
-| ----------------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | --------------------- |
-| `delivery-declarations` | `deliveryId`                            | Trường: `traceability.view` / `traceability.verify`, theo `Delivery.schoolId`. NCC: xem bằng chứng của delivery thuộc mình | Như xác minh          |
-| `meal-distributions`    | `mealAllocationId` bất kỳ trong ngày đó | Trường: `traceability.view` / `traceability.verify`, theo `school_id`                                                      | `traceability.verify` |
+| `kind`                  | `recordId` trong URL                    | Đọc / xác minh                                                                                                                                                     | Gửi lại               |
+| ----------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------- |
+| `delivery-declarations` | `deliveryId`                            | Trường: `traceability.view` / `traceability.verify`, theo `Delivery.schoolId`. NCC có `delivery.manage`: xem, xác minh, gửi lại bằng chứng của delivery thuộc mình | Như xác minh          |
+| `meal-distributions`    | `mealAllocationId` bất kỳ trong ngày đó | Trường: `traceability.view` / `traceability.verify`, theo `school_id`                                                                                              | `traceability.verify` |
 
 Thêm một API phục vụ mục 8:
 
@@ -162,11 +162,45 @@ Ngoài xác minh toàn vẹn (dựng lại payload, so với chain), bằng ch�
 - Kiểm nhận so với khai báo: liệt kê mặt hàng có số lượng thực nhận khác số lượng khai, và lô có trong biên bản nhưng không có trong khai báo.
 - Phân phối so với mẻ nấu: tổng suất phân phối của mỗi mẻ không vượt `plannedPortions` của mẻ.
 
-## Cần nhóm chốt trước khi code
+## Quyết định khi triển khai
 
-1. **Nodaco35 (`feat/blockchain-modules`)** đồng ý chuyển phân phối suất ăn sang `blockchain_proofs` thay cho `traceability_anchors`, và bỏ các route `/api/dev/blockchain-*` của nhánh đó.
-2. **Quyền NCC** xem bằng chứng khai báo: dùng permission đơn hàng NCC hiện có hay thêm permission mới.
-3. **Mục 8**: `feat/meal-traceability` gọi API chuỗi ở trên để điền `blockchainProof`, hay tự đọc bảng.
+1. Phân phối suất ăn dùng `blockchain_proofs`; `traceability_anchors` bị xóa. Nhánh `feat/blockchain-modules` cần bỏ phần ghi bảng này trước khi merge.
+2. NCC xem bằng chứng khai báo bằng permission sẵn có `delivery.manage`, không thêm permission mới.
+3. `feat/meal-traceability` lấy bằng chứng qua API chuỗi.
+4. Với kind `meal-distributions`, `recordId` trong phản hồi là `<schoolId>:<YYYY-MM-DD>`.
+5. `declaredAt` của khai báo là thời điểm tạo bằng chứng, được chốt trong `snapshot`; người khai là `created_by_user_id`.
+6. Đối chiếu nghiệp vụ dùng dữ liệu đã neo, chỉ thêm ghi chú vào `verificationResult`. API chuỗi không dừng khi một bằng chứng thuộc mạng hoặc contract khác: bằng chứng đó được đánh dấu `FAILED`.
+
+## Ảnh hưởng tới các nhánh đang mở
+
+### `feat/blockchain-modules` (Nodaco35): cần sửa trước khi merge
+
+Sau khi PR này vào `dev`, bảng `traceability_anchors` và model `TraceabilityAnchor` **không còn**. Nhánh này đang dùng chúng, nên merge `dev` vào sẽ lỗi typecheck và lỗi runtime.
+
+Phân phối suất ăn (UC-23) và chuỗi truy xuất đã được làm trong PR này. Đề nghị:
+
+| Phần trên nhánh                                                                                | Xử lý                                                                                                                                       |
+| ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `blockchain-distribution.service.ts` (ghi `traceabilityAnchor`, `recordId` theo trường + ngày) | Bỏ. `mealAllocationService.confirmDistribution` đã gọi `blockchainProofService.prepareMealDistributed` và gửi sau khi commit                |
+| Route `/api/dev/blockchain-distribution`                                                       | Bỏ. Xem bằng chứng qua `GET /api/blockchain-proofs/meal-distributions/:mealAllocationId/versions`, gửi lại qua `POST …/versions/:id/anchor` |
+| `blockchain-traceability.service.ts`, route `/api/dev/blockchain-traceability/*`               | Thay bằng `GET /api/blockchain-proofs/chains/meal-allocations/:mealAllocationId?verify=true`                                                |
+| Sửa trong `meal-allocation.service.ts`                                                         | Bỏ, để giữ bản trên `dev`                                                                                                                   |
+| `src/utils/blockchain.ts`, `src/utils/canonical-hash.ts`                                       | Đã có trên `dev`, giữ bản trên `dev`                                                                                                        |
+| `blockchain-todo`                                                                              | Không liên quan, giữ hoặc bỏ tùy nhánh                                                                                                      |
+
+Lý do không giữ cách ghi cũ:
+
+- Contract chỉ cho ghi mỗi `recordId` một lần (`AlreadyConfirmed`). `recordId` theo trường + ngày nên không gửi lại được nếu lần đầu lỗi.
+- Nhánh cũ gửi giao dịch rồi mới ghi DB, nên nếu ghi DB lỗi thì có hash trên chain mà hệ thống không biết. Ở đây bằng chứng được tạo `PREPARED` trong cùng transaction nghiệp vụ, rồi mới gửi.
+- Payload không được lưu lại, nên không xác minh lại được. Ở đây `snapshot` giữ đúng payload đã băm.
+
+### `feat/meal-traceability` (Nodaco35)
+
+Để điền `blockchainProof` (đang trả `null`), gọi API chuỗi ở trên, hoặc dùng `blockchainProofService.chain(...)` trong service. Mỗi nút có `kind`, `dataHash`, `transactionStatus`, `explorerUrl`, `links[]` và, khi `verify=true`, `verificationStatus`. Cờ `intact` cho biết cả chuỗi có nguyên vẹn không.
+
+### Nhánh khác đụng module `blockchain-proof`
+
+Repository không còn `createDeliveryVersion`, `createCookingBatchVersion`, `createSampleVersion`, `createRegistrationVersion`; dùng `createVersion(tx, subject, data)`. `proofRecordId` chỉ nhận id bằng chứng.
 
 ## Kiểm tra chấp nhận
 

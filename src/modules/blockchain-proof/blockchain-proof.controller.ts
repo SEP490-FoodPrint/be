@@ -6,6 +6,8 @@ import {
   type BlockchainProofService,
 } from "./blockchain-proof.service";
 import {
+  validateChainParams,
+  validateChainQuery,
   validateRecordParams,
   validateVersionParams,
 } from "./blockchain-proof.validation";
@@ -32,6 +34,12 @@ export function createBlockchainProofController(
       const params = validateVersionParams(req.params);
       const result = await service.verify(params, requirePrincipal(req));
       sendSuccess(res, result, "Đã xác minh bằng chứng blockchain");
+    }),
+    chain: asyncHandler(async (req, res) => {
+      const params = validateChainParams(req.params);
+      const query = validateChainQuery(req.query);
+      const result = await service.chain(params, query, requirePrincipal(req));
+      sendSuccess(res, result, "Lấy chuỗi bằng chứng blockchain thành công");
     }),
   };
 }
