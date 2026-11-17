@@ -4,7 +4,7 @@
 
 **Created**: 2026-11-17
 
-**Status**: Draft
+**Status**: Implemented — đã kiểm chứng backend; SC-005 chờ nghiệm thu người dùng/client phù hợp
 
 **Input**: User description: "Là System Admin tôi muốn chức năng có thể chỉnh sửa, thêm, ẩn, mở quyền của mọi vai trò trong hệ thống."
 
@@ -33,7 +33,10 @@ Là System Admin có quyền quản trị phù hợp, tôi muốn xem các vai t
 4. **Given** một tài khoản có hạn chế riêng đối với quyền đang được cấp cho vai trò, **When** System Admin thu hồi rồi cấp lại quyền cho vai trò, **Then** hạn chế riêng của tài khoản vẫn được giữ và tài khoản không tự được mở quyền.
 5. **Given** SYSTEM_ADMIN được chọn, **When** xem bộ quyền hoặc cố thêm, thu hồi hay thay thế bộ quyền, **Then** hệ thống cho xem với trạng thái chỉ đọc và từ chối mọi thay đổi, kể cả yêu cầu lưu lại bộ quyền giống hiện tại.
 6. **Given** vai trò có thể sửa đang có nhiều quyền, **When** một lần lưu chứa quyền không tồn tại, quyền trùng hoặc quyền tạm ngừng được gán mới, **Then** toàn bộ lần lưu bị từ chối và bộ quyền cũ được giữ nguyên.
-7. **Given** vai trò có thể sửa đang có quyền, **When** System Admin lưu bộ quyền rỗng hợp lệ, **Then** vai trò không còn quyền được gán và mọi hạn chế riêng của tài khoản vẫn được bảo toàn.
+7. **Given** danh mục có tên quyền khác nhau, gồm quyền đang hoạt động và tạm ngừng, **When** System Admin tìm bằng một phần tên với chữ hoa/thường hoặc khoảng trắng hai đầu, **Then** chỉ nhận tên chứa từ khóa đã chuẩn hóa, lọc trước phân trang; không tìm theo mã hoặc mô tả. Từ khóa rỗng/không có trả danh sách như hiện tại; ký tự %, _ và dấu gạch chéo ngược được hiểu theo nghĩa ký tự thường.
+8. **Given** vai trò có thể sửa đang có quyền, **When** System Admin lưu bộ quyền rỗng hợp lệ, **Then** vai trò không còn quyền được gán và mọi hạn chế riêng của tài khoản vẫn được bảo toàn.
+
+9. **Given** danh mục có quyền đang hoạt động và tạm ngừng, **When** System Admin xem danh sách quyền chưa bật, **Then** chỉ nhận quyền tạm ngừng với tối đa 5 quyền mỗi trang, thứ tự ổn định; trang vượt cuối trả rỗng và không có trang kế tiếp.
 
 ---
 
@@ -119,6 +122,10 @@ Là System Admin có quyền chỉnh sửa, tôi muốn sửa tên và mô tả 
 - **FR-015**: Tính năng MUST giữ cơ chế quản trị viên tổ chức chỉ hạn chế/mở lại quyền đã thuộc vai trò của tài khoản cùng tổ chức. Cán bộ an toàn thực phẩm MUST không được quản trị quyền dù được gán một quyền quản trị.
 - **FR-016**: Tạo quyền MUST không tự tạo chức năng nghiệp vụ hoặc làm quyền có hiệu lực ở chức năng chưa sử dụng quyền đó. Tính năng MUST không thêm, sửa hoặc xóa vai trò, đổi vai trò tài khoản, xóa vĩnh viễn quyền, hay bổ sung lịch sử hạn chế riêng.
 
+- **FR-017**: Danh mục quyền MUST cho tìm kiếm theo một phần tên, không phân biệt chữ hoa/thường, giữ nguyên dấu tiếng Việt; không tìm theo mã/mô tả. Từ khóa MUST được bỏ khoảng trắng hai đầu, dài tối đa 150 ký tự; rỗng hoặc không cung cấp nghĩa là không lọc. Các ký tự %, _ và gạch chéo ngược MUST được tìm theo nghĩa ký tự thường. Kết quả MUST lọc trước phân trang, giữ thứ tự và quyền truy cập hiện tại, bao gồm quyền tạm ngừng; không khớp thì danh sách rỗng.
+
+- **FR-018**: Hệ thống MUST cung cấp danh sách riêng các quyền chưa bật (trạng thái toàn cục tạm ngừng), mỗi trang cố định tối đa 5 quyền, mặc định trang 1; không nhận thay đổi kích thước trang. Danh sách MUST giữ guard, scope, dữ liệu an toàn và thứ tự hiện hành, trả dấu hiệu trang kế tiếp đúng; không có dữ liệu hoặc trang vượt cuối là kết quả rỗng hợp lệ.
+
 ### Key Entities _(include if feature involves data)_
 
 - **Quyền**: Một khả năng nghiệp vụ có định danh, mã ổn định, tên, nhóm chức năng, hành động, mô tả và trạng thái hoạt động chung. Trạng thái này chi phối hiệu lực ở mọi nơi quyền được gán.
@@ -137,10 +144,14 @@ Là System Admin có quyền chỉnh sửa, tôi muốn sửa tên và mô tả 
 - **SC-005**: Người kiểm thử có đủ quyền hoàn thành được cả bốn luồng xem/sửa bộ quyền, thêm quyền, sửa thông tin và tạm ngừng/kích hoạt chỉ bằng dữ liệu quản trị được cung cấp, không cần biết trước định danh nội bộ.
 - **SC-006**: Với dữ liệu kiểm thử gồm ít nhất hai vai trò và hai tổ chức, mọi trường hợp cấp lại bộ quyền hoặc kích hoạt quyền đều giữ 100% hạn chế riêng đã có; các lần lưu đồng thời kết thúc bằng một cấu hình đầy đủ đã được chấp nhận.
 
+- **SC-007**: 100% trường hợp kiểm chứng tìm tên, phân trang kết quả, từ khóa rỗng, ký tự đặc biệt và từ khóa không khớp trả đúng tập quyền trong phạm vi được phép.
+
+- **SC-008**: 100% ca kiểm chứng danh sách chưa bật chỉ chứa quyền tạm ngừng, mỗi trang tối đa 5 mục, duyệt hết không trùng/mất quyền khi dữ liệu không đổi và không trả quyền đang hoạt động.
+
 ## Assumptions
 
 - Hai câu trả lời trong Clarifications chốt phạm vi: bộ quyền SYSTEM_ADMIN chỉ đọc; ẩn/mở là đổi trạng thái quyền toàn cục. Trạng thái toàn cục vẫn ảnh hưởng đến quyền hiệu lực của System Admin.
 - “Thêm” gồm tạo mục quyền mới và cấp quyền cho vai trò; “chỉnh sửa” gồm sửa tên/mô tả quyền và thay đổi bộ quyền vai trò. Mã, nhóm chức năng, hành động được giữ ổn định để bảo toàn ý nghĩa quyền đã được chức năng nghiệp vụ sử dụng.
 - Kế thừa danh mục vai trò và cơ chế xác thực, phân quyền, hạn chế riêng, phản hồi và phân trang hiện tại theo [AUTHORIZATION.md](../../docs/AUTHORIZATION.md) và [AGENTS.md](../../AGENTS.md). Việc tách quyền cụ thể cho sửa thông tin/đổi trạng thái sẽ được xác định khi lập kế hoạch, không tự cấp quyền cho tài khoản hiện có.
 - Đây là đặc tả hành vi backend. Thiết kế giao diện quản trị, tạo màn hình, khôi phục quyền quản trị bằng thao tác vận hành và tự động đồng bộ danh mục không nằm trong phạm vi.
-- Chưa thực hiện triển khai, khởi tạo quyền quản trị mới hay thay đổi dữ liệu thực tế; mọi thao tác dữ liệu/môi trường phải tuân thủ chính sách cho phép riêng của dự án.
+- Không tự khởi tạo quyền quản trị mới hay thay đổi dữ liệu vận hành; mọi thao tác dữ liệu/môi trường phải tuân thủ chính sách cho phép riêng của dự án.
