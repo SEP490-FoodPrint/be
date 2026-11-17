@@ -9,7 +9,14 @@ const recipeInclude = {
         include: {
           entry: {
             include: {
-              Ingredient: { include: { Supplier: { select: { name: true } } } },
+              Ingredient: {
+                include: {
+                  Supplier: { select: { name: true } },
+                  ingredientCategory: {
+                    select: { id: true, categoryName: true },
+                  },
+                },
+              },
             },
           },
         },
@@ -21,7 +28,12 @@ const recipeInclude = {
     include: {
       IngredientEntry: {
         include: {
-          Ingredient: { include: { Supplier: { select: { name: true } } } },
+          Ingredient: {
+            include: {
+              Supplier: { select: { name: true } },
+              ingredientCategory: { select: { id: true, categoryName: true } },
+            },
+          },
         },
       },
     },
@@ -137,6 +149,7 @@ export const dishRecipeRepository = {
       include: {
         Ingredient: {
           include: {
+            ingredientCategory: { select: { id: true, categoryName: true } },
             Supplier: {
               include: {
                 schoolSupplierRelationships: {

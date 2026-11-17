@@ -948,6 +948,7 @@ function dto(batch: Detail): CookingBatchDetailDTO {
   return {
     id: batch.id,
     batchCode: batch.batchCode,
+    batchNumber: batch.batchNumber ?? null,
     batchGroupId: batch.batchGroupId,
     BatchGroup: {
       id: batch.BatchGroup.id,
@@ -1403,7 +1404,8 @@ export function createKitchenLifecycle(
           batchCode: `B-${randomUUID()}`,
         });
         const created: Detail[] = [];
-        for (const child of children)
+        for (let i = 0; i < children.length; i++) {
+          const child = children[i];
           created.push(
             await repository.createPlannedChild(
               tx,
@@ -1411,6 +1413,7 @@ export function createKitchenLifecycle(
                 ...meal,
                 batchGroupId: group.id,
                 batchCode: `CB-${randomUUID()}`,
+                batchNumber: i + 1,
                 dishId:
                   child.dishes.length === 1 ? child.dishes[0].dishId : null,
                 cookingModeApplied: mode,
@@ -1431,6 +1434,7 @@ export function createKitchenLifecycle(
               ),
             ),
           );
+        }
         await reserveMealSeasonings(
           tx,
           meal,
@@ -1801,6 +1805,7 @@ export function createKitchenService(
         items: page.items.map((batch) => ({
           id: batch.id,
           batchCode: batch.batchCode,
+          batchNumber: batch.batchNumber ?? null,
           batchGroupId: batch.batchGroupId,
           BatchGroup: {
             id: batch.BatchGroup.id,
