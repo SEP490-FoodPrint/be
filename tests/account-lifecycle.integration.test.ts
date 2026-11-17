@@ -1,3 +1,6 @@
+import { createSupplierStaffService } from "../src/modules/supplier-staff/supplier-staff.service";
+import { createSupplierStaffRepository } from "../src/modules/supplier-staff/supplier-staff.repository";
+import { validateSupplierStaffCreate } from "../src/modules/supplier-staff/supplier-staff.validation";
 import assert from "node:assert/strict";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "node:crypto";
@@ -933,6 +936,7 @@ void test("account lifecycle respects scope and intake state on disposable Postg
         where: { code: "supply_request.accept" },
       });
       const permissions = createPermissionService(() => Promise.resolve(db));
+      const permissionSystem = await loadPrincipal(system.id, db);
       for (const mutation of [
         "denial",
         "role-grant",
@@ -991,14 +995,14 @@ void test("account lifecycle respects scope and intake state on disposable Postg
             await read.promise;
             if (mutation === "denial")
               await permissions.toggle(
-                manager.id,
+                await loadPrincipal(manager.id, db),
                 member.id,
                 permission.id,
                 true,
               );
             else if (mutation === "role-grant")
               await permissions.replaceRole(
-                system.id,
+                permissionSystem,
                 actor.roleId,
                 originalGrants
                   .map((row) => row.permissionId)
@@ -1039,7 +1043,7 @@ void test("account lifecycle respects scope and intake state on disposable Postg
             await pending;
             if (mutation === "role-grant")
               await permissions.replaceRole(
-                system.id,
+                permissionSystem,
                 actor.roleId,
                 originalGrants.map((row) => row.permissionId),
               );
@@ -1371,7 +1375,7 @@ void test("account lifecycle respects scope and intake state on disposable Postg
       testContext.after(() => http.close());
       for (const scenario of scenarios) {
         const tokens = await sessionService.login({
-          identifier: scenario.username,
+          identifier: `${scenario.username}@example.test`,
           password: "Lifecycle-test-password",
         });
         const headers = { Cookie: `${ACCESS_COOKIE}=${tokens.accessToken}` };
@@ -1386,7 +1390,7 @@ void test("account lifecycle respects scope and intake state on disposable Postg
           204,
         );
         const secondLogin = await sessionService.login({
-          identifier: scenario.username,
+          identifier: `${scenario.username}@example.test`,
           password: "Lifecycle-test-password",
         });
         assert.equal(secondLogin.user.status, "ACTIVE");
@@ -1407,7 +1411,7 @@ void test("account lifecycle respects scope and intake state on disposable Postg
         await assert.rejects(
           () =>
             sessionService.login({
-              identifier: scenario.username,
+              identifier: `${scenario.username}@example.test`,
               password: "Lifecycle-test-password",
             }),
           denied,
@@ -2208,6 +2212,214 @@ void test("account lifecycle respects scope and intake state on disposable Postg
       assert.equal(supRaceCheck.status, "PREPARING");
       assert.equal(supRaceCheck.expectedArrivalAt, null);
       assert.equal(supRaceCheck.vehiclePlate, null);
+    },
+  );
+  await context.test(
+    "supplier staff create and organization cascade preserve both serial orders",
+    async () => {
+      for (const createFirst of [true, false]) {
+        const supplier = await db.supplier.create({
+          data: { name: `Staff create cascade ${createFirst}` },
+        });
+        const admin = await account(
+          "INGREDIENT_SUPPLIER_ADMIN",
+          `staff-race-admin-${randomUUID()}`,
+          { supplierId: supplier.id },
+        );
+        const actor = await loadPrincipal(admin.id, db);
+        const repo = createSupplierStaffRepository(() => Promise.resolve(db));
+        const input = validateSupplierStaffCreate({
+          username: `staff-race-${randomUUID()}`,
+          email: `staff-race-${randomUUID()}@example.test`,
+          fullName: "Staff race",
+          password: "StaffRace123!",
+        });
+        const service = (hold = () => Promise.resolve(), started = () => {}) =>
+          createSupplierStaffService(
+            {
+              ...repo,
+              async lock(...args) {
+                started();
+                await repo.lock(...args);
+                await hold();
+              },
+            },
+            () => Promise.resolve(db),
+            (value) => bcrypt.hash(value, 4),
+          );
+        const outcomes = createFirst
+          ? await overlap(
+              (hold) => service(hold).create(input, actor),
+              (started) =>
+                lifecycleBarrier(undefined, started).deactivate(
+                  { userId: admin.id },
+                  principal,
+                ),
+            )
+          : await overlap(
+              (hold) =>
+                lifecycleBarrier(hold).deactivate(
+                  { userId: admin.id },
+                  principal,
+                ),
+              (started) => service(undefined, started).create(input, actor),
+            );
+        assert.equal(outcomes[0].status, "fulfilled");
+        if (createFirst) assert.equal(outcomes[1].status, "fulfilled");
+        else assertBlocked(outcomes[1]);
+        assert.equal(
+          await db.user.count({
+            where: { supplierId: supplier.id, status: "ACTIVE" },
+          }),
+          0,
+        );
+        const created = await db.user.findUnique({
+          where: { email: input.email },
+        });
+        assert.equal(
+          created?.status ?? null,
+          createFirst ? "DEACTIVATED" : null,
+        );
+      }
+    },
+  );
+  await context.test(
+    "supplier staff unlock and organization cascade preserve both serial orders and rollback failures",
+    async () => {
+      for (const unlockFirst of [true, false]) {
+        const supplier = await db.supplier.create({
+          data: { name: `Staff unlock cascade ${unlockFirst}` },
+        });
+        const admin = await account(
+          "INGREDIENT_SUPPLIER_ADMIN",
+          `unlock-admin-${randomUUID()}`,
+          { supplierId: supplier.id },
+        );
+        const target = await account(
+          "INGREDIENT_SUPPLIER_STAFF",
+          `unlock-staff-${randomUUID()}`,
+          { supplierId: supplier.id },
+        );
+        await db.user.update({
+          where: { id: target.id },
+          data: { status: "LOCKED" },
+        });
+        const actor = await loadPrincipal(admin.id, db);
+        const before = await db.user.findUniqueOrThrow({
+          where: { id: target.id },
+        });
+        const grant = await db.rolePermission.findFirstOrThrow({
+          where: { roleId: before.roleId, permission: { isActive: true } },
+        });
+        const denial = await db.userPermissionDenial.create({
+          data: {
+            userId: target.id,
+            permissionId: grant.permissionId,
+            supplierId: supplier.id,
+            disabledByUserId: admin.id,
+          },
+        });
+        const repo = createSupplierStaffRepository(() => Promise.resolve(db));
+        const service = (hold = () => Promise.resolve(), started = () => {}) =>
+          createSupplierStaffService(
+            {
+              ...repo,
+              async lock(...args) {
+                started();
+                await repo.lock(...args);
+                await hold();
+              },
+            },
+            () => Promise.resolve(db),
+          );
+        const outcomes = unlockFirst
+          ? await overlap(
+              (hold) =>
+                service(hold).changeStatus(
+                  { userId: target.id },
+                  { status: "ACTIVE" },
+                  actor,
+                ),
+              (started) =>
+                lifecycleBarrier(undefined, started).deactivate(
+                  { userId: admin.id },
+                  principal,
+                ),
+            )
+          : await overlap(
+              (hold) =>
+                lifecycleBarrier(hold).deactivate(
+                  { userId: admin.id },
+                  principal,
+                ),
+              (started) =>
+                service(undefined, started).changeStatus(
+                  { userId: target.id },
+                  { status: "ACTIVE" },
+                  actor,
+                ),
+            );
+        assert.equal(outcomes[0].status, "fulfilled");
+        if (unlockFirst) assert.equal(outcomes[1].status, "fulfilled");
+        else assertBlocked(outcomes[1]);
+        assert.equal(
+          await db.user.count({
+            where: { supplierId: supplier.id, status: "ACTIVE" },
+          }),
+          0,
+        );
+        const after = await db.user.findUniqueOrThrow({
+          where: { id: target.id },
+        });
+        assert.equal(after.status, "DEACTIVATED");
+        assert.equal(after.passwordHash, before.passwordHash);
+        assert.equal(after.roleId, before.roleId);
+        assert.equal(after.username, before.username);
+        assert.deepEqual(
+          await db.userPermissionDenial.findUnique({
+            where: { id: denial.id },
+          }),
+          denial,
+        );
+      }
+      const supplier = await db.supplier.create({
+        data: { name: "Staff status rollback" },
+      });
+      const admin = await account(
+        "INGREDIENT_SUPPLIER_ADMIN",
+        `rollback-admin-${randomUUID()}`,
+        { supplierId: supplier.id },
+      );
+      const target = await account(
+        "INGREDIENT_SUPPLIER_STAFF",
+        `rollback-staff-${randomUUID()}`,
+        { supplierId: supplier.id },
+      );
+      const actor = await loadPrincipal(admin.id, db);
+      const repo = createSupplierStaffRepository(() => Promise.resolve(db));
+      const failing = createSupplierStaffService(
+        {
+          ...repo,
+          async setStatus(...args) {
+            await repo.setStatus(...args);
+            throw new Error("status write injected failure");
+          },
+        },
+        () => Promise.resolve(db),
+      );
+      await assert.rejects(
+        () =>
+          failing.changeStatus(
+            { userId: target.id },
+            { status: "LOCKED" },
+            actor,
+          ),
+        { statusCode: 503 },
+      );
+      assert.equal(
+        (await db.user.findUniqueOrThrow({ where: { id: target.id } })).status,
+        "ACTIVE",
+      );
     },
   );
 });

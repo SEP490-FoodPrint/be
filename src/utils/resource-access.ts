@@ -1,8 +1,47 @@
 import { ROLES, ORG_TYPES } from "../constants/roles";
 import type { Prisma } from "../generated/prisma/client";
 import type { AuthPrincipal } from "../types/auth";
-import { assertPermission, assertOrganizationManager } from "./authorization";
+import {
+  assertPermission,
+  assertOrganizationManager,
+  assertSystemManager,
+} from "./authorization";
 import { HttpError } from "./http-error";
+
+export interface PermissionCatalogScope {
+  kind: "SYSTEM";
+}
+export interface PermissionUserScope {
+  kind: "SYSTEM" | "ORGANIZATION";
+  schoolId: string | null;
+  supplierId: string | null;
+  communeFoodSafetyUnitId: string | null;
+}
+export function permissionCatalogScope(
+  principal: AuthPrincipal,
+  guard:
+    | "permission.view"
+    | "permission.create"
+    | "role.view"
+    | "role_permission.manage",
+): PermissionCatalogScope {
+  assertSystemManager(principal, guard);
+  return { kind: "SYSTEM" };
+}
+export function permissionUserScope(
+  principal: AuthPrincipal,
+  write = false,
+): PermissionUserScope {
+  if (principal.orgType === "SYSTEM" && !write)
+    assertSystemManager(principal, "user.manage");
+  else assertOrganizationManager(principal);
+  return {
+    kind: principal.orgType === "SYSTEM" ? "SYSTEM" : "ORGANIZATION",
+    schoolId: principal.schoolId,
+    supplierId: principal.supplierId,
+    communeFoodSafetyUnitId: principal.communeFoodSafetyUnitId,
+  };
+}
 function school(p: AuthPrincipal): string {
   if (!p.schoolId || p.orgType !== "SCHOOL")
     throw new HttpError(403, "Không có phạm vi trường");
@@ -29,6 +68,7 @@ function authorityReports(
 export const RESOURCE_PERMISSIONS = {
   auth: ["role.view"],
   user: ["user.manage", "school_user.manage", "supplier_staff.manage"],
+  "supplier-staff": ["supplier_staff.manage"],
   organization: ["school.manage"],
   ingredient: ["ingredient.view", "ingredient.manage"],
   menu: ["menu.view"],
@@ -46,6 +86,10 @@ export const RESOURCE_PERMISSIONS = {
   "supplier-certification": ["supplier_certification.view"],
   registration: ["registration.view"],
   "school-supplier": [
+    "supplier_relationship.view",
+    "supplier_relationship.manage",
+  ],
+  "supplier-school": [
     "supplier_relationship.view",
     "supplier_relationship.manage",
   ],
@@ -91,6 +135,19 @@ export const listScopes = {
       403,
       "Loại tổ chức không có phạm vi truy cập tài nguyên này",
     );
+  },
+  "supplier-staff": (p: AuthPrincipal): Prisma.UserWhereInput => {
+    const { supplierId } = supplierStaffManagementScope(p);
+    return {
+      supplierId,
+      schoolId: null,
+      communeFoodSafetyUnitId: null,
+      roleCode: ROLES.INGREDIENT_SUPPLIER_STAFF,
+      Role: {
+        code: ROLES.INGREDIENT_SUPPLIER_STAFF,
+        type: ORG_TYPES.SUPPLIER,
+      },
+    };
   },
   organization: (p: AuthPrincipal): Prisma.SchoolWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["organization"]);
@@ -289,6 +346,11 @@ export const listScopes = {
       "Loại tổ chức không có phạm vi truy cập tài nguyên này",
     );
   },
+  "supplier-school": (
+    p: AuthPrincipal,
+  ): Prisma.SchoolSupplierRelationshipWhereInput => {
+    return { supplierId: supplierSchoolReadScope(p).supplierId };
+  },
   "ingredient-entry": (p: AuthPrincipal): Prisma.IngredientEntryWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["ingredient-entry"]);
     if (p.orgType === "SYSTEM") return {};
@@ -375,26 +437,17 @@ export const listScopes = {
   "ingredient-quality-feedback": (
     p: AuthPrincipal,
   ): Prisma.IngredientQualityFeedbackWhereInput => {
-    assertPermission(p, ...RESOURCE_PERMISSIONS["ingredient-quality-feedback"]);
-    if (p.orgType === "SYSTEM") return {};
-    if (p.orgType === "SCHOOL")
+    const scope = ingredientQualityFeedbackReadScope(p, "list");
+    if (scope.kind === "SYSTEM") return {};
+    if (scope.kind === "SCHOOL") {
       return {
-        Delivery: { schoolId: school(p) },
-        ...(p.permissions.includes("ingredient_quality_feedback.view_details")
-          ? {}
-          : { submittedByUserId: p.id }),
+        Delivery: { schoolId: scope.schoolId },
+        ...(scope.submittedByUserId
+          ? { submittedByUserId: scope.submittedByUserId }
+          : {}),
       };
-    if (p.orgType === "SUPPLIER")
-      return {
-        Delivery: { supplierId: supplier(p) },
-        ...(p.permissions.includes("ingredient_quality_feedback.view_details")
-          ? {}
-          : { submittedByUserId: p.id }),
-      };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    }
+    return { Delivery: { supplierId: scope.supplierId } };
   },
   reporting: (
     p: AuthPrincipal,
@@ -496,6 +549,50 @@ export const listScopes = {
   },
 };
 export type Resource = keyof typeof listScopes;
+
+export interface SupplierStaffManagementScope {
+  readonly supplierId: string;
+}
+
+export function supplierStaffManagementScope(
+  principal: AuthPrincipal,
+): SupplierStaffManagementScope {
+  if (
+    principal.role !== ROLES.INGREDIENT_SUPPLIER_ADMIN ||
+    principal.orgType !== ORG_TYPES.SUPPLIER ||
+    !principal.supplierId ||
+    principal.schoolId ||
+    principal.communeFoodSafetyUnitId
+  )
+    throw new HttpError(
+      403,
+      "Chỉ quản trị viên nhà cung cấp được quản lý nhân viên",
+    );
+  assertPermission(principal, ...RESOURCE_PERMISSIONS["supplier-staff"]);
+  return { supplierId: principal.supplierId };
+}
+
+export interface SupplierSchoolReadScope {
+  readonly supplierId: string;
+}
+
+export function supplierSchoolReadScope(
+  principal: AuthPrincipal,
+): SupplierSchoolReadScope {
+  if (
+    principal.role !== ROLES.INGREDIENT_SUPPLIER_ADMIN ||
+    principal.orgType !== ORG_TYPES.SUPPLIER ||
+    !principal.supplierId ||
+    principal.schoolId ||
+    principal.communeFoodSafetyUnitId
+  )
+    throw new HttpError(
+      403,
+      "Chỉ quản trị viên nhà cung cấp được xem trường đã liên kết",
+    );
+  assertPermission(principal, ...RESOURCE_PERMISSIONS["supplier-school"]);
+  return { supplierId: principal.supplierId };
+}
 
 export interface SourceFacilityManagementScope {
   readonly supplierId: string;
@@ -612,4 +709,95 @@ export function blockchainProofScope(principal: AuthPrincipal): string | null {
     403,
     "Loại tổ chức không có phạm vi truy cập tài nguyên này",
   );
+}
+
+export type IngredientQualityFeedbackReadScope =
+  | { readonly kind: "SUPPLIER"; readonly supplierId: string }
+  | {
+      readonly kind: "SCHOOL";
+      readonly schoolId: string;
+      readonly submittedByUserId: string | null;
+    }
+  | { readonly kind: "SYSTEM" };
+
+export type IngredientQualityFeedbackDetailScope = Exclude<
+  IngredientQualityFeedbackReadScope,
+  { kind: "SYSTEM" }
+>;
+
+export interface IngredientQualityFeedbackResponseScope {
+  readonly supplierId: string;
+}
+
+function assertSupplierFeedbackActor(principal: AuthPrincipal): string {
+  if (
+    (principal.role !== ROLES.INGREDIENT_SUPPLIER_ADMIN &&
+      principal.role !== ROLES.INGREDIENT_SUPPLIER_STAFF) ||
+    principal.orgType !== ORG_TYPES.SUPPLIER ||
+    !principal.supplierId ||
+    principal.schoolId ||
+    principal.communeFoodSafetyUnitId
+  ) {
+    throw new HttpError(
+      403,
+      "Chỉ quản trị viên hoặc nhân viên nhà cung cấp được truy cập phản hồi chất lượng nguyên liệu",
+    );
+  }
+  return principal.supplierId;
+}
+
+export function ingredientQualityFeedbackReadScope(
+  principal: AuthPrincipal,
+  mode: "list",
+): IngredientQualityFeedbackReadScope;
+export function ingredientQualityFeedbackReadScope(
+  principal: AuthPrincipal,
+  mode: "detail",
+): IngredientQualityFeedbackDetailScope;
+export function ingredientQualityFeedbackReadScope(
+  principal: AuthPrincipal,
+  mode: "list" | "detail",
+): IngredientQualityFeedbackReadScope {
+  assertPermission(
+    principal,
+    ...RESOURCE_PERMISSIONS["ingredient-quality-feedback"],
+  );
+  if (principal.orgType === "SYSTEM") {
+    if (mode === "detail") {
+      throw new HttpError(
+        403,
+        "Loại tổ chức không có phạm vi truy cập chi tiết phản hồi này",
+      );
+    }
+    return { kind: "SYSTEM" };
+  }
+  if (principal.orgType === "SCHOOL") {
+    const schoolId = school(principal);
+    const hasViewDetails = principal.permissions.includes(
+      "ingredient_quality_feedback.view_details",
+    );
+    return {
+      kind: "SCHOOL",
+      schoolId,
+      submittedByUserId: hasViewDetails ? null : principal.id,
+    };
+  }
+  if (principal.orgType === "SUPPLIER") {
+    const supplierId = assertSupplierFeedbackActor(principal);
+    assertPermission(principal, "ingredient_quality_feedback.view_details");
+    return { kind: "SUPPLIER", supplierId };
+  }
+  throw new HttpError(
+    403,
+    "Loại tổ chức không có phạm vi truy cập tài nguyên này",
+  );
+}
+
+export function ingredientQualityFeedbackResponseScope(
+  principal: AuthPrincipal,
+): IngredientQualityFeedbackResponseScope {
+  const supplierId = assertSupplierFeedbackActor(principal);
+  assertPermission(principal, "ingredient_quality_feedback.view_details");
+  assertPermission(principal, "ingredient_quality_feedback.respond");
+  return { supplierId };
 }

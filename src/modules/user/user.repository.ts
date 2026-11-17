@@ -1,3 +1,4 @@
+import { ROLES } from "../../constants/roles";
 import type { Prisma } from "../../generated/prisma/client";
 import { getPrisma } from "../../utils/database";
 import { listWindow, type ListQuery } from "../../utils/list-query";
@@ -96,7 +97,10 @@ export function createUserRepository(read: ListReader = readFromDatabase) {
     ) {
       return tx.user.findFirst({
         where: {
-          OR: [{ email }, { username }],
+          OR: [
+            { email },
+            { username, roleCode: { not: ROLES.INGREDIENT_SUPPLIER_STAFF } },
+          ],
         },
         select: { id: true, email: true, username: true },
       });

@@ -1,4 +1,15 @@
+import type { Prisma } from "../src/generated/prisma/client";
+import { ROLES } from "../src/constants/roles";
 import { recordLocalTestDatabase } from "./helpers/local-test-database";
+import { createSupplierStaffService } from "../src/modules/supplier-staff/supplier-staff.service";
+import {
+  createSupplierStaffRepository,
+  supplierStaffRepository,
+} from "../src/modules/supplier-staff/supplier-staff.repository";
+import {
+  createPermissionRepository,
+  permissionConcurrencyRepository,
+} from "../src/modules/permission/permission.repository";
 import { createSupplyOrderService } from "../src/modules/supply-order/supply-order.service";
 import { createSupplyOrderRepository } from "../src/modules/supply-order/supply-order.repository";
 import { createIntakeAccessService } from "../src/modules/account-lifecycle/intake-access.service";
@@ -8,6 +19,7 @@ import {
   createIngredientService,
   ingredientService,
 } from "../src/modules/ingredient/ingredient.service";
+import { ingredientRepository } from "../src/modules/ingredient/ingredient.repository";
 import {
   createSourceFacilityService,
   sourceFacilityService,
@@ -23,6 +35,7 @@ import { withReadTransaction } from "../src/utils/read-transaction";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { test } from "node:test";
@@ -91,6 +104,10 @@ import {
   allocationFixtureClock,
   loadAllocationFixture,
 } from "./helpers/meal-allocation-fixture";
+import { createIngredientQualityFeedbackRepository } from "../src/modules/ingredient-quality-feedback/ingredient-quality-feedback.repository";
+import { createIngredientQualityFeedbackService } from "../src/modules/ingredient-quality-feedback/ingredient-quality-feedback.service";
+import { createPermissionService } from "../src/modules/permission/permission.service";
+import { formatComplaintCode } from "../src/utils/complaint-code";
 import {
   validateFoodSample,
   validateSampleDisposal,
@@ -419,6 +436,103 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
     store.shutdown();
   });
   context.mock.method(console, "error", () => undefined);
+  await context.test(
+    "supplier staff retries a real PostgreSQL serialization conflict during actor lookup",
+    async () => {
+      const organization = await db.supplier.create({
+        data: { name: "Actor query serialization regression" },
+      });
+      const administrator = await user("INGREDIENT_SUPPLIER_ADMIN", {
+        supplierId: organization.id,
+      });
+      const actor = await loadPrincipal(administrator.id, db);
+      const repository = createSupplierStaffRepository(() =>
+        Promise.resolve(db),
+      );
+      const transactions = new Set<Prisma.TransactionClient>();
+      const conflictKinds: string[] = [];
+      let injected = false,
+        hashes = 0;
+      const service = createSupplierStaffService(
+        {
+          ...repository,
+          actor(id, tx) {
+            transactions.add(tx);
+            const actorTx = new Proxy(tx, {
+              get(client, key, receiver) {
+                if (key !== "user")
+                  return Reflect.get(client, key, receiver) as unknown;
+                return new Proxy(tx.user, {
+                  get(delegate, method, delegateReceiver) {
+                    if (method !== "findUnique")
+                      return Reflect.get(
+                        delegate,
+                        method,
+                        delegateReceiver,
+                      ) as unknown;
+                    return async (query: Prisma.UserFindUniqueArgs) => {
+                      if (!injected) {
+                        injected = true;
+                        // Establish an old Serializable snapshot, then commit a concurrent profile update.
+                        await tx.$queryRaw`SELECT id FROM foodprint.users WHERE id = ${id}::uuid`;
+                        await db.user.update({
+                          where: { id },
+                          data: {
+                            fullName: "Concurrently updated actor profile",
+                          },
+                        });
+                        try {
+                          // PostgreSQL must raise 40001 when this snapshot tries to lock the changed row.
+                          await tx.$queryRaw`SELECT id FROM foodprint.users WHERE id = ${id}::uuid FOR UPDATE`;
+                        } catch (error) {
+                          const meta = record(record(error).meta);
+                          const cause = record(
+                            record(meta.driverAdapterError).cause,
+                          );
+                          conflictKinds.push(String(cause.kind));
+                          throw error;
+                        }
+                        assert.fail(
+                          "The actor query must encounter a real serialization conflict",
+                        );
+                      }
+                      return tx.user.findUnique(query);
+                    };
+                  },
+                });
+              },
+            });
+            return repository.actor(id, actorTx);
+          },
+        },
+        () => Promise.resolve(db),
+        async (value) => {
+          hashes++;
+          return bcrypt.hash(value, 4);
+        },
+      );
+      const suffix = randomUUID();
+      const input = {
+        username: `ci-retry-${suffix}`,
+        email: `ci-retry-${suffix}@example.test`,
+        fullName: "Retry staff",
+        password: "RetryStaff123!",
+        phone: null,
+      };
+      const created = await service.create(input, actor);
+      assert.deepEqual(conflictKinds, ["TransactionWriteConflict"]);
+      assert.equal(transactions.size, 2);
+      assert.equal(hashes, 1);
+      assert.equal(created.supplierId, organization.id);
+      assert.equal(await db.user.count({ where: { email: input.email } }), 1);
+      const saved = await db.user.findUniqueOrThrow({
+        where: { id: created.id },
+      });
+      assert.equal(saved.roleCode, "INGREDIENT_SUPPLIER_STAFF");
+      assert(await bcrypt.compare(input.password, saved.passwordHash));
+    },
+  );
+
   await context.test(
     "four-role delivery inspections isolate two rounds, receive once under concurrency and cancel the remainder after the third rejection",
     async () => {
@@ -1773,11 +1887,11 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       body: JSON.stringify(body),
     });
   async function passwordLogin(
-    account: { id: string; username: string },
+    account: { id: string; username: string; email: string },
     value = password,
   ) {
     const response = await postPassword("login", {
-      identifier: account.username,
+      identifier: account.email,
       password: value,
     });
     assert.equal(response.status, 200);
@@ -1833,7 +1947,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       assert.equal(
         (
           await postPassword("login", {
-            identifier: account.username,
+            identifier: account.email,
             password,
           })
         ).status,
@@ -1927,7 +2041,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       const cookie = await passwordLogin(account);
       const next = "Concurrent123!";
       const [login, change] = await Promise.all([
-        postPassword("login", { identifier: account.username, password }),
+        postPassword("login", { identifier: account.email, password }),
         postPassword(
           "change-password",
           { currentPassword: password, newPassword: next },
@@ -2011,6 +2125,1928 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       headers: headers(id),
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
+
+  await context.test(
+    "supplier staff list is scoped, includes every status, paginates stably and rejects forbidden actors or query expansion",
+    async () => {
+      const route = "/api/supplier-staff";
+      const organization = await db.supplier.create({
+        data: { name: "Staff list supplier " + randomUUID() },
+      });
+      const foreignOrganization = await db.supplier.create({
+        data: { name: "Staff list foreign supplier " + randomUUID() },
+      });
+      const administrator = await user("INGREDIENT_SUPPLIER_ADMIN", {
+        supplierId: organization.id,
+      });
+      const foreignAdministrator = await user("INGREDIENT_SUPPLIER_ADMIN", {
+        supplierId: foreignOrganization.id,
+      });
+      const foreignStaff = await user("INGREDIENT_SUPPLIER_STAFF", {
+        supplierId: foreignOrganization.id,
+      });
+      const systemActor = await user("SYSTEM_ADMIN");
+      const staffRole = await role("INGREDIENT_SUPPLIER_STAFF");
+      const states = [
+        "UNVERIFIED",
+        "ACTIVE",
+        "INACTIVE",
+        "LOCKED",
+        "DEACTIVATED",
+      ] as const;
+      const fixtures = Array.from({ length: 45 }, (_, index) => {
+        const id = randomUUID();
+        return {
+          id,
+          roleId: staffRole.id,
+          roleCode: staffRole.code,
+          supplierId: organization.id,
+          username: "list_" + id.replaceAll("-", ""),
+          email: id + "@staff-list.example.test",
+          fullName: "Staff list member " + index,
+          phone: index % 2 ? "0909123456" : null,
+          passwordHash,
+          status: states[index % states.length],
+          createdAt: new Date(
+            index < 22 ? "2026-01-01T00:00:00Z" : "2026-02-01T00:00:00Z",
+          ),
+        };
+      });
+      await db.user.createMany({ data: fixtures });
+      const activeStaff = fixtures.find(
+        (account) => account.status === "ACTIVE",
+      );
+      assert(activeStaff);
+      for (const account of [
+        administrator,
+        foreignAdministrator,
+        systemActor,
+        activeStaff,
+      ]) {
+        const tokens = await authSessions.issue(account.id);
+        issued.set(account.id, tokens);
+        refreshTokens.push(tokens.refreshToken);
+      }
+      const expected = [...fixtures].sort(
+        (left, right) =>
+          right.createdAt.getTime() - left.createdAt.getTime() ||
+          left.id.localeCompare(right.id),
+      );
+      const observed: Record<string, unknown>[] = [];
+      for (const [page, expectedCount] of [
+        [1, 20],
+        [2, 20],
+        [3, 5],
+      ] as const) {
+        const response = await request(
+          route + "?page=" + page,
+          administrator.id,
+        );
+        assert.equal(response.status, 200, JSON.stringify(response.body));
+        const items = rows(response.body);
+        assert.equal(items.length, expectedCount);
+        assert.deepEqual(
+          record(record(record(response.body).data).pagination),
+          {
+            page,
+            limit: 20,
+            hasNext: page < 3,
+          },
+        );
+        assert.deepEqual(
+          Object.keys(record(record(response.body).data)).sort(),
+          ["items", "pagination"],
+        );
+        for (const item of items) {
+          assert.deepEqual(Object.keys(item).sort(), [
+            "email",
+            "fullName",
+            "id",
+            "phone",
+            "roleCode",
+            "roleName",
+            "status",
+            "username",
+          ]);
+          assert.equal(item.roleCode, "INGREDIENT_SUPPLIER_STAFF");
+          assert.equal(item.roleName, staffRole.name);
+          const source = fixtures.find((fixture) => fixture.id === item.id);
+          assert(source);
+          assert.equal(item.username, source.username);
+          assert.equal(item.email, source.email);
+          assert.equal(item.fullName, source.fullName);
+          assert.equal(item.phone, source.phone);
+          assert.equal(item.status, source.status);
+          assert.notEqual(item.id, administrator.id);
+          assert.notEqual(item.id, foreignStaff.id);
+        }
+        observed.push(...items);
+      }
+      assert.deepEqual(
+        observed.map((item) => item.id),
+        expected.map((item) => item.id),
+      );
+      assert.equal(new Set(observed.map((item) => item.id)).size, 45);
+      assert.deepEqual(
+        [...new Set(observed.map((item) => item.status))].sort(),
+        [...states].sort(),
+      );
+      assert(!JSON.stringify(observed).includes(passwordHash));
+      const repeated = await request(route + "?page=1", administrator.id);
+      assert.deepEqual(rows(repeated.body), observed.slice(0, 20));
+      const first = await request(route, administrator.id);
+      assert.deepEqual(rows(first.body), observed.slice(0, 20));
+      const maximum = await request(route + "?limit=100", administrator.id);
+      assert.equal(maximum.status, 200);
+      assert.equal(rows(maximum.body).length, 45);
+      const beyond = await request(route + "?page=4", administrator.id);
+      assert.equal(beyond.status, 200);
+      assert.deepEqual(rows(beyond.body), []);
+      assert.deepEqual(record(record(record(beyond.body).data).pagination), {
+        page: 4,
+        limit: 20,
+        hasNext: false,
+      });
+      const foreign = await request(route, foreignAdministrator.id);
+      assert.equal(foreign.status, 200);
+      assert.deepEqual(
+        rows(foreign.body).map((item) => item.id),
+        [foreignStaff.id],
+      );
+      const emptyOrganization = await db.supplier.create({
+        data: { name: "Staff list empty supplier " + randomUUID() },
+      });
+      const emptyAdministrator = await user("INGREDIENT_SUPPLIER_ADMIN", {
+        supplierId: emptyOrganization.id,
+      });
+      const emptyTokens = await authSessions.issue(emptyAdministrator.id);
+      issued.set(emptyAdministrator.id, emptyTokens);
+      refreshTokens.push(emptyTokens.refreshToken);
+      const empty = await request(route, emptyAdministrator.id);
+      assert.equal(empty.status, 200);
+      assert.deepEqual(rows(empty.body), []);
+      assert.deepEqual(record(record(record(empty.body).data).pagination), {
+        page: 1,
+        limit: 20,
+        hasNext: false,
+      });
+      for (const query of [
+        "?supplierId=" + foreignOrganization.id,
+        "?schoolId=" + schoolA.id,
+        "?role=INGREDIENT_SUPPLIER_ADMIN",
+        "?status=ACTIVE",
+        "?search=staff",
+        "?page=0",
+        "?page=-1",
+        "?page=1.5",
+        "?page=abc",
+        "?page=9007199254740992",
+        "?limit=0",
+        "?limit=101",
+        "?limit=1.5",
+        "?limit=abc",
+        "?page=2147483648&limit=100",
+        "?page=1&page=2",
+      ]) {
+        const invalid = await request(route + query, administrator.id);
+        assert.equal(
+          invalid.status,
+          400,
+          query + ": " + JSON.stringify(invalid.body),
+        );
+      }
+      const manage = await permission("supplier_staff.manage");
+      const addedGrants: { roleId: string; permissionId: string }[] = [];
+      try {
+        for (const account of [activeStaff, systemActor]) {
+          const key = { roleId: account.roleId, permissionId: manage.id };
+          if (
+            !(await db.rolePermission.findUnique({
+              where: { roleId_permissionId: key },
+            }))
+          ) {
+            await db.rolePermission.create({ data: key });
+            addedGrants.push(key);
+          }
+          const actor = await loadPrincipal(account.id, db);
+          assert(actor.permissions.includes("supplier_staff.manage"));
+          assert.equal((await request(route, account.id)).status, 403);
+        }
+        assert.equal((await request(route, adminA.id)).status, 403);
+        assert.equal((await request(route, officerA.id)).status, 403);
+      } finally {
+        for (const key of addedGrants) {
+          await db.rolePermission.delete({
+            where: { roleId_permissionId: key },
+          });
+        }
+      }
+      const denial = await db.userPermissionDenial.create({
+        data: {
+          userId: administrator.id,
+          permissionId: manage.id,
+          supplierId: organization.id,
+          disabledByUserId: systemActor.id,
+        },
+      });
+      try {
+        assert.equal((await request(route, administrator.id)).status, 403);
+      } finally {
+        await db.userPermissionDenial.delete({ where: { id: denial.id } });
+      }
+      assert.equal((await request(route, administrator.id)).status, 200);
+      await db.user.update({
+        where: { id: administrator.id },
+        data: { status: "LOCKED" },
+      });
+      try {
+        assert.equal((await request(route, administrator.id)).status, 403);
+      } finally {
+        await db.user.update({
+          where: { id: administrator.id },
+          data: { status: "ACTIVE" },
+        });
+      }
+      assert.equal((await request(route, administrator.id)).status, 200);
+    },
+  );
+
+  await context.test(
+    "supplier staff detail allows every target status, projects safe values and hides foreign, admin and missing targets alike",
+    async () => {
+      const route = "/api/supplier-staff/";
+      const organization = await db.supplier.create({
+        data: { name: "Staff detail supplier " + randomUUID() },
+      });
+      const foreignOrganization = await db.supplier.create({
+        data: { name: "Staff detail foreign supplier " + randomUUID() },
+      });
+      const administrator = await user("INGREDIENT_SUPPLIER_ADMIN", {
+        supplierId: organization.id,
+      });
+      const foreignAdministrator = await user("INGREDIENT_SUPPLIER_ADMIN", {
+        supplierId: foreignOrganization.id,
+      });
+      const foreignStaff = await user("INGREDIENT_SUPPLIER_STAFF", {
+        supplierId: foreignOrganization.id,
+      });
+      const staffRole = await role("INGREDIENT_SUPPLIER_STAFF");
+      const createdAt = new Date("2026-01-01T01:02:03.000Z");
+      const updatedAt = new Date("2026-01-02T04:05:06.000Z");
+      const fixtures = [];
+      for (const [index, state] of [
+        "UNVERIFIED",
+        "ACTIVE",
+        "INACTIVE",
+        "LOCKED",
+        "DEACTIVATED",
+      ].entries()) {
+        const member = await user("INGREDIENT_SUPPLIER_STAFF", {
+          supplierId: organization.id,
+        });
+        fixtures.push(
+          await db.user.update({
+            where: { id: member.id },
+            data: {
+              status: state as
+                "UNVERIFIED" | "ACTIVE" | "INACTIVE" | "LOCKED" | "DEACTIVATED",
+              phone: index % 2 ? "0909123456" : null,
+              fullName: "Staff detail " + state,
+              createdAt,
+              updatedAt,
+            },
+          }),
+        );
+      }
+      const tokens = await authSessions.issue(administrator.id);
+      issued.set(administrator.id, tokens);
+      refreshTokens.push(tokens.refreshToken);
+      for (const member of fixtures) {
+        const response = await request(route + member.id, administrator.id);
+        assert.equal(response.status, 200, JSON.stringify(response.body));
+        const data = record(record(response.body).data);
+        assert.deepEqual(Object.keys(data).sort(), [
+          "createdAt",
+          "email",
+          "fullName",
+          "id",
+          "phone",
+          "roleCode",
+          "roleName",
+          "status",
+          "supplierId",
+          "updatedAt",
+          "username",
+        ]);
+        assert.deepEqual(data, {
+          id: member.id,
+          username: member.username,
+          fullName: member.fullName,
+          email: member.email,
+          phone: member.phone,
+          roleCode: "INGREDIENT_SUPPLIER_STAFF",
+          roleName: staffRole.name,
+          status: member.status,
+          supplierId: organization.id,
+          createdAt: createdAt.toISOString(),
+          updatedAt: updatedAt.toISOString(),
+        });
+        assert(!JSON.stringify(data).includes(passwordHash));
+        assert.equal(
+          new Date(String(data.createdAt)).toISOString(),
+          data.createdAt,
+        );
+        assert.equal(
+          new Date(String(data.updatedAt)).toISOString(),
+          data.updatedAt,
+        );
+      }
+      const missing = await request(route + randomUUID(), administrator.id);
+      assert.equal(missing.status, 404);
+      assert.equal(
+        record(missing.body).message,
+        "Không tìm thấy tài khoản nhân viên",
+      );
+      for (const targetId of [
+        foreignStaff.id,
+        foreignAdministrator.id,
+        administrator.id,
+        staffA.id,
+        system.id,
+      ]) {
+        const hidden = await request(route + targetId, administrator.id);
+        assert.equal(hidden.status, 404);
+        assert.deepEqual(hidden.body, missing.body);
+      }
+      for (const targetId of ["not-a-uuid", "123", randomUUID() + "-extra"]) {
+        const invalid = await request(route + targetId, administrator.id);
+        assert.equal(invalid.status, 400);
+      }
+      const member = fixtures[0];
+      assert.equal(
+        (
+          await request(
+            route + member.id + "?supplierId=" + foreignOrganization.id,
+            administrator.id,
+          )
+        ).status,
+        400,
+      );
+      const manage = await permission("supplier_staff.manage");
+      const denial = await db.userPermissionDenial.create({
+        data: {
+          userId: administrator.id,
+          permissionId: manage.id,
+          supplierId: organization.id,
+          disabledByUserId: system.id,
+        },
+      });
+      try {
+        assert.equal(
+          (await request(route + member.id, administrator.id)).status,
+          403,
+        );
+      } finally {
+        await db.userPermissionDenial.delete({ where: { id: denial.id } });
+      }
+      assert.equal(
+        (await request(route + member.id, administrator.id)).status,
+        200,
+      );
+    },
+  );
+
+  await context.test(
+    "supplier staff creation preserves scoped usernames, global email uniqueness and email-only identity under concurrent requests",
+    async (testContext) => {
+      const initialReads = createBarrier(2);
+      let duplicateReads = 0;
+      const readDuplicate = supplierStaffRepository.duplicateExists.bind(
+        supplierStaffRepository,
+      );
+      testContext.mock.method(
+        supplierStaffRepository,
+        "duplicateExists",
+        async (...args: Parameters<typeof readDuplicate>) => {
+          const exists = await readDuplicate(...args);
+          // Force the first two independent suppliers to establish overlapping snapshots.
+          if (++duplicateReads <= 2) await initialReads.wait();
+          return exists;
+        },
+      );
+      const route = "/api/supplier-staff";
+      const suffix = randomUUID().replaceAll("-", "");
+      const organizations = await Promise.all(
+        [0, 1].map((index) =>
+          db.supplier.create({
+            data: { name: `Staff create ${suffix} ${index}` },
+          }),
+        ),
+      );
+      const administrators = await Promise.all(
+        organizations.map((organization) =>
+          user("INGREDIENT_SUPPLIER_ADMIN", { supplierId: organization.id }),
+        ),
+      );
+      for (const administrator of administrators) {
+        const tokens = await authSessions.issue(administrator.id);
+        issued.set(administrator.id, tokens);
+        refreshTokens.push(tokens.refreshToken);
+      }
+      const initialPassword = " StaffCreate123! ";
+      const sharedUsername = "shared_" + suffix;
+      const staffRole = await role("INGREDIENT_SUPPLIER_STAFF");
+      const beforeGrants = await db.rolePermission.findMany({
+        where: { roleId: staffRole.id },
+        orderBy: { permissionId: "asc" },
+      });
+      const createPayload = (username: string, email: string) => ({
+        username,
+        email,
+        fullName: " Created staff ",
+        password: initialPassword,
+      });
+      const sharedResponses = await Promise.all(
+        administrators.map((administrator, index) =>
+          request(route, administrator.id, "POST", {
+            ...createPayload(
+              " " + sharedUsername + " ",
+              ` SHARED-${index}-${suffix}@EXAMPLE.TEST `,
+            ),
+            ...(index === 0 ? { phone: " 0909123456 " } : {}),
+          }),
+        ),
+      );
+      const accounts = [];
+      for (const [index, response] of sharedResponses.entries()) {
+        assert.equal(response.status, 201, JSON.stringify(response.body));
+        assert.deepEqual(
+          response.headers.getSetCookie(),
+          [],
+          "Creating staff does not issue a session",
+        );
+        const data = record(record(response.body).data);
+        assert.deepEqual(Object.keys(data).sort(), [
+          "createdAt",
+          "email",
+          "fullName",
+          "id",
+          "phone",
+          "roleCode",
+          "roleName",
+          "status",
+          "supplierId",
+          "updatedAt",
+          "username",
+        ]);
+        assert.equal(data.username, sharedUsername);
+        assert.equal(data.fullName, "Created staff");
+        assert.equal(data.email, `shared-${index}-${suffix}@example.test`);
+        assert.equal(data.phone, index === 0 ? "0909123456" : null);
+        assert.equal(data.supplierId, organizations[index].id);
+        assert.equal(data.roleCode, "INGREDIENT_SUPPLIER_STAFF");
+        assert.equal(data.roleName, staffRole.name);
+        assert.equal(data.status, "ACTIVE");
+        assert.equal(typeof data.id, "string");
+        assert.equal(
+          new Date(String(data.createdAt)).toISOString(),
+          data.createdAt,
+        );
+        assert.equal(
+          new Date(String(data.updatedAt)).toISOString(),
+          data.updatedAt,
+        );
+        const persisted = await db.user.findUniqueOrThrow({
+          where: { id: String(data.id) },
+        });
+        assert.equal(persisted.roleId, staffRole.id);
+        assert.equal(persisted.roleCode, "INGREDIENT_SUPPLIER_STAFF");
+        assert.equal(persisted.supplierId, organizations[index].id);
+        assert.equal(persisted.schoolId, null);
+        assert.equal(persisted.communeFoodSafetyUnitId, null);
+        assert.equal(persisted.emailVerifiedAt, null);
+        assert.equal(persisted.status, "ACTIVE");
+        assert.equal(
+          await bcrypt.compare(initialPassword, persisted.passwordHash),
+          true,
+        );
+        assert.equal(
+          await bcrypt.compare(initialPassword.trim(), persisted.passwordHash),
+          false,
+        );
+        assert.equal(bcrypt.getRounds(persisted.passwordHash), 12);
+        assert(!JSON.stringify(data).includes(initialPassword));
+        assert(!JSON.stringify(data).includes(persisted.passwordHash));
+        assert.equal(
+          await db.registrationRequest.count({
+            where: { applicantUserId: persisted.id },
+          }),
+          0,
+        );
+        assert.equal(
+          await db.userPermissionDenial.count({
+            where: { userId: persisted.id },
+          }),
+          0,
+        );
+        accounts.push(persisted);
+      }
+      assert.notEqual(accounts[0].id, accounts[1].id);
+      assert.deepEqual(
+        await db.rolePermission.findMany({
+          where: { roleId: staffRole.id },
+          orderBy: { permissionId: "asc" },
+        }),
+        beforeGrants,
+      );
+      for (const account of accounts) {
+        const login = await postPassword("login", {
+          identifier: " " + account.email.toUpperCase() + " ",
+          password: initialPassword,
+        });
+        assert.equal(login.status, 200, JSON.stringify(login.body));
+        const sessionUser = record(record(record(login.body).data).user);
+        assert.equal(sessionUser.id, account.id);
+        assert.equal(sessionUser.supplierId, account.supplierId);
+        assert.equal(sessionUser.role, "INGREDIENT_SUPPLIER_STAFF");
+        assert.equal(sessionUser.orgType, "SUPPLIER");
+        assert.equal(sessionUser.onboardingRequired, false);
+        assert.equal(sessionUser.registrationRequest, null);
+        const expectedPermissions = (await loadPrincipal(account.id, db))
+          .permissions;
+        assert.deepEqual(sessionUser.permissions, expectedPermissions);
+        const cookie = login.headers
+          .getSetCookie()
+          .map((part) => part.split(";")[0])
+          .join("; ");
+        const refresh = parseCookie(cookie)[REFRESH_COOKIE];
+        assert(refresh);
+        refreshTokens.push(refresh);
+        verificationKeys.add("foodprint:auth:session:user:" + account.id);
+        const who = await http.request("/api/auth/me", {
+          headers: { Cookie: cookie },
+        });
+        assert.equal(who.status, 200);
+        assert.equal(record(record(who.body).data).id, account.id);
+      }
+      const usernameLogin = await postPassword("login", {
+        identifier: sharedUsername,
+        password: initialPassword,
+      });
+      assert.equal(usernameLogin.status, 401);
+      assert.deepEqual(usernameLogin.headers.getSetCookie(), []);
+      const unique = await request(
+        route,
+        administrators[0].id,
+        "POST",
+        createPayload("unique_" + suffix, `unique-${suffix}@example.test`),
+      );
+      assert.equal(unique.status, 201);
+      const uniqueUsernameLogin = await postPassword("login", {
+        identifier: "unique_" + suffix,
+        password: initialPassword,
+      });
+      assert.equal(uniqueUsernameLogin.status, 401);
+      assert.deepEqual(uniqueUsernameLogin.headers.getSetCookie(), []);
+      const raceName = "race_" + suffix;
+      const usernameRace = await Promise.all(
+        [0, 1].map((index) =>
+          request(
+            route,
+            administrators[0].id,
+            "POST",
+            createPayload(
+              raceName,
+              `name-race-${index}-${suffix}@example.test`,
+            ),
+          ),
+        ),
+      );
+      assert.deepEqual(
+        usernameRace.map((response) => response.status).sort(),
+        [201, 409],
+      );
+      assert.equal(
+        await db.user.count({
+          where: { supplierId: organizations[0].id, username: raceName },
+        }),
+        1,
+      );
+      assert.equal(
+        await db.user.count({
+          where: {
+            email: {
+              in: [0, 1].map(
+                (index) => `name-race-${index}-${suffix}@example.test`,
+              ),
+            },
+          },
+        }),
+        1,
+      );
+      const adminCollision = await request(
+        route,
+        administrators[0].id,
+        "POST",
+        createPayload(
+          administrators[0].username,
+          `admin-name-${suffix}@example.test`,
+        ),
+      );
+      assert.equal(adminCollision.status, 409);
+      assert.equal(
+        record(adminCollision.body).message,
+        "Tên đăng nhập hoặc email đã được sử dụng",
+      );
+      assert.equal(
+        await db.user.count({
+          where: { email: `admin-name-${suffix}@example.test` },
+        }),
+        0,
+      );
+      const sharedEmail = `email-race-${suffix}@example.test`;
+      const emailRace = await Promise.all(
+        administrators.map((administrator, index) =>
+          request(
+            route,
+            administrator.id,
+            "POST",
+            createPayload(
+              "email_race_" + index + "_" + suffix,
+              index === 0 ? sharedEmail : sharedEmail.toUpperCase(),
+            ),
+          ),
+        ),
+      );
+      assert.deepEqual(
+        emailRace.map((response) => response.status).sort(),
+        [201, 409],
+      );
+      assert.equal(await db.user.count({ where: { email: sharedEmail } }), 1);
+      const otherRole = await user("SCHOOL_NUTRITION_OFFICER", {
+        schoolId: schoolA.id,
+      });
+      await db.user.update({
+        where: { id: otherRole.id },
+        data: { status: "INACTIVE" },
+      });
+      const inactiveEmail = await request(
+        route,
+        administrators[1].id,
+        "POST",
+        createPayload(
+          "inactive_email_" + suffix,
+          otherRole.email.toUpperCase(),
+        ),
+      );
+      assert.equal(inactiveEmail.status, 409);
+      assert.equal(
+        record(inactiveEmail.body).message,
+        record(adminCollision.body).message,
+      );
+      assert.equal(
+        await db.user.count({
+          where: {
+            supplierId: organizations[1].id,
+            username: "inactive_email_" + suffix,
+          },
+        }),
+        0,
+      );
+      const roleRaceEmail = `role-race-${suffix}@example.test`;
+      const roleRace = await Promise.all([
+        request(
+          route,
+          administrators[0].id,
+          "POST",
+          createPayload("role_staff_" + suffix, roleRaceEmail),
+        ),
+        postPassword("signup", {
+          ...createPayload(
+            "role_applicant_" + suffix,
+            roleRaceEmail.toUpperCase(),
+          ),
+          requestType: "SCHOOL",
+        }),
+      ]);
+      assert.deepEqual(
+        roleRace.map((response) => response.status).sort(),
+        [201, 409],
+      );
+      assert.equal(await db.user.count({ where: { email: roleRaceEmail } }), 1);
+      // Username is still case-sensitive data even though it is never a login key.
+      const casedName = "Case_" + suffix;
+      for (const [index, name] of [
+        casedName,
+        casedName.toLowerCase(),
+      ].entries()) {
+        assert.equal(
+          (
+            await request(
+              route,
+              administrators[0].id,
+              "POST",
+              createPayload(name, `case-${index}-${suffix}@example.test`),
+            )
+          ).status,
+          201,
+        );
+      }
+      // Non-staff retain their own username uniqueness without reserving staff names globally.
+      const school = await db.school.create({
+        data: { name: "Staff create compatibility " + suffix },
+      });
+      const schoolAdmin = await user("SCHOOL_ADMINISTRATION", {
+        schoolId: school.id,
+      });
+      const schoolTokens = await authSessions.issue(schoolAdmin.id);
+      issued.set(schoolAdmin.id, schoolTokens);
+      refreshTokens.push(schoolTokens.refreshToken);
+      const schoolCreate = (email: string) =>
+        request(`/api/schools/${school.id}/accounts`, schoolAdmin.id, "POST", {
+          ...createPayload(sharedUsername, email),
+          roleCode: "SCHOOL_KITCHEN_STAFF",
+        });
+      const schoolCreated = await schoolCreate(
+        `school-created-${suffix}@example.test`,
+      );
+      assert.equal(
+        schoolCreated.status,
+        201,
+        JSON.stringify(schoolCreated.body),
+      );
+      assert.equal(
+        (await schoolCreate(`school-duplicate-${suffix}@example.test`)).status,
+        409,
+      );
+      const signupDuplicate = await postPassword("signup", {
+        ...createPayload(
+          sharedUsername,
+          `signup-duplicate-${suffix}@example.test`,
+        ),
+        requestType: "SCHOOL",
+      });
+      assert.equal(signupDuplicate.status, 409);
+      const signupStaffName = "unique_" + suffix;
+      const signupCreated = await postPassword("signup", {
+        ...createPayload(
+          signupStaffName,
+          `signup-created-${suffix}@example.test`,
+        ),
+        requestType: "SUPPLIER",
+      });
+      assert.equal(
+        signupCreated.status,
+        201,
+        JSON.stringify(signupCreated.body),
+      );
+      assert.equal(
+        (
+          await postPassword("signup", {
+            ...createPayload(
+              signupStaffName,
+              `signup-second-${suffix}@example.test`,
+            ),
+            requestType: "SCHOOL",
+          })
+        ).status,
+        409,
+      );
+    },
+  );
+
+  await context.test(
+    "SC-007 email-only login authenticates every role, collisions and status/onboarding without username fallback",
+    async () => {
+      const remember = (
+        response: Awaited<ReturnType<typeof postPassword>>,
+        id: string,
+      ) => {
+        const cookie = response.headers
+          .getSetCookie()
+          .map((value) => value.split(";")[0])
+          .join("; ");
+        const refresh = parseCookie(cookie)[REFRESH_COOKIE];
+        assert(refresh);
+        refreshTokens.push(refresh);
+        verificationKeys.add("foodprint:auth:session:user:" + id);
+        return cookie;
+      };
+      for (const code of Object.values(ROLES)) {
+        const scope =
+          code === ROLES.SYSTEM_ADMIN
+            ? {}
+            : code.startsWith("INGREDIENT_SUPPLIER_")
+              ? {
+                  supplierId: (
+                    await db.supplier.create({
+                      data: { name: `Email role ${code}` },
+                    })
+                  ).id,
+                }
+              : code === ROLES.COMMUNE_FOOD_SAFETY_OFFICER
+                ? {
+                    communeFoodSafetyUnitId: (
+                      await db.communeFoodSafetyUnit.create({
+                        data: {
+                          code: `LOGIN_${randomUUID()}`,
+                          name: "Email officer",
+                        },
+                      })
+                    ).id,
+                  }
+                : {
+                    schoolId: (
+                      await db.school.create({
+                        data: { name: `Email role ${code}` },
+                      })
+                    ).id,
+                  };
+        const account = await user(code, scope);
+        const response = await postPassword("login", {
+          identifier: ` ${account.email.toUpperCase()} `,
+          password,
+        });
+        assert.equal(response.status, 200, code);
+        const identity = record(record(record(response.body).data).user);
+        assert.equal(identity.id, account.id);
+        assert.equal(identity.role, code);
+        assert.equal(identity.supplierId, account.supplierId);
+        assert.equal(identity.schoolId, account.schoolId);
+        assert.deepEqual(
+          identity.permissions,
+          (await loadPrincipal(account.id, db)).permissions,
+        );
+        remember(response, account.id);
+        for (const identifier of [
+          account.username,
+          `unknown-${randomUUID()}@example.test`,
+        ]) {
+          const denied = await postPassword("login", { identifier, password });
+          assert.equal(denied.status, 401, code);
+          assert.equal(
+            record(denied.body).message,
+            "Email hoặc mật khẩu không đúng",
+          );
+          assert.deepEqual(denied.headers.getSetCookie(), []);
+        }
+      }
+      const ownerA = await user(ROLES.INGREDIENT_SUPPLIER_STAFF, {
+        supplierId: supplierA.id,
+      });
+      const ownerB = await user(ROLES.SCHOOL_NUTRITION_OFFICER, {
+        schoolId: schoolA.id,
+      });
+      const passwordB = "CollisionB123!";
+      await db.user.update({
+        where: { id: ownerB.id },
+        data: {
+          username: ownerA.email,
+          passwordHash: await bcrypt.hash(passwordB, 4),
+        },
+      });
+      const a = await postPassword("login", {
+        identifier: ownerA.email,
+        password,
+      });
+      assert.equal(a.status, 200);
+      assert.equal(record(record(record(a.body).data).user).id, ownerA.id);
+      remember(a, ownerA.id);
+      const wrong = await postPassword("login", {
+        identifier: ownerA.email,
+        password: passwordB,
+      });
+      assert.equal(wrong.status, 401);
+      assert.deepEqual(wrong.headers.getSetCookie(), []);
+      const b = await postPassword("login", {
+        identifier: ownerB.email,
+        password: passwordB,
+      });
+      assert.equal(b.status, 200);
+      assert.equal(record(record(record(b.body).data).user).id, ownerB.id);
+      remember(b, ownerB.id);
+      for (const status of [
+        "UNVERIFIED",
+        "LOCKED",
+        "INACTIVE",
+        "DEACTIVATED",
+      ] as const) {
+        await db.user.update({ where: { id: ownerA.id }, data: { status } });
+        const denied = await postPassword("login", {
+          identifier: ownerA.email,
+          password,
+        });
+        assert.equal(denied.status, 403);
+        assert.deepEqual(denied.headers.getSetCookie(), []);
+      }
+      for (const code of [
+        ROLES.SCHOOL_ADMINISTRATION,
+        ROLES.INGREDIENT_SUPPLIER_ADMIN,
+      ]) {
+        const adminRole = await role(code);
+        const pending = await db.user.create({
+          data: {
+            username: `pending-${randomUUID()}`,
+            email: `pending-${randomUUID()}@example.test`,
+            fullName: "Pending email admin",
+            passwordHash,
+            roleId: adminRole.id,
+            roleCode: code,
+            status: "UNVERIFIED",
+          },
+        });
+        assert.equal(
+          (await postPassword("login", { identifier: pending.email, password }))
+            .status,
+          403,
+        );
+        await db.user.update({
+          where: { id: pending.id },
+          data: { emailVerifiedAt: new Date() },
+        });
+        const verified = await postPassword("login", {
+          identifier: pending.email,
+          password,
+        });
+        assert.equal(verified.status, 200);
+        assert.equal(
+          record(record(record(verified.body).data).user).onboardingRequired,
+          true,
+        );
+        remember(verified, pending.id);
+      }
+    },
+  );
+  await context.test(
+    "staff recovery by email preserves accounts with shared username and email-username collision",
+    async () => {
+      const a = await user(ROLES.INGREDIENT_SUPPLIER_STAFF, {
+        supplierId: supplierA.id,
+      });
+      const c = await user(ROLES.INGREDIENT_SUPPLIER_STAFF, {
+        supplierId: supplierB.id,
+      });
+      const b = await user(ROLES.SCHOOL_NUTRITION_OFFICER, {
+        schoolId: schoolA.id,
+      });
+      await db.user.update({
+        where: { id: c.id },
+        data: { username: a.username },
+      });
+      await db.user.update({
+        where: { id: b.id },
+        data: { username: a.email },
+      });
+      const cookies = await Promise.all(
+        [a, b, c].map((account) => passwordLogin(account)),
+      );
+      const before = await db.user.findMany({
+        where: { id: { in: [b.id, c.id] } },
+        orderBy: { id: "asc" },
+      });
+      assert.equal(
+        (await postPassword("forgot-password", { email: a.email })).status,
+        200,
+      );
+      const code = resetCodes.get(a.email);
+      assert(code);
+      const grant = await postPassword("forgot-password/verify", {
+        email: a.email,
+        code,
+      });
+      assert.equal(grant.status, 200);
+      const resetToken = record(record(grant.body).data).resetToken;
+      assert.equal(
+        (
+          await postPassword("reset-password", {
+            resetToken,
+            newPassword: "StaffReset123!",
+          })
+        ).status,
+        200,
+      );
+      assert.equal(
+        (
+          await http.request("/api/auth/me", {
+            headers: { Cookie: cookies[0] },
+          })
+        ).status,
+        401,
+      );
+      for (const cookie of cookies.slice(1))
+        assert.equal(
+          (await http.request("/api/auth/me", { headers: { Cookie: cookie } }))
+            .status,
+          200,
+        );
+      assert.deepEqual(
+        await db.user.findMany({
+          where: { id: { in: [b.id, c.id] } },
+          orderBy: { id: "asc" },
+        }),
+        before,
+      );
+      assert(
+        await bcrypt.compare(
+          "StaffReset123!",
+          (await db.user.findUniqueOrThrow({ where: { id: a.id } }))
+            .passwordHash,
+        ),
+      );
+    },
+  );
+  await context.test(
+    "supplier staff locking blocks live access and refresh, unlocking preserves denials and history and paused intake stays independent",
+    async () => {
+      const suffix = randomUUID().replaceAll("-", "");
+      const organization = await db.supplier.create({
+        data: { name: "Staff status " + suffix },
+      });
+      const foreignOrganization = await db.supplier.create({
+        data: { name: "Staff status foreign " + suffix },
+      });
+      const administrator = await user("INGREDIENT_SUPPLIER_ADMIN", {
+        supplierId: organization.id,
+      });
+      const staff = await user("INGREDIENT_SUPPLIER_STAFF", {
+        supplierId: organization.id,
+      });
+      const foreign = await user("INGREDIENT_SUPPLIER_STAFF", {
+        supplierId: foreignOrganization.id,
+      });
+      await db.user.update({
+        where: { id: foreign.id },
+        data: { username: staff.username },
+      });
+      const adminTokens = await authSessions.issue(administrator.id);
+      issued.set(administrator.id, adminTokens);
+      refreshTokens.push(adminTokens.refreshToken);
+      const route = `/api/supplier-staff/${staff.id}/status`;
+      const manage = await permission("delivery.manage");
+      const denial = await db.userPermissionDenial.create({
+        data: {
+          userId: staff.id,
+          permissionId: manage.id,
+          supplierId: organization.id,
+          disabledByUserId: administrator.id,
+        },
+      });
+      const history = await db.sourceFacility.create({
+        data: {
+          supplierId: organization.id,
+          name: "Staff historical source " + suffix,
+          createdByUserId: staff.id,
+          updatedByUserId: administrator.id,
+        },
+      });
+      const oldCookie = await passwordLogin(staff);
+      const foreignCookie = await passwordLogin(foreign);
+      const before = await db.user.findUniqueOrThrow({
+        where: { id: staff.id },
+      });
+      const foreignBefore = await db.user.findUniqueOrThrow({
+        where: { id: foreign.id },
+      });
+      const preservedFields = (account: typeof staff) => ({
+        id: account.id,
+        username: account.username,
+        email: account.email,
+        passwordHash: account.passwordHash,
+        fullName: account.fullName,
+        phone: account.phone,
+        roleId: account.roleId,
+        roleCode: account.roleCode,
+        schoolId: account.schoolId,
+        supplierId: account.supplierId,
+        communeFoodSafetyUnitId: account.communeFoodSafetyUnitId,
+        emailVerifiedAt: account.emailVerifiedAt,
+        intakeState: account.intakeState,
+        createdAt: account.createdAt,
+      });
+      const allowed = await loadPrincipal(staff.id, db);
+      assert(allowed.permissions.includes("supply_request.view"));
+      assert(!allowed.permissions.includes("delivery.manage"));
+      assert.equal(
+        (
+          await http.request("/api/supply-requests", {
+            headers: { Cookie: oldCookie },
+          })
+        ).status,
+        200,
+      );
+      const locked = await request(route, administrator.id, "PATCH", {
+        status: "LOCKED",
+      });
+      assert.equal(locked.status, 200, JSON.stringify(locked.body));
+      const lockedData = record(record(locked.body).data);
+      assert.equal(lockedData.id, staff.id);
+      assert.equal(lockedData.status, "LOCKED");
+      const afterLock = await db.user.findUniqueOrThrow({
+        where: { id: staff.id },
+      });
+      assert.equal(afterLock.status, "LOCKED");
+      assert.deepEqual(preservedFields(afterLock), preservedFields(before));
+      assert.equal(lockedData.updatedAt, afterLock.updatedAt.toISOString());
+      const sameLocked = await request(route, administrator.id, "PATCH", {
+        status: "LOCKED",
+      });
+      assert.equal(sameLocked.status, 200);
+      assert.equal(
+        record(record(sameLocked.body).data).updatedAt,
+        afterLock.updatedAt.toISOString(),
+      );
+      assert.deepEqual(
+        await db.user.findUniqueOrThrow({ where: { id: staff.id } }),
+        afterLock,
+      );
+      const refusedLogin = await postPassword("login", {
+        identifier: staff.email,
+        password,
+      });
+      assert.equal(refusedLogin.status, 403);
+      assert.deepEqual(refusedLogin.headers.getSetCookie(), []);
+      for (const path of ["/api/auth/me", "/api/supply-requests"]) {
+        assert.equal(
+          (await http.request(path, { headers: { Cookie: oldCookie } })).status,
+          403,
+        );
+        assert.equal(
+          (await http.request(path, { headers: { Cookie: foreignCookie } }))
+            .status,
+          200,
+        );
+      }
+      assert.equal((await postPassword("refresh", {}, oldCookie)).status, 403);
+      assert.deepEqual(
+        await db.user.findUniqueOrThrow({ where: { id: foreign.id } }),
+        foreignBefore,
+      );
+      const opened = await request(route, administrator.id, "PATCH", {
+        status: "ACTIVE",
+      });
+      assert.equal(opened.status, 200, JSON.stringify(opened.body));
+      assert.equal(record(record(opened.body).data).status, "ACTIVE");
+      const afterOpen = await db.user.findUniqueOrThrow({
+        where: { id: staff.id },
+      });
+      assert.deepEqual(preservedFields(afterOpen), preservedFields(before));
+      const sameActive = await request(route, administrator.id, "PATCH", {
+        status: "ACTIVE",
+      });
+      assert.equal(sameActive.status, 200);
+      assert.equal(
+        record(record(sameActive.body).data).updatedAt,
+        afterOpen.updatedAt.toISOString(),
+      );
+      assert.deepEqual(
+        await db.user.findUniqueOrThrow({ where: { id: staff.id } }),
+        afterOpen,
+      );
+      const newCookie = await passwordLogin(staff);
+      const me = await http.request("/api/auth/me", {
+        headers: { Cookie: newCookie },
+      });
+      assert.equal(me.status, 200);
+      const permissions = record(record(me.body).data).permissions;
+      assert(Array.isArray(permissions));
+      assert(!permissions.includes("delivery.manage"));
+      assert.equal(
+        (
+          await http.request("/api/supply-requests", {
+            headers: { Cookie: newCookie },
+          })
+        ).status,
+        200,
+      );
+      assert.deepEqual(
+        await db.userPermissionDenial.findUniqueOrThrow({
+          where: { id: denial.id },
+        }),
+        denial,
+      );
+      assert.deepEqual(
+        await db.sourceFacility.findUniqueOrThrow({
+          where: { id: history.id },
+        }),
+        history,
+      );
+      for (const status of ["UNVERIFIED", "INACTIVE", "DEACTIVATED"] as const) {
+        const unsupported = await user("INGREDIENT_SUPPLIER_STAFF", {
+          supplierId: organization.id,
+        });
+        const original = await db.user.update({
+          where: { id: unsupported.id },
+          data: { status },
+        });
+        for (const requested of ["ACTIVE", "LOCKED"]) {
+          const refused = await request(
+            `/api/supplier-staff/${unsupported.id}/status`,
+            administrator.id,
+            "PATCH",
+            { status: requested },
+          );
+          assert.equal(refused.status, 409);
+          assert.equal(
+            record(refused.body).message,
+            "Trạng thái tài khoản không hỗ trợ khóa hoặc mở khóa",
+          );
+          assert.deepEqual(
+            await db.user.findUniqueOrThrow({ where: { id: unsupported.id } }),
+            original,
+          );
+        }
+      }
+      const foreignStatus = await request(
+        `/api/supplier-staff/${foreign.id}/status`,
+        administrator.id,
+        "PATCH",
+        { status: "LOCKED" },
+      );
+      assert.equal(foreignStatus.status, 404);
+      assert.deepEqual(
+        await db.user.findUniqueOrThrow({ where: { id: foreign.id } }),
+        foreignBefore,
+      );
+      for (const intakeState of [
+        "PAUSED_FOR_FOOD_SAFETY_INSPECTION",
+      ] as const) {
+        await db.supplier.update({
+          where: { id: organization.id },
+          data: { intakeState },
+        });
+        for (const status of ["LOCKED", "ACTIVE"]) {
+          const changed = await request(route, administrator.id, "PATCH", {
+            status,
+          });
+          assert.equal(changed.status, 200, JSON.stringify(changed.body));
+          assert.equal(record(record(changed.body).data).status, status);
+          assert.equal(
+            (
+              await db.supplier.findUniqueOrThrow({
+                where: { id: organization.id },
+              })
+            ).intakeState,
+            intakeState,
+          );
+          assert.equal(
+            (
+              await db.user.findUniqueOrThrow({
+                where: { id: administrator.id },
+              })
+            ).status,
+            "ACTIVE",
+          );
+        }
+      }
+      assert.deepEqual(
+        await db.userPermissionDenial.findUniqueOrThrow({
+          where: { id: denial.id },
+        }),
+        denial,
+      );
+      assert.deepEqual(
+        await db.sourceFacility.findUniqueOrThrow({
+          where: { id: history.id },
+        }),
+        history,
+      );
+      assert.deepEqual(
+        await db.user.findUniqueOrThrow({ where: { id: foreign.id } }),
+        foreignBefore,
+      );
+    },
+  );
+
+  await context.test(
+    "supplier staff permissions apply to the next request, preserve scoped denials and reject inactive, foreign or ungranted targets",
+    async () => {
+      const suffix = randomUUID().replaceAll("-", "");
+      const organization = await db.supplier.create({
+        data: { name: "Staff permissions " + suffix },
+      });
+      const foreignOrganization = await db.supplier.create({
+        data: { name: "Staff permissions foreign " + suffix },
+      });
+      const administrator = await user("INGREDIENT_SUPPLIER_ADMIN", {
+        supplierId: organization.id,
+      });
+      const staff = await user("INGREDIENT_SUPPLIER_STAFF", {
+        supplierId: organization.id,
+      });
+      const colleague = await user("INGREDIENT_SUPPLIER_STAFF", {
+        supplierId: organization.id,
+      });
+      const foreign = await user("INGREDIENT_SUPPLIER_STAFF", {
+        supplierId: foreignOrganization.id,
+      });
+      await db.user.update({
+        where: { id: foreign.id },
+        data: { username: staff.username },
+      });
+      const tokens = await authSessions.issue(administrator.id);
+      issued.set(administrator.id, tokens);
+      refreshTokens.push(tokens.refreshToken);
+      const cookies = await Promise.all(
+        [staff, colleague, foreign].map((account) => passwordLogin(account)),
+      );
+      const route = `/api/supplier-staff/${staff.id}/permissions`;
+      const view = await permission("supply_request.view");
+      const denialRoute = `/api/supplier-staff/${staff.id}/permission-denials/${view.id}`;
+      const state = (body: unknown, permissionId: string) => {
+        const data = record(record(body).data);
+        assert(Array.isArray(data.permissions));
+        return data.permissions
+          .map((item: unknown) => record(item))
+          .find((item) => item.id === permissionId);
+      };
+      const read = await request(route, administrator.id);
+      assert.equal(read.status, 200, JSON.stringify(read.body));
+      const data = record(record(read.body).data);
+      assert.deepEqual(Object.keys(data).sort(), [
+        "permissions",
+        "roleId",
+        "userId",
+      ]);
+      assert.equal(data.userId, staff.id);
+      assert.equal(data.roleId, staff.roleId);
+      assert(Array.isArray(data.permissions));
+      const items = data.permissions.map((item: unknown) => record(item));
+      assert.deepEqual(
+        items.map((item) => item.code),
+        items.map((item) => item.code).sort(),
+      );
+      for (const item of items)
+        assert.deepEqual(Object.keys(item).sort(), [
+          "action",
+          "code",
+          "description",
+          "enabled",
+          "id",
+          "isActive",
+          "module",
+          "name",
+        ]);
+      assert.equal(state(read.body, view.id)?.enabled, true);
+      for (const cookie of cookies)
+        assert.equal(
+          (
+            await http.request("/api/supply-requests", {
+              headers: { Cookie: cookie },
+            })
+          ).status,
+          200,
+        );
+      const disabled = await request(denialRoute, administrator.id, "PUT");
+      assert.equal(disabled.status, 200, JSON.stringify(disabled.body));
+      assert.equal(state(disabled.body, view.id)?.enabled, false);
+      const denials = await db.userPermissionDenial.findMany({
+        where: { userId: staff.id, permissionId: view.id },
+      });
+      assert.equal(denials.length, 1);
+      assert.equal(denials[0].supplierId, organization.id);
+      assert.equal(denials[0].disabledByUserId, administrator.id);
+      const disabledUser = await db.user.findUniqueOrThrow({
+        where: { id: staff.id },
+      });
+      const repeated = await request(denialRoute, administrator.id, "PUT", {});
+      assert.equal(repeated.status, 200);
+      assert.equal(state(repeated.body, view.id)?.enabled, false);
+      assert.deepEqual(
+        await db.userPermissionDenial.findMany({
+          where: { userId: staff.id, permissionId: view.id },
+        }),
+        denials,
+      );
+      assert.deepEqual(
+        await db.user.findUniqueOrThrow({ where: { id: staff.id } }),
+        disabledUser,
+      );
+      assert.equal(
+        (
+          await http.request("/api/supply-requests", {
+            headers: { Cookie: cookies[0] },
+          })
+        ).status,
+        403,
+      );
+      for (const cookie of cookies.slice(1))
+        assert.equal(
+          (
+            await http.request("/api/supply-requests", {
+              headers: { Cookie: cookie },
+            })
+          ).status,
+          200,
+        );
+      assert.equal(
+        await db.userPermissionDenial.count({
+          where: { userId: { in: [colleague.id, foreign.id] } },
+        }),
+        0,
+      );
+      const grant = await db.rolePermission.findUniqueOrThrow({
+        where: {
+          roleId_permissionId: { roleId: staff.roleId, permissionId: view.id },
+        },
+      });
+      const replaceGrant = async (present: boolean) =>
+        authorizationTransaction(db, async (tx) => {
+          await tx.$queryRaw`SELECT id FROM foodprint.roles WHERE id = ${staff.roleId}::uuid FOR UPDATE`;
+          if (present)
+            await tx.rolePermission.createMany({
+              data: [grant],
+              skipDuplicates: true,
+            });
+          else
+            await tx.rolePermission.deleteMany({
+              where: { roleId: staff.roleId, permissionId: view.id },
+            });
+          await permissionConcurrencyRepository.touchRole(tx, staff.roleId);
+        });
+      try {
+        await replaceGrant(false);
+        const revoked = await request(route, administrator.id);
+        assert.equal(revoked.status, 200);
+        assert.equal(state(revoked.body, view.id), undefined);
+        assert.equal(
+          (await request(denialRoute, administrator.id, "DELETE")).status,
+          400,
+        );
+        assert.deepEqual(
+          await db.userPermissionDenial.findMany({
+            where: { userId: staff.id, permissionId: view.id },
+          }),
+          denials,
+        );
+      } finally {
+        await replaceGrant(true);
+      }
+      const inheritedAgain = await request(route, administrator.id);
+      assert.equal(state(inheritedAgain.body, view.id)?.enabled, false);
+      assert.equal(
+        (
+          await http.request("/api/supply-requests", {
+            headers: { Cookie: cookies[0] },
+          })
+        ).status,
+        403,
+      );
+      const enabled = await request(
+        denialRoute,
+        administrator.id,
+        "DELETE",
+        {},
+      );
+      assert.equal(enabled.status, 200);
+      assert.equal(state(enabled.body, view.id)?.enabled, true);
+      assert.equal(
+        await db.userPermissionDenial.count({
+          where: { userId: staff.id, permissionId: view.id },
+        }),
+        0,
+      );
+      const enabledUser = await db.user.findUniqueOrThrow({
+        where: { id: staff.id },
+      });
+      assert.equal(
+        (await request(denialRoute, administrator.id, "DELETE")).status,
+        200,
+      );
+      assert.deepEqual(
+        await db.user.findUniqueOrThrow({ where: { id: staff.id } }),
+        enabledUser,
+      );
+      assert.equal(
+        (
+          await http.request("/api/supply-requests", {
+            headers: { Cookie: cookies[0] },
+          })
+        ).status,
+        200,
+      );
+      const inactivePermission = await db.permission.create({
+        data: {
+          code: `staff_fixture_${suffix}.inactive`,
+          name: "Inactive fixture",
+          module: "staff_fixture",
+          action: "inactive",
+          isActive: false,
+        },
+      });
+      const outsidePermission = await db.permission.create({
+        data: {
+          code: `staff_fixture_${suffix}.outside`,
+          name: "Outside fixture",
+          module: "staff_fixture",
+          action: "outside",
+        },
+      });
+      await db.rolePermission.create({
+        data: { roleId: staff.roleId, permissionId: inactivePermission.id },
+      });
+      try {
+        const inactive = state(
+          (await request(route, administrator.id)).body,
+          inactivePermission.id,
+        );
+        assert(inactive);
+        assert.equal(inactive.isActive, false);
+        assert.equal(inactive.enabled, false);
+        for (const permissionId of [
+          inactivePermission.id,
+          outsidePermission.id,
+          randomUUID(),
+        ]) {
+          for (const method of ["PUT", "DELETE"]) {
+            assert.equal(
+              (
+                await request(
+                  `/api/supplier-staff/${staff.id}/permission-denials/${permissionId}`,
+                  administrator.id,
+                  method,
+                )
+              ).status,
+              400,
+            );
+          }
+        }
+        assert.equal(
+          await db.userPermissionDenial.count({ where: { userId: staff.id } }),
+          0,
+        );
+      } finally {
+        await db.rolePermission.deleteMany({
+          where: { roleId: staff.roleId, permissionId: inactivePermission.id },
+        });
+        await db.permission.deleteMany({
+          where: { id: { in: [inactivePermission.id, outsidePermission.id] } },
+        });
+      }
+      const locked = await user("INGREDIENT_SUPPLIER_STAFF", {
+        supplierId: organization.id,
+      });
+      await db.user.update({
+        where: { id: locked.id },
+        data: { status: "LOCKED" },
+      });
+      await db.user.update({
+        where: { id: foreign.id },
+        data: { status: "LOCKED" },
+      });
+      const missing = await request(
+        `/api/supplier-staff/${randomUUID()}/permissions`,
+        administrator.id,
+      );
+      assert.equal(missing.status, 404);
+      for (const target of [foreign, administrator]) {
+        for (const [method, suffix] of [
+          ["GET", "/permissions"],
+          ["PUT", `/permission-denials/${view.id}`],
+          ["DELETE", `/permission-denials/${view.id}`],
+        ]) {
+          const response = await request(
+            `/api/supplier-staff/${target.id}` + suffix,
+            administrator.id,
+            method,
+          );
+          assert.equal(response.status, 404);
+          assert.equal(
+            record(response.body).message,
+            record(missing.body).message,
+          );
+        }
+      }
+      for (const [method, suffix] of [
+        ["GET", "/permissions"],
+        ["PUT", `/permission-denials/${view.id}`],
+        ["DELETE", `/permission-denials/${view.id}`],
+      ]) {
+        assert.equal(
+          (
+            await request(
+              `/api/supplier-staff/${locked.id}` + suffix,
+              administrator.id,
+              method,
+            )
+          ).status,
+          403,
+        );
+      }
+      assert.equal(
+        (await request(denialRoute, administrator.id, "PUT", { enabled: true }))
+          .status,
+        400,
+      );
+      assert.equal(
+        (
+          await request(
+            denialRoute + "?supplierId=" + foreignOrganization.id,
+            administrator.id,
+            "DELETE",
+          )
+        ).status,
+        400,
+      );
+      assert.equal(
+        (
+          await request(
+            `/api/supplier-staff/${staff.id}/permission-denials/not-a-uuid`,
+            administrator.id,
+            "PUT",
+          )
+        ).status,
+        400,
+      );
+    },
+  );
+
+  await context.test(
+    "supplier staff permission mutations recheck revoked actors, changed grants and status, serialize competing toggles and roll back failed writes",
+    async () => {
+      const organization = await db.supplier.create({
+        data: { name: "Staff permission races " + randomUUID() },
+      });
+      const administrator = await user("INGREDIENT_SUPPLIER_ADMIN", {
+        supplierId: organization.id,
+      });
+      const staff = await user("INGREDIENT_SUPPLIER_STAFF", {
+        supplierId: organization.id,
+      });
+      const tokens = await authSessions.issue(administrator.id);
+      issued.set(administrator.id, tokens);
+      refreshTokens.push(tokens.refreshToken);
+      const manage = await permission("supplier_staff.manage");
+      const view = await permission("supply_request.view");
+      const params = { userId: staff.id, permissionId: view.id };
+      const repository = createSupplierStaffRepository(() =>
+        Promise.resolve(db),
+      );
+      const normal = createSupplierStaffService(repository, () =>
+        Promise.resolve(db),
+      );
+      const actorGrant = await db.rolePermission.findUniqueOrThrow({
+        where: {
+          roleId_permissionId: {
+            roleId: administrator.roleId,
+            permissionId: manage.id,
+          },
+        },
+      });
+      const targetGrant = await db.rolePermission.findUniqueOrThrow({
+        where: {
+          roleId_permissionId: { roleId: staff.roleId, permissionId: view.id },
+        },
+      });
+      const setGrant = async (
+        grant: { roleId: string; permissionId: string; assignedAt: Date },
+        present: boolean,
+      ) =>
+        authorizationTransaction(db, async (tx) => {
+          await tx.$queryRaw`SELECT id FROM foodprint.roles WHERE id = ${grant.roleId}::uuid FOR UPDATE`;
+          if (present)
+            await tx.rolePermission.createMany({
+              data: [grant],
+              skipDuplicates: true,
+            });
+          else
+            await tx.rolePermission.deleteMany({
+              where: { roleId: grant.roleId, permissionId: grant.permissionId },
+            });
+          await permissionConcurrencyRepository.touchRole(tx, grant.roleId);
+        });
+      const targetDenials = () =>
+        db.userPermissionDenial.findMany({
+          where: {
+            userId: staff.id,
+            supplierId: organization.id,
+            permissionId: view.id,
+          },
+        });
+      const pausedToggle = async (disabled: boolean) => {
+        const principal = await loadPrincipal(administrator.id, db);
+        let reached!: () => void;
+        let release!: () => void;
+        const entering = new Promise<void>((resolve) => {
+          reached = resolve;
+        });
+        const resume = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        let first = true;
+        let actorReads = 0;
+        const service = createSupplierStaffService(
+          {
+            ...repository,
+            async actor(...args) {
+              actorReads += 1;
+              return repository.actor(...args);
+            },
+            async lock(...args) {
+              if (first) {
+                first = false;
+                reached();
+                await resume;
+              }
+              await repository.lock(...args);
+            },
+          },
+          () => Promise.resolve(db),
+        );
+        const pending = service.togglePermission(params, disabled, principal);
+        try {
+          await Promise.race([
+            entering,
+            pending.then(() => {
+              throw new Error(
+                "Permission mutation ended before its lock barrier",
+              );
+            }),
+          ]);
+        } catch (error) {
+          release();
+          throw error;
+        }
+        return { pending, release, reads: () => actorReads };
+      };
+      const rejectedStatus = (status: number) => (error: unknown) =>
+        error instanceof HttpError && error.statusCode === status;
+
+      const deniedActor = await pausedToggle(true);
+      let actorDenialId: string | undefined;
+      try {
+        actorDenialId = await authorizationTransaction(db, async (tx) => {
+          await tx.$queryRaw`SELECT id FROM foodprint.users WHERE id = ${administrator.id}::uuid FOR UPDATE`;
+          const denial = await tx.userPermissionDenial.create({
+            data: {
+              userId: administrator.id,
+              permissionId: manage.id,
+              supplierId: organization.id,
+              disabledByUserId: system.id,
+            },
+          });
+          await permissionConcurrencyRepository.touchUser(tx, administrator.id);
+          return denial.id;
+        });
+      } finally {
+        deniedActor.release();
+      }
+      try {
+        await assert.rejects(deniedActor.pending, rejectedStatus(403));
+        assert(
+          deniedActor.reads() >= 2,
+          "Actor revocation invalidates the stale authorization snapshot",
+        );
+        assert.deepEqual(await targetDenials(), []);
+      } finally {
+        if (actorDenialId)
+          await authorizationTransaction(db, async (tx) => {
+            await tx.userPermissionDenial.delete({
+              where: { id: actorDenialId },
+            });
+            await permissionConcurrencyRepository.touchUser(
+              tx,
+              administrator.id,
+            );
+          });
+      }
+      const revokedActor = await pausedToggle(true);
+      try {
+        await setGrant(actorGrant, false);
+      } finally {
+        revokedActor.release();
+      }
+      try {
+        await assert.rejects(revokedActor.pending, rejectedStatus(403));
+        assert(
+          revokedActor.reads() >= 2,
+          "Role grant revocation retries/rechecks the old actor snapshot",
+        );
+        assert.deepEqual(await targetDenials(), []);
+      } finally {
+        await setGrant(actorGrant, true);
+      }
+      let principal = await loadPrincipal(administrator.id, db);
+      await normal.togglePermission(params, true, principal);
+      const retainedDenial = await targetDenials();
+      assert.equal(retainedDenial.length, 1);
+      const targetGrantRemoved = await pausedToggle(false);
+      try {
+        await setGrant(targetGrant, false);
+      } finally {
+        targetGrantRemoved.release();
+      }
+      try {
+        await assert.rejects(targetGrantRemoved.pending, rejectedStatus(400));
+        assert(targetGrantRemoved.reads() >= 2);
+        assert.deepEqual(await targetDenials(), retainedDenial);
+        assert(
+          !(await loadPrincipal(staff.id, db)).permissions.includes(view.code),
+        );
+      } finally {
+        await setGrant(targetGrant, true);
+      }
+      const targetLocked = await pausedToggle(false);
+      try {
+        const changed = await request(
+          `/api/supplier-staff/${staff.id}/status`,
+          administrator.id,
+          "PATCH",
+          { status: "LOCKED" },
+        );
+        assert.equal(changed.status, 200, JSON.stringify(changed.body));
+      } finally {
+        targetLocked.release();
+      }
+      try {
+        await assert.rejects(targetLocked.pending, rejectedStatus(403));
+        assert(targetLocked.reads() >= 2);
+        assert.deepEqual(await targetDenials(), retainedDenial);
+      } finally {
+        assert.equal(
+          (
+            await request(
+              `/api/supplier-staff/${staff.id}/status`,
+              administrator.id,
+              "PATCH",
+              { status: "ACTIVE" },
+            )
+          ).status,
+          200,
+        );
+      }
+      principal = await loadPrincipal(administrator.id, db);
+      await normal.togglePermission(params, false, principal);
+      const concurrent = async (directions: [boolean, boolean]) => {
+        const barrier = createBarrier(2);
+        const metrics = [{ reads: 0 }, { reads: 0 }];
+        const services = metrics.map((metric) =>
+          createSupplierStaffService(
+            {
+              ...repository,
+              async actor(...args) {
+                const actor = await repository.actor(...args);
+                metric.reads += 1;
+                if (metric.reads === 1) await barrier.wait();
+                return actor;
+              },
+            },
+            () => Promise.resolve(db),
+          ),
+        );
+        const results = await Promise.all(
+          services.map((service, index) =>
+            service.togglePermission(params, directions[index], principal),
+          ),
+        );
+        assert.equal(results.length, 2);
+        const denials = await targetDenials();
+        assert(denials.length <= 1);
+        const effective = await loadPrincipal(staff.id, db);
+        assert.equal(
+          effective.permissions.includes(view.code),
+          denials.length === 0,
+        );
+        const response = await normal.getPermissions(
+          { userId: staff.id },
+          principal,
+        );
+        assert.equal(
+          response.permissions.find((item) => item.id === view.id)?.enabled,
+          denials.length === 0,
+        );
+        assert(metrics[0].reads + metrics[1].reads >= 4);
+      };
+      await concurrent([true, true]);
+      assert.equal((await targetDenials()).length, 1);
+      await concurrent([true, false]);
+      await normal.togglePermission(params, false, principal);
+      const beforeFailure = await db.user.findUniqueOrThrow({
+        where: { id: staff.id },
+      });
+      const failing = createSupplierStaffService(
+        {
+          ...repository,
+          async disablePermission(...args) {
+            await repository.disablePermission(...args);
+            throw new HttpError(409, "Injected denial write rollback");
+          },
+        },
+        () => Promise.resolve(db),
+      );
+      await assert.rejects(
+        failing.togglePermission(params, true, principal),
+        rejectedStatus(409),
+      );
+      assert.deepEqual(await targetDenials(), []);
+      assert.deepEqual(
+        await db.user.findUniqueOrThrow({ where: { id: staff.id } }),
+        beforeFailure,
+      );
+      assert(
+        (await loadPrincipal(staff.id, db)).permissions.includes(view.code),
+      );
+    },
+  );
 
   await context.test(
     "supplier intake: scoped list/detail, independent permissions and immutable receipt",
@@ -3391,7 +5427,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           ["GET", "/" + ingredientA.id],
           ["POST", ""],
           ["PATCH", "/" + ingredientA.id],
-          ["POST", "/" + ingredientA.id + "/hide"],
+          ["PATCH", "/" + ingredientA.id + "/status"],
         ]) {
           assert.equal(
             (await request(base + suffix, actor.id, method)).status,
@@ -3449,12 +5485,16 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       });
       const absent = randomUUID();
       for (const foreignId of [foreign.id, absent]) {
-        for (const method of ["GET", "PATCH", "POST"]) {
+        for (const method of ["GET", "PATCH", "STATUS"]) {
           const response = await request(
-            base + "/" + foreignId + (method === "POST" ? "/hide" : ""),
+            base + "/" + foreignId + (method === "STATUS" ? "/status" : ""),
             supplierAdmin.id,
-            method,
-            method === "PATCH" ? { name: "Refused" } : undefined,
+            method === "STATUS" ? "PATCH" : method,
+            method === "PATCH"
+              ? { name: "Refused" }
+              : method === "STATUS"
+                ? { status: "ACTIVE" }
+                : undefined,
           );
           assert.equal(response.status, 404);
           assert.equal(
@@ -3521,15 +5561,27 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         },
       });
       assert.equal(
-        (await request(base + "/" + id + "/hide", supplierAdmin.id, "POST"))
-          .status,
+        (
+          await request(
+            base + "/" + id + "/status",
+            supplierAdmin.id,
+            "PATCH",
+            { status: "INACTIVE" },
+          )
+        ).status,
         200,
       );
       const hidden = await db.ingredient.findUniqueOrThrow({ where: { id } });
       assert.equal(hidden.status, "INACTIVE");
       assert.equal(
-        (await request(base + "/" + id + "/hide", supplierAdmin.id, "POST"))
-          .status,
+        (
+          await request(
+            base + "/" + id + "/status",
+            supplierAdmin.id,
+            "PATCH",
+            { status: "INACTIVE" },
+          )
+        ).status,
         200,
       );
       assert.equal(
@@ -3560,6 +5612,221 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         (await request(base, supplierAdmin.id, "POST", payload)).status,
         409,
       );
+      // A pre-existing hidden ingredient can be restored without recreating it.
+      const beforeCycles = await db.ingredient.findUniqueOrThrow({
+        where: { id },
+      });
+      for (let cycle = 0; cycle < 3; cycle++) {
+        for (const status of ["ACTIVE", "INACTIVE"] as const) {
+          const changed = await request(
+            base + "/" + id + "/status",
+            supplierAdmin.id,
+            "PATCH",
+            { status },
+          );
+          assert.equal(changed.status, 200, JSON.stringify(changed.body));
+          assert.equal(record(record(changed.body).data).status, status);
+          const after = await db.ingredient.findUniqueOrThrow({
+            where: { id },
+          });
+          assert.equal(after.status, status);
+          assert.equal(after.id, beforeCycles.id);
+          assert.equal(after.supplierId, beforeCycles.supplierId);
+          assert.equal(after.name, beforeCycles.name);
+          assert.equal(after.description, beforeCycles.description);
+          assert.equal(after.categoryId, beforeCycles.categoryId);
+          assert.equal(after.coverImage, beforeCycles.coverImage);
+          assert.deepEqual(
+            after.imageDescription,
+            beforeCycles.imageDescription,
+          );
+          assert.equal(+after.createdAt, +beforeCycles.createdAt);
+          const repeated = await request(
+            base + "/" + id + "/status",
+            supplierAdmin.id,
+            "PATCH",
+            { status },
+          );
+          assert.equal(repeated.status, 200);
+          assert.equal(
+            +(await db.ingredient.findUniqueOrThrow({ where: { id } }))
+              .updatedAt,
+            +after.updatedAt,
+          );
+          assert.equal(
+            (
+              await db.ingredientEntry.findUniqueOrThrow({
+                where: { id: entry.id },
+              })
+            ).ingredientId,
+            id,
+          );
+          const detail = await request(base + "/" + id, supplierAdmin.id);
+          assert.equal(record(record(detail.body).data).status, status);
+        }
+      }
+      assert.equal(
+        (await request(base + "/" + id + "/hide", supplierAdmin.id, "POST"))
+          .status,
+        404,
+      );
+      assert.equal(
+        (await db.ingredient.findUniqueOrThrow({ where: { id } })).status,
+        "INACTIVE",
+      );
+      const beforeRollback = await db.ingredient.findUniqueOrThrow({
+        where: { id },
+      });
+      const faultService = createIngredientService({
+        ...ingredientRepository,
+        async changeStatus(...args) {
+          await ingredientRepository.changeStatus(...args);
+          throw new Error("private driver details");
+        },
+      });
+      const currentActor = await loadPrincipal(supplierAdmin.id, db);
+      await assert.rejects(
+        () =>
+          faultService.changeStatus(
+            { ingredientId: id },
+            { status: "ACTIVE" },
+            currentActor,
+          ),
+        (error: unknown) =>
+          error instanceof HttpError &&
+          error.statusCode === 503 &&
+          !error.message.includes("private driver details"),
+      );
+      const afterRollback = await db.ingredient.findUniqueOrThrow({
+        where: { id },
+      });
+      assert.equal(afterRollback.status, beforeRollback.status);
+      assert.equal(+afterRollback.updatedAt, +beforeRollback.updatedAt);
+      let attempts = 0;
+      const conflictService = createIngredientService({
+        ...ingredientRepository,
+        changeStatus() {
+          attempts++;
+          return Promise.reject(
+            Object.assign(new Error("test conflict"), { code: "P2034" }),
+          );
+        },
+      });
+      await assert.rejects(
+        () =>
+          conflictService.changeStatus(
+            { ingredientId: id },
+            { status: "ACTIVE" },
+            currentActor,
+          ),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 503,
+      );
+      assert.equal(attempts, 3);
+      assert.equal(
+        (await db.ingredient.findUniqueOrThrow({ where: { id } })).status,
+        "INACTIVE",
+      );
+
+      // A school with no other suppliers makes both option lists deterministic.
+      const optionsSchool = await db.school.create({
+        data: { name: "Status options " + id },
+      });
+      const optionsRelationship = await db.schoolSupplierRelationship.create({
+        data: {
+          schoolId: optionsSchool.id,
+          supplierId: supplierA.id,
+          status: "ACTIVE",
+        },
+      });
+      const optionsEntry = await db.ingredientEntry.create({
+        data: {
+          schoolId: optionsSchool.id,
+          ingredientId: id,
+          handlingType: "DRY_STOCK",
+          status: "ACTIVE",
+        },
+      });
+      const optionsUser = await user("SCHOOL_NUTRITION_OFFICER", {
+        schoolId: optionsSchool.id,
+      });
+      const ingredientReader = await user("INGREDIENT_MANAGEMENT_DEPARTMENT", {
+        schoolId: optionsSchool.id,
+      });
+      const ingredientReaderSession = await authSessions.issue(
+        ingredientReader.id,
+      );
+      issued.set(ingredientReader.id, ingredientReaderSession);
+      refreshTokens.push(ingredientReaderSession.refreshToken);
+      const optionsActor = await loadPrincipal(optionsUser.id, db);
+      const menus = createMenuService(undefined, () => Promise.resolve(db));
+      const optionList = async (kind: "main" | "seasoning") =>
+        menus.getIngredientOptions(kind, { page: 1, limit: 100 }, optionsActor);
+      const includesIngredient = (
+        items: { id?: unknown; ingredientId?: unknown }[],
+      ) => items.some((row) => row.id === id || row.ingredientId === id);
+      const schoolIngredients = async () => {
+        const result = await request(
+          "/api/ingredients?limit=100",
+          ingredientReader.id,
+        );
+        assert.equal(result.status, 200);
+        return rows(result.body);
+      };
+      assert(!includesIngredient(await schoolIngredients()));
+      assert(!includesIngredient((await optionList("main")).items));
+      assert(!includesIngredient((await optionList("seasoning")).items));
+      assert.equal(
+        (
+          await request(
+            base + "/" + id + "/status",
+            supplierAdmin.id,
+            "PATCH",
+            { status: "ACTIVE" },
+          )
+        ).status,
+        200,
+      );
+      assert(includesIngredient((await optionList("main")).items));
+      assert(includesIngredient((await optionList("seasoning")).items));
+      assert(includesIngredient(await schoolIngredients()));
+      await db.schoolSupplierRelationship.update({
+        where: { id: optionsRelationship.id },
+        data: {
+          status: "SUSPENDED",
+          suspendedAt: new Date(),
+          suspensionReason: "Status selection test",
+        },
+      });
+      assert(!includesIngredient(await schoolIngredients()));
+      assert(!includesIngredient((await optionList("main")).items));
+      // Seasoning selection is based on the school's active entry, independently of supplier relationships.
+      assert(includesIngredient((await optionList("seasoning")).items));
+      await db.schoolSupplierRelationship.update({
+        where: { id: optionsRelationship.id },
+        data: { status: "ACTIVE", suspendedAt: null, suspensionReason: null },
+      });
+      assert(includesIngredient(await schoolIngredients()));
+      await db.ingredientEntry.update({
+        where: { id: optionsEntry.id },
+        data: { status: "INACTIVE" },
+      });
+      assert(!includesIngredient((await optionList("seasoning")).items));
+      assert(includesIngredient((await optionList("main")).items));
+      assert.equal(
+        (
+          await request(
+            base + "/" + id + "/status",
+            supplierAdmin.id,
+            "PATCH",
+            { status: "INACTIVE" },
+          )
+        ).status,
+        200,
+      );
+      assert(!includesIngredient((await optionList("main")).items));
+      assert(!includesIngredient(await schoolIngredients()));
+
       // Same name remains allowed in another supplier.
       await db.ingredient.create({
         data: {
@@ -3570,15 +5837,97 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       });
       const hideEdit = await Promise.all([
         request(
-          base + "/" + raceItems[0].id + "/hide",
+          base + "/" + raceItems[0].id + "/status",
           supplierAdmin.id,
-          "POST",
+          "PATCH",
+          { status: "INACTIVE" },
         ),
         request(base + "/" + raceItems[0].id, supplierAdmin.id, "PATCH", {
           description: "Concurrent edit",
         }),
       ]);
       assert(hideEdit.every((r) => r.status === 200));
+      assert.equal(
+        (
+          await db.ingredient.findUniqueOrThrow({
+            where: { id: raceItems[0].id },
+          })
+        ).status,
+        "INACTIVE",
+      );
+      assert.equal(
+        (
+          await db.ingredient.findUniqueOrThrow({
+            where: { id: raceItems[0].id },
+          })
+        ).description,
+        "Concurrent edit",
+      );
+      for (const status of ["ACTIVE", "INACTIVE"] as const) {
+        const concurrent = await Promise.all(
+          [1, 2].map(() =>
+            request(
+              base + "/" + raceItems[0].id + "/status",
+              supplierAdmin.id,
+              "PATCH",
+              { status },
+            ),
+          ),
+        );
+        assert(concurrent.every((response) => response.status === 200));
+        assert.equal(
+          (
+            await db.ingredient.findUniqueOrThrow({
+              where: { id: raceItems[0].id },
+            })
+          ).status,
+          status,
+        );
+      }
+      // Start both operations together, then release the second only after the first commits.
+      const rendezvous = createBarrier(2);
+      let releaseSecond!: () => void;
+      const firstCommitted = new Promise<void>((resolve) => {
+        releaseSecond = resolve;
+      });
+      let firstStarted = false;
+      let secondStarted = false;
+      const firstService = createIngredientService({
+        ...ingredientRepository,
+        async lockSupplier(scope, tx) {
+          if (!firstStarted) {
+            firstStarted = true;
+            await rendezvous.wait();
+          }
+          return ingredientRepository.lockSupplier(scope, tx);
+        },
+      });
+      const secondService = createIngredientService({
+        ...ingredientRepository,
+        async lockSupplier(scope, tx) {
+          if (!secondStarted) {
+            secondStarted = true;
+            await rendezvous.wait();
+          }
+          await firstCommitted;
+          return ingredientRepository.lockSupplier(scope, tx);
+        },
+      });
+      const first = firstService
+        .changeStatus(
+          { ingredientId: raceItems[0].id },
+          { status: "ACTIVE" },
+          currentActor,
+        )
+        .finally(releaseSecond);
+      const second = secondService.changeStatus(
+        { ingredientId: raceItems[0].id },
+        { status: "INACTIVE" },
+        currentActor,
+      );
+      const [firstResult, secondResult] = await Promise.all([first, second]);
+      assert.equal(firstResult.status, "ACTIVE");
+      assert.equal(secondResult.status, "INACTIVE");
       assert.equal(
         (
           await db.ingredient.findUniqueOrThrow({
@@ -3634,6 +5983,18 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         },
       });
       assert.equal((await request(base, supplierAdmin.id)).status, 403);
+      for (const status of ["ACTIVE", "INACTIVE"] as const) {
+        await assert.rejects(
+          () =>
+            ingredientService.changeStatus(
+              { ingredientId: id },
+              { status },
+              staleActor,
+            ),
+          (error: unknown) =>
+            error instanceof HttpError && error.statusCode === 403,
+        );
+      }
       assert.equal(
         (
           await request(base + "/" + id, supplierAdmin.id, "PATCH", {
@@ -3665,6 +6026,16 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       });
       await assert.rejects(
         () =>
+          ingredientService.changeStatus(
+            { ingredientId: id },
+            { status: "INACTIVE" },
+            staleActor,
+          ),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 403,
+      );
+      await assert.rejects(
+        () =>
           ingredientService.update(
             { ingredientId: id },
             { name: "Locked account" },
@@ -3682,6 +6053,16 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         where: { id: supplierAdmin.id },
         data: { status: "ACTIVE", supplierId: supplierB.id },
       });
+      await assert.rejects(
+        () =>
+          ingredientService.changeStatus(
+            { ingredientId: id },
+            { status: "ACTIVE" },
+            staleActor,
+          ),
+        (error: unknown) =>
+          error instanceof HttpError && error.statusCode === 403,
+      );
       await assert.rejects(
         () =>
           ingredientService.update(
@@ -3753,6 +6134,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       });
       // Remove only this subtest's disposable fixture so later scope assertions keep their baseline.
       await db.ingredientEntry.delete({ where: { id: entry.id } });
+      await db.ingredientEntry.delete({ where: { id: optionsEntry.id } });
       await db.ingredient.deleteMany({
         where: {
           OR: [
@@ -4073,7 +6455,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           "Content-Type": "application/json",
           "X-CSRF-Protection": "1",
         },
-        body: JSON.stringify({ identifier: system.username, password }),
+        body: JSON.stringify({ identifier: system.email, password }),
       });
       assert.equal(response.status, 200);
       const data = record(record(response.body).data);
@@ -4133,7 +6515,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           "Content-Type": "application/json",
           "X-CSRF-Protection": "1",
         },
-        body: JSON.stringify({ identifier: system.username, password }),
+        body: JSON.stringify({ identifier: system.email, password }),
       });
       assert.equal(login.status, 200);
       const cookie = login.headers
@@ -4212,7 +6594,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           true,
         );
         const account = await db.user.findUniqueOrThrow({
-          where: { username },
+          where: { email: body.email },
         });
         assert.equal(account.status, "UNVERIFIED");
         assert.equal(account.emailVerifiedAt, null);
@@ -4260,7 +6642,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             "X-CSRF-Protection": "1",
           },
           body: JSON.stringify({
-            identifier: username,
+            identifier: body.email,
             password: body.password,
           }),
         });
@@ -4309,7 +6691,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             "X-CSRF-Protection": "1",
           },
           body: JSON.stringify({
-            identifier: username,
+            identifier: body.email,
             password: body.password,
           }),
         });
@@ -4608,7 +6990,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
                 "X-CSRF-Protection": "1",
               },
               body: JSON.stringify({
-                identifier: username,
+                identifier: email,
                 password: "MailFailure123!",
               }),
             })
@@ -5639,6 +8021,827 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
     },
   );
   await context.test(
+    "role permission management US1 preserves inactive grants, denials and complete concurrent saves",
+    async () => {
+      const roleId = staffA.roleId;
+      const original = await db.rolePermission.findMany({ where: { roleId } });
+      const principal = await loadPrincipal(system.id, db);
+      const repo = createPermissionRepository(() => Promise.resolve(db));
+      const service = createPermissionService(() => Promise.resolve(db), repo);
+      const code = "rp_" + randomUUID().replaceAll("-", "");
+      const a = await db.permission.create({
+        data: {
+          code: code + ".first",
+          name: "RP first",
+          module: code,
+          action: "first",
+        },
+      });
+      const b = await db.permission.create({
+        data: {
+          code: code + ".second",
+          name: "RP second",
+          module: code,
+          action: "second",
+          isActive: false,
+        },
+      });
+      const deny = await db.userPermissionDenial.create({
+        data: {
+          userId: staffA.id,
+          permissionId: a.id,
+          schoolId: schoolA.id,
+          disabledByUserId: adminA.id,
+        },
+      });
+      const snapshot = () =>
+        db.rolePermission.findMany({
+          where: { roleId },
+          orderBy: { permissionId: "asc" },
+        });
+      try {
+        await db.rolePermission.create({
+          data: { roleId, permissionId: b.id },
+        });
+        const kept = await db.rolePermission.findUniqueOrThrow({
+          where: { roleId_permissionId: { roleId, permissionId: b.id } },
+        });
+        await service.replaceRole(principal, roleId, [a.id, b.id]);
+        assert.equal(
+          (
+            await db.rolePermission.findUniqueOrThrow({
+              where: { roleId_permissionId: { roleId, permissionId: b.id } },
+            })
+          ).assignedAt.toISOString(),
+          kept.assignedAt.toISOString(),
+        );
+        assert(
+          await db.userPermissionDenial.findUnique({ where: { id: deny.id } }),
+        );
+        assert(
+          !(await loadPrincipal(staffA.id, db)).permissions.includes(a.code),
+        );
+        assert(
+          (await loadPrincipal(staffB.id, db)).permissions.includes(a.code),
+        );
+        await service.replaceRole(principal, roleId, [a.id]);
+        await assert.rejects(
+          service.replaceRole(principal, roleId, [a.id, b.id]),
+          (e: unknown) => e instanceof HttpError && e.statusCode === 400,
+        );
+        const before = await snapshot();
+        await assert.rejects(
+          service.replaceRole(principal, system.roleId, []),
+          (e: unknown) => e instanceof HttpError && e.statusCode === 403,
+        );
+        const faulty = createPermissionService(() => Promise.resolve(db), {
+          ...repo,
+          async replaceGrants(...args) {
+            await repo.replaceGrants(...args);
+            throw new Error("test rollback");
+          },
+        });
+        await assert.rejects(
+          faulty.replaceRole(principal, roleId, []),
+          (e: unknown) => e instanceof HttpError && e.statusCode === 503,
+        );
+        assert.deepEqual(await snapshot(), before);
+        const barrier = createBarrier(2);
+        const counts = [0, 0];
+        const competing = counts.map((_, i) =>
+          createPermissionService(() => Promise.resolve(db), {
+            ...repo,
+            async lockSystem(...args) {
+              if (++counts[i] === 1) await barrier.wait();
+              return repo.lockSystem(...args);
+            },
+          }),
+        );
+        const outcomes = await Promise.allSettled([
+          competing[0].replaceRole(principal, roleId, [a.id]),
+          competing[1].replaceRole(principal, roleId, []),
+        ]);
+        assert(outcomes.every((result) => result.status === "fulfilled"));
+        const final = (await snapshot()).map((row) => row.permissionId);
+        assert(final.length === 0 || (final.length === 1 && final[0] === a.id));
+        assert(
+          await db.userPermissionDenial.findUnique({ where: { id: deny.id } }),
+        );
+        const roles = await request("/api/roles?limit=100", system.id);
+        assert.equal(roles.status, 200);
+        assert.equal(
+          rows(roles.body).find((r) => r.code === "SYSTEM_ADMIN")?.editable,
+          false,
+        );
+        assert.equal(
+          (await request("/api/roles?schoolId=" + schoolB.id, system.id))
+            .status,
+          400,
+        );
+      } finally {
+        await db.rolePermission.deleteMany({ where: { roleId } });
+        if (original.length)
+          await db.rolePermission.createMany({ data: original });
+        await db.userPermissionDenial.deleteMany({ where: { id: deny.id } });
+        await db.permission.deleteMany({ where: { id: { in: [a.id, b.id] } } });
+      }
+    },
+  );
+
+  await context.test(
+    "role permission management US2 global state, guard races and self-disable",
+    async () => {
+      const code = "rp_" + randomUUID().replaceAll("-", "");
+      const p = await db.permission.create({
+        data: {
+          code: code + ".state",
+          name: "RP state",
+          module: code,
+          action: "state",
+        },
+      });
+      const race = await db.permission.create({
+        data: {
+          code: code + ".race",
+          name: "RP race",
+          module: code,
+          action: "race",
+        },
+      });
+      const original = await db.rolePermission.findMany({
+        where: { roleId: staffA.roleId },
+      });
+      await db.rolePermission.createMany({
+        data: [
+          { roleId: system.roleId, permissionId: p.id },
+          { roleId: staffA.roleId, permissionId: p.id },
+        ],
+      });
+      const denial = await db.userPermissionDenial.create({
+        data: {
+          userId: staffA.id,
+          permissionId: p.id,
+          schoolId: schoolA.id,
+          disabledByUserId: adminA.id,
+        },
+      });
+      const repo = createPermissionRepository(() => Promise.resolve(db));
+      const service = createPermissionService(() => Promise.resolve(db), repo);
+      const principal = await loadPrincipal(system.id, db);
+      const guard = await permission("role_permission.manage");
+      const grantsSnapshot = () =>
+        db.rolePermission.findMany({
+          orderBy: [{ roleId: "asc" }, { permissionId: "asc" }],
+        });
+      const denialSnapshot = () =>
+        db.userPermissionDenial.findMany({ orderBy: { id: "asc" } });
+      const signal = () => {
+        let release!: () => void;
+        const promise = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return { promise, release };
+      };
+      const baseIds = [...original.map((g) => g.permissionId), p.id];
+      try {
+        const grants = await grantsSnapshot(),
+          denials = await denialSnapshot();
+        const route = "/api/permissions/" + p.id + "/state";
+        assert.equal(
+          (await request(route, system.id, "PATCH", { isActive: false }))
+            .status,
+          200,
+        );
+        for (const account of [system, staffA, staffB])
+          assert(
+            !(await loadPrincipal(account.id, db)).permissions.includes(p.code),
+          );
+        assert.equal(
+          (await request(route, system.id, "PATCH", { isActive: false }))
+            .status,
+          200,
+        );
+        assert.equal(
+          (await request(route, system.id, "PATCH", { isActive: true })).status,
+          200,
+        );
+        assert(
+          (await loadPrincipal(staffB.id, db)).permissions.includes(p.code),
+        );
+        assert(
+          (await loadPrincipal(system.id, db)).permissions.includes(p.code),
+        );
+        assert(
+          !(await loadPrincipal(staffA.id, db)).permissions.includes(p.code),
+        );
+        assert.deepEqual(await grantsSnapshot(), grants);
+        assert.deepEqual(await denialSnapshot(), denials);
+        for (const offFirst of [true, false]) {
+          await db.permission.update({
+            where: { id: race.id },
+            data: { isActive: true },
+          });
+          await service.replaceRole(principal, staffA.roleId, baseIds);
+          const entered = signal(),
+            resume = signal();
+          let locks = 0;
+          const paused = createPermissionService(() => Promise.resolve(db), {
+            ...repo,
+            async lockSystem(...args) {
+              if (++locks === 1) {
+                entered.release();
+                await resume.promise;
+              }
+              return repo.lockSystem(...args);
+            },
+          });
+          const pending = Promise.allSettled([
+            offFirst
+              ? paused.replaceRole(principal, staffA.roleId, [
+                  ...baseIds,
+                  race.id,
+                ])
+              : paused.setPermissionState(principal, race.id, {
+                  isActive: false,
+                }),
+          ]);
+          try {
+            await entered.promise;
+            if (offFirst)
+              await service.setPermissionState(principal, race.id, {
+                isActive: false,
+              });
+            else
+              await service.replaceRole(principal, staffA.roleId, [
+                ...baseIds,
+                race.id,
+              ]);
+          } finally {
+            resume.release();
+          }
+          const [outcome] = await pending;
+          if (offFirst) {
+            assert.equal(outcome.status, "rejected");
+            if (outcome.status === "rejected")
+              assert(
+                outcome.reason instanceof HttpError &&
+                  outcome.reason.statusCode === 400,
+              );
+          } else assert.equal(outcome.status, "fulfilled");
+          assert.equal(
+            await db.rolePermission.count({
+              where: { roleId: staffA.roleId, permissionId: race.id },
+            }),
+            offFirst ? 0 : 1,
+          );
+          assert.equal(
+            (await db.permission.findUniqueOrThrow({ where: { id: race.id } }))
+              .isActive,
+            false,
+          );
+          if (offFirst)
+            assert(locks >= 2, "stale permission snapshot must retry");
+        }
+        // A state change must invalidate a stale permission snapshot. A grant
+        // change alone may serialize without retry when no permission row changed.
+        const schoolRole = await role("SCHOOL_KITCHEN_STAFF");
+        for (const mutation of ["status", "role", "guard"] as const) {
+          for (const commitFirst of [true, false]) {
+            await db.permission.update({
+              where: { id: p.id },
+              data: { isActive: true },
+            });
+            const actor = await user("SYSTEM_ADMIN");
+            const actorPrincipal = await loadPrincipal(actor.id, db);
+            const entered = signal(),
+              resume = signal();
+            let calls = 0;
+            const paused = createPermissionService(() => Promise.resolve(db), {
+              ...repo,
+              async lockSystem(...args) {
+                const first = ++calls === 1;
+                if (first && commitFirst) {
+                  entered.release();
+                  await resume.promise;
+                }
+                await repo.lockSystem(...args);
+                if (first && !commitFirst) {
+                  entered.release();
+                  await resume.promise;
+                }
+              },
+            });
+            const revoke = () =>
+              mutation === "guard"
+                ? db.permission.update({
+                    where: { id: guard.id },
+                    data: { isActive: false },
+                  })
+                : db.user.update({
+                    where: { id: actor.id },
+                    data:
+                      mutation === "status"
+                        ? { status: "LOCKED" }
+                        : {
+                            roleId: schoolRole.id,
+                            roleCode: schoolRole.code,
+                            schoolId: schoolA.id,
+                          },
+                  });
+            const pending = Promise.allSettled([
+              paused.setPermissionState(actorPrincipal, p.id, {
+                isActive: false,
+              }),
+            ]);
+            let revoking: Promise<unknown> | undefined;
+            try {
+              await entered.promise;
+              if (commitFirst) await revoke();
+              else revoking = Promise.resolve(revoke());
+            } finally {
+              resume.release();
+            }
+            try {
+              const [outcome] = await pending;
+              await revoking;
+              if (commitFirst) {
+                assert.equal(
+                  outcome.status,
+                  "rejected",
+                  mutation + " commits before point of acceptance",
+                );
+                if (outcome.status === "rejected")
+                  assert(
+                    outcome.reason instanceof HttpError &&
+                      outcome.reason.statusCode === 403,
+                  );
+              } else
+                assert.equal(
+                  outcome.status,
+                  "fulfilled",
+                  mutation + " waits until the accepted write commits",
+                );
+              assert.equal(
+                (await db.permission.findUniqueOrThrow({ where: { id: p.id } }))
+                  .isActive,
+                commitFirst,
+              );
+              await assert.rejects(
+                service.setPermissionState(actorPrincipal, p.id, {
+                  isActive: true,
+                }),
+                (error: unknown) =>
+                  error instanceof HttpError && error.statusCode === 403,
+              );
+            } finally {
+              await db.permission.update({
+                where: { id: guard.id },
+                data: { isActive: true },
+              });
+              await db.user.delete({ where: { id: actor.id } });
+            }
+          }
+        }
+        const statesBarrier = createBarrier(2);
+        const stateCalls = [0, 0];
+        const stateServices = stateCalls.map((_, index) =>
+          createPermissionService(() => Promise.resolve(db), {
+            ...repo,
+            async lockSystem(...args) {
+              if (++stateCalls[index] === 1) await statesBarrier.wait();
+              return repo.lockSystem(...args);
+            },
+          }),
+        );
+        const states = await Promise.all(
+          stateServices.map((writer, index) =>
+            writer.setPermissionState(principal, p.id, {
+              isActive: Boolean(index),
+            }),
+          ),
+        );
+        assert.deepEqual(
+          states.map((row) => row.isActive),
+          [false, true],
+        );
+        assert.equal(
+          (
+            await request(
+              "/api/permissions/" + guard.id + "/state",
+              system.id,
+              "PATCH",
+              { isActive: false },
+            )
+          ).status,
+          200,
+        );
+        assert.equal(
+          (await request(route, system.id, "PATCH", { isActive: false }))
+            .status,
+          403,
+        );
+      } finally {
+        await db.permission.update({
+          where: { id: guard.id },
+          data: { isActive: true },
+        });
+        await db.rolePermission.deleteMany({
+          where: { roleId: staffA.roleId },
+        });
+        if (original.length)
+          await db.rolePermission.createMany({ data: original });
+        await db.rolePermission.deleteMany({
+          where: { permissionId: { in: [p.id, race.id] } },
+        });
+        await db.userPermissionDenial.deleteMany({ where: { id: denial.id } });
+        await db.permission.deleteMany({
+          where: { id: { in: [p.id, race.id] } },
+        });
+      }
+    },
+  );
+
+  await context.test(
+    "role permission management US3 create uniqueness and unassigned defaults",
+    async () => {
+      const principal = await loadPrincipal(system.id, db);
+      const repo = createPermissionRepository(() => Promise.resolve(db));
+      const code = "rp_" + randomUUID().replaceAll("-", "") + ".create";
+      const body = {
+        code,
+        name: "RP create",
+        module: "rp",
+        action: "create",
+        description: null,
+      };
+      const before = await db.rolePermission.findMany({
+        orderBy: [{ roleId: "asc" }, { permissionId: "asc" }],
+      });
+      const barrier = createBarrier(2);
+      const counts = [0, 0];
+      const services = counts.map((_, i) =>
+        createPermissionService(() => Promise.resolve(db), {
+          ...repo,
+          async lockSystem(...args) {
+            if (++counts[i] === 1) await barrier.wait();
+            return repo.lockSystem(...args);
+          },
+        }),
+      );
+      try {
+        const outcomes = await Promise.allSettled(
+          services.map((service) => service.create(principal, body)),
+        );
+        assert.equal(
+          outcomes.filter((result) => result.status === "fulfilled").length,
+          1,
+        );
+        const loser = outcomes.find((result) => result.status === "rejected");
+        assert(
+          loser?.status === "rejected" &&
+            loser.reason instanceof HttpError &&
+            loser.reason.statusCode === 409,
+        );
+        const row = await db.permission.findUniqueOrThrow({ where: { code } });
+        assert.equal(row.isActive, true);
+        assert.equal(
+          await db.rolePermission.count({ where: { permissionId: row.id } }),
+          0,
+        );
+        assert.deepEqual(
+          await db.rolePermission.findMany({
+            orderBy: [{ roleId: "asc" }, { permissionId: "asc" }],
+          }),
+          before,
+        );
+        await db.permission.update({
+          where: { id: row.id },
+          data: { isActive: false },
+        });
+        assert.equal(
+          (await request("/api/permissions", system.id, "POST", body)).status,
+          409,
+        );
+      } finally {
+        await db.permission.deleteMany({ where: { code } });
+      }
+    },
+  );
+
+  await context.test(
+    "role permission management US4 partial metadata never overwrites concurrent state",
+    async () => {
+      const code = "rp_" + randomUUID().replaceAll("-", "") + ".metadata";
+      const p = await db.permission.create({
+        data: { code, name: "Original", module: "rp", action: "metadata" },
+      });
+      await db.rolePermission.create({
+        data: { roleId: staffA.roleId, permissionId: p.id },
+      });
+      const principal = await loadPrincipal(system.id, db);
+      const repo = createPermissionRepository(() => Promise.resolve(db));
+      const service = createPermissionService(() => Promise.resolve(db), repo);
+      const grants = await db.rolePermission.findMany({
+        where: { permissionId: p.id },
+      });
+      const signal = () => {
+        let release!: () => void;
+        const promise = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return { promise, release };
+      };
+      try {
+        for (const metadataFirst of [true, false]) {
+          await db.permission.update({
+            where: { id: p.id },
+            data: { name: "Original", description: null, isActive: true },
+          });
+          const entered = signal(),
+            resume = signal();
+          let locks = 0;
+          const paused = createPermissionService(() => Promise.resolve(db), {
+            ...repo,
+            async lockSystem(...args) {
+              if (++locks === 1) {
+                entered.release();
+                await resume.promise;
+              }
+              return repo.lockSystem(...args);
+            },
+          });
+          const pending = Promise.allSettled([
+            metadataFirst
+              ? paused.setPermissionState(principal, p.id, { isActive: false })
+              : paused.updatePermission(principal, p.id, {
+                  name: "Updated",
+                  description: "Nội dung",
+                }),
+          ]);
+          try {
+            await entered.promise;
+            if (metadataFirst)
+              await service.updatePermission(principal, p.id, {
+                name: "Updated",
+                description: "Nội dung",
+              });
+            else
+              await service.setPermissionState(principal, p.id, {
+                isActive: false,
+              });
+          } finally {
+            resume.release();
+          }
+          assert.equal((await pending)[0].status, "fulfilled");
+          const saved = await db.permission.findUniqueOrThrow({
+            where: { id: p.id },
+          });
+          assert.equal(saved.name, "Updated");
+          assert.equal(saved.description, "Nội dung");
+          assert.equal(saved.isActive, false);
+          assert.equal(saved.code, code);
+          assert(locks >= 2);
+        }
+        const before = await db.permission.findUniqueOrThrow({
+          where: { id: p.id },
+        });
+        const faulty = createPermissionService(() => Promise.resolve(db), {
+          ...repo,
+          async updateMetadata(...args) {
+            await repo.updateMetadata(...args);
+            throw new Error("test metadata rollback");
+          },
+        });
+        await assert.rejects(
+          faulty.updatePermission(principal, p.id, { description: null }),
+          (e: unknown) => e instanceof HttpError && e.statusCode === 503,
+        );
+        assert.deepEqual(
+          await db.permission.findUniqueOrThrow({ where: { id: p.id } }),
+          before,
+        );
+        assert.deepEqual(
+          await db.rolePermission.findMany({ where: { permissionId: p.id } }),
+          grants,
+        );
+        assert.equal(
+          (
+            await request("/api/permissions/" + p.id, system.id, "PATCH", {
+              description: null,
+            })
+          ).status,
+          200,
+        );
+        assert.equal(
+          (
+            await request("/api/permissions/" + p.id, system.id, "PATCH", {
+              code: "forged.code",
+            })
+          ).status,
+          400,
+        );
+        const detail = await request(
+          "/api/roles/" + staffA.roleId + "/permissions",
+          system.id,
+        );
+        const dto = record(detail.body).data as {
+          permissions: { id: string; name: string; isActive: boolean }[];
+        };
+        assert.equal(
+          dto.permissions.find((row) => row.id === p.id)?.name,
+          "Updated",
+        );
+        assert.equal(
+          dto.permissions.find((row) => row.id === p.id)?.isActive,
+          false,
+        );
+      } finally {
+        await db.rolePermission.deleteMany({ where: { permissionId: p.id } });
+        await db.permission.delete({ where: { id: p.id } });
+      }
+    },
+  );
+
+  await context.test(
+    "permission name search filters before pagination and treats wildcard characters literally",
+    async () => {
+      const prefix = "ps_" + randomUUID().replaceAll("-", "");
+      const input = [
+        { code: prefix + ".a", name: prefix + " Xem quyền alpha" },
+        {
+          code: prefix + ".b",
+          name: prefix + " xEM QUYỀN beta",
+          isActive: false,
+        },
+        { code: prefix + ".c", name: prefix + " Xem quyền gamma" },
+        {
+          code: prefix + ".codeonly",
+          name: "Tên không khớp",
+          description: prefix + " Xem quyền",
+        },
+        { code: prefix + ".percent", name: prefix + " percent%literal" },
+        { code: prefix + ".percent_decoy", name: prefix + " percentXliteral" },
+        { code: prefix + ".under", name: prefix + " under_score" },
+        { code: prefix + ".under_decoy", name: prefix + " underXscore" },
+        { code: prefix + ".slash", name: prefix + " slash\\path" },
+        { code: prefix + ".slash_decoy", name: prefix + " slashpath" },
+      ];
+      const created: { id: string }[] = [];
+      try {
+        for (const data of input)
+          created.push(
+            await db.permission.create({
+              data: { module: prefix, action: "search", ...data },
+            }),
+          );
+        const search = "  " + prefix.toUpperCase() + " XEM QUYỀN  ";
+        for (let page = 1; page <= 4; page++) {
+          const response = await request(
+            "/api/permissions?search=" +
+              encodeURIComponent(search) +
+              "&limit=1&page=" +
+              page,
+            system.id,
+          );
+          assert.equal(response.status, 200);
+          assert.deepEqual(
+            rows(response.body).map((row) => row.id),
+            page <= 3 ? [created[page - 1].id] : [],
+          );
+          assert.equal(
+            record(record(record(response.body).data).pagination).hasNext,
+            page < 3,
+          );
+          if (page === 2) assert.equal(rows(response.body)[0].isActive, false);
+        }
+        const allMatches = await request(
+          "/api/permissions?search=" + encodeURIComponent(prefix),
+          system.id,
+        );
+        assert.equal(rows(allMatches.body).length, 9);
+        assert(
+          !rows(allMatches.body).some((row) => row.id === created[3].id),
+          "code and description alone do not match",
+        );
+        for (const [suffix, index] of [
+          ["percent%literal", 4],
+          ["under_score", 6],
+          ["slash\\path", 8],
+        ] as const) {
+          const response = await request(
+            "/api/permissions?search=" +
+              encodeURIComponent(prefix + " " + suffix),
+            system.id,
+          );
+          assert.equal(response.status, 200);
+          assert.deepEqual(
+            rows(response.body).map((row) => row.id),
+            [created[index].id],
+          );
+        }
+        const none = await request(
+          "/api/permissions?search=" + encodeURIComponent(prefix + " missing"),
+          system.id,
+        );
+        assert.deepEqual(rows(none.body), []);
+        const baseline = await request("/api/permissions", system.id);
+        const blank = await request(
+          "/api/permissions?search=%20%20",
+          system.id,
+        );
+        assert.deepEqual(record(blank.body).data, record(baseline.body).data);
+        assert.equal(
+          (await request("/api/permissions?search=a&search=b", system.id))
+            .status,
+          400,
+        );
+        assert.equal(
+          (await request("/api/roles?search=name", system.id)).status,
+          400,
+        );
+        assert.equal(
+          (await request("/api/permissions?search=name", adminA.id)).status,
+          403,
+        );
+      } finally {
+        await db.permission.deleteMany({
+          where: { id: { in: created.map((row) => row.id) } },
+        });
+      }
+    },
+  );
+
+  await context.test(
+    "inactive permission API pages five disabled permissions without mixing active entries",
+    async () => {
+      const prefix = "ip_" + randomUUID().replaceAll("-", "");
+      const baseline = await db.permission.findMany({
+        where: { isActive: false },
+        select: { id: true, code: true },
+      });
+      const created: { id: string; code: string; isActive: boolean }[] = [];
+      try {
+        for (let i = 0; i < 8; i++)
+          created.push(
+            await db.permission.create({
+              data: {
+                code: prefix + ".p_" + i,
+                name: "Quyền chưa bật " + i,
+                module: prefix,
+                action: "test",
+                isActive: i === 7,
+              },
+            }),
+          );
+        const expected = [
+          ...baseline,
+          ...created.filter((row) => !row.isActive),
+        ]
+          .sort((a, b) => a.code.localeCompare(b.code))
+          .map((row) => row.id);
+        const found: string[] = [];
+        for (let page = 1; page <= Math.ceil(expected.length / 5) + 1; page++) {
+          const response = await request(
+            "/api/permissions/inactive?page=" + page,
+            system.id,
+          );
+          assert.equal(response.status, 200);
+          const items = rows(response.body);
+          assert(items.every((row) => row.isActive === false));
+          assert.deepEqual(
+            items.map((row) => row.id),
+            expected.slice((page - 1) * 5, page * 5),
+          );
+          found.push(...items.map((row) => String(row.id)));
+          assert.deepEqual(
+            record(record(record(response.body).data).pagination),
+            { page, limit: 5, hasNext: page * 5 < expected.length },
+          );
+        }
+        assert.equal(new Set(found).size, expected.length);
+        assert(!found.includes(created[7].id));
+        assert.equal(
+          (await request("/api/permissions/inactive", system.id)).status,
+          200,
+        );
+        assert.equal(
+          (await request("/api/permissions/inactive?limit=20", system.id))
+            .status,
+          400,
+        );
+        assert.equal(
+          (await request("/api/permissions/inactive", adminA.id)).status,
+          403,
+        );
+      } finally {
+        await db.permission.deleteMany({
+          where: { id: { in: created.map((row) => row.id) } },
+        });
+      }
+    },
+  );
+
+  await context.test(
     "catalog create is System-only and own System role cannot be edited",
     async () => {
       const body = {
@@ -5734,6 +8937,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   await context.test(
     "organization admins cannot edit global grants, grant outside a role or affect another organization",
     async () => {
+      const denialBaseline = await db.userPermissionDenial.count();
       assert.equal(
         (await request(roleUrl, adminA.id, "PUT", { permissionIds: [] }))
           .status,
@@ -5774,12 +8978,13 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         where: { id: staffB.id },
         data: { status: "ACTIVE" },
       });
-      assert.equal(await db.userPermissionDenial.count(), 0);
+      assert.equal(await db.userPermissionDenial.count(), denialBaseline);
     },
   );
   await context.test(
     "concurrent disable is idempotent, affects the next request, and enable removes the denial",
     async () => {
+      const denialBaseline = await db.userPermissionDenial.count();
       const results = await Promise.all([
         request(denyA, adminA.id, "PUT"),
         request(denyA, adminA.id, "PUT"),
@@ -5795,7 +9000,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       assert.equal((await request("/api/menus", staffB.id)).status, 200);
       assert.equal((await request(denyA, adminA.id, "DELETE")).status, 200);
       assert.equal((await request(denyA, adminA.id, "DELETE")).status, 200);
-      assert.equal(await db.userPermissionDenial.count(), 0);
+      assert.equal(await db.userPermissionDenial.count(), denialBaseline);
       assert.equal((await request("/api/menus", staffA.id)).status, 200);
     },
   );
@@ -6683,6 +9888,1334 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       } finally {
         await sql.query("ROLLBACK");
         await sql.end();
+      }
+    },
+  );
+  await context.test(
+    "supplier-school endpoints enforce real-login default view, OR view/manage, admin-only role and live session recheck for JSON and binary",
+    async () => {
+      const localStore = new MemoryStore();
+      const srv = createApp(
+        createApiRateLimiter(localStore, { windowMs: 60_000, limit: 5000 }),
+        undefined,
+        {
+          session: sessionService,
+          signup: createSignupService(undefined, verification),
+          emailVerification: verification,
+          password: passwords,
+          onboarding: createOnboardingService(getPrisma, testDocumentStorage),
+        },
+      ).listen(0, "127.0.0.1");
+      await once(srv, "listening");
+      const addr = srv.address();
+      assert(addr && typeof addr !== "string");
+      const base = `http://127.0.0.1:${addr.port}/api`;
+      const loginReal = async (email: string) => {
+        const res = await fetch(base + "/auth/login", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-CSRF-Protection": "1",
+          },
+          body: JSON.stringify({ identifier: email, password }),
+        });
+        assert.equal(res.status, 200);
+        const cookie = res.headers
+          .getSetCookie()
+          .map((c) => c.split(";")[0])
+          .join("; ");
+        const refresh = parseCookie(cookie)[REFRESH_COOKIE];
+        assert(refresh);
+        refreshTokens.push(refresh);
+        return cookie;
+      };
+      try {
+        const sup1 = await db.supplier.create({
+          data: { name: "AuthZ Supplier School 1" },
+        });
+        const sup2 = await db.supplier.create({
+          data: { name: "AuthZ Supplier School 2" },
+        });
+        const sup3 = await db.supplier.create({
+          data: { name: "AuthZ Supplier School 3" },
+        });
+        const sch1 = await db.school.create({
+          data: { name: "AuthZ Linked School 1", code: "AZ-SCH-1" },
+        });
+        const rel1 = await db.schoolSupplierRelationship.create({
+          data: { schoolId: sch1.id, supplierId: sup1.id, status: "ACTIVE" },
+        });
+        const rel2 = await db.schoolSupplierRelationship.create({
+          data: { schoolId: sch1.id, supplierId: sup2.id, status: "ACTIVE" },
+        });
+        const pdfBytes = Buffer.from("%PDF-1.4\nAuthZ check bytes");
+        const c1 = await db.supplierContract.create({
+          data: {
+            schoolId: sch1.id,
+            supplierId: sup1.id,
+            relationshipId: rel1.id,
+            number: "AZ-HD-1",
+            status: "ACTIVE",
+            signedOn: new Date("2026-11-01"),
+            startsOn: new Date("2026-11-01"),
+            endsOn: new Date("2026-12-31"),
+            snapshot: {},
+            createdByUserId: system.id,
+            activatedByUserId: system.id,
+            activatedAt: new Date("2026-11-01T08:00:00Z"),
+          },
+        });
+        const d1 = await db.supplierContractDocument.create({
+          data: {
+            contractId: c1.id,
+            kind: "SIGNED_CONTRACT",
+            fileName: "az-1.pdf",
+            mimeType: "application/pdf",
+            size: pdfBytes.length,
+            sha256: "a".repeat(64),
+            content: pdfBytes,
+            uploadedByUserId: system.id,
+          },
+        });
+        const c2 = await db.supplierContract.create({
+          data: {
+            schoolId: sch1.id,
+            supplierId: sup2.id,
+            relationshipId: rel2.id,
+            number: "AZ-HD-2",
+            status: "ACTIVE",
+            signedOn: new Date("2026-11-01"),
+            startsOn: new Date("2026-11-01"),
+            endsOn: new Date("2026-12-31"),
+            snapshot: {},
+            createdByUserId: system.id,
+            activatedByUserId: system.id,
+            activatedAt: new Date("2026-11-01T08:00:00Z"),
+          },
+        });
+        const d2 = await db.supplierContractDocument.create({
+          data: {
+            contractId: c2.id,
+            kind: "SIGNED_CONTRACT",
+            fileName: "az-2.pdf",
+            mimeType: "application/pdf",
+            size: pdfBytes.length,
+            sha256: "b".repeat(64),
+            content: pdfBytes,
+            uploadedByUserId: system.id,
+          },
+        });
+
+        const admin1 = await user("INGREDIENT_SUPPLIER_ADMIN", {
+          supplierId: sup1.id,
+        });
+        const admin2 = await user("INGREDIENT_SUPPLIER_ADMIN", {
+          supplierId: sup2.id,
+        });
+        const staffSup1 = await user("INGREDIENT_SUPPLIER_STAFF", {
+          supplierId: sup1.id,
+        });
+        const cookieAdmin1 = await loginReal(admin1.email);
+        const cookieAdmin2 = await loginReal(admin2.email);
+        const cookieStaff1 = await loginReal(staffSup1.email);
+        const cookieSystem = await loginReal(system.email);
+
+        const viewPerm = await permission("supplier_relationship.view");
+        const managePerm = await permission("supplier_relationship.manage");
+        const supAdminRoleId = admin1.roleId;
+        const supStaffRoleId = staffSup1.roleId;
+
+        const callCookie = (urlPath: string, cookie: string) =>
+          fetch(base + urlPath, { headers: { Cookie: cookie } });
+
+        // 1. Fresh admin default view grant works on JSON and binary
+        assert.equal(
+          (await callCookie("/supplier-schools", cookieAdmin1)).status,
+          200,
+        );
+        assert.equal(
+          (await callCookie(`/supplier-schools/${sch1.id}`, cookieAdmin1))
+            .status,
+          200,
+        );
+        assert.equal(
+          (
+            await callCookie(
+              `/supplier-schools/${sch1.id}/contracts`,
+              cookieAdmin1,
+            )
+          ).status,
+          200,
+        );
+        assert.equal(
+          (
+            await callCookie(
+              `/supplier-schools/${sch1.id}/contracts/${c1.id}`,
+              cookieAdmin1,
+            )
+          ).status,
+          200,
+        );
+        assert.equal(
+          (
+            await callCookie(
+              `/supplier-schools/${sch1.id}/contracts/${c1.id}/documents/${d1.id}`,
+              cookieAdmin1,
+            )
+          ).status,
+          200,
+        );
+
+        // 2. Staff and SYSTEM_ADMIN get 403 even when granted both view & manage permissions
+        await db.rolePermission.createMany({
+          data: [
+            { roleId: supStaffRoleId, permissionId: viewPerm.id },
+            { roleId: supStaffRoleId, permissionId: managePerm.id },
+            { roleId: system.roleId, permissionId: viewPerm.id },
+            { roleId: system.roleId, permissionId: managePerm.id },
+          ],
+          skipDuplicates: true,
+        });
+        try {
+          for (const actorCookie of [cookieStaff1, cookieSystem]) {
+            assert.equal(
+              (await callCookie("/supplier-schools", actorCookie)).status,
+              403,
+            );
+            assert.equal(
+              (
+                await callCookie(
+                  `/supplier-schools/${sch1.id}/contracts/${c1.id}/documents/${d1.id}`,
+                  actorCookie,
+                )
+              ).status,
+              403,
+            );
+          }
+
+          // 3. OR view/manage + current-org denial + inactive permission on SAME session (cookieAdmin2)
+          await db.userPermissionDenial.create({
+            data: {
+              userId: admin2.id,
+              permissionId: viewPerm.id,
+              supplierId: sup2.id,
+              disabledByUserId: system.id,
+            },
+          });
+          assert.equal(
+            (await callCookie("/supplier-schools", cookieAdmin2)).status,
+            403,
+          );
+          assert.equal(
+            (
+              await callCookie(
+                `/supplier-schools/${sch1.id}/contracts/${c2.id}/documents/${d2.id}`,
+                cookieAdmin2,
+              )
+            ).status,
+            403,
+          );
+
+          // Grant manage to INGREDIENT_SUPPLIER_ADMIN -> admin2 with view denied can STILL read via manage OR
+          await db.rolePermission.create({
+            data: { roleId: supAdminRoleId, permissionId: managePerm.id },
+          });
+          assert.equal(
+            (await callCookie("/supplier-schools", cookieAdmin2)).status,
+            200,
+          );
+          assert.equal(
+            (
+              await callCookie(
+                `/supplier-schools/${sch1.id}/contracts/${c2.id}/documents/${d2.id}`,
+                cookieAdmin2,
+              )
+            ).status,
+            200,
+          );
+
+          // Inactive manage permission while view is denied -> 403 for JSON and binary
+          await db.permission.update({
+            where: { id: managePerm.id },
+            data: { isActive: false },
+          });
+          assert.equal(
+            (await callCookie("/supplier-schools", cookieAdmin2)).status,
+            403,
+          );
+          assert.equal(
+            (
+              await callCookie(
+                `/supplier-schools/${sch1.id}/contracts/${c2.id}/documents/${d2.id}`,
+                cookieAdmin2,
+              )
+            ).status,
+            403,
+          );
+          await db.permission.update({
+            where: { id: managePerm.id },
+            data: { isActive: true },
+          });
+
+          // Denying both view and manage -> 403
+          await db.userPermissionDenial.create({
+            data: {
+              userId: admin2.id,
+              permissionId: managePerm.id,
+              supplierId: sup2.id,
+              disabledByUserId: system.id,
+            },
+          });
+          assert.equal(
+            (await callCookie("/supplier-schools", cookieAdmin2)).status,
+            403,
+          );
+
+          // 4. Same live session (cookieAdmin1) observes lock, supplier change, role change (JSON + binary)
+          await db.user.update({
+            where: { id: admin1.id },
+            data: { status: "LOCKED" },
+          });
+          assert.equal(
+            (await callCookie("/supplier-schools", cookieAdmin1)).status,
+            403,
+          );
+          assert.equal(
+            (
+              await callCookie(
+                `/supplier-schools/${sch1.id}/contracts/${c1.id}/documents/${d1.id}`,
+                cookieAdmin1,
+              )
+            ).status,
+            403,
+          );
+          await db.user.update({
+            where: { id: admin1.id },
+            data: { status: "ACTIVE" },
+          });
+
+          // Move admin1 to sup3 (unlinked) -> same session loses access to sup1's school/file
+          await db.user.update({
+            where: { id: admin1.id },
+            data: { supplierId: sup3.id },
+          });
+          const movedList = await callCookie("/supplier-schools", cookieAdmin1);
+          assert.equal(movedList.status, 200);
+          assert.deepEqual(
+            ((await movedList.json()) as { data: { items: unknown[] } }).data
+              .items,
+            [],
+          );
+          assert.equal(
+            (await callCookie(`/supplier-schools/${sch1.id}`, cookieAdmin1))
+              .status,
+            404,
+          );
+          assert.equal(
+            (
+              await callCookie(
+                `/supplier-schools/${sch1.id}/contracts/${c1.id}/documents/${d1.id}`,
+                cookieAdmin1,
+              )
+            ).status,
+            404,
+          );
+
+          // Move back to sup1 and downgrade role to INGREDIENT_SUPPLIER_STAFF -> 403 JSON & binary
+          await db.user.update({
+            where: { id: admin1.id },
+            data: {
+              supplierId: sup1.id,
+              roleId: supStaffRoleId,
+              roleCode: "INGREDIENT_SUPPLIER_STAFF",
+            },
+          });
+          assert.equal(
+            (await callCookie("/supplier-schools", cookieAdmin1)).status,
+            403,
+          );
+          assert.equal(
+            (
+              await callCookie(
+                `/supplier-schools/${sch1.id}/contracts/${c1.id}/documents/${d1.id}`,
+                cookieAdmin1,
+              )
+            ).status,
+            403,
+          );
+        } finally {
+          await db.user.update({
+            where: { id: admin1.id },
+            data: {
+              supplierId: sup1.id,
+              roleId: supAdminRoleId,
+              roleCode: "INGREDIENT_SUPPLIER_ADMIN",
+              status: "ACTIVE",
+            },
+          });
+          await db.permission.update({
+            where: { id: managePerm.id },
+            data: { isActive: true },
+          });
+          await db.userPermissionDenial.deleteMany({
+            where: { userId: admin2.id },
+          });
+          await db.rolePermission.deleteMany({
+            where: {
+              OR: [
+                { roleId: supAdminRoleId, permissionId: managePerm.id },
+                { roleId: supStaffRoleId, permissionId: viewPerm.id },
+                { roleId: supStaffRoleId, permissionId: managePerm.id },
+                { roleId: system.roleId, permissionId: managePerm.id },
+              ],
+            },
+          });
+        }
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          srv.close((err) => (err ? reject(err) : resolve()));
+          srv.closeAllConnections();
+        });
+        localStore.shutdown();
+      }
+    },
+  );
+
+  await context.test(
+    "ingredient-quality-feedback POST response enforces Serializable single winner and deterministic barrier interleavings with denial, status lock, and role grant replacement",
+    async () => {
+      const iqfRepo = createIngredientQualityFeedbackRepository();
+      const sup1 = await db.supplier.create({
+        data: { name: "IQF Race Supplier 1" },
+      });
+      const sch1 = await db.school.create({
+        data: { name: "IQF Race School 1", code: "IQF-RACE" },
+      });
+      const raceAdmin = await user("INGREDIENT_SUPPLIER_ADMIN", {
+        supplierId: sup1.id,
+      });
+      const raceStaff1 = await user("INGREDIENT_SUPPLIER_STAFF", {
+        supplierId: sup1.id,
+      });
+      const raceStaff2 = await user("INGREDIENT_SUPPLIER_STAFF", {
+        supplierId: sup1.id,
+      });
+      const raceSubmitter = await user("SCHOOL_KITCHEN_STAFF", {
+        schoolId: sch1.id,
+      });
+      const del1 = await db.delivery.create({
+        data: {
+          deliveryNo: `FP-DE-R1-${randomUUID().slice(0, 6)}`,
+          schoolId: sch1.id,
+          supplierId: sup1.id,
+          creationMode: "STANDALONE",
+          creationKey: randomUUID(),
+          creationFingerprint: "a".repeat(64),
+          createdByUserId: raceAdmin.id,
+          status: "RECEIVED",
+          receivedAt: new Date("2026-09-10T08:00:00Z"),
+          receivedByUserId: raceSubmitter.id,
+        },
+      });
+      const mkFeedback = async (title: string) =>
+        db.$transaction(async (tx) => {
+          const seq = await iqfRepo.nextComplaintCodeSequence(tx);
+          return tx.ingredientQualityFeedback.create({
+            data: {
+              complaintCode: formatComplaintCode(seq),
+              deliveryId: del1.id,
+              submittedByUserId: raceSubmitter.id,
+              title,
+              description: `${title} description`,
+            },
+          });
+        });
+
+      const principalAdmin = await loadPrincipal(raceAdmin.id, db);
+      const principalStaff1 = await loadPrincipal(raceStaff1.id, db);
+      const principalStaff2 = await loadPrincipal(raceStaff2.id, db);
+      const staffRepo = createSupplierStaffRepository();
+      const staffService = createSupplierStaffService(staffRepo, () =>
+        Promise.resolve(db),
+      );
+      const permService = createPermissionService(() => Promise.resolve(db));
+      const permissionSystem = await loadPrincipal(system.id, db);
+      const respondPerm = await permission(
+        "ingredient_quality_feedback.respond",
+      );
+
+      // 1. Concurrent valid responders (admin vs staff1) on same SUBMITTED complaint -> 1 fulfilled, 1 409 conflict
+      const fRace = await mkFeedback("Concurrent responders");
+      {
+        const barrier = createBarrier(2);
+        const counts = [0, 0];
+        const services = counts.map((_, idx) =>
+          createIngredientQualityFeedbackService(
+            {
+              ...iqfRepo,
+              async lockResponseContext(...args) {
+                counts[idx] += 1;
+                if (counts[idx] === 1) await barrier.wait();
+                return iqfRepo.lockResponseContext(...args);
+              },
+            },
+            () => Promise.resolve(db),
+          ),
+        );
+        const outcomes = await Promise.allSettled([
+          services[0].respond(
+            { feedbackId: fRace.id },
+            { supplierResponse: "Phản hồi từ Admin" },
+            principalAdmin,
+          ),
+          services[1].respond(
+            { feedbackId: fRace.id },
+            { supplierResponse: "Phản hồi từ Staff" },
+            principalStaff1,
+          ),
+        ]);
+        const fulfilled = outcomes.filter((o) => o.status === "fulfilled");
+        const rejected = outcomes.filter((o) => o.status === "rejected");
+        assert.equal(fulfilled.length, 1);
+        assert.equal(rejected.length, 1);
+        assert(
+          rejected[0].reason instanceof HttpError &&
+            rejected[0].reason.statusCode === 409,
+        );
+        const winner = fulfilled[0].value;
+        assert.equal(winner.id, fRace.id);
+        assert.equal(winner.complaintCode, fRace.complaintCode);
+
+        // Repeated POST preserves exact winner tuple and code
+        await assert.rejects(
+          () =>
+            createIngredientQualityFeedbackService(iqfRepo, () =>
+              Promise.resolve(db),
+            ).respond(
+              { feedbackId: fRace.id },
+              { supplierResponse: "Thử ghi đè sau khi đã thắng" },
+              principalAdmin,
+            ),
+          (err: unknown) => err instanceof HttpError && err.statusCode === 409,
+        );
+        const saved = await db.ingredientQualityFeedback.findUniqueOrThrow({
+          where: { id: fRace.id },
+        });
+        assert.equal(saved.status, "RESPONDED");
+        assert.equal(saved.supplierResponse, winner.supplierResponse);
+        assert.equal(saved.respondedByUserId, winner.respondedBy?.id);
+        assert.equal(saved.complaintCode, fRace.complaintCode);
+      }
+
+      // 2a. Order 1: Admin denial / status lock / role replacement commits BEFORE response acquires lock -> retries & fails 403
+      const runCommitFirstRace = async (
+        label: string,
+        feedbackId: string,
+        actorPrincipal: Awaited<ReturnType<typeof loadPrincipal>>,
+        commitAdminAction: () => Promise<unknown>,
+        restoreAction: () => Promise<unknown>,
+      ) => {
+        let txRuns = 0;
+        let attempts = 0;
+        const trackedDb = {
+          $transaction(
+            op: Parameters<typeof db.$transaction>[0],
+            opts?: Parameters<typeof db.$transaction>[1],
+          ) {
+            txRuns++;
+            return typeof op === "function"
+              ? db.$transaction(op, opts)
+              : db.$transaction(op);
+          },
+        } as unknown as typeof db;
+        const respEntered = createBarrier(2);
+        const adminDone = createBarrier(2);
+        const rSvc = createIngredientQualityFeedbackService(
+          {
+            ...iqfRepo,
+            async findResponseMetadata(...args) {
+              attempts++;
+              const meta = await iqfRepo.findResponseMetadata(...args);
+              if (attempts === 1) {
+                await respEntered.wait();
+                await adminDone.wait();
+              }
+              return meta;
+            },
+          },
+          () => Promise.resolve(trackedDb),
+        );
+        try {
+          const respPromise = rSvc.respond(
+            { feedbackId },
+            { supplierResponse: `Attempt ${label}` },
+            actorPrincipal,
+          );
+          await respEntered.wait();
+          await commitAdminAction();
+          await adminDone.wait();
+          await assert.rejects(
+            () => respPromise,
+            (err: unknown) =>
+              err instanceof HttpError && err.statusCode === 403,
+            `${label} must refuse with 403 after retry, not 503`,
+          );
+          assert.equal(
+            attempts,
+            1,
+            `${label} retry should fail in initial readActor before metadata`,
+          );
+          assert(
+            txRuns >= 2,
+            `${label} should retry stale snapshot instead of failing 503`,
+          );
+          const row = await db.ingredientQualityFeedback.findUniqueOrThrow({
+            where: { id: feedbackId },
+          });
+          assert.equal(row.status, "SUBMITTED");
+          assert.equal(row.supplierResponse, null);
+        } finally {
+          await restoreAction();
+        }
+      };
+
+      const fDenial1 = await mkFeedback("Denial commit first");
+      await runCommitFirstRace(
+        "denial-first",
+        fDenial1.id,
+        principalStaff1,
+        () =>
+          staffService.togglePermission(
+            { userId: raceStaff1.id, permissionId: respondPerm.id },
+            true,
+            principalAdmin,
+          ),
+        () =>
+          staffService.togglePermission(
+            { userId: raceStaff1.id, permissionId: respondPerm.id },
+            false,
+            principalAdmin,
+          ),
+      );
+
+      const fLock1 = await mkFeedback("Status lock commit first");
+      await runCommitFirstRace(
+        "status-lock-first",
+        fLock1.id,
+        principalStaff1,
+        () =>
+          staffService.changeStatus(
+            { userId: raceStaff1.id },
+            { status: "LOCKED" },
+            principalAdmin,
+          ),
+        () =>
+          staffService.changeStatus(
+            { userId: raceStaff1.id },
+            { status: "ACTIVE" },
+            principalAdmin,
+          ),
+      );
+
+      const originalStaffGrants = (
+        await db.rolePermission.findMany({
+          where: { roleId: raceStaff1.roleId },
+          select: { permissionId: true },
+        })
+      ).map((g) => g.permissionId);
+      const fRole1 = await mkFeedback("Role grant replacement commit first");
+      await runCommitFirstRace(
+        "role-replace-first",
+        fRole1.id,
+        principalStaff2,
+        () =>
+          permService.replaceRole(
+            permissionSystem,
+            raceStaff1.roleId,
+            originalStaffGrants.filter((id) => id !== respondPerm.id),
+          ),
+        () =>
+          permService.replaceRole(
+            permissionSystem,
+            raceStaff1.roleId,
+            originalStaffGrants,
+          ),
+      );
+
+      // 2b. Order 2: Response acquires locks BEFORE admin action -> response commits 200 cleanly, then admin waits and commits -> next request gets 403
+      const runResponseLocksFirstRace = async (
+        label: string,
+        feedbackId: string,
+        followUpFeedbackId: string,
+        actorPrincipal: Awaited<ReturnType<typeof loadPrincipal>>,
+        adminAction: (beforeLock: () => Promise<void>) => Promise<unknown>,
+        restoreAction: () => Promise<unknown>,
+      ) => {
+        const locksHeld = createBarrier(2);
+        const adminReady = createBarrier(2);
+        let respLocksCount = 0;
+        const rSvc = createIngredientQualityFeedbackService(
+          {
+            ...iqfRepo,
+            async lockResponseContext(...args) {
+              await iqfRepo.lockResponseContext(...args);
+              respLocksCount++;
+              if (respLocksCount === 1) {
+                await locksHeld.wait();
+                await adminReady.wait();
+              }
+            },
+          },
+          () => Promise.resolve(db),
+        );
+        try {
+          const respPromise = rSvc.respond(
+            { feedbackId },
+            { supplierResponse: `Lock-first ${label}` },
+            actorPrincipal,
+          );
+          await locksHeld.wait();
+          const adminPromise = adminAction(async () => {
+            await adminReady.wait();
+          });
+          const [respResult] = await Promise.all([respPromise, adminPromise]);
+          assert.equal(respResult.status, "RESPONDED");
+          await assert.rejects(
+            () =>
+              createIngredientQualityFeedbackService(iqfRepo, () =>
+                Promise.resolve(db),
+              ).respond(
+                { feedbackId: followUpFeedbackId },
+                { supplierResponse: `Next op after ${label}` },
+                actorPrincipal,
+              ),
+            (err: unknown) =>
+              err instanceof HttpError && err.statusCode === 403,
+          );
+        } finally {
+          await restoreAction();
+        }
+      };
+
+      const fDenial2a = await mkFeedback("Denial response lock first");
+      const fDenial2b = await mkFeedback("Denial follow-up");
+      await runResponseLocksFirstRace(
+        "denial-after-lock",
+        fDenial2a.id,
+        fDenial2b.id,
+        principalStaff1,
+        async (beforeLock) => {
+          const hookedAdmin = createSupplierStaffService(
+            {
+              ...staffRepo,
+              async lock(...args) {
+                await beforeLock();
+                return staffRepo.lock(...args);
+              },
+            },
+            () => Promise.resolve(db),
+          );
+          return hookedAdmin.togglePermission(
+            { userId: raceStaff1.id, permissionId: respondPerm.id },
+            true,
+            principalAdmin,
+          );
+        },
+        () =>
+          staffService.togglePermission(
+            { userId: raceStaff1.id, permissionId: respondPerm.id },
+            false,
+            principalAdmin,
+          ),
+      );
+
+      const fLock2a = await mkFeedback("Status lock response lock first");
+      const fLock2b = await mkFeedback("Status lock follow-up");
+      await runResponseLocksFirstRace(
+        "status-after-lock",
+        fLock2a.id,
+        fLock2b.id,
+        principalStaff1,
+        async (beforeLock) => {
+          const hookedAdmin = createSupplierStaffService(
+            {
+              ...staffRepo,
+              async lock(...args) {
+                await beforeLock();
+                return staffRepo.lock(...args);
+              },
+            },
+            () => Promise.resolve(db),
+          );
+          return hookedAdmin.changeStatus(
+            { userId: raceStaff1.id },
+            { status: "LOCKED" },
+            principalAdmin,
+          );
+        },
+        () =>
+          staffService.changeStatus(
+            { userId: raceStaff1.id },
+            { status: "ACTIVE" },
+            principalAdmin,
+          ),
+      );
+
+      const fRole2a = await mkFeedback("Role replace response lock first");
+      const fRole2b = await mkFeedback("Role replace follow-up");
+      await runResponseLocksFirstRace(
+        "role-replace-after-lock",
+        fRole2a.id,
+        fRole2b.id,
+        principalStaff2,
+        async (beforeLock) => {
+          let waited = false;
+          return authorizationTransaction(db, async (tx) => {
+            if (!waited) {
+              waited = true;
+              await beforeLock();
+            }
+            await tx.$queryRaw`SELECT id FROM foodprint.roles WHERE id = ${raceStaff1.roleId}::uuid FOR UPDATE`;
+            await tx.rolePermission.deleteMany({
+              where: {
+                roleId: raceStaff1.roleId,
+                permissionId: respondPerm.id,
+              },
+            });
+            await permissionConcurrencyRepository.touchRole(
+              tx,
+              raceStaff1.roleId,
+            );
+          });
+        },
+        () =>
+          permService.replaceRole(
+            permissionSystem,
+            raceStaff1.roleId,
+            originalStaffGrants,
+          ),
+      );
+    },
+  );
+
+  await context.test(
+    "ingredient-quality-feedback real-login dynamic authorization rejects locked/moved/demoted/denied/inactive permissions on live session and never trusts forged token claims",
+    async () => {
+      const localStore = new MemoryStore();
+      const srv = createApp(
+        createApiRateLimiter(localStore, { windowMs: 60_000, limit: 5000 }),
+        undefined,
+        {
+          session: sessionService,
+          signup: createSignupService(undefined, verification),
+          emailVerification: verification,
+          password: passwords,
+          onboarding: createOnboardingService(getPrisma, testDocumentStorage),
+        },
+      ).listen(0, "127.0.0.1");
+      await once(srv, "listening");
+      const addr = srv.address();
+      assert(addr && typeof addr !== "string");
+      const base = `http://127.0.0.1:${addr.port}/api`;
+      const loginReal = async (email: string) => {
+        const res = await fetch(base + "/auth/login", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-CSRF-Protection": "1",
+          },
+          body: JSON.stringify({ identifier: email, password }),
+        });
+        assert.equal(res.status, 200);
+        const cookie = res.headers
+          .getSetCookie()
+          .map((c) => c.split(";")[0])
+          .join("; ");
+        const refresh = parseCookie(cookie)[REFRESH_COOKIE];
+        assert(refresh);
+        refreshTokens.push(refresh);
+        return cookie;
+      };
+      const callApi = (
+        pathUrl: string,
+        cookie: string,
+        method = "GET",
+        body?: unknown,
+      ) =>
+        fetch(base + pathUrl, {
+          method,
+          headers: {
+            Cookie: cookie,
+            ...(method === "GET"
+              ? {}
+              : {
+                  "X-CSRF-Protection": "1",
+                  "Content-Type": "application/json",
+                }),
+          },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        });
+
+      const iqfRepo = createIngredientQualityFeedbackRepository();
+      try {
+        const sup1 = await db.supplier.create({
+          data: { name: "Dyn Auth Sup 1" },
+        });
+        const sup2 = await db.supplier.create({
+          data: { name: "Dyn Auth Sup 2" },
+        });
+        const sch1 = await db.school.create({
+          data: { name: "Dyn Auth School 1", code: "DYN-1" },
+        });
+        const staff1 = await user("INGREDIENT_SUPPLIER_STAFF", {
+          supplierId: sup1.id,
+        });
+        const supAdmin1 = await user("INGREDIENT_SUPPLIER_ADMIN", {
+          supplierId: sup1.id,
+        });
+        const schoolSubmitter = await user("SCHOOL_KITCHEN_STAFF", {
+          schoolId: sch1.id,
+        });
+        const sup2Staff = await user("INGREDIENT_SUPPLIER_STAFF", {
+          supplierId: sup2.id,
+        });
+        const dynUnit = await db.communeFoodSafetyUnit.create({
+          data: {
+            code: `DYN_UNIT_${randomUUID().slice(0, 6)}`,
+            name: "Dyn Auth Unit",
+          },
+        });
+        const authOfficer = await user("COMMUNE_FOOD_SAFETY_OFFICER", {
+          communeFoodSafetyUnitId: dynUnit.id,
+        });
+
+        const del1 = await db.delivery.create({
+          data: {
+            deliveryNo: `FP-DE-DYN-${randomUUID().slice(0, 6)}`,
+            schoolId: sch1.id,
+            supplierId: sup1.id,
+            creationMode: "STANDALONE",
+            creationKey: randomUUID(),
+            creationFingerprint: "9".repeat(64),
+            createdByUserId: supAdmin1.id,
+            status: "RECEIVED",
+            receivedAt: new Date("2026-09-10T08:00:00Z"),
+            receivedByUserId: schoolSubmitter.id,
+          },
+        });
+        const mkFb = async (title: string) =>
+          db.$transaction(async (tx) => {
+            const seq = await iqfRepo.nextComplaintCodeSequence(tx);
+            return tx.ingredientQualityFeedback.create({
+              data: {
+                complaintCode: formatComplaintCode(seq),
+                deliveryId: del1.id,
+                submittedByUserId: schoolSubmitter.id,
+                title,
+                description: "Dynamic auth test",
+              },
+            });
+          });
+        const fb1 = await mkFb("Dynamic feedback 1");
+
+        const cookieStaff1 = await loginReal(staff1.email);
+        const cookieSchool = await loginReal(schoolSubmitter.email);
+        const cookieSystem = await loginReal(system.email);
+        const cookieOfficer = await loginReal(authOfficer.email);
+        const cookieSup2Staff = await loginReal(sup2Staff.email);
+
+        const viewDetailsPerm = await permission(
+          "ingredient_quality_feedback.view_details",
+        );
+        const viewOwnPerm = await permission(
+          "ingredient_quality_feedback.view_own",
+        );
+        const respondPerm = await permission(
+          "ingredient_quality_feedback.respond",
+        );
+        const staffRoleId = staff1.roleId;
+        const origGrants = (
+          await db.rolePermission.findMany({
+            where: { roleId: staffRoleId },
+            select: { permissionId: true },
+          })
+        ).map((g) => g.permissionId);
+
+        try {
+          // Baseline allowed before changes
+          assert.equal(
+            (await callApi("/ingredient-quality-feedback", cookieStaff1))
+              .status,
+            200,
+          );
+          assert.equal(
+            (
+              await callApi(
+                `/ingredient-quality-feedback/${fb1.id}`,
+                cookieStaff1,
+              )
+            ).status,
+            200,
+          );
+
+          // SCHOOL / SYSTEM / AUTHORITY / foreign supplier POST -> 403 or 404 (no leak)
+          assert.equal(
+            (
+              await callApi(
+                `/ingredient-quality-feedback/${fb1.id}/response`,
+                cookieSchool,
+                "POST",
+                { supplierResponse: "School forbidden" },
+              )
+            ).status,
+            403,
+          );
+          assert.equal(
+            (
+              await callApi(
+                `/ingredient-quality-feedback/${fb1.id}/response`,
+                cookieSystem,
+                "POST",
+                { supplierResponse: "System forbidden" },
+              )
+            ).status,
+            403,
+          );
+          assert.equal(
+            (
+              await callApi(
+                `/ingredient-quality-feedback/${fb1.id}/response`,
+                cookieOfficer,
+                "POST",
+                { supplierResponse: "Authority forbidden" },
+              )
+            ).status,
+            403,
+          );
+          assert.equal(
+            (
+              await callApi(
+                `/ingredient-quality-feedback/${fb1.id}/response`,
+                cookieSup2Staff,
+                "POST",
+                { supplierResponse: "Foreign supplier 404" },
+              )
+            ).status,
+            404,
+          );
+
+          // Same live cookie session immediately observes account LOCKED on list/detail/POST
+          await db.user.update({
+            where: { id: staff1.id },
+            data: { status: "LOCKED" },
+          });
+          assert.equal(
+            (await callApi("/ingredient-quality-feedback", cookieStaff1))
+              .status,
+            403,
+          );
+          assert.equal(
+            (
+              await callApi(
+                `/ingredient-quality-feedback/${fb1.id}`,
+                cookieStaff1,
+              )
+            ).status,
+            403,
+          );
+          assert.equal(
+            (
+              await callApi(
+                `/ingredient-quality-feedback/${fb1.id}/response`,
+                cookieStaff1,
+                "POST",
+                { supplierResponse: "Locked account" },
+              )
+            ).status,
+            403,
+          );
+          await db.user.update({
+            where: { id: staff1.id },
+            data: { status: "ACTIVE" },
+          });
+
+          // Move supplierId on live session -> list empty, detail/POST 404 (foreign scope)
+          await db.user.update({
+            where: { id: staff1.id },
+            data: { supplierId: sup2.id },
+          });
+          const movedList = await callApi(
+            "/ingredient-quality-feedback",
+            cookieStaff1,
+          );
+          assert.equal(movedList.status, 200);
+          assert.deepEqual(
+            ((await movedList.json()) as { data: { items: unknown[] } }).data
+              .items,
+            [],
+          );
+          assert.equal(
+            (
+              await callApi(
+                `/ingredient-quality-feedback/${fb1.id}`,
+                cookieStaff1,
+              )
+            ).status,
+            404,
+          );
+          assert.equal(
+            (
+              await callApi(
+                `/ingredient-quality-feedback/${fb1.id}/response`,
+                cookieStaff1,
+                "POST",
+                { supplierResponse: "Moved org cannot reply" },
+              )
+            ).status,
+            404,
+          );
+          await db.user.update({
+            where: { id: staff1.id },
+            data: { supplierId: sup1.id },
+          });
+
+          // Change role on live session to non-supplier -> 403 (even forged JWT claim claiming supplier role is ignored!)
+          const schoolRoleRow = await role("SCHOOL_KITCHEN_STAFF");
+          await db.user.update({
+            where: { id: staff1.id },
+            data: {
+              roleId: schoolRoleRow.id,
+              roleCode: schoolRoleRow.code,
+              supplierId: null,
+              schoolId: sch1.id,
+            },
+          });
+          const rawAccess = parseCookie(cookieStaff1)[ACCESS_COOKIE];
+          assert(rawAccess);
+          const payload = verifyToken(rawAccess);
+          const customClaims = Object.fromEntries(
+            Object.entries(payload).filter(
+              ([k]) => !["iss", "aud", "exp", "iat", "nbf"].includes(k),
+            ),
+          );
+          const forgedHeader = {
+            Authorization:
+              "Bearer " +
+              signToken({
+                ...customClaims,
+                role: "INGREDIENT_SUPPLIER_ADMIN",
+                orgType: "SUPPLIER",
+                supplierId: sup1.id,
+              }),
+            "X-CSRF-Protection": "1",
+            "Content-Type": "application/json",
+          };
+          const forgedPost = await fetch(
+            `${base}/ingredient-quality-feedback/${fb1.id}/response`,
+            {
+              method: "POST",
+              headers: forgedHeader,
+              body: JSON.stringify({ supplierResponse: "Forged token" }),
+            },
+          );
+          assert.equal(forgedPost.status, 403);
+          await db.user.update({
+            where: { id: staff1.id },
+            data: {
+              roleId: staffRoleId,
+              roleCode: "INGREDIENT_SUPPLIER_STAFF",
+              supplierId: sup1.id,
+              schoolId: null,
+            },
+          });
+
+          // Denial on respond -> reads 200, POST 403; denial on view_details -> list/detail/POST 403
+          await db.userPermissionDenial.create({
+            data: {
+              userId: staff1.id,
+              permissionId: respondPerm.id,
+              supplierId: sup1.id,
+              disabledByUserId: supAdmin1.id,
+            },
+          });
+          assert.equal(
+            (
+              await callApi(
+                `/ingredient-quality-feedback/${fb1.id}`,
+                cookieStaff1,
+              )
+            ).status,
+            200,
+          );
+          assert.equal(
+            (
+              await callApi(
+                `/ingredient-quality-feedback/${fb1.id}/response`,
+                cookieStaff1,
+                "POST",
+                { supplierResponse: "Respond denied" },
+              )
+            ).status,
+            403,
+          );
+          await db.userPermissionDenial.deleteMany({
+            where: { userId: staff1.id, permissionId: respondPerm.id },
+          });
+
+          await db.userPermissionDenial.create({
+            data: {
+              userId: staff1.id,
+              permissionId: viewDetailsPerm.id,
+              supplierId: sup1.id,
+              disabledByUserId: supAdmin1.id,
+            },
+          });
+          // Even if supplier has view_own only (e.g., via role grant) while view_details is denied -> 403 on list/detail/POST!
+          await db.rolePermission.createMany({
+            data: [{ roleId: staffRoleId, permissionId: viewOwnPerm.id }],
+            skipDuplicates: true,
+          });
+          assert.equal(
+            (await callApi("/ingredient-quality-feedback", cookieStaff1))
+              .status,
+            403,
+          );
+          assert.equal(
+            (
+              await callApi(
+                `/ingredient-quality-feedback/${fb1.id}`,
+                cookieStaff1,
+              )
+            ).status,
+            403,
+          );
+          assert.equal(
+            (
+              await callApi(
+                `/ingredient-quality-feedback/${fb1.id}/response`,
+                cookieStaff1,
+                "POST",
+                { supplierResponse: "Respond only without view_details" },
+              )
+            ).status,
+            403,
+          );
+          await db.rolePermission.deleteMany({
+            where: { roleId: staffRoleId, permissionId: viewOwnPerm.id },
+          });
+          await db.userPermissionDenial.deleteMany({
+            where: { userId: staff1.id },
+          });
+
+          // Inactive permission isActive=false on respond -> POST 403; on view_details -> list/detail/POST 403
+          await db.permission.update({
+            where: { id: respondPerm.id },
+            data: { isActive: false },
+          });
+          assert.equal(
+            (
+              await callApi(
+                `/ingredient-quality-feedback/${fb1.id}/response`,
+                cookieStaff1,
+                "POST",
+                { supplierResponse: "Inactive respond permission" },
+              )
+            ).status,
+            403,
+          );
+          await db.permission.update({
+            where: { id: respondPerm.id },
+            data: { isActive: true },
+          });
+
+          await db.permission.update({
+            where: { id: viewDetailsPerm.id },
+            data: { isActive: false },
+          });
+          assert.equal(
+            (await callApi("/ingredient-quality-feedback", cookieStaff1))
+              .status,
+            403,
+          );
+          assert.equal(
+            (
+              await callApi(
+                `/ingredient-quality-feedback/${fb1.id}`,
+                cookieStaff1,
+              )
+            ).status,
+            403,
+          );
+          assert.equal(
+            (
+              await callApi(
+                `/ingredient-quality-feedback/${fb1.id}/response`,
+                cookieStaff1,
+                "POST",
+                { supplierResponse: "Inactive view_details permission" },
+              )
+            ).status,
+            403,
+          );
+          await db.permission.update({
+            where: { id: viewDetailsPerm.id },
+            data: { isActive: true },
+          });
+
+          // Removed role grant -> 403
+          await db.rolePermission.deleteMany({
+            where: { roleId: staffRoleId, permissionId: respondPerm.id },
+          });
+          assert.equal(
+            (
+              await callApi(
+                `/ingredient-quality-feedback/${fb1.id}/response`,
+                cookieStaff1,
+                "POST",
+                { supplierResponse: "Lost role grant" },
+              )
+            ).status,
+            403,
+          );
+        } finally {
+          await db.permission.update({
+            where: { id: viewDetailsPerm.id },
+            data: { isActive: true },
+          });
+          await db.permission.update({
+            where: { id: respondPerm.id },
+            data: { isActive: true },
+          });
+          await db.userPermissionDenial.deleteMany({
+            where: { userId: staff1.id },
+          });
+          await db.rolePermission.deleteMany({
+            where: { roleId: staffRoleId },
+          });
+          await db.rolePermission.createMany({
+            data: origGrants.map((permissionId) => ({
+              roleId: staffRoleId,
+              permissionId,
+            })),
+            skipDuplicates: true,
+          });
+          await db.user.update({
+            where: { id: staff1.id },
+            data: {
+              roleId: staffRoleId,
+              roleCode: "INGREDIENT_SUPPLIER_STAFF",
+              supplierId: sup1.id,
+              schoolId: null,
+              status: "ACTIVE",
+            },
+          });
+        }
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          srv.close((err) => (err ? reject(err) : resolve()));
+          srv.closeAllConnections();
+        });
+        localStore.shutdown();
       }
     },
   );

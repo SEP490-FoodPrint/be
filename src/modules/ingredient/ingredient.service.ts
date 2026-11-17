@@ -18,7 +18,7 @@ import type {
   IngredientUpdateRequest,
   IngredientQueryRequest,
   IngredientParamsRequest,
-  IngredientHideRequest,
+  IngredientChangeStatusRequest,
   IngredientSingleUploadRequest,
   IngredientMultipleUploadRequest,
 } from "./ingredient.request.dto";
@@ -245,15 +245,25 @@ export function createIngredientService(
         );
       });
     },
-    hide(
+    changeStatus(
       params: IngredientParamsRequest,
-      _input: IngredientHideRequest,
+      input: IngredientChangeStatusRequest,
       principal: AuthPrincipal,
     ) {
       return write(principal, async (tx, access) => {
         await repo.lockTarget(access, params.ingredientId, tx);
-        found(await repo.find(access, params.ingredientId, tx));
-        return dto(found(await repo.hide(access, params.ingredientId, tx)));
+        const current = found(await repo.find(access, params.ingredientId, tx));
+        if (current.status === input.status) return dto(current);
+        return dto(
+          found(
+            await repo.changeStatus(
+              access,
+              params.ingredientId,
+              input.status,
+              tx,
+            ),
+          ),
+        );
       });
     },
   };

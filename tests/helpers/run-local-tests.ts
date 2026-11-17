@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Client } from "pg";
 import {
+  assertOwnedTestDatabaseName,
   localTestControlDatabase,
   localTestDatabaseUrl,
   readLocalTestConfig,
@@ -13,15 +14,19 @@ import {
 } from "./local-test-database";
 
 const root = path.resolve(__dirname, "../..");
-const files = {
-  migrations: "tests/migrations.test.ts",
-  authorization: "tests/authorization.integration.test.ts",
-  lifecycle: "tests/account-lifecycle.integration.test.ts",
-  "supplier-orders": "tests/supplier-order-creation.integration.test.ts",
-};
+export const localTestSuites = {
+  migrations: ["tests/migrations.test.ts"],
+  authorization: [
+    "tests/authorization.integration.test.ts",
+    "tests/supplier-onboarding.integration.test.ts",
+  ],
+  lifecycle: ["tests/account-lifecycle.integration.test.ts"],
+  "supplier-orders": ["tests/supplier-order-creation.integration.test.ts"],
+} as const;
+const files = localTestSuites;
 type Suite = keyof typeof files | "unit";
 
-async function cleanupRun(
+export async function cleanupRun(
   admin: Client,
   manifest: string,
   expectedOwner: string,
@@ -47,26 +52,45 @@ async function cleanupRun(
   );
 }
 
-async function runSuite(
+export async function createRecordedDatabase(
+  admin: Client,
+  name: string,
+  manifest: string,
+) {
+  // Validate before interpolating; never register an unsuccessful CREATE.
+  assertOwnedTestDatabaseName(name);
+  await admin.query(`CREATE DATABASE "${name}"`);
+  recordLocalTestDatabase(name, manifest);
+}
+
+export async function runSuite(
   suite: Suite,
   env: NodeJS.ProcessEnv,
   onChild: (child: ChildProcess | undefined) => void,
+  launch: typeof spawn = spawn,
 ) {
-  const command = suite === "unit" ? "npm" : process.execPath;
-  const args =
+  const commands =
     suite === "unit"
-      ? ["run", "test:unit"]
-      : ["--import", "tsx", "--test", files[suite]];
-  console.log(`Chạy test local: ${suite}`);
-  return new Promise<number>((resolve, reject) => {
-    const child = spawn(command, args, { cwd: root, env, stdio: "inherit" });
-    onChild(child);
-    child.once("error", reject);
-    child.once("close", (code) => {
-      onChild(undefined);
-      resolve(code ?? 1);
+      ? [["run", "test:unit"]]
+      : files[suite].map((file) => ["--import", "tsx", "--test", file]);
+  for (const args of commands) {
+    console.log(`Chạy test local: ${suite} (${args.at(-1)})`);
+    const code = await new Promise<number>((resolve, reject) => {
+      const child = launch(suite === "unit" ? "npm" : process.execPath, args, {
+        cwd: root,
+        env,
+        stdio: "inherit",
+      });
+      onChild(child);
+      child.once("error", reject);
+      child.once("close", (status) => {
+        onChild(undefined);
+        resolve(status ?? 1);
+      });
     });
-  });
+    if (code !== 0) return code;
+  }
+  return 0;
 }
 
 async function main() {
@@ -134,8 +158,7 @@ async function main() {
     );
     manifest = path.join(temporaryDirectory, "created-databases.jsonl");
     const name = "foodprint_migration_test_" + randomUUID().replaceAll("-", "");
-    await admin.query(`CREATE DATABASE "${name}"`);
-    recordLocalTestDatabase(name, manifest);
+    await createRecordedDatabase(admin, name, manifest);
     const target = localTestDatabaseUrl(config, name);
     const env: NodeJS.ProcessEnv = {
       ...process.env,
@@ -178,10 +201,12 @@ async function main() {
   }
 }
 
-void main().catch(() => {
-  // Driver/spawn errors can contain URLs, passwords or environment values.
-  console.error(
-    "Không chạy xong test local. Kiểm tra .env.test.local, kết nối/quyền CREATEDB và output test phía trên; không dùng database ứng dụng.",
-  );
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  void main().catch(() => {
+    // Driver/spawn errors can contain URLs, passwords or environment values.
+    console.error(
+      "Không chạy xong test local. Kiểm tra .env.test.local, kết nối/quyền CREATEDB và output test phía trên; không dùng database ứng dụng.",
+    );
+    process.exitCode = 1;
+  });
+}

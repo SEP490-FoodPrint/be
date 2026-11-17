@@ -44,6 +44,7 @@ type DraftInput = {
   createdByUserId: string;
   requestNo: string;
   deliveryDate: Date;
+  note?: string;
   items: { ingredientEntryId: string; quantity: number; unit: string }[];
 };
 
@@ -79,6 +80,7 @@ export const supplierOrderRepository = {
         createdByUserId: input.createdByUserId,
         requestNo: input.requestNo,
         requestedDeliveryDate: input.deliveryDate,
+        note: input.note,
         supplyRequestItems: {
           create: input.items.map((item) => ({
             ingredientEntryId: item.ingredientEntryId,

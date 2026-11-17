@@ -13,6 +13,7 @@ import {
 } from "../../utils/authorization";
 import { HttpError } from "../../utils/http-error";
 import {
+  documentSha256,
   documentStorage,
   readDocuments,
   validateProfileFiles,
@@ -29,6 +30,11 @@ import {
   type ReviewRow,
 } from "./onboarding.repository";
 import { formatRegistrationID } from "../../utils/registration-id";
+import {
+  blockchainProofService,
+  type BlockchainProofService,
+  type ProofRef,
+} from "../blockchain-proof/blockchain-proof.service";
 import type {
   OnboardingSubmitRequestDTO,
   RegistrationParamsRequestDTO,
@@ -136,6 +142,12 @@ async function editable(tx: AuthorizationClient, userId: string) {
 export function createOnboardingService(
   connect: () => Promise<PrismaClient> = getPrisma,
   storage: DocumentStorage = documentStorage,
+  proofs: Pick<
+    BlockchainProofService,
+    | "prepareRegistrationSubmitted"
+    | "prepareRegistrationApproved"
+    | "scheduleAnchor"
+  > = blockchainProofService,
 ) {
   async function readOwn(user: SessionUser) {
     const db = await connect();
@@ -218,7 +230,11 @@ export function createOnboardingService(
       let obsolete: OnboardingDocument[] = [];
       try {
         for (const file of files)
-          uploaded.push(await storage.upload(user.id, file));
+          uploaded.push({
+            ...(await storage.upload(user.id, file)),
+            sha256: documentSha256(file.buffer),
+          });
+        let proof: ProofRef | null = null;
         const result = await authorizationTransaction(db, async (tx) => {
           const {
             current,
@@ -266,8 +282,14 @@ export function createOnboardingService(
               submissionEmail(row, currentUser),
             );
           }
+          proof = await proofs.prepareRegistrationSubmitted(
+            tx,
+            row.id,
+            user.id,
+          );
           return { ...view(row), accountStatus: "UNVERIFIED" as const };
         });
+        proofs.scheduleAnchor(proof);
         // The replacement has committed; cleanup failure must not undo or hide submission success.
         for (const document of obsolete) {
           try {
@@ -320,7 +342,8 @@ export function createOnboardingService(
       }: RegistrationApproveRequestDTO,
     ): Promise<ReviewDecisionResponseDTO> {
       const db = await connect();
-      return authorizationTransaction(db, async (tx) => {
+      let proof: ProofRef | null = null;
+      const decision = await authorizationTransaction(db, async (tx) => {
         const row = await reviewedApplication(
           tx,
           actor,
@@ -384,6 +407,7 @@ export function createOnboardingService(
           id,
           reviewEmail(row),
         );
+        proof = await proofs.prepareRegistrationApproved(tx, id, actor.id);
         return {
           ...reviewView(result),
           accountStatus: "ACTIVE" as const,
@@ -394,6 +418,8 @@ export function createOnboardingService(
           },
         };
       });
+      proofs.scheduleAnchor(proof);
+      return decision;
     },
     async reject(
       actor: AuthPrincipal,

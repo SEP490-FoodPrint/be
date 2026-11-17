@@ -23,6 +23,7 @@ import {
   type SupplyOrderRepository,
   type AcceptedOrderRow,
   type SupplierOrderListRow,
+  type SupplierOrderDetailRow,
 } from "./supply-order.repository";
 import type {
   SupplyOrderAcceptParamsRequestDTO,
@@ -176,21 +177,46 @@ export function createSupplyOrderService(
       params: SupplyOrderDetailParamsRequestDTO,
       principal: AuthPrincipal,
     ): Promise<SupplierOrderDetailResponseDTO> {
-      assertSupplierActor(principal);
       assertPermission(principal, "supply_request.view");
-      const order = await databaseOperation(() =>
-        repository.findDetailForSupplier(params.id, principal.supplierId),
+      if (principal.orgType === ORG_TYPES.SUPPLIER) {
+        assertSupplierActor(principal);
+      } else if (principal.orgType === ORG_TYPES.SCHOOL) {
+        if (!principal.schoolId) {
+          throw new HttpError(403, "Chỉ dành cho nhân viên trường học");
+        }
+      } else {
+        throw new HttpError(403, "Không có quyền truy cập");
+      }
+      const order = await databaseOperation<SupplierOrderDetailRow | null>(
+        async () => {
+          if (
+            principal.orgType === ORG_TYPES.SUPPLIER &&
+            principal.supplierId
+          ) {
+            return repository.findDetailForSupplier(
+              params.id,
+              principal.supplierId,
+            );
+          }
+          if (principal.orgType === ORG_TYPES.SCHOOL && principal.schoolId) {
+            return repository.findDetailForSchool(
+              params.id,
+              principal.schoolId,
+            );
+          }
+          return repository.findDetailById(params.id);
+        },
       );
-      if (!order || order.status === "DRAFT")
-        throw new HttpError(404, "Không tìm thấy đơn đặt hàng");
+      if (!order) throw new HttpError(404, "Không tìm thấy đơn đặt hàng");
       return {
         ...mapSupplierList(order, principal),
         note: order.note,
         acceptedByUserId: order.acceptedByUserId,
-        items: order.supplyRequestItems.map((item) => ({
+        items: (order.supplyRequestItems ?? []).map((item) => ({
           id: item.id,
           ingredientEntryId: item.ingredientEntryId,
-          ingredientName: item.IngredientEntry.Ingredient.name,
+          ingredientName:
+            item.IngredientEntry?.Ingredient?.name ?? "Nguyên liệu",
           requestedQuantity: item.requestedQuantity.toString(),
           unit: item.unit,
           note: item.note,

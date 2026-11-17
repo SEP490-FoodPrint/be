@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { parseRequest, requiredText } from "../../utils/request-validation";
 export const loginSchema = z.strictObject({
-  identifier: requiredText(320),
+  identifier: requiredText(320).toLowerCase(),
   password: z
     .string({ error: "Mật khẩu phải có từ 1 đến 72 byte UTF-8" })
     .refine(

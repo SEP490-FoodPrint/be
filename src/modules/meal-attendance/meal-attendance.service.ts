@@ -461,6 +461,8 @@ export function createMealAttendanceService(
             select: {
               id: true,
               name: true,
+              gradeId: true,
+              grade: { select: { id: true, name: true } },
               registeredMealPortions: true,
               homeroomAssignments: {
                 where: { endedAt: null },
@@ -496,6 +498,8 @@ export function createMealAttendanceService(
             return {
               classId: cls.id,
               className: cls.name,
+              gradeId: cls.gradeId,
+              gradeName: cls.grade?.name || null,
               registeredPortions: cls.registeredMealPortions,
               actualPortions: p ? p.totalPortions : 0,
               status: p ? p.status : "NOT_REPORTED",
