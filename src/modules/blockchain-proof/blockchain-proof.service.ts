@@ -1,7 +1,10 @@
 import { id as keccakId, type ContractTransactionResponse } from "ethers";
 import type { PrismaClient, Prisma } from "../../generated/prisma/client";
 import type { AuthPrincipal } from "../../types/auth";
-import { assertPermission } from "../../utils/authorization";
+import {
+  assertPermission,
+  assertSystemManager,
+} from "../../utils/authorization";
 import {
   createBlockchainProvider,
   getContractInstance,
@@ -10,15 +13,24 @@ import {
 } from "../../utils/blockchain";
 import { getPrisma } from "../../utils/database";
 import { HttpError } from "../../utils/http-error";
+import {
+  documentSha256,
+  documentStorage,
+  readDocuments,
+  type OnboardingDocument,
+} from "../../utils/onboarding-documents";
 import { blockchainProofScope } from "../../utils/resource-access";
 import {
   buildCookingCompletedPayload,
   buildDeliveryInspectedPayload,
+  buildRegistrationApprovedPayload,
+  buildRegistrationSubmittedPayload,
   buildSampleDisposedPayload,
   buildSampleStoredPayload,
   changedFields,
   hashPayload,
   HASH_ALGORITHM,
+  iso,
   PAYLOAD_VERSION,
   type ProofPayload,
 } from "./blockchain-proof.payload";
@@ -33,7 +45,10 @@ import type {
   BlockchainProofRecordParamsDTO,
   BlockchainProofVersionParamsDTO,
 } from "./blockchain-proof.request.dto";
-import type { BlockchainProofVersionResponseDTO } from "./blockchain-proof.response.dto";
+import type {
+  BlockchainProofVersionResponseDTO,
+  RegistrationDocumentCheckDTO,
+} from "./blockchain-proof.response.dto";
 
 type Tx = Prisma.TransactionClient;
 
@@ -72,6 +87,20 @@ function receiptTimeoutMs(): number {
   const value = Number(process.env.BLOCKCHAIN_RECEIPT_TIMEOUT_MS);
   return Number.isInteger(value) && value > 0 ? value : 120_000;
 }
+
+/** Downloads a stored registration file; null when the storage no longer has it. */
+export type DocumentReader = (
+  document: OnboardingDocument,
+) => Promise<Buffer | null>;
+
+const fetchDocument: DocumentReader = async (document) => {
+  const response = await fetch(documentStorage.download(document), {
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`Tải tài liệu lỗi HTTP ${response.status}`);
+  return Buffer.from(await response.arrayBuffer());
+};
 
 const defaultChain: ProofChain = {
   contractAddress() {
@@ -131,6 +160,7 @@ const tables: Record<ProofKind, string> = {
   deliveries: "delivery_inspection_versions",
   "cooking-batches": "cooking_batch_versions",
   "retained-samples": "retained_sample_versions",
+  registrations: "registration_request_versions",
 };
 
 export function proofRecordId(kind: ProofKind, versionId: string): string {
@@ -201,6 +231,7 @@ export type BlockchainProofOptions = {
   network?: () => string;
   now?: () => Date;
   warn?: (message: string) => void;
+  readDocument?: DocumentReader;
 };
 
 export function createBlockchainProofService(
@@ -216,6 +247,7 @@ export function createBlockchainProofService(
     (() => process.env.BLOCKCHAIN_NETWORK?.trim() || "localhost");
   const now = options.now ?? (() => new Date());
   const warn = options.warn ?? ((message: string) => console.warn(message));
+  const readDocument = options.readDocument ?? fetchDocument;
 
   // One sender per process, so consecutive transactions never share a nonce.
   let tail: Promise<unknown> = Promise.resolve();
@@ -289,6 +321,55 @@ export function createBlockchainProofService(
     previousHash: string | null,
   ) => buildSampleDisposedPayload({ ...row, disposedByUserId, previousHash });
 
+  type Registration = NonNullable<
+    Awaited<ReturnType<BlockchainProofRepository["readRegistration"]>>
+  >;
+  const storedDocuments = (row: Registration) => {
+    try {
+      return readDocuments(row.supportingDocuments, row.applicantUserId);
+    } catch {
+      return null;
+    }
+  };
+  const submittedPayload = (
+    row: Registration,
+    previousHash: string | null,
+  ): ProofPayload | null => {
+    const documents = storedDocuments(row);
+    return documents
+      ? buildRegistrationSubmittedPayload({
+          ...row,
+          documents,
+          previousHash,
+        })
+      : null;
+  };
+  const approvedPayload = (row: Registration, submittedHash: string | null) =>
+    buildRegistrationApprovedPayload({
+      ...row,
+      organizationId:
+        row.applicantUser.schoolId ?? row.applicantUser.supplierId ?? null,
+      submittedHash,
+    });
+  const text = (payload: ProofPayload, key: string) => {
+    const value = payload[key];
+    return typeof value === "string" ? value : null;
+  };
+
+  /** The SUBMITTED version the current registration data belongs to. */
+  async function currentSubmission(db: Tx, registrationRequestId: string) {
+    const rows = await repo.listVersions(
+      db,
+      "registrations",
+      registrationRequestId,
+      null,
+    );
+    return (
+      rows.filter((row) => row.eventType === "REGISTRATION_SUBMITTED").at(-1) ??
+      null
+    );
+  }
+
   async function anchorVersion(ref: ProofRef): Promise<VersionRow | null> {
     const db = await connect();
     const row = await repo.findVersion(db, ref.kind, ref.id, null);
@@ -350,6 +431,18 @@ export function createBlockchainProofService(
 
   async function rebuild(db: Tx, row: VersionRow): Promise<ProofPayload> {
     const snapshot = asPayload(row.snapshot);
+    if (row.kind === "registrations") {
+      const registration = await repo.readRegistration(db, row.recordId);
+      if (!registration) return {};
+      if (row.eventType === "REGISTRATION_APPROVED")
+        return approvedPayload(registration, text(snapshot, "submittedHash"));
+      // A resubmission replaces the data; older versions can only be checked as stored.
+      if ((await currentSubmission(db, row.recordId))?.id !== row.id)
+        return snapshot;
+      return (
+        submittedPayload(registration, text(snapshot, "previousHash")) ?? {}
+      );
+    }
     if (row.kind === "deliveries") {
       const delivery = await repo.readDelivery(db, row.recordId);
       return delivery ? deliveryPayload(delivery) : {};
@@ -389,11 +482,82 @@ export function createBlockchainProofService(
       : disposedPayload(sample, row.createdByUserId, reference("previousHash"));
   }
 
+  /** Registrations belong to no school: only System Admin reviews them. */
+  function proofScope(
+    kind: ProofKind,
+    principal: AuthPrincipal,
+    action: "view" | "verify" | "anchor",
+  ): string | null {
+    if (kind === "registrations") {
+      assertSystemManager(
+        principal,
+        action === "anchor" ? "registration.approve" : "registration.view",
+      );
+      return null;
+    }
+    assertPermission(
+      principal,
+      action === "view" ? "traceability.view" : "traceability.verify",
+    );
+    return blockchainProofScope(principal);
+  }
+
+  /** Each file listed in the anchored submission, re-hashed from storage. */
+  async function checkDocuments(
+    db: Tx,
+    row: VersionRow,
+  ): Promise<RegistrationDocumentCheckDTO[] | null> {
+    const submission =
+      row.eventType === "REGISTRATION_APPROVED"
+        ? row.previousVersionId
+          ? await repo.findVersion(db, row.kind, row.previousVersionId, null)
+          : null
+        : row;
+    if (!submission) return null;
+    const current = await currentSubmission(db, row.recordId);
+    // Files replaced by a later submission are deleted from storage.
+    if (current?.id !== submission.id) return null;
+    const registration = await repo.readRegistration(db, row.recordId);
+    const stored = registration ? (storedDocuments(registration) ?? []) : [];
+    const anchored = asPayload(submission.snapshot).documents;
+    const results: RegistrationDocumentCheckDTO[] = [];
+    for (const item of Array.isArray(anchored) ? anchored : []) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const id = typeof item.id === "string" ? item.id : "";
+      const base = {
+        id,
+        field: typeof item.field === "string" ? item.field : "",
+        fileName: typeof item.fileName === "string" ? item.fileName : "",
+      };
+      const document = stored.find((candidate) => candidate.id === id);
+      if (!document) {
+        results.push({ ...base, status: "MISSING" });
+        continue;
+      }
+      if (typeof item.sha256 !== "string") {
+        results.push({ ...base, status: "NO_HASH" });
+        continue;
+      }
+      const data = await readDocument(document);
+      results.push({
+        ...base,
+        status:
+          data === null
+            ? "MISSING"
+            : documentSha256(data) === item.sha256
+              ? "MATCH"
+              : "MISMATCH",
+      });
+    }
+    return results;
+  }
+
   async function scopedVersion(
     params: BlockchainProofVersionParamsDTO,
     principal: AuthPrincipal,
+    action: "verify" | "anchor",
   ) {
-    const schoolId = blockchainProofScope(principal);
+    const schoolId = proofScope(params.kind, principal, action);
     const db = await connect();
     const row = await repo.findVersion(
       db,
@@ -504,6 +668,76 @@ export function createBlockchainProofService(
       );
       return { kind: "retained-samples", id };
     },
+    /** Each submission or resubmission adds a version linked to the previous one. */
+    async prepareRegistrationSubmitted(
+      tx: Tx,
+      registrationRequestId: string,
+      actorId: string,
+    ): Promise<ProofRef | null> {
+      if (!enabled()) return null;
+      const registration = await repo.readRegistration(
+        tx,
+        registrationRequestId,
+      );
+      if (!registration || registration.status !== "PENDING") return null;
+      const latest = await repo.latestRegistrationVersion(
+        tx,
+        registrationRequestId,
+      );
+      if (latest?.eventType === "APPROVED") return null;
+      const payload = submittedPayload(registration, latest?.dataHash ?? null);
+      if (!payload) return null;
+      const id = await repo.createRegistrationVersion(
+        tx,
+        registrationRequestId,
+        "SUBMITTED",
+        newVersion(
+          payload,
+          actorId,
+          (latest?.version ?? 0) + 1,
+          latest?.id ?? null,
+          latest ? "Nộp lại hồ sơ" : null,
+        ),
+      );
+      return { kind: "registrations", id };
+    },
+    /** Skipped when the approved data was never anchored (submitted before proofs, or while disabled). */
+    async prepareRegistrationApproved(
+      tx: Tx,
+      registrationRequestId: string,
+      actorId: string,
+    ): Promise<ProofRef | null> {
+      if (!enabled()) return null;
+      const latest = await repo.latestRegistrationVersion(
+        tx,
+        registrationRequestId,
+      );
+      if (latest?.eventType !== "SUBMITTED") return null;
+      const registration = await repo.readRegistration(
+        tx,
+        registrationRequestId,
+      );
+      if (
+        !registration ||
+        registration.status !== "APPROVED" ||
+        text(asPayload(latest.snapshot), "submittedAt") !==
+          iso(registration.submittedAt)
+      )
+        return null;
+      const id = await repo.createRegistrationVersion(
+        tx,
+        registrationRequestId,
+        "APPROVED",
+        newVersion(
+          approvedPayload(registration, latest.dataHash),
+          actorId,
+          latest.version + 1,
+          latest.id,
+          "Duyệt hồ sơ",
+        ),
+      );
+      return { kind: "registrations", id };
+    },
     /** Fire-and-forget after commit; blockchain failures never reach the business response. */
     scheduleAnchor(ref: ProofRef | null) {
       if (!ref) return;
@@ -519,8 +753,7 @@ export function createBlockchainProofService(
       params: BlockchainProofRecordParamsDTO,
       principal: AuthPrincipal,
     ): Promise<BlockchainProofVersionResponseDTO[]> {
-      assertPermission(principal, "traceability.view");
-      const schoolId = blockchainProofScope(principal);
+      const schoolId = proofScope(params.kind, principal, "view");
       const rows = await repo.listVersions(
         await connect(),
         params.kind,
@@ -533,9 +766,8 @@ export function createBlockchainProofService(
       params: BlockchainProofVersionParamsDTO,
       principal: AuthPrincipal,
     ): Promise<BlockchainProofVersionResponseDTO> {
-      assertPermission(principal, "traceability.verify");
       requireEnabled();
-      const { row } = await scopedVersion(params, principal);
+      const { row } = await scopedVersion(params, principal, "anchor");
       if (row.transactionStatus === "CONFIRMED")
         throw new HttpError(409, "Bằng chứng đã được xác nhận trên blockchain");
       const result = await enqueue(() =>
@@ -547,9 +779,8 @@ export function createBlockchainProofService(
       params: BlockchainProofVersionParamsDTO,
       principal: AuthPrincipal,
     ): Promise<BlockchainProofVersionResponseDTO> {
-      assertPermission(principal, "traceability.verify");
       requireEnabled();
-      const { db, row } = await scopedVersion(params, principal);
+      const { db, row } = await scopedVersion(params, principal, "verify");
       if (row.transactionStatus !== "CONFIRMED")
         throw new HttpError(
           409,
@@ -612,13 +843,71 @@ export function createBlockchainProofService(
           verificationResult: "Không kết nối được blockchain",
         };
       }
+      let documents: RegistrationDocumentCheckDTO[] | null = null;
+      if (row.kind === "registrations") {
+        try {
+          documents = await checkDocuments(db, row);
+        } catch {
+          if (outcome.verificationStatus === "VERIFIED")
+            outcome = {
+              verificationStatus: "FAILED",
+              verificationResult: "Không tải được tài liệu để đối chiếu",
+            };
+        }
+        outcome = withDocuments(outcome, documents);
+      }
       const verifiedAt = now();
       await repo.setVerification(db, row.kind, row.id, {
         ...outcome,
         verifiedAt,
       });
-      return toDTO({ ...row, ...outcome, verifiedAt });
+      return {
+        ...toDTO({ ...row, ...outcome, verifiedAt }),
+        ...(documents ? { documents } : {}),
+      };
     },
+  };
+}
+
+type Outcome = {
+  verificationStatus: "VERIFIED" | "MISMATCH" | "FAILED";
+  verificationResult: string;
+};
+
+/** Folds the per-file comparison into the record-level result. */
+export function withDocuments(
+  outcome: Outcome,
+  documents: RegistrationDocumentCheckDTO[] | null,
+): Outcome {
+  if (!documents || outcome.verificationStatus === "FAILED") return outcome;
+  const broken = documents.filter(
+    (document) =>
+      document.status === "MISMATCH" || document.status === "MISSING",
+  );
+  const unhashed = documents.filter(
+    (document) => document.status === "NO_HASH",
+  ).length;
+  const notes: string[] = [];
+  if (broken.length)
+    notes.push(
+      `Tài liệu khác bản đã ghi nhận: ${broken
+        .map(
+          (document) =>
+            `${document.fileName} (${document.status === "MISSING" ? "không còn" : "đã thay đổi"})`,
+        )
+        .join(", ")}`,
+    );
+  if (unhashed)
+    notes.push(`${unhashed} tài liệu nộp trước khi có mã băm, chưa đối chiếu`);
+  if (!notes.length) return outcome;
+  // The record hash matched, so say so without implying the files did too.
+  const lead =
+    outcome.verificationStatus === "VERIFIED" && broken.length
+      ? "Thông tin hồ sơ khớp blockchain"
+      : outcome.verificationResult;
+  return {
+    verificationStatus: broken.length ? "MISMATCH" : outcome.verificationStatus,
+    verificationResult: [lead, ...notes].join(". ").slice(0, 500),
   };
 }
 

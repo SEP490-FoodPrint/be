@@ -4,9 +4,10 @@ import {
   requestUuidSchema,
 } from "../../utils/request-validation";
 
-const kind = z.enum(["deliveries", "cooking-batches", "retained-samples"], {
-  error: "Loại bằng chứng không hợp lệ",
-});
+const kind = z.enum(
+  ["deliveries", "cooking-batches", "retained-samples", "registrations"],
+  { error: "Loại bằng chứng không hợp lệ" },
+);
 
 export const recordParamsSchema = z.strictObject({
   kind,

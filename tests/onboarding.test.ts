@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Readable } from "node:stream";
 import express from "express";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   validateOnboarding,
   readProfileBody,
@@ -445,6 +445,25 @@ function editFixture(
     recipientEmail: string;
     text: string;
   }[] = [];
+  // Records proof hooks so these tests never depend on BLOCKCHAIN_ENABLED in .env.
+  const proofEvents: { event: string; supportingDocuments?: unknown }[] = [];
+  let lastWrite: Record<string, unknown> | null = null;
+  const proofs = {
+    prepareRegistrationSubmitted: (_tx: unknown, id: string) => {
+      proofEvents.push({
+        event: `submitted:${id}`,
+        supportingDocuments: lastWrite?.supportingDocuments,
+      });
+      return Promise.resolve({ kind: "registrations" as const, id });
+    },
+    prepareRegistrationApproved: (_tx: unknown, id: string) => {
+      proofEvents.push({ event: `approved:${id}` });
+      return Promise.resolve({ kind: "registrations" as const, id });
+    },
+    scheduleAnchor: (ref: { id: string } | null) => {
+      if (ref) proofEvents.push({ event: `scheduled:${ref.id}` });
+    },
+  };
   const storage: DocumentStorage = {
     upload(_id, file) {
       const id = randomUUID();
@@ -478,12 +497,14 @@ function editFixture(
       findUnique: () => Promise.resolve(status ? structuredClone(row) : null),
       create({ data }: { data: Record<string, unknown> }) {
         writes++;
+        lastWrite = data;
         return Promise.resolve({ ...row, ...data, updatedAt: new Date() });
       },
       update({ data }: { data: Record<string, unknown> }) {
         assert(!("registrationNumber" in data));
         assert(!("registrationID" in data));
         writes++;
+        lastWrite = data;
         return Promise.resolve({ ...row, ...data, updatedAt: new Date() });
       },
     },
@@ -515,9 +536,10 @@ function editFixture(
       emailFailure = true;
     },
     storage,
+    proofEvents,
     writes: () => writes,
     service: {
-      ...createOnboardingService(() => Promise.resolve(db), storage),
+      ...createOnboardingService(() => Promise.resolve(db), storage, proofs),
       submit(
         actor: SessionUser,
         body: unknown,
@@ -526,6 +548,7 @@ function editFixture(
         return createOnboardingService(
           () => Promise.resolve(db),
           storage,
+          proofs,
         ).submit(
           actor,
           readSubmission(
@@ -662,6 +685,32 @@ void test("approved applications remain immutable and pending edits append multi
   assert.equal(pending.writes(), 1);
   assert.equal(pending.uploaded.length, 2);
   assert.deepEqual(pending.removed, []);
+});
+
+void test("submissions store each new file's SHA-256 and anchor the proof only after commit", async () => {
+  const pending = editFixture();
+  const upload = file("certificate_0");
+  await pending.service.submit(pending.user, retainedBody(pending), [upload]);
+  const [prepared, scheduled] = pending.proofEvents;
+  assert.equal(prepared?.event, `submitted:${pending.row.id}`);
+  assert.equal(scheduled?.event, `scheduled:${pending.row.id}`);
+  const stored = prepared?.supportingDocuments as OnboardingDocument[];
+  assert.equal(
+    stored.find((document) => document.id !== pending.document.id)?.sha256,
+    createHash("sha256").update(upload.buffer).digest("hex"),
+  );
+  // Documents uploaded before proofs existed keep no hash rather than a guessed one.
+  assert.equal(
+    stored.find((document) => document.id === pending.document.id)?.sha256,
+    undefined,
+  );
+
+  const failing = editFixture("REJECTED");
+  failing.failEmail();
+  await assert.rejects(() =>
+    failing.service.submit(failing.user, retainedBody(failing)),
+  );
+  assert.deepEqual(failing.proofEvents, []);
 });
 
 void test("retained plus new document limits are checked before uploads or writes", async () => {
