@@ -29,7 +29,7 @@ export const kitchenPlanSchema = z.strictObject({
     .regex(/^[a-f0-9]{64}$/)
     .optional(),
   menuDayId: requestUuidSchema,
-  // Legacy callers may send a dish; planning always covers the whole meal.
+  // When present, only this dish of the meal is planned ("Nấu" từng món).
   dishId: requestUuidSchema.optional(),
   mealType: mealTypeSchema,
 });
