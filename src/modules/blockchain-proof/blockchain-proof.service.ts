@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { id as keccakId, type ContractTransactionResponse } from "ethers";
 import type { PrismaClient, Prisma } from "../../generated/prisma/client";
 import type { AuthPrincipal } from "../../types/auth";
@@ -19,10 +20,15 @@ import {
   readDocuments,
   type OnboardingDocument,
 } from "../../utils/onboarding-documents";
-import { blockchainProofScope } from "../../utils/resource-access";
+import {
+  blockchainProofScope,
+  supplierOrderManagementScope,
+} from "../../utils/resource-access";
 import {
   buildCookingCompletedPayload,
+  buildDeliveryDeclaredPayload,
   buildDeliveryInspectedPayload,
+  buildMealDistributedPayload,
   buildRegistrationApprovedPayload,
   buildRegistrationSubmittedPayload,
   buildSampleDisposedPayload,
@@ -31,7 +37,6 @@ import {
   hashPayload,
   HASH_ALGORITHM,
   iso,
-  PAYLOAD_VERSION,
   type ProofPayload,
 } from "./blockchain-proof.payload";
 import {
@@ -39,14 +44,19 @@ import {
   type BlockchainProofRepository,
   type NewVersion,
   type ProofKind,
+  type ProofScope,
   type VersionRow,
 } from "./blockchain-proof.repository";
 import type {
+  BlockchainProofChainParamsDTO,
+  BlockchainProofChainQueryDTO,
   BlockchainProofRecordParamsDTO,
   BlockchainProofVersionParamsDTO,
 } from "./blockchain-proof.request.dto";
 import type {
+  BlockchainProofChainResponseDTO,
   BlockchainProofVersionResponseDTO,
+  ProofLinkCheckDTO,
   RegistrationDocumentCheckDTO,
 } from "./blockchain-proof.response.dto";
 
@@ -156,15 +166,9 @@ const defaultChain: ProofChain = {
   },
 };
 
-const tables: Record<ProofKind, string> = {
-  deliveries: "delivery_inspection_versions",
-  "cooking-batches": "cooking_batch_versions",
-  "retained-samples": "retained_sample_versions",
-  registrations: "registration_request_versions",
-};
-
-export function proofRecordId(kind: ProofKind, versionId: string): string {
-  return keccakId(`foodprint:${tables[kind]}:${versionId}`);
+/** On-chain key of a proof; every kind lives in `blockchain_proofs`. */
+export function proofRecordId(proofId: string): string {
+  return keccakId(`foodprint:blockchain_proofs:${proofId}`);
 }
 
 export function explorerUrl(
@@ -258,17 +262,22 @@ export function createBlockchainProofService(
   }
 
   function newVersion(
+    eventType: NewVersion["eventType"],
     payload: ProofPayload,
     actorId: string,
     version = 1,
     previousVersionId: string | null = null,
     changeReason: string | null = null,
   ): NewVersion {
+    const id = randomUUID();
     return {
+      id,
+      recordId: proofRecordId(id),
+      eventType,
       version,
       dataHash: hashPayload(payload),
       hashAlgorithm: HASH_ALGORITHM,
-      payloadVersion: PAYLOAD_VERSION,
+      payloadVersion: typeof payload.v === "number" ? payload.v : 1,
       snapshot: payload,
       previousVersionId,
       changeReason,
@@ -288,9 +297,10 @@ export function createBlockchainProofService(
     Awaited<ReturnType<BlockchainProofRepository["readSample"]>>
   >;
 
-  const deliveryPayload = (row: Delivery) =>
+  const deliveryPayload = (row: Delivery, declarationHash: string | null) =>
     buildDeliveryInspectedPayload({
       ...row,
+      declarationHash,
       approvals: row.deliveryApprovals.map((a) => ({
         ...a,
         roleCode: a.Role.code,
@@ -313,6 +323,46 @@ export function createBlockchainProofService(
         deliveryInspectionHash: hashFor(lot),
       })),
     });
+  const declaredPayload = (
+    row: Delivery,
+    declaredByUserId: string,
+    declaredAt: string | null,
+  ) =>
+    buildDeliveryDeclaredPayload({
+      ...row,
+      declaredAt,
+      declaredByUserId,
+      items: row.deliveryItems.map((item) => ({
+        ...item,
+        requestedQuantity: item.SupplyRequestItem?.requestedQuantity ?? null,
+        requestedUnit: item.SupplyRequestItem?.unit ?? null,
+        lots: item.ingredientLots,
+      })),
+    });
+  const distributedPayload = async (
+    db: Tx,
+    schoolId: string,
+    date: string,
+    hashFor: ((cookingBatchId: string) => string | null) | null,
+  ) => {
+    const allocations = await repo.readDistribution(db, schoolId, date);
+    if (!allocations.length) return null;
+    const hashes = hashFor
+      ? null
+      : await repo.cookingBatchHashes(
+          db,
+          allocations.flatMap((a) =>
+            a.mealAllocationBatches.map((batch) => batch.cookingBatchId),
+          ),
+        );
+    return buildMealDistributedPayload({
+      schoolId,
+      date,
+      allocations,
+      cookingCompletedHash: (id) =>
+        hashFor ? hashFor(id) : (hashes?.get(id) ?? null),
+    });
+  };
   const storedPayload = (row: Sample, cookingCompletedHash: string | null) =>
     buildSampleStoredPayload({ ...row, cookingCompletedHash });
   const disposedPayload = (
@@ -374,7 +424,7 @@ export function createBlockchainProofService(
     const db = await connect();
     const row = await repo.findVersion(db, ref.kind, ref.id, null);
     if (!row || row.transactionStatus === "CONFIRMED") return row;
-    const recordId = proofRecordId(ref.kind, ref.id);
+    const recordId = proofRecordId(ref.id);
     try {
       const existing = await chain.read(recordId);
       // A previous send that timed out keeps its hash: reuse it, never double-send.
@@ -445,7 +495,40 @@ export function createBlockchainProofService(
     }
     if (row.kind === "deliveries") {
       const delivery = await repo.readDelivery(db, row.recordId);
-      return delivery ? deliveryPayload(delivery) : {};
+      return delivery
+        ? deliveryPayload(delivery, text(snapshot, "declarationHash"))
+        : {};
+    }
+    if (row.kind === "delivery-declarations") {
+      const delivery = await repo.readDelivery(db, row.recordId);
+      return delivery
+        ? declaredPayload(
+            delivery,
+            row.createdByUserId,
+            text(snapshot, "declaredAt"),
+          )
+        : {};
+    }
+    if (row.kind === "meal-distributions") {
+      if (!row.subject) return {};
+      // Batch hashes are fixed at anchoring time and read back from the snapshot.
+      const anchored = new Map<string, string | null>();
+      for (const batch of objects(snapshot.batches))
+        if (typeof batch.cookingBatchId === "string")
+          anchored.set(
+            batch.cookingBatchId,
+            typeof batch.cookingCompletedHash === "string"
+              ? batch.cookingCompletedHash
+              : null,
+          );
+      return (
+        (await distributedPayload(
+          db,
+          row.subject.schoolId,
+          row.subject.date,
+          (id) => anchored.get(id) ?? null,
+        )) ?? {}
+      );
     }
     if (row.kind === "cooking-batches") {
       const batch = await repo.readCookingBatch(db, row.recordId);
@@ -487,7 +570,7 @@ export function createBlockchainProofService(
     kind: ProofKind,
     principal: AuthPrincipal,
     action: "view" | "verify" | "anchor",
-  ): string | null {
+  ): ProofScope {
     if (kind === "registrations") {
       assertSystemManager(
         principal,
@@ -495,11 +578,15 @@ export function createBlockchainProofService(
       );
       return null;
     }
+    // Suppliers see the declarations of their own deliveries.
+    if (kind === "delivery-declarations" && principal.orgType === "SUPPLIER")
+      return { supplierId: supplierOrderManagementScope(principal).supplierId };
     assertPermission(
       principal,
       action === "view" ? "traceability.view" : "traceability.verify",
     );
-    return blockchainProofScope(principal);
+    const schoolId = blockchainProofScope(principal);
+    return schoolId ? { schoolId } : null;
   }
 
   /** Each file listed in the anchored submission, re-hashed from storage. */
@@ -557,13 +644,13 @@ export function createBlockchainProofService(
     principal: AuthPrincipal,
     action: "verify" | "anchor",
   ) {
-    const schoolId = proofScope(params.kind, principal, action);
+    const scope = proofScope(params.kind, principal, action);
     const db = await connect();
     const row = await repo.findVersion(
       db,
       params.kind,
       params.versionId,
-      schoolId,
+      scope,
     );
     if (!row) throw new HttpError(404, "Không tìm thấy bằng chứng blockchain");
     return { db, row };
@@ -573,7 +660,7 @@ export function createBlockchainProofService(
     if (!enabled()) throw new HttpError(409, "Chức năng blockchain đang tắt");
   }
 
-  return {
+  const service = {
     async prepareDeliveryInspected(
       tx: Tx,
       deliveryId: string,
@@ -583,12 +670,56 @@ export function createBlockchainProofService(
         return null;
       const delivery = await repo.readDelivery(tx, deliveryId);
       if (!delivery) return null;
-      const id = await repo.createDeliveryVersion(
+      const declarationHash = await repo.declarationHash(tx, deliveryId);
+      const id = await repo.createVersion(
         tx,
-        deliveryId,
-        newVersion(deliveryPayload(delivery), actorId),
+        { kind: "deliveries", deliveryId },
+        newVersion(
+          "INSPECTED",
+          deliveryPayload(delivery, declarationHash),
+          actorId,
+        ),
       );
       return { kind: "deliveries", id };
+    },
+    /** Supplier dispatch (PREPARING → IN_TRANSIT) fixes what was promised. */
+    async prepareDeliveryDeclared(
+      tx: Tx,
+      deliveryId: string,
+      actorId: string,
+    ): Promise<ProofRef | null> {
+      if (!enabled() || (await repo.hasDeclarationVersion(tx, deliveryId)))
+        return null;
+      const delivery = await repo.readDelivery(tx, deliveryId);
+      if (!delivery) return null;
+      const id = await repo.createVersion(
+        tx,
+        { kind: "delivery-declarations", deliveryId },
+        newVersion(
+          "DECLARED",
+          declaredPayload(delivery, actorId, iso(now())),
+          actorId,
+        ),
+      );
+      return { kind: "delivery-declarations", id };
+    },
+    /** One proof per school-day once its distribution is confirmed. */
+    async prepareMealDistributed(
+      tx: Tx,
+      schoolId: string,
+      date: string,
+      actorId: string,
+    ): Promise<ProofRef | null> {
+      if (!enabled() || (await repo.hasDistributionVersion(tx, schoolId, date)))
+        return null;
+      const payload = await distributedPayload(tx, schoolId, date, null);
+      if (!payload) return null;
+      const id = await repo.createVersion(
+        tx,
+        { kind: "meal-distributions", schoolId, date },
+        newVersion("DISTRIBUTED", payload, actorId),
+      );
+      return { kind: "meal-distributions", id };
     },
     async prepareCookingCompleted(
       tx: Tx,
@@ -605,10 +736,11 @@ export function createBlockchainProofService(
           (lot) => lot.IngredientLot.DeliveryItem.deliveryId,
         ),
       );
-      const id = await repo.createCookingBatchVersion(
+      const id = await repo.createVersion(
         tx,
-        cookingBatchId,
+        { kind: "cooking-batches", cookingBatchId },
         newVersion(
+          "COMPLETED",
           batchPayload(
             batch,
             (lot) =>
@@ -632,11 +764,10 @@ export function createBlockchainProofService(
         tx,
         sample.cookingBatchId,
       );
-      const id = await repo.createSampleVersion(
+      const id = await repo.createVersion(
         tx,
-        sampleId,
-        "STORED",
-        newVersion(storedPayload(sample, cookingHash), actorId),
+        { kind: "retained-samples", retainedFoodSampleId: sampleId },
+        newVersion("STORED", storedPayload(sample, cookingHash), actorId),
       );
       return { kind: "retained-samples", id };
     },
@@ -654,11 +785,11 @@ export function createBlockchainProofService(
       const stored = await repo.findSampleVersion(tx, sampleId, "STORED");
       const sample = stored ? await repo.readSample(tx, sampleId) : null;
       if (!stored || !sample) return null;
-      const id = await repo.createSampleVersion(
+      const id = await repo.createVersion(
         tx,
-        sampleId,
-        "DISPOSED",
+        { kind: "retained-samples", retainedFoodSampleId: sampleId },
         newVersion(
+          "DISPOSED",
           disposedPayload(sample, actorId, stored.dataHash),
           actorId,
           2,
@@ -687,11 +818,11 @@ export function createBlockchainProofService(
       if (latest?.eventType === "APPROVED") return null;
       const payload = submittedPayload(registration, latest?.dataHash ?? null);
       if (!payload) return null;
-      const id = await repo.createRegistrationVersion(
+      const id = await repo.createVersion(
         tx,
-        registrationRequestId,
-        "SUBMITTED",
+        { kind: "registrations", registrationRequestId },
         newVersion(
+          "SUBMITTED",
           payload,
           actorId,
           (latest?.version ?? 0) + 1,
@@ -724,11 +855,11 @@ export function createBlockchainProofService(
           iso(registration.submittedAt)
       )
         return null;
-      const id = await repo.createRegistrationVersion(
+      const id = await repo.createVersion(
         tx,
-        registrationRequestId,
-        "APPROVED",
+        { kind: "registrations", registrationRequestId },
         newVersion(
+          "APPROVED",
           approvedPayload(registration, latest.dataHash),
           actorId,
           latest.version + 1,
@@ -753,12 +884,12 @@ export function createBlockchainProofService(
       params: BlockchainProofRecordParamsDTO,
       principal: AuthPrincipal,
     ): Promise<BlockchainProofVersionResponseDTO[]> {
-      const schoolId = proofScope(params.kind, principal, "view");
+      const scope = proofScope(params.kind, principal, "view");
       const rows = await repo.listVersions(
         await connect(),
         params.kind,
         params.recordId,
-        schoolId,
+        scope,
       );
       return rows.map(toDTO);
     },
@@ -781,91 +912,327 @@ export function createBlockchainProofService(
     ): Promise<BlockchainProofVersionResponseDTO> {
       requireEnabled();
       const { db, row } = await scopedVersion(params, principal, "verify");
-      if (row.transactionStatus !== "CONFIRMED")
-        throw new HttpError(
-          409,
-          "Bằng chứng chưa được xác nhận trên blockchain",
-        );
-      if (row.networkName !== network())
-        throw new HttpError(
-          409,
-          "Bằng chứng thuộc mạng khác mạng blockchain đang cấu hình",
-        );
-      const configured = chain.contractAddress();
-      if (
-        row.contractAddress &&
-        configured &&
-        !same(row.contractAddress, configured)
-      )
-        throw new HttpError(
-          409,
-          "Bằng chứng thuộc contract khác contract đang cấu hình",
-        );
-
-      const current = await rebuild(db, row);
-      const recomputed = hashPayload(current);
-      let outcome: {
-        verificationStatus: "VERIFIED" | "MISMATCH" | "FAILED";
-        verificationResult: string;
-      };
-      try {
-        const { onChainHash } = await chain.read(
-          proofRecordId(row.kind, row.id),
-        );
-        if (onChainHash === null)
-          outcome = {
-            verificationStatus: "MISMATCH",
-            verificationResult: "Không tìm thấy bản ghi trên blockchain",
-          };
-        else if (!same(onChainHash, row.dataHash))
-          outcome = {
-            verificationStatus: "MISMATCH",
-            verificationResult:
-              "Hash trên blockchain khác hash đã lưu trong hệ thống",
-          };
-        else if (!same(recomputed, onChainHash))
-          outcome = {
-            verificationStatus: "MISMATCH",
-            verificationResult:
-              `Dữ liệu hiện tại khác dữ liệu đã neo: ${changedFields(asPayload(row.snapshot), current).join(", ")}`.slice(
-                0,
-                500,
-              ),
-          };
-        else
-          outcome = {
-            verificationStatus: "VERIFIED",
-            verificationResult: "Dữ liệu khớp với bản ghi trên blockchain",
-          };
-      } catch {
-        outcome = {
-          verificationStatus: "FAILED",
-          verificationResult: "Không kết nối được blockchain",
-        };
-      }
-      let documents: RegistrationDocumentCheckDTO[] | null = null;
-      if (row.kind === "registrations") {
-        try {
-          documents = await checkDocuments(db, row);
-        } catch {
-          if (outcome.verificationStatus === "VERIFIED")
-            outcome = {
+      return verifyRow(db, row);
+    },
+    async chain(
+      params: BlockchainProofChainParamsDTO,
+      query: BlockchainProofChainQueryDTO,
+      principal: AuthPrincipal,
+    ): Promise<BlockchainProofChainResponseDTO> {
+      assertPermission(
+        principal,
+        query.verify ? "traceability.verify" : "traceability.view",
+      );
+      const schoolId = blockchainProofScope(principal);
+      if (query.verify) requireEnabled();
+      const db = await connect();
+      const subjects = await repo.chainSubjects(
+        db,
+        params.mealAllocationId,
+        schoolId,
+      );
+      if (!subjects)
+        throw new HttpError(404, "Không tìm thấy suất ăn trong phạm vi");
+      const rows = await repo.listChain(db, subjects);
+      const links = linkChecks(rows, subjects.lotDeliveries);
+      const nodes: BlockchainProofChainResponseDTO["nodes"] = [];
+      for (const row of rows) {
+        let checked = toDTO(row);
+        if (query.verify && row.transactionStatus === "CONFIRMED")
+          try {
+            checked = await verifyRow(db, row);
+          } catch (error) {
+            // One proof on another network or contract must not hide the rest.
+            if (!(error instanceof HttpError)) throw error;
+            checked = {
+              ...checked,
               verificationStatus: "FAILED",
-              verificationResult: "Không tải được tài liệu để đối chiếu",
+              verificationResult: error.message,
             };
-        }
-        outcome = withDocuments(outcome, documents);
+          }
+        nodes.push({ ...checked, links: links.get(row.id) ?? [] });
       }
-      const verifiedAt = now();
-      await repo.setVerification(db, row.kind, row.id, {
-        ...outcome,
-        verifiedAt,
-      });
       return {
-        ...toDTO({ ...row, ...outcome, verifiedAt }),
-        ...(documents ? { documents } : {}),
+        mealAllocationId: params.mealAllocationId,
+        schoolId: subjects.schoolId,
+        date: subjects.date,
+        intact: nodes.every(
+          (node) =>
+            node.links.every((link) => link.status !== "MISMATCH") &&
+            (!query.verify ||
+              node.transactionStatus !== "CONFIRMED" ||
+              node.verificationStatus === "VERIFIED"),
+        ),
+        nodes,
       };
     },
+  };
+
+  async function verifyRow(
+    db: Tx,
+    row: VersionRow,
+  ): Promise<BlockchainProofVersionResponseDTO> {
+    if (row.transactionStatus !== "CONFIRMED")
+      throw new HttpError(409, "Bằng chứng chưa được xác nhận trên blockchain");
+    if (row.networkName !== network())
+      throw new HttpError(
+        409,
+        "Bằng chứng thuộc mạng khác mạng blockchain đang cấu hình",
+      );
+    const configured = chain.contractAddress();
+    if (
+      row.contractAddress &&
+      configured &&
+      !same(row.contractAddress, configured)
+    )
+      throw new HttpError(
+        409,
+        "Bằng chứng thuộc contract khác contract đang cấu hình",
+      );
+
+    const current = await rebuild(db, row);
+    const recomputed = hashPayload(current);
+    let outcome: {
+      verificationStatus: "VERIFIED" | "MISMATCH" | "FAILED";
+      verificationResult: string;
+    };
+    try {
+      const { onChainHash } = await chain.read(proofRecordId(row.id));
+      if (onChainHash === null)
+        outcome = {
+          verificationStatus: "MISMATCH",
+          verificationResult: "Không tìm thấy bản ghi trên blockchain",
+        };
+      else if (!same(onChainHash, row.dataHash))
+        outcome = {
+          verificationStatus: "MISMATCH",
+          verificationResult:
+            "Hash trên blockchain khác hash đã lưu trong hệ thống",
+        };
+      else if (!same(recomputed, onChainHash))
+        outcome = {
+          verificationStatus: "MISMATCH",
+          verificationResult:
+            `Dữ liệu hiện tại khác dữ liệu đã neo: ${changedFields(asPayload(row.snapshot), current).join(", ")}`.slice(
+              0,
+              500,
+            ),
+        };
+      else
+        outcome = {
+          verificationStatus: "VERIFIED",
+          verificationResult: "Dữ liệu khớp với bản ghi trên blockchain",
+        };
+    } catch {
+      outcome = {
+        verificationStatus: "FAILED",
+        verificationResult: "Không kết nối được blockchain",
+      };
+    }
+    let documents: RegistrationDocumentCheckDTO[] | null = null;
+    if (row.kind === "registrations") {
+      try {
+        documents = await checkDocuments(db, row);
+      } catch {
+        if (outcome.verificationStatus === "VERIFIED")
+          outcome = {
+            verificationStatus: "FAILED",
+            verificationResult: "Không tải được tài liệu để đối chiếu",
+          };
+      }
+      outcome = withDocuments(outcome, documents);
+    }
+    if (outcome.verificationStatus !== "FAILED")
+      outcome = withNotes(outcome, await reconcile(db, row));
+    const verifiedAt = now();
+    await repo.setVerification(db, row.kind, row.id, {
+      ...outcome,
+      verifiedAt,
+    });
+    return {
+      ...toDTO({ ...row, ...outcome, verifiedAt }),
+      ...(documents ? { documents } : {}),
+    };
+  }
+
+  /** Business cross-checks against the previous step; notes only, never a status. */
+  async function reconcile(db: Tx, row: VersionRow): Promise<string[]> {
+    const snapshot = asPayload(row.snapshot);
+    if (row.kind === "deliveries") {
+      const declared = (
+        await repo.listVersions(db, "delivery-declarations", row.recordId, null)
+      ).at(-1);
+      if (!declared) return [];
+      const promised = new Map<string, string | null>();
+      const lots = new Set<string>();
+      for (const item of objects(asPayload(declared.snapshot).items)) {
+        if (typeof item.deliveryItemId === "string")
+          promised.set(
+            item.deliveryItemId,
+            typeof item.quantity === "string" ? item.quantity : null,
+          );
+        for (const lot of objects(item.lots))
+          if (typeof lot.id === "string") lots.add(lot.id);
+      }
+      const notes: string[] = [];
+      for (const item of objects(snapshot.items)) {
+        const id =
+          typeof item.deliveryItemId === "string" ? item.deliveryItemId : "";
+        if (!promised.has(id))
+          notes.push(`mặt hàng ${id} không có trong khai báo`);
+        else if (promised.get(id) !== item.actualQuantity)
+          notes.push(
+            `mặt hàng ${id} nhận ${show(item.actualQuantity)}, khai ${show(promised.get(id))}`,
+          );
+        for (const lot of objects(item.lots))
+          if (typeof lot.id === "string" && !lots.has(lot.id))
+            notes.push(`lô ${lot.id} không có trong khai báo`);
+      }
+      return notes.length
+        ? [`Khác khai báo giao hàng: ${notes.join("; ")}`]
+        : ["Khớp khai báo giao hàng của NCC"];
+    }
+    if (row.kind === "meal-distributions") {
+      const served = new Map<string, number>();
+      for (const batch of objects(snapshot.batches))
+        if (
+          typeof batch.cookingBatchId === "string" &&
+          typeof batch.portions === "number"
+        )
+          served.set(
+            batch.cookingBatchId,
+            (served.get(batch.cookingBatchId) ?? 0) + batch.portions,
+          );
+      const planned = await repo.plannedPortions(db, [...served.keys()]);
+      const over = [...served].filter(([id, portions]) => {
+        const limit = planned.get(id);
+        return typeof limit === "number" && portions > limit;
+      });
+      return over.length
+        ? [
+            `Phân phối vượt số suất của mẻ: ${over
+              .map(([id, portions]) => `${id} (${portions}/${planned.get(id)})`)
+              .join(", ")}`,
+          ]
+        : [];
+    }
+    return [];
+  }
+
+  return service;
+}
+
+/** Readable form of a JSON value in a message. */
+const show = (value: unknown): string =>
+  typeof value === "string" ? value : (JSON.stringify(value) ?? "null");
+
+const objects = (value: unknown): ProofPayload[] =>
+  Array.isArray(value)
+    ? value.filter(
+        (item): item is ProofPayload =>
+          Boolean(item) && typeof item === "object" && !Array.isArray(item),
+      )
+    : [];
+
+/**
+ * Each reference hash a proof carries must equal the data hash of the proof it
+ * points to; a null reference (record older than anchoring) is not linked.
+ */
+export function linkChecks(
+  rows: VersionRow[],
+  lotDeliveries: Map<string, string>,
+): Map<string, ProofLinkCheckDTO[]> {
+  const latest = (kind: ProofKind, recordId: string) =>
+    rows.filter((row) => row.kind === kind && row.recordId === recordId).at(-1)
+      ?.dataHash ?? null;
+  const check = (
+    field: string,
+    expected: string | null,
+    actual: unknown,
+  ): ProofLinkCheckDTO => ({
+    field,
+    status:
+      typeof actual !== "string"
+        ? "NOT_LINKED"
+        : expected !== null && expected.toLowerCase() === actual.toLowerCase()
+          ? "MATCH"
+          : "MISMATCH",
+  });
+  const result = new Map<string, ProofLinkCheckDTO[]>();
+  for (const row of rows) {
+    const snapshot = asPayload(row.snapshot);
+    const links: ProofLinkCheckDTO[] = [];
+    if (row.kind === "deliveries")
+      links.push(
+        check(
+          "declarationHash",
+          latest("delivery-declarations", row.recordId),
+          snapshot.declarationHash,
+        ),
+      );
+    if (row.kind === "cooking-batches")
+      for (const lot of objects(snapshot.lots)) {
+        const delivery =
+          typeof lot.ingredientLotId === "string"
+            ? lotDeliveries.get(lot.ingredientLotId)
+            : undefined;
+        links.push(
+          check(
+            `lots.${show(lot.ingredientLotId)}.deliveryInspectionHash`,
+            delivery ? latest("deliveries", delivery) : null,
+            lot.deliveryInspectionHash,
+          ),
+        );
+      }
+    if (row.kind === "retained-samples") {
+      if (row.eventType === "SAMPLE_STORED")
+        links.push(
+          check(
+            "cookingCompletedHash",
+            typeof snapshot.cookingBatchId === "string"
+              ? latest("cooking-batches", snapshot.cookingBatchId)
+              : null,
+            snapshot.cookingCompletedHash,
+          ),
+        );
+      else
+        links.push(
+          check(
+            "previousHash",
+            rows.find(
+              (other) =>
+                other.kind === "retained-samples" &&
+                other.recordId === row.recordId &&
+                other.eventType === "SAMPLE_STORED",
+            )?.dataHash ?? null,
+            snapshot.previousHash,
+          ),
+        );
+    }
+    if (row.kind === "meal-distributions")
+      for (const batch of objects(snapshot.batches))
+        links.push(
+          check(
+            `batches.${show(batch.cookingBatchId)}.cookingCompletedHash`,
+            typeof batch.cookingBatchId === "string"
+              ? latest("cooking-batches", batch.cookingBatchId)
+              : null,
+            batch.cookingCompletedHash,
+          ),
+        );
+    result.set(row.id, links);
+  }
+  return result;
+}
+
+/** Appends cross-check notes without changing the integrity status. */
+function withNotes(outcome: Outcome, notes: string[]): Outcome {
+  if (!notes.length || outcome.verificationStatus === "FAILED") return outcome;
+  return {
+    ...outcome,
+    verificationResult: [outcome.verificationResult, ...notes]
+      .join(". ")
+      .slice(0, 500),
   };
 }
 

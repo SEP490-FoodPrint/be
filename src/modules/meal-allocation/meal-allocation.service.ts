@@ -8,6 +8,11 @@ import { getPrisma } from "../../utils/database";
 import { HttpError } from "../../utils/http-error";
 import { withReadTransaction } from "../../utils/read-transaction";
 import type { AuthPrincipal } from "../../types/auth";
+import {
+  blockchainProofService,
+  type BlockchainProofService,
+  type ProofRef,
+} from "../blockchain-proof/blockchain-proof.service";
 import type {
   ApplyAllocationRequest,
   ConfirmDistributionRequest,
@@ -877,6 +882,11 @@ function prepareChanges(
 export function createMealAllocationService(
   connect = getPrisma,
   now = () => new Date(),
+  /** Anchors each confirmed distribution day (UC-23) after commit. */
+  proofs: Pick<
+    BlockchainProofService,
+    "prepareMealDistributed" | "scheduleAnchor"
+  > = blockchainProofService,
 ) {
   return {
     getToday(principal: AuthPrincipal) {
@@ -938,11 +948,13 @@ export function createMealAllocationService(
       requireKitchenStaff(principal);
       assertPermission(principal, "meal_allocation.update");
       schoolIdFor(principal);
-      return withSchoolTransaction(
+      let proof: ProofRef | null = null;
+      const result = await withSchoolTransaction(
         await connect(),
         principal,
         "meal_allocation.update",
         async (tx, actor, schoolId) => {
+          proof = null;
           requireKitchenStaff(actor);
           const timestamp = now();
           const date = dateFormatter.format(timestamp);
@@ -977,12 +989,20 @@ export function createMealAllocationService(
               409,
               "Dữ liệu phân bổ đã thay đổi. Vui lòng tải lại.",
             );
+          proof = await proofs.prepareMealDistributed(
+            tx,
+            schoolId,
+            date,
+            actor.id,
+          );
           return projectAllocationDay(
             await readAllocationDay(tx, schoolId, day),
             date,
           );
         },
       );
+      proofs.scheduleAnchor(proof);
+      return result;
     },
   };
 }
