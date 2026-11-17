@@ -165,7 +165,12 @@ export function createSupplyOrderService(
           requestNo: row.requestNo,
           schoolId: row.schoolId,
           supplierId: row.supplierId,
+          supplierName: row.Supplier?.name ?? null,
+          supplierPhone: row.Supplier?.phone ?? null,
           status: row.status,
+          requestedDeliveryDate:
+            row.requestedDeliveryDate?.toISOString() ?? null,
+          note: row.note ?? null,
           acceptedAt: row.acceptedAt?.toISOString() ?? null,
           createdAt: row.createdAt.toISOString(),
           updatedAt: row.updatedAt.toISOString(),

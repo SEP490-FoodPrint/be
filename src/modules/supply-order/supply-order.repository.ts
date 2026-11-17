@@ -11,9 +11,12 @@ const listSelect = {
   schoolId: true,
   supplierId: true,
   status: true,
+  requestedDeliveryDate: true,
+  note: true,
   acceptedAt: true,
   createdAt: true,
   updatedAt: true,
+  Supplier: { select: { id: true, name: true, phone: true } },
 } as const satisfies Prisma.SupplyRequestSelect;
 const supplierOrderStatuses = [
   "SENT",

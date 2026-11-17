@@ -8,6 +8,10 @@ export interface SupplyOrderListResponseDTO {
     requestNo: string;
     schoolId: string;
     supplierId: string;
+    supplierName?: string | null;
+    supplierPhone?: string | null;
+    requestedDeliveryDate?: string | null;
+    note?: string | null;
     status: SupplyRequestStatus;
     acceptedAt: string | null;
     createdAt: string;
