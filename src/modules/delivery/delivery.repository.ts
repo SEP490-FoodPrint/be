@@ -532,6 +532,25 @@ export const deliveryInspectionRepository = {
       select: detailSelect,
     });
   },
+  /** Tìm đợt giao của trường theo mã QR dòng hàng, mã QR lô hoặc mã đợt giao. */
+  findByScanCode(tx: Tx, schoolId: string, code: string) {
+    return tx.delivery.findFirst({
+      where: {
+        schoolId,
+        OR: [
+          { deliveryNo: code },
+          { deliveryItems: { some: { qrToken: code } } },
+          {
+            deliveryItems: {
+              some: { ingredientLots: { some: { qrToken: code } } },
+            },
+          },
+        ],
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+      select: { id: true, deliveryNo: true },
+    });
+  },
 };
 export type DeliveryInspectionRow = Prisma.DeliveryGetPayload<{
   select: typeof summarySelect;

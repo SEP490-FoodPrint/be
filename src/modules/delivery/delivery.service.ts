@@ -21,11 +21,32 @@ import type {
   DeliveryArrivalQueryDTO,
   DeliveryInspectionQueryDTO,
   DeliveryInspectionDecisionDTO,
+  DeliveryInspectionLookupDTO,
 } from "./delivery.request.dto";
 import type {
   DeliveryInspectionDTO,
+  DeliveryInspectionLookupResultDTO,
   DeliveryListResponseDTO,
 } from "./delivery.response.dto";
+
+/**
+ * Chuẩn hóa nội dung quét được: link tem QR (lấy đoạn cuối của đường dẫn),
+ * mã QR thô hoặc mã đợt giao nhập tay.
+ */
+export function scannedDeliveryCode(raw: string): string {
+  const value = raw.trim();
+  try {
+    const url = new URL(value);
+    if (url.protocol === "http:" || url.protocol === "https:") {
+      const segments = url.pathname.split("/").filter(Boolean);
+      const last = segments.at(-1);
+      if (last) return decodeURIComponent(last).slice(0, 160);
+    }
+  } catch {
+    // Không phải URL: dùng nguyên giá trị (mã QR thô hoặc mã đợt giao).
+  }
+  return value.slice(0, 160);
+}
 import type { PrismaClient } from "../../generated/prisma/client";
 import { listScopes } from "../../utils/resource-access";
 import { Prisma } from "../../generated/prisma/client";
@@ -777,6 +798,26 @@ export function createDeliveryInspectionService(
             rejected: statuses.REJECTED ?? 0,
           },
         };
+      });
+    },
+    async lookup(
+      input: DeliveryInspectionLookupDTO,
+      principal: AuthPrincipal,
+    ): Promise<DeliveryInspectionLookupResultDTO> {
+      const schoolId = inspectionScope(principal);
+      const code = scannedDeliveryCode(input.code);
+      return databaseOperation(async () => {
+        const row = await inspections.findByScanCode(
+          await connect(),
+          schoolId,
+          code,
+        );
+        if (!row)
+          throw new HttpError(
+            404,
+            "Không tìm thấy xe giao của trường với mã này",
+          );
+        return { id: row.id, deliveryNo: row.deliveryNo };
       });
     },
     async detail(
