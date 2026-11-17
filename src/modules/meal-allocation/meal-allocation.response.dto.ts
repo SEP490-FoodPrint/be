@@ -17,6 +17,7 @@ interface Totals {
 export interface DishBatchSlot {
   cookingBatchId: string;
   batchCode?: string;
+  batchNumber?: number | null;
   plannedPortions: number;
   availablePortions: number;
   autoAssigned: boolean;
@@ -74,13 +75,20 @@ export interface AllocationDayResponse {
       allocationStatus:
         "ALLOCATED" | "DISTRIBUTED" | "FINALIZED" | "CANCELLED" | null;
       demandFinalized: boolean;
-      batches: { batchId: string; allocatedPortions: number }[];
+      batches: {
+        batchId: string;
+        allocatedPortions: number;
+        batchCode?: string;
+        batchNumber?: number | null;
+      }[];
     }[];
   };
   batches: {
     eligibleDemandIds?: string[];
     scopeLabel?: string;
     id: string;
+    batchCode?: string;
+    batchNumber?: number | null;
     mealType: MealType;
     plannedPortions: number | null;
     note: string | null;

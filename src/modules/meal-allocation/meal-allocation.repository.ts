@@ -43,6 +43,7 @@ export async function readAllocationDay(
       select: {
         id: true,
         batchCode: true,
+        batchNumber: true,
         menuDayId: true,
         mealType: true,
         status: true,
