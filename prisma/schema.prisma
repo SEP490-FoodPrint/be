@@ -887,21 +887,22 @@ model MenuReviewRecord {
 
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
 model RegistrationRequest {
-  registrationNumber  BigInt                    @unique(map: "registration_requests_registration_number_key") @default(autoincrement()) @map("registration_number") @db.BigInt
-  id                  String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  applicantUserId     String                    @map("applicant_user_id") @db.Uuid
-  requestType         RegistrationRequestType   @map("request_type")
-  status              RegistrationRequestStatus @default(PENDING)
-  profileData         Json                      @default("{}") @map("profile_data") @db.JsonB
-  supportingDocuments Json                      @default("[]") @map("supporting_documents") @db.JsonB
-  rejectionReason     String?                   @map("rejection_reason") @db.Text
-  reviewedByUserId    String?                   @map("reviewed_by_user_id") @db.Uuid
-  submittedAt         DateTime                  @default(now()) @map("submitted_at") @db.Timestamptz(6)
-  reviewedAt          DateTime?                 @map("reviewed_at") @db.Timestamptz(6)
-  updatedAt           DateTime                  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  applicantUser       User                      @relation("registration_requests_applicant_user_id__users", fields: [applicantUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  reviewedByUser      User?                     @relation("registration_requests_reviewed_by_user_id__users", fields: [reviewedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  registrationNumber  BigInt                       @unique(map: "registration_requests_registration_number_key") @default(autoincrement()) @map("registration_number") @db.BigInt
+  id                  String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  applicantUserId     String                       @map("applicant_user_id") @db.Uuid
+  requestType         RegistrationRequestType      @map("request_type")
+  status              RegistrationRequestStatus    @default(PENDING)
+  profileData         Json                         @default("{}") @map("profile_data") @db.JsonB
+  supportingDocuments Json                         @default("[]") @map("supporting_documents") @db.JsonB
+  rejectionReason     String?                      @map("rejection_reason") @db.Text
+  reviewedByUserId    String?                      @map("reviewed_by_user_id") @db.Uuid
+  submittedAt         DateTime                     @default(now()) @map("submitted_at") @db.Timestamptz(6)
+  reviewedAt          DateTime?                    @map("reviewed_at") @db.Timestamptz(6)
+  updatedAt           DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  applicantUser       User                         @relation("registration_requests_applicant_user_id__users", fields: [applicantUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  reviewedByUser      User?                        @relation("registration_requests_reviewed_by_user_id__users", fields: [reviewedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   emailOutbox         EmailOutbox[]
+  blockchainVersions  RegistrationRequestVersion[] @relation("registration_request_versions_registration_request_id__registration_requests")
 
   @@unique([applicantUserId])
   @@map("registration_requests")
@@ -1365,6 +1366,7 @@ model User {
   deliveryInspectionVersions                   DeliveryInspectionVersion[]  @relation("delivery_inspection_versions_created_by_user_id__users")
   cookingBatchVersions                         CookingBatchVersion[]        @relation("cooking_batch_versions_created_by_user_id__users")
   retainedSampleVersions                       RetainedSampleVersion[]      @relation("retained_sample_versions_created_by_user_id__users")
+  registrationRequestVersions                  RegistrationRequestVersion[] @relation("registration_request_versions_created_by_user_id__users")
   permissionDenials                            UserPermissionDenial[]       @relation("user_permission_denials_user_id__users")
   permissionDenialsAsDisabledBy                UserPermissionDenial[]       @relation("user_permission_denials_disabled_by_user_id__users")
   confirmedMealPortionGroups                   DailyMealPortionGroup[]
@@ -1612,6 +1614,14 @@ enum RetainedSampleEventType {
   DISPOSED
 
   @@map("retained_sample_event_type")
+  @@schema("foodprint")
+}
+
+enum RegistrationProofEventType {
+  SUBMITTED
+  APPROVED
+
+  @@map("registration_proof_event_type")
   @@schema("foodprint")
 }
 
@@ -2084,5 +2094,45 @@ model DishGradeRecipeLine {
 
   @@id([dishId, gradeId, ingredientEntryId])
   @@map("dish_grade_recipe_lines")
+  @@schema("foodprint")
+}
+
+/// Blockchain proof versions for registration documents (UC-01 supplier, UC-02 school).
+/// CHECK constraints are defined in the migration SQL and are not represented in Prisma.
+model RegistrationRequestVersion {
+  id                    String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  registrationRequestId String                       @map("registration_request_id") @db.Uuid
+  eventType             RegistrationProofEventType   @map("event_type")
+  version               Int                          @db.Integer
+  dataHash              String                       @map("data_hash") @db.VarChar(66)
+  hashAlgorithm         String                       @default("KECCAK-256") @map("hash_algorithm") @db.VarChar(30)
+  payloadVersion        Int                          @default(1) @map("payload_version") @db.SmallInt
+  snapshot              Json                         @db.JsonB
+  previousVersionId     String?                      @map("previous_version_id") @db.Uuid
+  changeReason          String?                      @map("change_reason") @db.VarChar(255)
+  networkName           String                       @map("network_name") @db.VarChar(80)
+  contractAddress       String?                      @map("contract_address") @db.VarChar(100)
+  transactionHash       String?                      @map("transaction_hash") @db.VarChar(100)
+  blockNumber           BigInt?                      @map("block_number") @db.BigInt
+  transactionStatus     BlockchainAnchorStatus       @default(PREPARED) @map("transaction_status")
+  attemptCount          Int                          @default(0) @map("attempt_count") @db.Integer
+  lastError             String?                      @map("last_error") @db.VarChar(500)
+  recordedAt            DateTime?                    @map("recorded_at") @db.Timestamptz(6)
+  verificationStatus    BlockchainVerificationStatus @default(NOT_VERIFIED) @map("verification_status")
+  verificationResult    String?                      @map("verification_result") @db.VarChar(500)
+  verifiedAt            DateTime?                    @map("verified_at") @db.Timestamptz(6)
+  createdByUserId       String                       @map("created_by_user_id") @db.Uuid
+  createdAt             DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  RegistrationRequest   RegistrationRequest          @relation("registration_request_versions_registration_request_id__registration_requests", fields: [registrationRequestId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  createdByUser         User                         @relation("registration_request_versions_created_by_user_id__users", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  previousVersion       RegistrationRequestVersion?  @relation("registration_request_versions_previous", fields: [previousVersionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  nextVersions          RegistrationRequestVersion[] @relation("registration_request_versions_previous")
+
+  @@unique([registrationRequestId, version], map: "uq_registration_request_versions_request_version")
+  @@unique([registrationRequestId], map: "uq_registration_request_versions_approved", where: raw("(event_type = 'APPROVED'::registration_proof_event_type)"))
+  @@unique([transactionHash], map: "uq_registration_request_versions_tx_hash", where: raw("transaction_hash IS NOT NULL"))
+  @@index([transactionStatus], map: "idx_registration_request_versions_status")
+  @@map("registration_request_versions")
   @@schema("foodprint")
 }

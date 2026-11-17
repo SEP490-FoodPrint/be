@@ -153,6 +153,8 @@ Mọi dòng đều yêu cầu một trong các permission liệt kê. SYSTEM có
 
 Bằng chứng blockchain (`/api/blockchain-proofs`): xem danh sách version cần `traceability.view`; gửi lại (`POST …/versions/:versionId/anchor`) và xác minh (`POST …/versions/:versionId/verify`) cần `traceability.verify`, cấp cho `SCHOOL_MANAGEMENT_BOARD` và `SCHOOL_NUTRITION_OFFICER`. Chỉ SCHOOL (theo trường của Delivery, hoặc CookingBatch → MenuDay → WeeklyMenu) và SYSTEM; ngoài phạm vi trả 404.
 
+Riêng kind `registrations` (hồ sơ đăng ký NCC/trường, UC-01/UC-02) không thuộc trường nào nên chỉ `SYSTEM_ADMIN` thuộc tổ chức SYSTEM được dùng: xem và xác minh cần `registration.view`, gửi lại cần `registration.approve`. Vai trò trường có `traceability.*` vẫn nhận 403.
+
 School xem supplier qua quan hệ ACTIVE/SUSPENDED; ingredient qua IngredientEntry của trường. Supplier xem tài nguyên supplier-owned hoặc delivery của supplier khi có permission phù hợp. ATTP xã chỉ thấy incident/report chuyển tới đơn vị mình; traceability chỉ mở phần liên quan trực tiếp. Với ingredient_quality_feedback.view_own, thêm điều kiện submittedByUserId; view_details vẫn giới hạn tổ chức. Các API cũ giữ phân trang, safe select và serialization Date/Decimal/BigInt.
 
 - `GET /api/meal-complaints/meal-options` và `POST /api/meal-complaints` yêu cầu `meal_complaint.submit` và vai trò `HOMEROOM_TEACHER` hoặc `PARENTS_COMMITTEE`. Trường, ngày ăn và phạm vi lớp do server xác định.

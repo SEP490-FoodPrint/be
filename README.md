@@ -125,7 +125,7 @@ Mặc định `BLOCKCHAIN_ENABLED=false`, nghiệp vụ chạy như cũ. Để c
 1. Trong repo `blockchain`: `npm run node` (terminal riêng), rồi `npm run deploy:local`.
 2. Copy `deployments/localhost/FoodPrintHashRegistry.json` sang `be/blockchain/` (xem `blockchain/README.md`).
 3. Trong `.env` của `be`: `BLOCKCHAIN_ENABLED=true`, `BLOCKCHAIN_NETWORK=localhost`, `BLOCKCHAIN_RPC_URL=http://127.0.0.1:8545`. Có thể bỏ trống `BLOCKCHAIN_WRITER_PRIVATE_KEY`: khi đó dùng tài khoản #0 của Hardhat node.
-4. `npm run dev`. Kiểm nhận xong, hoàn thành mẻ, lưu hoặc tiêu huỷ mẫu sẽ tạo version `PREPARED` rồi gửi ngầm lên chain. Xem kết quả ở `GET /api/blockchain-proofs/:kind/:recordId/versions`.
+4. `npm run dev`. Kiểm nhận xong, hoàn thành mẻ, lưu hoặc tiêu huỷ mẫu sẽ tạo version `PREPARED` rồi gửi ngầm lên chain. Xem kết quả ở `GET /api/blockchain-proofs/:kind/:recordId/versions`. Hồ sơ đăng ký NCC/trường (`kind = registrations`) tạo version mỗi lần nộp hoặc nộp lại và khi được duyệt; xác minh tải lại từng tệp minh chứng và so SHA-256 với bản đã neo.
 
 Với Sepolia: `BLOCKCHAIN_NETWORK=sepolia`, `BLOCKCHAIN_RPC_URL` của Sepolia, và `BLOCKCHAIN_WRITER_PRIVATE_KEY` là ví đã được cấp quyền bằng `npm run set-writer:sepolia` trong repo `blockchain`. Không commit `.env` hay file key.
 

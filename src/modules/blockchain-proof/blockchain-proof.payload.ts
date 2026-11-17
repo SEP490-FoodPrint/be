@@ -259,3 +259,71 @@ export function buildSampleDisposedPayload(
     previousHash: input.previousHash,
   };
 }
+
+export type RegistrationDocumentInput = {
+  id: string;
+  field: string;
+  fileName: string;
+  format: string;
+  bytes: number;
+  sha256?: string;
+};
+
+/** Profile as stored (JSON) plus each file's content hash; publicId stays off the proof. */
+export function buildRegistrationSubmittedPayload(input: {
+  id: string;
+  requestType: string;
+  applicantUserId: string;
+  profileData: unknown;
+  documents: RegistrationDocumentInput[];
+  submittedAt: Date;
+  previousHash: string | null;
+}): ProofPayload {
+  return {
+    v: PAYLOAD_VERSION,
+    type: "REGISTRATION_SUBMITTED",
+    registrationRequestId: input.id,
+    requestType: input.requestType,
+    applicantUserId: input.applicantUserId,
+    profile: JSON.parse(JSON.stringify(input.profileData ?? null)) as Json,
+    documents: [...input.documents]
+      .sort(
+        byKey(
+          (d) => d.field,
+          (d) => d.id,
+        ),
+      )
+      .map((d) => ({
+        id: d.id,
+        field: d.field,
+        fileName: d.fileName,
+        format: d.format,
+        bytes: integer(d.bytes),
+        sha256: d.sha256 ?? null,
+      })),
+    submittedAt: iso(input.submittedAt),
+    previousHash: input.previousHash,
+  };
+}
+
+export function buildRegistrationApprovedPayload(input: {
+  id: string;
+  requestType: string;
+  status: string;
+  reviewedByUserId: string | null;
+  reviewedAt: Date | null;
+  organizationId: string | null;
+  submittedHash: string | null;
+}): ProofPayload {
+  return {
+    v: PAYLOAD_VERSION,
+    type: "REGISTRATION_APPROVED",
+    registrationRequestId: input.id,
+    requestType: input.requestType,
+    decision: input.status,
+    reviewedByUserId: input.reviewedByUserId,
+    reviewedAt: iso(input.reviewedAt),
+    organizationId: input.organizationId,
+    submittedHash: input.submittedHash,
+  };
+}
