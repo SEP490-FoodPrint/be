@@ -26,6 +26,14 @@ import {
   dayString,
   schoolToday,
 } from "../src/modules/supplier-onboarding/supplier-onboarding.rules";
+import { createIngredientQualityFeedbackRepository } from "../src/modules/ingredient-quality-feedback/ingredient-quality-feedback.repository";
+import { createIngredientQualityFeedbackService } from "../src/modules/ingredient-quality-feedback/ingredient-quality-feedback.service";
+import { loadPrincipal } from "../src/utils/authorization";
+import { HttpError } from "../src/utils/http-error";
+import {
+  formatComplaintCode,
+  parseCanonicalComplaintCode,
+} from "../src/utils/complaint-code";
 
 function record(value: unknown): Record<string, unknown> {
   assert(value && typeof value === "object" && !Array.isArray(value));
@@ -2153,6 +2161,1184 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
         ).status,
         200,
       );
+    },
+  );
+
+  // Shared producer-contract fixture helper for T006/US1/US2/US3 tests:
+  // Proves storage/sequence/formatter contract only — BGH HTTP creator & default grants remain outside scope.
+  const feedbackRepoFixture = createIngredientQualityFeedbackRepository();
+  async function createComplaintViaProducerContract(input: {
+    id?: string;
+    deliveryId: string;
+    ingredientLotId?: string | null;
+    submittedByUserId: string;
+    title: string;
+    description: string;
+    status?: "SUBMITTED" | "RESPONDED";
+    supplierResponse?: string | null;
+    respondedByUserId?: string | null;
+    respondedAt?: Date | null;
+    createdAt?: Date;
+    updatedAt?: Date;
+  }) {
+    return db.$transaction(async (tx) => {
+      const sequence = await feedbackRepoFixture.nextComplaintCodeSequence(tx);
+      const complaintCode = formatComplaintCode(sequence);
+      return tx.ingredientQualityFeedback.create({
+        data: {
+          ...(input.id ? { id: input.id } : {}),
+          complaintCode,
+          deliveryId: input.deliveryId,
+          ingredientLotId: input.ingredientLotId ?? null,
+          submittedByUserId: input.submittedByUserId,
+          title: input.title,
+          description: input.description,
+          status: input.status ?? "SUBMITTED",
+          supplierResponse: input.supplierResponse ?? null,
+          respondedByUserId: input.respondedByUserId ?? null,
+          respondedAt: input.respondedAt ?? null,
+          ...(input.createdAt ? { createdAt: input.createdAt } : {}),
+          ...(input.updatedAt ? { updatedAt: input.updatedAt } : {}),
+        },
+      });
+    });
+  }
+
+  await context.test(
+    "complaint-code producer contract allocates globally unique FP-CP codes across schools in-tx and allows rollback gaps (fixture contract only, not BGH HTTP creator)",
+    async () => {
+      const supRole = await db.role.findUniqueOrThrow({
+        where: { code: "INGREDIENT_SUPPLIER_ADMIN" },
+      });
+      const schRole = await db.role.findUniqueOrThrow({
+        where: { code: "SCHOOL_KITCHEN_STAFF" },
+      });
+      const contractSup = await db.supplier.create({
+        data: { name: "Producer Contract Supplier" },
+      });
+      const contractSch1 = await db.school.create({
+        data: { name: "Producer Contract School 1", code: "PCS-1" },
+      });
+      const contractSch2 = await db.school.create({
+        data: { name: "Producer Contract School 2", code: null },
+      });
+      const supActor = await db.user.create({
+        data: {
+          roleId: supRole.id,
+          roleCode: supRole.code,
+          supplierId: contractSup.id,
+          username: `pc-sup-${randomUUID().slice(0, 8)}`,
+          email: `pc-sup-${randomUUID().slice(0, 8)}@test.local`,
+          passwordHash,
+          fullName: "PC Supplier Admin",
+          status: "ACTIVE",
+        },
+      });
+      const schActor1 = await db.user.create({
+        data: {
+          roleId: schRole.id,
+          roleCode: schRole.code,
+          schoolId: contractSch1.id,
+          username: `pc-sch1-${randomUUID().slice(0, 8)}`,
+          email: `pc-sch1-${randomUUID().slice(0, 8)}@test.local`,
+          passwordHash,
+          fullName: "PC School 1 Staff",
+          status: "ACTIVE",
+        },
+      });
+      const schActor2 = await db.user.create({
+        data: {
+          roleId: schRole.id,
+          roleCode: schRole.code,
+          schoolId: contractSch2.id,
+          username: `pc-sch2-${randomUUID().slice(0, 8)}`,
+          email: `pc-sch2-${randomUUID().slice(0, 8)}@test.local`,
+          passwordHash,
+          fullName: "PC School 2 Staff",
+          status: "ACTIVE",
+        },
+      });
+      const del1 = await db.delivery.create({
+        data: {
+          deliveryNo: `FP-DE-PC1-${randomUUID().slice(0, 6)}`,
+          schoolId: contractSch1.id,
+          supplierId: contractSup.id,
+          creationMode: "STANDALONE",
+          creationKey: randomUUID(),
+          creationFingerprint: "c".repeat(64),
+          createdByUserId: supActor.id,
+          status: "RECEIVED",
+          receivedAt: new Date("2026-09-10T08:00:00Z"),
+          receivedByUserId: schActor1.id,
+        },
+      });
+      const del2 = await db.delivery.create({
+        data: {
+          deliveryNo: `FP-DE-PC2-${randomUUID().slice(0, 6)}`,
+          schoolId: contractSch2.id,
+          supplierId: contractSup.id,
+          creationMode: "STANDALONE",
+          creationKey: randomUUID(),
+          creationFingerprint: "d".repeat(64),
+          createdByUserId: supActor.id,
+          status: "RECEIVED",
+          receivedAt: new Date("2026-09-10T08:00:00Z"),
+          receivedByUserId: schActor2.id,
+        },
+      });
+
+      const created = await Promise.all([
+        createComplaintViaProducerContract({
+          deliveryId: del1.id,
+          submittedByUserId: schActor1.id,
+          title: "School 1 complaint",
+          description: "Allocated across schools concurrently",
+        }),
+        createComplaintViaProducerContract({
+          deliveryId: del2.id,
+          submittedByUserId: schActor2.id,
+          title: "School 2 complaint",
+          description: "Allocated across schools concurrently",
+        }),
+      ]);
+      assert.equal(new Set(created.map((c) => c.id)).size, 2);
+      assert.equal(new Set(created.map((c) => c.complaintCode)).size, 2);
+      const seqs = created.map((c) => {
+        const parsed = parseCanonicalComplaintCode(c.complaintCode);
+        assert(parsed !== null && parsed > 0n);
+        return parsed;
+      });
+
+      // Rolled-back transaction must not persist the complaint row, while a sequence gap is permitted.
+      const rolledBackId = randomUUID();
+      await assert.rejects(
+        db.$transaction(async (tx) => {
+          const seq = await feedbackRepoFixture.nextComplaintCodeSequence(tx);
+          await tx.ingredientQualityFeedback.create({
+            data: {
+              id: rolledBackId,
+              complaintCode: formatComplaintCode(seq),
+              deliveryId: del1.id,
+              submittedByUserId: schActor1.id,
+              title: "Rolled back complaint",
+              description: "Must not persist",
+            },
+          });
+          throw new Error("SIMULATED_PRODUCER_ROLLBACK");
+        }),
+        /SIMULATED_PRODUCER_ROLLBACK/,
+      );
+      assert.equal(
+        await db.ingredientQualityFeedback.findUnique({
+          where: { id: rolledBackId },
+        }),
+        null,
+      );
+
+      const afterRollback = await createComplaintViaProducerContract({
+        deliveryId: del2.id,
+        submittedByUserId: schActor2.id,
+        title: "After rollback",
+        description: "Consumes next global sequence leaving gap",
+      });
+      const afterSeq = parseCanonicalComplaintCode(afterRollback.complaintCode);
+      assert(afterSeq !== null && afterSeq > seqs[0] && afterSeq > seqs[1]);
+      const reloaded = await db.ingredientQualityFeedback.findUniqueOrThrow({
+        where: { id: afterRollback.id },
+      });
+      assert.equal(reloaded.complaintCode, afterRollback.complaintCode);
+    },
+  );
+
+  await context.test(
+    "US1 supplier complaint list enforces delivery isolation across shared schools/historical links, preserves deterministic pagination and never allocates sequence numbers",
+    async () => {
+      const supAdminRole = await db.role.findUniqueOrThrow({
+        where: { code: "INGREDIENT_SUPPLIER_ADMIN" },
+      });
+      const supStaffRole = await db.role.findUniqueOrThrow({
+        where: { code: "INGREDIENT_SUPPLIER_STAFF" },
+      });
+      const schRole = await db.role.findUniqueOrThrow({
+        where: { code: "SCHOOL_KITCHEN_STAFF" },
+      });
+      const supA = await db.supplier.create({
+        data: { name: "US1 Complaint Supplier A" },
+      });
+      const supB = await db.supplier.create({
+        data: { name: "US1 Complaint Supplier B" },
+      });
+      const schX = await db.school.create({
+        data: { name: "US1 School X", code: "SCH-SAME" },
+      });
+      const schY = await db.school.create({
+        data: { name: "US1 School Y", code: null },
+      });
+      const schU = await db.school.create({
+        data: {
+          name: "US1 School U Inactive",
+          code: "SCH-UNLINKED",
+          status: "INACTIVE",
+        },
+      });
+      const createTestUser = async (
+        roleId: string,
+        roleCode: string,
+        prefix: string,
+        org: { schoolId?: string; supplierId?: string },
+      ) =>
+        db.user.create({
+          data: {
+            roleId,
+            roleCode,
+            schoolId: org.schoolId ?? null,
+            supplierId: org.supplierId ?? null,
+            username: `${prefix}-${randomUUID().slice(0, 8)}`,
+            email: `${prefix}-${randomUUID().slice(0, 8)}@test.local`,
+            passwordHash,
+            fullName: prefix,
+            status: "ACTIVE",
+          },
+        });
+      const supAdminUserA = await createTestUser(
+        supAdminRole.id,
+        supAdminRole.code,
+        "us1-supA-admin",
+        { supplierId: supA.id },
+      );
+      const supStaffUserA = await createTestUser(
+        supStaffRole.id,
+        supStaffRole.code,
+        "us1-supA-staff",
+        { supplierId: supA.id },
+      );
+      const supAdminUserB = await createTestUser(
+        supAdminRole.id,
+        supAdminRole.code,
+        "us1-supB-admin",
+        { supplierId: supB.id },
+      );
+      const schUserX1 = await createTestUser(
+        schRole.id,
+        schRole.code,
+        "us1-schX-1",
+        { schoolId: schX.id },
+      );
+      const schUserX2 = await createTestUser(
+        schRole.id,
+        schRole.code,
+        "us1-schX-2",
+        { schoolId: schX.id },
+      );
+      const schUserY = await createTestUser(
+        schRole.id,
+        schRole.code,
+        "us1-schY",
+        { schoolId: schY.id },
+      );
+      const schUserU = await createTestUser(
+        schRole.id,
+        schRole.code,
+        "us1-schU",
+        { schoolId: schU.id },
+      );
+
+      // Historical relationships + expired contract must not block reading complaints on past deliveries.
+      const relActive = await db.schoolSupplierRelationship.create({
+        data: {
+          schoolId: schX.id,
+          supplierId: supA.id,
+          status: "ACTIVE",
+          linkedAt: new Date("2026-09-01T00:00:00Z"),
+        },
+      });
+      await db.schoolSupplierRelationship.create({
+        data: {
+          schoolId: schX.id,
+          supplierId: supB.id,
+          status: "ACTIVE",
+          linkedAt: new Date("2026-09-01T00:00:00Z"),
+        },
+      });
+      await db.schoolSupplierRelationship.create({
+        data: {
+          schoolId: schY.id,
+          supplierId: supA.id,
+          status: "SUSPENDED",
+          linkedAt: new Date("2026-09-01T00:00:00Z"),
+          suspendedAt: new Date("2026-09-10T00:00:00Z"),
+          suspensionReason: "Temporary pause",
+        },
+      });
+      const relUnlinked = await db.schoolSupplierRelationship.create({
+        data: {
+          schoolId: schU.id,
+          supplierId: supA.id,
+          status: "UNLINKED",
+          linkedAt: new Date("2026-08-01T00:00:00Z"),
+          unlinkedAt: new Date("2026-09-01T00:00:00Z"),
+          unlinkReason: "Contract ended",
+        },
+      });
+      await db.supplierContract.create({
+        data: {
+          relationshipId: relUnlinked.id,
+          schoolId: schU.id,
+          supplierId: supA.id,
+          createdByUserId: schUserU.id,
+          status: "CLOSED",
+          number: `HD-US1-${randomUUID().slice(0, 6)}`,
+          signedOn: new Date("2024-12-20"),
+          startsOn: new Date("2025-01-01"),
+          endsOn: new Date("2025-12-31"),
+          activatedAt: new Date("2025-01-01T00:00:00Z"),
+          activatedByUserId: schUserU.id,
+          snapshot: { legacy: true },
+          closedAt: new Date("2026-01-01T00:00:00Z"),
+          closeReason: "Expired agreement",
+        },
+      });
+      void relActive;
+
+      const makeDelivery = async (
+        schoolId: string,
+        supplierId: string,
+        creatorId: string,
+        receiverId: string,
+        no: string,
+      ) =>
+        db.delivery.create({
+          data: {
+            deliveryNo: no,
+            schoolId,
+            supplierId,
+            creationMode: "STANDALONE",
+            creationKey: randomUUID(),
+            creationFingerprint: "e".repeat(64),
+            createdByUserId: creatorId,
+            status: "RECEIVED",
+            receivedAt: new Date("2026-09-10T08:00:00Z"),
+            receivedByUserId: receiverId,
+          },
+        });
+      const delXA = await makeDelivery(
+        schX.id,
+        supA.id,
+        supAdminUserA.id,
+        schUserX1.id,
+        "FP-DE-50001",
+      );
+      const delXB = await makeDelivery(
+        schX.id,
+        supB.id,
+        supAdminUserB.id,
+        schUserX2.id,
+        "FP-DE-50001",
+      );
+      const delYA = await makeDelivery(
+        schY.id,
+        supA.id,
+        supAdminUserA.id,
+        schUserY.id,
+        "FP-DE-50002",
+      );
+      const delUA = await makeDelivery(
+        schU.id,
+        supA.id,
+        supAdminUserA.id,
+        schUserU.id,
+        "FP-DE-50003",
+      );
+
+      // Build 5 complaints for supA (including tied createdAt timestamps) + 1 for supB on shared school X.
+      const tiedTime = new Date("2026-10-15T10:00:00.000Z");
+      const aTieHigh = await createComplaintViaProducerContract({
+        id: "70000000-0000-4000-8000-00000000000c",
+        deliveryId: delXA.id,
+        submittedByUserId: schUserX1.id,
+        title: "Tied timestamp high id",
+        description: "desc",
+        createdAt: tiedTime,
+        updatedAt: tiedTime,
+      });
+      const aTieLow = await createComplaintViaProducerContract({
+        id: "70000000-0000-4000-8000-00000000000a",
+        deliveryId: delXA.id,
+        submittedByUserId: schUserX2.id,
+        title: "Tied timestamp low id (different submitter)",
+        description: "desc",
+        status: "RESPONDED",
+        supplierResponse: "Đã xử lý đổi lô",
+        respondedByUserId: supAdminUserA.id,
+        respondedAt: new Date("2026-10-15T11:00:00.000Z"),
+        createdAt: tiedTime,
+        updatedAt: new Date("2026-10-15T11:00:00.000Z"),
+      });
+      const aNewest = await createComplaintViaProducerContract({
+        deliveryId: delYA.id,
+        submittedByUserId: schUserY.id,
+        title: "Suspended rel & null school code",
+        description: "desc",
+        createdAt: new Date("2026-10-16T10:00:00.000Z"),
+        updatedAt: new Date("2026-10-16T10:00:00.000Z"),
+      });
+      const aOldest1 = await createComplaintViaProducerContract({
+        deliveryId: delUA.id,
+        submittedByUserId: schUserU.id,
+        title: "Unlinked school inactive & expired contract",
+        description: "desc",
+        createdAt: new Date("2026-10-14T10:00:00.000Z"),
+        updatedAt: new Date("2026-10-14T10:00:00.000Z"),
+      });
+      const aOldest2 = await createComplaintViaProducerContract({
+        deliveryId: delXA.id,
+        submittedByUserId: schUserX1.id,
+        title: "Fifth page-3 item",
+        description: "desc",
+        createdAt: new Date("2026-10-13T10:00:00.000Z"),
+        updatedAt: new Date("2026-10-13T10:00:00.000Z"),
+      });
+      const foreignB = await createComplaintViaProducerContract({
+        deliveryId: delXB.id,
+        submittedByUserId: schUserX1.id,
+        title: "Shared school X complaint belonging to supplier B",
+        description: "Must never leak to A",
+        createdAt: new Date("2026-10-17T10:00:00.000Z"),
+        updatedAt: new Date("2026-10-17T10:00:00.000Z"),
+      });
+      assert.equal(
+        new Set([
+          aTieHigh.complaintCode,
+          aTieLow.complaintCode,
+          aNewest.complaintCode,
+          aOldest1.complaintCode,
+          aOldest2.complaintCode,
+          foreignB.complaintCode,
+        ]).size,
+        6,
+      );
+
+      const supACookie = await login(supAdminUserA.email);
+      const supAStaffCookie = await login(supStaffUserA.email);
+      const supBCookie = await login(supAdminUserB.email);
+
+      const seqBefore = await db.$queryRaw<
+        { last_value: bigint; is_called: boolean }[]
+      >`SELECT last_value, is_called FROM foodprint.ingredient_quality_feedback_complaint_code_seq`;
+
+      for (const cookie of [supACookie, supAStaffCookie]) {
+        const collected: Record<string, unknown>[] = [];
+        for (let page = 1; ; page++) {
+          const res = await call(
+            `/ingredient-quality-feedback?page=${page}&limit=2`,
+            cookie,
+          );
+          assert.equal(res.status, 200);
+          const items = res.data.items as Record<string, unknown>[];
+          collected.push(...items);
+          if (!record(res.data.pagination).hasNext) break;
+        }
+        assert.deepEqual(
+          collected.map((i) => ({ id: i.id, complaintCode: i.complaintCode })),
+          [
+            { id: aNewest.id, complaintCode: aNewest.complaintCode },
+            { id: aTieLow.id, complaintCode: aTieLow.complaintCode },
+            { id: aTieHigh.id, complaintCode: aTieHigh.complaintCode },
+            { id: aOldest1.id, complaintCode: aOldest1.complaintCode },
+            { id: aOldest2.id, complaintCode: aOldest2.complaintCode },
+          ],
+        );
+        assert(!collected.some((i) => i.id === foreignB.id));
+        assert.equal(record(collected[0].school).code, null);
+        assert.equal(record(collected[1].school).code, "SCH-SAME");
+        assert.equal(record(collected[3].school).code, "SCH-UNLINKED");
+        assert.equal(collected[1].status, "RESPONDED");
+        const beyond = await call(
+          "/ingredient-quality-feedback?page=99&limit=2",
+          cookie,
+        );
+        assert.equal(beyond.status, 200);
+        assert.deepEqual(beyond.data, {
+          items: [],
+          pagination: { page: 99, limit: 2, hasNext: false },
+        });
+      }
+
+      const bRes = await call("/ingredient-quality-feedback", supBCookie);
+      assert.equal(bRes.status, 200);
+      assert.deepEqual(
+        (bRes.data.items as Record<string, unknown>[]).map((i) => ({
+          id: i.id,
+          complaintCode: i.complaintCode,
+        })),
+        [{ id: foreignB.id, complaintCode: foreignB.complaintCode }],
+      );
+
+      // Verify empty supplier sees valid empty page
+      const supEmpty = await db.supplier.create({
+        data: { name: "US1 Empty Supplier" },
+      });
+      const supEmptyUser = await createTestUser(
+        supAdminRole.id,
+        supAdminRole.code,
+        "us1-sup-empty",
+        { supplierId: supEmpty.id },
+      );
+      const emptyRes = await call(
+        "/ingredient-quality-feedback",
+        await login(supEmptyUser.email),
+      );
+      assert.equal(emptyRes.status, 200);
+      assert.deepEqual(emptyRes.data, {
+        items: [],
+        pagination: { page: 1, limit: 20, hasNext: false },
+      });
+
+      const seqAfter = await db.$queryRaw<
+        { last_value: bigint; is_called: boolean }[]
+      >`SELECT last_value, is_called FROM foodprint.ingredient_quality_feedback_complaint_code_seq`;
+      assert.deepEqual(seqAfter, seqBefore);
+    },
+  );
+
+  await context.test(
+    "US2 detail enforces lot-delivery guard, SCHOOL own/details readback with original code, historical author/responder identities, and zero mutations on GET",
+    async () => {
+      const supAdminRole = await db.role.findUniqueOrThrow({
+        where: { code: "INGREDIENT_SUPPLIER_ADMIN" },
+      });
+      const schBoardRole = await db.role.findUniqueOrThrow({
+        where: { code: "SCHOOL_MANAGEMENT_BOARD" },
+      });
+      const schKitchenRole = await db.role.findUniqueOrThrow({
+        where: { code: "SCHOOL_KITCHEN_STAFF" },
+      });
+      const schTeacherRole = await db.role.findUniqueOrThrow({
+        where: { code: "HOMEROOM_TEACHER" },
+      });
+      const sup1 = await db.supplier.create({
+        data: { name: "US2 Detail Supplier 1" },
+      });
+      const sup2 = await db.supplier.create({
+        data: { name: "US2 Detail Supplier 2" },
+      });
+      const sch1 = await db.school.create({
+        data: { name: "US2 Detail School 1", code: "SCH-US2" },
+      });
+      const sch2 = await db.school.create({
+        data: { name: "US2 Detail School 2", code: "SCH-US2-O" },
+      });
+      const mkUser = async (
+        roleId: string,
+        roleCode: string,
+        tag: string,
+        org: { schoolId?: string; supplierId?: string },
+      ) =>
+        db.user.create({
+          data: {
+            roleId,
+            roleCode,
+            schoolId: org.schoolId ?? null,
+            supplierId: org.supplierId ?? null,
+            username: `${tag}-${randomUUID().slice(0, 8)}`,
+            email: `${tag}-${randomUUID().slice(0, 8)}@test.local`,
+            passwordHash,
+            fullName: tag,
+            status: "ACTIVE",
+          },
+        });
+      const supStaffRole = await db.role.findUniqueOrThrow({
+        where: { code: "INGREDIENT_SUPPLIER_STAFF" },
+      });
+      const supAdmin1 = await mkUser(
+        supAdminRole.id,
+        supAdminRole.code,
+        "us2-sup1-admin",
+        { supplierId: sup1.id },
+      );
+      const lockedResponder1 = await mkUser(
+        supStaffRole.id,
+        supStaffRole.code,
+        "us2-sup1-former-responder",
+        { supplierId: sup2.id },
+      );
+      const supAdmin2 = await mkUser(
+        supAdminRole.id,
+        supAdminRole.code,
+        "us2-sup2-admin",
+        { supplierId: sup2.id },
+      );
+      await db.user.update({
+        where: { id: lockedResponder1.id },
+        data: {
+          status: "LOCKED",
+        },
+      });
+      const submitter1 = await mkUser(
+        schKitchenRole.id,
+        schKitchenRole.code,
+        "us2-submitter-own",
+        { schoolId: sch1.id },
+      );
+      // Transfer submitter1's current school to sch2 later? Check historical identity preserved & no sch2 grant!
+      const peerViewer1 = await mkUser(
+        schKitchenRole.id,
+        schKitchenRole.code,
+        "us2-peer-details",
+        { schoolId: sch1.id },
+      );
+      // Grant view_details vs view_own via denials on US2 actors
+      const viewDetailsPerm = await db.permission.findUniqueOrThrow({
+        where: { code: "ingredient_quality_feedback.view_details" },
+      });
+      const viewOwnPerm = await db.permission.findUniqueOrThrow({
+        where: { code: "ingredient_quality_feedback.view_own" },
+      });
+      void viewOwnPerm;
+      // Disable view_details for submitter1 in sch1 so submitter1 has ONLY view_own!
+      await db.userPermissionDenial.create({
+        data: {
+          userId: submitter1.id,
+          permissionId: viewDetailsPerm.id,
+          schoolId: sch1.id,
+          disabledByUserId: peerViewer1.id,
+        },
+      });
+      const peerOwnOnly = await mkUser(
+        schKitchenRole.id,
+        schKitchenRole.code,
+        "us2-peer-own-only",
+        { schoolId: sch1.id },
+      );
+      await db.userPermissionDenial.create({
+        data: {
+          userId: peerOwnOnly.id,
+          permissionId: viewDetailsPerm.id,
+          schoolId: sch1.id,
+          disabledByUserId: peerViewer1.id,
+        },
+      });
+      const otherSchoolViewer = await mkUser(
+        schBoardRole.id,
+        schBoardRole.code,
+        "us2-sch2-board",
+        { schoolId: sch2.id },
+      );
+      void schTeacherRole;
+      void otherSchoolViewer;
+      const sch2Kitchen = await mkUser(
+        schKitchenRole.id,
+        schKitchenRole.code,
+        "us2-sch2-kitchen",
+        { schoolId: sch2.id },
+      );
+
+      // Historical unlinked relationship
+      await db.schoolSupplierRelationship.create({
+        data: {
+          schoolId: sch1.id,
+          supplierId: sup1.id,
+          status: "UNLINKED",
+          linkedAt: new Date("2026-08-01T00:00:00Z"),
+          unlinkedAt: new Date("2026-09-01T00:00:00Z"),
+          unlinkReason: "Historical closure",
+        },
+      });
+      const ing1 = await db.ingredient.create({
+        data: { supplierId: sup1.id, name: "US2 Ing 1", defaultUnit: "kg" },
+      });
+      const ing2 = await db.ingredient.create({
+        data: { supplierId: sup2.id, name: "US2 Ing 2", defaultUnit: "kg" },
+      });
+      const delSup1 = await db.delivery.create({
+        data: {
+          deliveryNo: "FP-DE-60001",
+          schoolId: sch1.id,
+          supplierId: sup1.id,
+          creationMode: "STANDALONE",
+          creationKey: randomUUID(),
+          creationFingerprint: "f".repeat(64),
+          createdByUserId: supAdmin1.id,
+          status: "RECEIVED",
+          receivedAt: new Date("2026-09-10T08:00:00Z"),
+          receivedByUserId: submitter1.id,
+        },
+      });
+      const delSup2 = await db.delivery.create({
+        data: {
+          deliveryNo: "FP-DE-60002",
+          schoolId: sch1.id,
+          supplierId: sup2.id,
+          creationMode: "STANDALONE",
+          creationKey: randomUUID(),
+          creationFingerprint: "1".repeat(64),
+          createdByUserId: supAdmin2.id,
+          status: "RECEIVED",
+          receivedAt: new Date("2026-09-10T08:00:00Z"),
+          receivedByUserId: submitter1.id,
+        },
+      });
+      const di1 = await db.deliveryItem.create({
+        data: {
+          deliveryId: delSup1.id,
+          ingredientId: ing1.id,
+          actualQuantity: "5.000",
+          unit: "kg",
+        },
+      });
+      const di2 = await db.deliveryItem.create({
+        data: {
+          deliveryId: delSup2.id,
+          ingredientId: ing2.id,
+          actualQuantity: "5.000",
+          unit: "kg",
+        },
+      });
+      const validLot = await db.ingredientLot.create({
+        data: {
+          deliveryItemId: di1.id,
+          lotCode: "LOT-US2-VALID",
+          receivedQuantity: "5.000",
+          availableQuantity: "5.000",
+          unit: "kg",
+          status: "AVAILABLE",
+        },
+      });
+      const foreignLot = await db.ingredientLot.create({
+        data: {
+          deliveryItemId: di2.id,
+          lotCode: "LOT-US2-FOREIGN-SECRET",
+          receivedQuantity: "5.000",
+          availableQuantity: "5.000",
+          unit: "kg",
+          status: "AVAILABLE",
+        },
+      });
+
+      const respondedFeedback = await createComplaintViaProducerContract({
+        deliveryId: delSup1.id,
+        ingredientLotId: validLot.id,
+        submittedByUserId: submitter1.id,
+        title: "US2 Responded with valid lot",
+        description: "Full detail description",
+        status: "RESPONDED",
+        supplierResponse: "Câu trả lời chính thức từ nhà cung cấp",
+        respondedByUserId: lockedResponder1.id,
+        respondedAt: new Date("2026-10-20T12:00:00.000Z"),
+        createdAt: new Date("2026-10-19T12:00:00.000Z"),
+        updatedAt: new Date("2026-10-20T12:00:00.000Z"),
+      });
+      const wrongLotFeedback = await createComplaintViaProducerContract({
+        deliveryId: delSup1.id,
+        ingredientLotId: foreignLot.id,
+        submittedByUserId: submitter1.id,
+        title: "US2 Corrupt cross-delivery lot FK",
+        description: "Foreign lot must fail closed with 503",
+      });
+
+      const sup1Cookie = await login(supAdmin1.email);
+      const sup2Cookie = await login(supAdmin2.email);
+      const submitterCookie = await login(submitter1.email);
+      const peerDetailsCookie = await login(peerViewer1.email);
+      const peerOwnCookie = await login(peerOwnOnly.email);
+      const sch2Cookie = await login(sch2Kitchen.email);
+
+      const beforeSeq = await db.$queryRaw<
+        { last_value: bigint; is_called: boolean }[]
+      >`SELECT last_value, is_called FROM foodprint.ingredient_quality_feedback_complaint_code_seq`;
+      const beforeRow = await db.ingredientQualityFeedback.findUniqueOrThrow({
+        where: { id: respondedFeedback.id },
+      });
+
+      // Supplier 1, submitter (view_own), and school peer (view_details) all see exact same reply & original code.
+      for (const cookie of [sup1Cookie, submitterCookie, peerDetailsCookie]) {
+        const res = await call(
+          `/ingredient-quality-feedback/${respondedFeedback.id}`,
+          cookie,
+        );
+        assert.equal(res.status, 200);
+        assert.equal(res.data.id, respondedFeedback.id);
+        assert.equal(res.data.complaintCode, respondedFeedback.complaintCode);
+        assert.equal(
+          res.data.supplierResponse,
+          "Câu trả lời chính thức từ nhà cung cấp",
+        );
+        assert.deepEqual(res.data.submittedBy, {
+          id: submitter1.id,
+          fullName: submitter1.fullName,
+        });
+        assert.deepEqual(res.data.respondedBy, {
+          id: lockedResponder1.id,
+          fullName: lockedResponder1.fullName,
+        });
+        assert.deepEqual(res.data.ingredientLot, {
+          id: validLot.id,
+          lotCode: "LOT-US2-VALID",
+        });
+      }
+
+      // Note: lockedResponder1 has supplierId=sup2, so moving/locking responder must NOT grant sup2 access,
+      // and sup2 / peerOwnOnly / sch2Kitchen all get identical 404!
+      const notFoundResponses = await Promise.all([
+        call(
+          `/ingredient-quality-feedback/${respondedFeedback.id}`,
+          sup2Cookie,
+        ),
+        call(
+          `/ingredient-quality-feedback/${respondedFeedback.id}`,
+          peerOwnCookie,
+        ),
+        call(
+          `/ingredient-quality-feedback/${respondedFeedback.id}`,
+          sch2Cookie,
+        ),
+        call(
+          "/ingredient-quality-feedback/99999999-9999-4999-8999-999999999999",
+          sup1Cookie,
+        ),
+      ]);
+      for (const nf of notFoundResponses) {
+        assert.equal(nf.status, 404);
+        assert.equal(nf.result.message, notFoundResponses[3].result.message);
+      }
+
+      // Cross-delivery lot FK triggers safe 503 without leaking foreign lotId/lotCode
+      const wrongLotRes = await call(
+        `/ingredient-quality-feedback/${wrongLotFeedback.id}`,
+        sup1Cookie,
+      );
+      assert.equal(wrongLotRes.status, 503);
+      assert(!JSON.stringify(wrongLotRes.result).includes(foreignLot.id));
+      assert(
+        !JSON.stringify(wrongLotRes.result).includes("LOT-US2-FOREIGN-SECRET"),
+      );
+
+      // Zero DB or sequence mutations on GET detail
+      assert.deepEqual(
+        await db.ingredientQualityFeedback.findUniqueOrThrow({
+          where: { id: respondedFeedback.id },
+        }),
+        beforeRow,
+      );
+      assert.deepEqual(
+        await db.$queryRaw<
+          { last_value: bigint; is_called: boolean }[]
+        >`SELECT last_value, is_called FROM foodprint.ingredient_quality_feedback_complaint_code_seq`,
+        beforeSeq,
+      );
+    },
+  );
+
+  await context.test(
+    "US3 end-to-end supplier POST response updates SUBMITTED once, preserves UUID+complaintCode for SCHOOL FR-011 readback, supports historical unlinked data, rolls back on readback error and mutates no external timestamps or sequence",
+    async () => {
+      const supAdminRole = await db.role.findUniqueOrThrow({
+        where: { code: "INGREDIENT_SUPPLIER_ADMIN" },
+      });
+      const supStaffRole = await db.role.findUniqueOrThrow({
+        where: { code: "INGREDIENT_SUPPLIER_STAFF" },
+      });
+      const schKitchenRole = await db.role.findUniqueOrThrow({
+        where: { code: "SCHOOL_KITCHEN_STAFF" },
+      });
+      const sup1 = await db.supplier.create({
+        data: { name: "US3 Supplier 1" },
+      });
+      const sup2 = await db.supplier.create({
+        data: { name: "US3 Supplier 2" },
+      });
+      const sch1 = await db.school.create({
+        data: {
+          name: "US3 Historical School",
+          code: "SCH-US3",
+          status: "INACTIVE",
+        },
+      });
+      const sch2 = await db.school.create({
+        data: { name: "US3 Foreign School", code: "SCH-US3-F" },
+      });
+      const mkActor = async (
+        roleId: string,
+        roleCode: string,
+        tag: string,
+        org: { schoolId?: string; supplierId?: string },
+      ) =>
+        db.user.create({
+          data: {
+            roleId,
+            roleCode,
+            schoolId: org.schoolId ?? null,
+            supplierId: org.supplierId ?? null,
+            username: `${tag}-${randomUUID().slice(0, 8)}`,
+            email: `${tag}-${randomUUID().slice(0, 8)}@test.local`,
+            passwordHash,
+            fullName: tag,
+            status: "ACTIVE",
+          },
+        });
+      const supAdmin1 = await mkActor(
+        supAdminRole.id,
+        supAdminRole.code,
+        "us3-sup1-admin",
+        { supplierId: sup1.id },
+      );
+      const supStaff1 = await mkActor(
+        supStaffRole.id,
+        supStaffRole.code,
+        "us3-sup1-staff",
+        { supplierId: sup1.id },
+      );
+      const supAdmin2 = await mkActor(
+        supAdminRole.id,
+        supAdminRole.code,
+        "us3-sup2-admin",
+        { supplierId: sup2.id },
+      );
+      const submitter = await mkActor(
+        schKitchenRole.id,
+        schKitchenRole.code,
+        "us3-submitter",
+        { schoolId: sch1.id },
+      );
+      const schoolDetailsPeer = await mkActor(
+        schKitchenRole.id,
+        schKitchenRole.code,
+        "us3-peer-details",
+        { schoolId: sch1.id },
+      );
+      const foreignSchoolUser = await mkActor(
+        schKitchenRole.id,
+        schKitchenRole.code,
+        "us3-sch2-user",
+        { schoolId: sch2.id },
+      );
+      const viewDetailsPerm = await db.permission.findUniqueOrThrow({
+        where: { code: "ingredient_quality_feedback.view_details" },
+      });
+      // Restrict submitter to view_own only to prove FR-011 works for both view_own & view_details
+      await db.userPermissionDenial.create({
+        data: {
+          userId: submitter.id,
+          permissionId: viewDetailsPerm.id,
+          schoolId: sch1.id,
+          disabledByUserId: schoolDetailsPeer.id,
+        },
+      });
+
+      const relUnlinked = await db.schoolSupplierRelationship.create({
+        data: {
+          schoolId: sch1.id,
+          supplierId: sup1.id,
+          status: "UNLINKED",
+          linkedAt: new Date("2026-07-01T00:00:00Z"),
+          unlinkedAt: new Date("2026-08-01T00:00:00Z"),
+          unlinkReason: "Historical closure",
+        },
+      });
+      const expiredContract = await db.supplierContract.create({
+        data: {
+          relationshipId: relUnlinked.id,
+          schoolId: sch1.id,
+          supplierId: sup1.id,
+          createdByUserId: submitter.id,
+          status: "CLOSED",
+          number: `HD-US3-${randomUUID().slice(0, 6)}`,
+          signedOn: new Date("2024-12-20"),
+          startsOn: new Date("2025-01-01"),
+          endsOn: new Date("2025-12-31"),
+          activatedAt: new Date("2025-01-01T00:00:00Z"),
+          activatedByUserId: submitter.id,
+          snapshot: { legacy: true },
+          closedAt: new Date("2026-01-01T00:00:00Z"),
+          closeReason: "Historical closure",
+        },
+      });
+      const ing1 = await db.ingredient.create({
+        data: { supplierId: sup1.id, name: "US3 Ing", defaultUnit: "kg" },
+      });
+      const del1 = await db.delivery.create({
+        data: {
+          deliveryNo: "FP-DE-70001",
+          schoolId: sch1.id,
+          supplierId: sup1.id,
+          creationMode: "STANDALONE",
+          creationKey: randomUUID(),
+          creationFingerprint: "2".repeat(64),
+          createdByUserId: supAdmin1.id,
+          status: "RECEIVED",
+          receivedAt: new Date("2026-09-10T08:00:00Z"),
+          receivedByUserId: submitter.id,
+        },
+      });
+      const di1 = await db.deliveryItem.create({
+        data: {
+          deliveryId: del1.id,
+          ingredientId: ing1.id,
+          actualQuantity: "3.000",
+          unit: "kg",
+        },
+      });
+      const lot1 = await db.ingredientLot.create({
+        data: {
+          deliveryItemId: di1.id,
+          lotCode: "LOT-US3-01",
+          receivedQuantity: "3.000",
+          availableQuantity: "3.000",
+          unit: "kg",
+          status: "AVAILABLE",
+        },
+      });
+
+      const fTarget = await createComplaintViaProducerContract({
+        deliveryId: del1.id,
+        ingredientLotId: lot1.id,
+        submittedByUserId: submitter.id,
+        title: "US3 Historical complaint",
+        description: "Original immutable complaint content",
+      });
+      const fRollback = await createComplaintViaProducerContract({
+        deliveryId: del1.id,
+        ingredientLotId: lot1.id,
+        submittedByUserId: submitter.id,
+        title: "US3 Rollback test complaint",
+        description: "Rollback must leave SUBMITTED untouched",
+      });
+
+      const sup1Cookie = await login(supAdmin1.email);
+      const sup1StaffCookie = await login(supStaff1.email);
+      const sup2Cookie = await login(supAdmin2.email);
+      const submitterCookie = await login(submitter.email);
+      const peerDetailsCookie = await login(schoolDetailsPeer.email);
+      const foreignSchoolCookie = await login(foreignSchoolUser.email);
+
+      // Foreign org POST -> 404 before any mutation
+      for (const c of [sup2Cookie]) {
+        const nf = await call(
+          `/ingredient-quality-feedback/${fTarget.id}/response`,
+          c,
+          "POST",
+          { supplierResponse: "Unauthorized foreign supplier attempt" },
+        );
+        assert.equal(nf.status, 404);
+      }
+      assert.equal(
+        (
+          await call(
+            `/ingredient-quality-feedback/${fTarget.id}/response`,
+            foreignSchoolCookie,
+            "POST",
+            { supplierResponse: "School cannot reply" },
+          )
+        ).status,
+        403,
+      );
+
+      // Snapshot external rows & timestamps before POST response
+      const snapshotExternal = async () => ({
+        delivery: await db.delivery.findUniqueOrThrow({
+          where: { id: del1.id },
+        }),
+        lot: await db.ingredientLot.findUniqueOrThrow({
+          where: { id: lot1.id },
+        }),
+        school: await db.school.findUniqueOrThrow({ where: { id: sch1.id } }),
+        rel: await db.schoolSupplierRelationship.findUniqueOrThrow({
+          where: { id: relUnlinked.id },
+        }),
+        contract: await db.supplierContract.findUniqueOrThrow({
+          where: { id: expiredContract.id },
+        }),
+        submitterUser: await db.user.findUniqueOrThrow({
+          where: { id: submitter.id },
+        }),
+        responderUser: await db.user.findUniqueOrThrow({
+          where: { id: supStaff1.id },
+        }),
+        seq: await db.$queryRaw<
+          { last_value: bigint; is_called: boolean }[]
+        >`SELECT last_value, is_called FROM foodprint.ingredient_quality_feedback_complaint_code_seq`,
+      });
+      const before = await snapshotExternal();
+
+      const replyText =
+        "  Phản hồi chính thức sau ngừng liên kết.\nĐang đổi lô bù. ";
+      const expectedReply =
+        "Phản hồi chính thức sau ngừng liên kết.\nĐang đổi lô bù.";
+      const postRes = await call(
+        `/ingredient-quality-feedback/${fTarget.id}/response`,
+        sup1StaffCookie,
+        "POST",
+        { supplierResponse: replyText },
+      );
+      assert.equal(postRes.status, 200);
+      assert.equal(postRes.data.id, fTarget.id);
+      assert.equal(postRes.data.complaintCode, fTarget.complaintCode);
+      assert.equal(postRes.data.status, "RESPONDED");
+      assert.equal(postRes.data.supplierResponse, expectedReply);
+      assert.deepEqual(postRes.data.respondedBy, {
+        id: supStaff1.id,
+        fullName: supStaff1.fullName,
+      });
+
+      // External entities and complaint sequence remain untouched
+      assert.deepEqual(await snapshotExternal(), before);
+      const updatedTarget =
+        await db.ingredientQualityFeedback.findUniqueOrThrow({
+          where: { id: fTarget.id },
+        });
+      assert.equal(updatedTarget.id, fTarget.id);
+      assert.equal(updatedTarget.complaintCode, fTarget.complaintCode);
+      assert.equal(updatedTarget.title, fTarget.title);
+      assert.equal(updatedTarget.description, fTarget.description);
+      assert.equal(updatedTarget.submittedByUserId, submitter.id);
+      assert.equal(+updatedTarget.createdAt, +fTarget.createdAt);
+      assert(+updatedTarget.updatedAt >= +fTarget.updatedAt);
+
+      // Both supplier admin and SCHOOL (own + details) read exact same reply & id & code
+      for (const readerCookie of [
+        sup1Cookie,
+        submitterCookie,
+        peerDetailsCookie,
+      ]) {
+        const readRes = await call(
+          `/ingredient-quality-feedback/${fTarget.id}`,
+          readerCookie,
+        );
+        assert.equal(readRes.status, 200);
+        assert.equal(readRes.data.id, fTarget.id);
+        assert.equal(readRes.data.complaintCode, fTarget.complaintCode);
+        assert.equal(readRes.data.supplierResponse, expectedReply);
+        assert.deepEqual(readRes.data.respondedBy, {
+          id: supStaff1.id,
+          fullName: supStaff1.fullName,
+        });
+      }
+
+      // Simulated readback failure via repository injection rolls back DB write atomically (without disabling CHECKs)
+      const rollbackSvc = createIngredientQualityFeedbackService(
+        {
+          ...feedbackRepoFixture,
+          findLotInDelivery: async () => Promise.resolve(null),
+        },
+        () => Promise.resolve(db),
+      );
+      const staffPrincipal = await loadPrincipal(supStaff1.id, db);
+      await assert.rejects(
+        () =>
+          rollbackSvc.respond(
+            { feedbackId: fRollback.id },
+            { supplierResponse: "Must roll back" },
+            staffPrincipal,
+          ),
+        (err: unknown) => err instanceof HttpError && err.statusCode === 503,
+      );
+      const afterRb = await db.ingredientQualityFeedback.findUniqueOrThrow({
+        where: { id: fRollback.id },
+      });
+      assert.equal(afterRb.status, "SUBMITTED");
+      assert.equal(afterRb.supplierResponse, null);
+      assert.equal(afterRb.respondedByUserId, null);
+      assert.equal(afterRb.respondedAt, null);
     },
   );
 });
