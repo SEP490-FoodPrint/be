@@ -43,14 +43,30 @@ export const kitchenDetailSelect = {
           expiryDate: true,
           DeliveryItem: {
             select: {
-              Ingredient: { select: { name: true } },
+              Ingredient: {
+                select: { name: true, Supplier: { select: { name: true } } },
+              },
               IngredientEntry: {
-                select: { Ingredient: { select: { name: true } } },
+                select: {
+                  Ingredient: {
+                    select: {
+                      name: true,
+                      Supplier: { select: { name: true } },
+                    },
+                  },
+                },
               },
               SupplyRequestItem: {
                 select: {
                   IngredientEntry: {
-                    select: { Ingredient: { select: { name: true } } },
+                    select: {
+                      Ingredient: {
+                        select: {
+                          name: true,
+                          Supplier: { select: { name: true } },
+                        },
+                      },
+                    },
                   },
                 },
               },

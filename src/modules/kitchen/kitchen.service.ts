@@ -942,6 +942,13 @@ function dto(batch: Detail): CookingBatchDetailDTO {
       lot.IngredientLot?.DeliveryItem?.SupplyRequestItem?.IngredientEntry
         ?.Ingredient?.name ??
       null,
+    supplierName:
+      lot.IngredientLot?.DeliveryItem?.Ingredient?.Supplier?.name ??
+      lot.IngredientLot?.DeliveryItem?.IngredientEntry?.Ingredient?.Supplier
+        ?.name ??
+      lot.IngredientLot?.DeliveryItem?.SupplyRequestItem?.IngredientEntry
+        ?.Ingredient?.Supplier?.name ??
+      null,
     expiryDate:
       lot.IngredientLot?.expiryDate?.toISOString().slice(0, 10) ?? null,
   }));
@@ -1262,31 +1269,33 @@ export function createKitchenLifecycle(
             409,
             "Bữa đã có các chế độ chế biến khác nhau; cần đối chiếu",
           );
-        const recipes = menu.menuDayDishes.flatMap((dish) => {
-          const portions =
-            (demand.dishPortions.get(dish.dishId) ?? 0) -
-            (planned.get(dish.dishId) ?? 0);
-          if (!portions) return [];
-          const recipe = dish.ingredients.map((row) => {
-            const entries = row.ingredient.ingredientEntries;
-            if (entries.length !== 1)
+        const recipes = menu.menuDayDishes
+          .filter((dish) => !input.dishId || dish.dishId === input.dishId)
+          .flatMap((dish) => {
+            const portions =
+              (demand.dishPortions.get(dish.dishId) ?? 0) -
+              (planned.get(dish.dishId) ?? 0);
+            if (!portions) return [];
+            const recipe = dish.ingredients.map((row) => {
+              const entries = row.ingredient.ingredientEntries;
+              if (entries.length !== 1)
+                throw new HttpError(
+                  409,
+                  "Nguyên liệu thực đơn chưa xác định được danh mục kho trường",
+                );
+              return {
+                ingredientEntryId: entries[0].id,
+                quantityPerPortion: row.quantityPerPortion.toString(),
+                unit: row.unit,
+              };
+            });
+            if (!recipe.length)
               throw new HttpError(
                 409,
-                "Nguyên liệu thực đơn chưa xác định được danh mục kho trường",
+                "Thiếu định mức chính thức của món trong thực đơn",
               );
-            return {
-              ingredientEntryId: entries[0].id,
-              quantityPerPortion: row.quantityPerPortion.toString(),
-              unit: row.unit,
-            };
+            return [{ dishId: dish.dishId, portions, recipe }];
           });
-          if (!recipe.length)
-            throw new HttpError(
-              409,
-              "Thiếu định mức chính thức của món trong thực đơn",
-            );
-          return [{ dishId: dish.dishId, portions, recipe }];
-        });
         if (!recipes.length && preview)
           return {
             batches: [],
@@ -1404,8 +1413,17 @@ export function createKitchenLifecycle(
           batchCode: `B-${randomUUID()}`,
         });
         const created: Detail[] = [];
+        // Lô được đánh số theo từng món trong bữa: Lô 1, Lô 2... tiếp nối các lô đã có.
+        const lotCounter = new Map<string, number>();
+        for (const child of existing)
+          for (const dish of child.dishes)
+            lotCounter.set(dish.dishId, (lotCounter.get(dish.dishId) ?? 0) + 1);
         for (let i = 0; i < children.length; i++) {
           const child = children[i];
+          const lotKey =
+            child.dishes.length === 1 ? child.dishes[0].dishId : `group:${i}`;
+          const batchNumber = (lotCounter.get(lotKey) ?? 0) + 1;
+          lotCounter.set(lotKey, batchNumber);
           created.push(
             await repository.createPlannedChild(
               tx,
@@ -1413,7 +1431,7 @@ export function createKitchenLifecycle(
                 ...meal,
                 batchGroupId: group.id,
                 batchCode: `CB-${randomUUID()}`,
-                batchNumber: i + 1,
+                batchNumber,
                 dishId:
                   child.dishes.length === 1 ? child.dishes[0].dishId : null,
                 cookingModeApplied: mode,

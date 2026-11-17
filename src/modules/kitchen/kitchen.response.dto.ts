@@ -20,6 +20,7 @@ export interface CookingBatchLotDTO {
   unit: string;
   lotCode: string | null;
   ingredientName: string | null;
+  supplierName: string | null;
   expiryDate: string | null;
 }
 
