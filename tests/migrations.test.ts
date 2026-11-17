@@ -3742,4 +3742,588 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
       }
     },
   );
+
+  await context.test(
+    "fresh replay configures complaint_code column and empty BIGINT sequence with no default, functions or triggers",
+    async () => {
+      const migration = "20261120000300_ingredient_feedback_complaint_code";
+      assert(
+        migrationNames.includes(migration),
+        "Versioned complaint_code migration must exist",
+      );
+      const migrationSql = await readFile(
+        path.join(root, "prisma/migrations", migration, "migration.sql"),
+        "utf8",
+      );
+      assert.match(migrationSql, /BEGIN\s*;/i);
+      assert.match(migrationSql, /COMMIT\s*;\s*$/i);
+      assert.match(migrationSql, /LOCK\s+TABLE[\s\S]*ACCESS\s+EXCLUSIVE/i);
+      assert.doesNotMatch(
+        migrationSql,
+        /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION/i,
+      );
+      assert.doesNotMatch(migrationSql, /CREATE\s+TRIGGER/i);
+      assert.doesNotMatch(
+        migrationSql,
+        /SET\s+DEFAULT\s+nextval|ADD\s+COLUMN\s+complaint_code[\s\S]*DEFAULT/i,
+      );
+
+      const column = (
+        await db.query<{
+          type: string;
+          not_null: boolean;
+          default_value: string | null;
+        }>(
+          `SELECT format_type(a.atttypid, a.atttypmod) AS type,
+                  a.attnotnull AS not_null,
+                  pg_get_expr(d.adbin, d.adrelid) AS default_value
+           FROM pg_class c
+           JOIN pg_namespace n ON n.oid = c.relnamespace
+           JOIN pg_attribute a ON a.attrelid = c.oid
+           LEFT JOIN pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
+           WHERE n.nspname = 'foodprint'
+             AND c.relname = 'ingredient_quality_feedback'
+             AND a.attname = 'complaint_code'
+             AND a.attnum > 0 AND NOT a.attisdropped`,
+        )
+      ).rows[0];
+      assert.deepEqual(column, {
+        type: "character varying(25)",
+        not_null: true,
+        default_value: null,
+      });
+
+      const sequence = (
+        await db.query<{
+          data_type: string;
+          seqincrement: string;
+          seqmin: string;
+          seqmax: string;
+          seqcache: string;
+          seqcycle: boolean;
+        }>(
+          `SELECT format_type(seqtypid, -1) AS data_type,
+                  seqincrement, seqmin, seqmax, seqcache, seqcycle
+           FROM pg_sequence
+           WHERE seqrelid = 'foodprint.ingredient_quality_feedback_complaint_code_seq'::regclass`,
+        )
+      ).rows[0];
+      assert.deepEqual(sequence, {
+        data_type: "bigint",
+        seqincrement: "1",
+        seqmin: "1",
+        seqmax: "9223372036854775807",
+        seqcache: "1",
+        seqcycle: false,
+      });
+      assert.equal(
+        (
+          await db.query<{ owner: string }>(
+            "SELECT pg_get_serial_sequence('foodprint.ingredient_quality_feedback', 'complaint_code') AS owner",
+          )
+        ).rows[0].owner,
+        "foodprint.ingredient_quality_feedback_complaint_code_seq",
+      );
+
+      const rowCount = (
+        await db.query<{ count: number }>(
+          "SELECT count(*)::int AS count FROM foodprint.ingredient_quality_feedback",
+        )
+      ).rows[0].count;
+      assert.equal(rowCount, 0);
+      assert.deepEqual(
+        (
+          await db.query<{ last_value: string; is_called: boolean }>(
+            "SELECT last_value, is_called FROM foodprint.ingredient_quality_feedback_complaint_code_seq",
+          )
+        ).rows[0],
+        { last_value: "1", is_called: false },
+      );
+      assert.equal(
+        (
+          await db.query<{ value: string }>(
+            "SELECT nextval('foodprint.ingredient_quality_feedback_complaint_code_seq') AS value",
+          )
+        ).rows[0].value,
+        "1",
+      );
+    },
+  );
+
+  await context.test(
+    "ingredient feedback complaint code migration backfills deterministically (including tied created_at and >99999 without truncation), preserves legacy rows/timestamps, enforces constraints and continues sequence",
+    async () => {
+      const migration = "20261120000300_ingredient_feedback_complaint_code";
+      const migrationSql = await readFile(
+        path.join(root, "prisma/migrations", migration, "migration.sql"),
+        "utf8",
+      );
+      const name = `foodprint_migration_test_complaint_codes_${randomUUID().replaceAll("-", "")}`;
+      await db.query(`CREATE DATABASE "${name}"`);
+      recordLocalTestDatabase(name);
+      const isolated = new URL(url);
+      isolated.pathname = `/${name}`;
+      const temporary = await mkdtemp(
+        path.join(tmpdir(), "foodprint-complaint-codes-"),
+      );
+      const directory = path.join(temporary, "migrations");
+      const config = path.join(temporary, "prisma.config.ts");
+      const legacy = new Client({ connectionString: isolated.toString() });
+      const largeName = `foodprint_migration_test_complaint_large_${randomUUID().replaceAll("-", "")}`;
+      const largeClient = new Client({
+        connectionString: (() => {
+          const u = new URL(url);
+          u.pathname = `/${largeName}`;
+          return u.toString();
+        })(),
+      });
+      try {
+        await mkdir(directory);
+        await copyFile(
+          path.join(root, "prisma/migrations/migration_lock.toml"),
+          path.join(directory, "migration_lock.toml"),
+        );
+        const copyMigration = async (item: string) => {
+          await mkdir(path.join(directory, item));
+          await copyFile(
+            path.join(root, "prisma/migrations", item, "migration.sql"),
+            path.join(directory, item, "migration.sql"),
+          );
+        };
+        for (const previous of migrationNames.filter(
+          (item) => item < migration,
+        )) {
+          await copyMigration(previous);
+        }
+        await writeFile(
+          config,
+          `import { defineConfig } from ${JSON.stringify(path.join(root, "node_modules/prisma/config.js"))};\nexport default defineConfig({ schema: ${JSON.stringify(path.join(root, "prisma/schema.prisma"))}, migrations: { path: ${JSON.stringify(directory)} }, datasource: { url: process.env.DATABASE_URL } });\n`,
+        );
+        const deploy = () =>
+          runPrisma(isolated.toString(), [
+            "migrate",
+            "deploy",
+            "--config",
+            config,
+          ]);
+        await deploy();
+        await legacy.connect();
+
+        // Confirm legacy schema does not have complaint_code or the new sequence yet.
+        assert.equal(
+          (
+            await legacy.query<{ count: number }>(
+              `SELECT count(*)::int AS count FROM information_schema.columns
+               WHERE table_schema='foodprint' AND table_name='ingredient_quality_feedback' AND column_name='complaint_code'`,
+            )
+          ).rows[0].count,
+          0,
+        );
+        assert.equal(
+          (
+            await legacy.query<{ name: string | null }>(
+              "SELECT to_regclass('foodprint.ingredient_quality_feedback_complaint_code_seq')::text AS name",
+            )
+          ).rows[0].name,
+          null,
+        );
+
+        const routinesBefore = (
+          await legacy.query(
+            "SELECT p.proname AS name, pg_get_function_identity_arguments(p.oid) AS arguments FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='foodprint' ORDER BY 1,2",
+          )
+        ).rows;
+        const triggersBefore = (
+          await legacy.query(
+            "SELECT c.relname AS table_name, t.tgname AS name FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='foodprint' AND NOT t.tgisinternal ORDER BY 1,2",
+          )
+        ).rows;
+
+        // Seed parent fixtures and legacy feedback rows with tied created_at inserted out of id order.
+        await legacy.query(`
+          INSERT INTO foodprint.roles(code,name,type) VALUES
+            ('SCHOOL_MANAGEMENT_BOARD','Legacy BGH','SCHOOL'),
+            ('INGREDIENT_SUPPLIER_ADMIN','Legacy Supplier Admin','SUPPLIER')
+          ON CONFLICT (code) DO NOTHING;
+        `);
+        const schoolRole = (
+          await legacy.query<{ id: string }>(
+            "SELECT id FROM foodprint.roles WHERE code='SCHOOL_MANAGEMENT_BOARD'",
+          )
+        ).rows[0].id;
+        const supRole = (
+          await legacy.query<{ id: string }>(
+            "SELECT id FROM foodprint.roles WHERE code='INGREDIENT_SUPPLIER_ADMIN'",
+          )
+        ).rows[0].id;
+        const schoolId = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.schools(name,code) VALUES('Legacy School','SCH-LEG') RETURNING id",
+          )
+        ).rows[0].id;
+        const supplierId = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.suppliers(name) VALUES('Legacy Supplier') RETURNING id",
+          )
+        ).rows[0].id;
+        const schoolUserId = (
+          await legacy.query<{ id: string }>(
+            `INSERT INTO foodprint.users(role_id,role_code,school_id,username,email,password_hash,full_name,status)
+             VALUES($1,'SCHOOL_MANAGEMENT_BOARD',$2,'legacy-bgh','legacy-bgh@example.test','legacy-hash','Legacy School User','ACTIVE') RETURNING id`,
+            [schoolRole, schoolId],
+          )
+        ).rows[0].id;
+        const supplierUserId = (
+          await legacy.query<{ id: string }>(
+            `INSERT INTO foodprint.users(role_id,role_code,supplier_id,username,email,password_hash,full_name,status)
+             VALUES($1,'INGREDIENT_SUPPLIER_ADMIN',$2,'legacy-sup','legacy-sup@example.test','legacy-hash','Legacy Supplier User','ACTIVE') RETURNING id`,
+            [supRole, supplierId],
+          )
+        ).rows[0].id;
+        const ingredientId = (
+          await legacy.query<{ id: string }>(
+            "INSERT INTO foodprint.ingredients(supplier_id,name,default_unit) VALUES($1,'Legacy Rice','kg') RETURNING id",
+            [supplierId],
+          )
+        ).rows[0].id;
+        const deliveryId = (
+          await legacy.query<{ id: string }>(
+            `INSERT INTO foodprint.deliveries(delivery_no,supply_request_id,school_id,supplier_id,creation_mode,creation_key,creation_fingerprint,status,created_by_user_id)
+             VALUES('FP-DE-90001',NULL,$1,$2,'STANDALONE',$3,$4,'CREATED',$5) RETURNING id`,
+            [
+              schoolId,
+              supplierId,
+              randomUUID(),
+              "a".repeat(64),
+              supplierUserId,
+            ],
+          )
+        ).rows[0].id;
+        const deliveryItemId = (
+          await legacy.query<{ id: string }>(
+            `INSERT INTO foodprint.delivery_items(delivery_id,ingredient_id,actual_quantity,unit)
+             VALUES($1,$2,10.000,'kg') RETURNING id`,
+            [deliveryId, ingredientId],
+          )
+        ).rows[0].id;
+        const lotId = (
+          await legacy.query<{ id: string }>(
+            `INSERT INTO foodprint.ingredient_lots(delivery_item_id,lot_code,received_quantity,available_quantity,unit,status)
+             VALUES($1,'LOT-LEG-01',10.000,10.000,'kg','AVAILABLE') RETURNING id`,
+            [deliveryItemId],
+          )
+        ).rows[0].id;
+
+        const idEarliest = "00000000-0000-4000-8000-000000000001";
+        const idTieLow = "00000000-0000-4000-8000-00000000000a";
+        const idTieHigh = "00000000-0000-4000-8000-00000000000c";
+
+        // Insert idTieHigh BEFORE idTieLow with identical created_at to prove id ASC tie-breaking.
+        await legacy.query(
+          `INSERT INTO foodprint.ingredient_quality_feedback
+             (id,delivery_id,ingredient_lot_id,submitted_by_user_id,title,description,status,supplier_response,responded_by_user_id,responded_at,created_at,updated_at)
+           VALUES
+             ($1,$4,$5,$6,'Legacy responded','Has response','RESPONDED','Đã tiếp nhận',$7,'2026-10-02T11:22:33.111222Z','2026-10-02T10:00:00.123456Z','2026-10-02T12:34:56.789123Z'),
+             ($2,$4,NULL,$6,'Legacy earliest','Earliest feedback','SUBMITTED',NULL,NULL,NULL,'2026-10-01T08:00:00.123456Z','2026-10-01T09:10:11.654321Z'),
+             ($3,$4,$5,$6,'Legacy tied low','Tied timestamp lower id','SUBMITTED',NULL,NULL,NULL,'2026-10-02T10:00:00.123456Z','2026-10-02T10:00:00.123456Z')`,
+          [
+            idTieHigh,
+            idEarliest,
+            idTieLow,
+            deliveryId,
+            lotId,
+            schoolUserId,
+            supplierUserId,
+          ],
+        );
+
+        const before = (
+          await legacy.query<{ row: unknown }>(
+            "SELECT to_jsonb(f) AS row FROM foodprint.ingredient_quality_feedback f ORDER BY id",
+          )
+        ).rows;
+
+        // Failed DDL rolls back completely without adding column or sequence or changing data.
+        const failBeforeCommit = migrationSql.replace(
+          /COMMIT\s*;\s*$/i,
+          "SELECT 1 / 0;\nCOMMIT;\n",
+        );
+        await assert.rejects(legacy.query(failBeforeCommit), (error) =>
+          sqlState(error, "22012"),
+        );
+        await legacy.query("ROLLBACK");
+        assert.deepEqual(
+          (
+            await legacy.query<{ row: unknown }>(
+              "SELECT to_jsonb(f) AS row FROM foodprint.ingredient_quality_feedback f ORDER BY id",
+            )
+          ).rows,
+          before,
+        );
+
+        // Apply migration through Prisma deploy.
+        await copyMigration(migration);
+        await deploy();
+
+        assert.deepEqual(
+          (
+            await legacy.query<{ row: unknown }>(
+              "SELECT to_jsonb(f)-'complaint_code' AS row FROM foodprint.ingredient_quality_feedback f ORDER BY id",
+            )
+          ).rows,
+          before,
+        );
+
+        const backfilled = (
+          await legacy.query<{ id: string; complaint_code: string }>(
+            "SELECT id, complaint_code FROM foodprint.ingredient_quality_feedback ORDER BY created_at ASC, id ASC",
+          )
+        ).rows;
+        assert.deepEqual(backfilled, [
+          { id: idEarliest, complaint_code: "FP-CP-00001" },
+          { id: idTieLow, complaint_code: "FP-CP-00002" },
+          { id: idTieHigh, complaint_code: "FP-CP-00003" },
+        ]);
+
+        // No new SQL functions or triggers added.
+        assert.deepEqual(
+          (
+            await legacy.query(
+              "SELECT p.proname AS name, pg_get_function_identity_arguments(p.oid) AS arguments FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='foodprint' ORDER BY 1,2",
+            )
+          ).rows,
+          routinesBefore,
+        );
+        assert.deepEqual(
+          (
+            await legacy.query(
+              "SELECT c.relname AS table_name, t.tgname AS name FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='foodprint' AND NOT t.tgisinternal ORDER BY 1,2",
+            )
+          ).rows,
+          triggersBefore,
+        );
+
+        // Next sequence value after N=3 legacy rows is 4.
+        assert.equal(
+          (
+            await legacy.query<{ value: string }>(
+              "SELECT nextval('foodprint.ingredient_quality_feedback_complaint_code_seq') AS value",
+            )
+          ).rows[0].value,
+          "4",
+        );
+
+        // Enforce NOT NULL / no default / unique / CHECK format + range / legacy response CHECK.
+        await assert.rejects(
+          legacy.query(
+            `INSERT INTO foodprint.ingredient_quality_feedback(delivery_id,submitted_by_user_id,title,description)
+             VALUES($1,$2,'Missing code','No default allowed')`,
+            [deliveryId, schoolUserId],
+          ),
+          (error) => sqlState(error, "23502"),
+        );
+        await assert.rejects(
+          legacy.query(
+            `INSERT INTO foodprint.ingredient_quality_feedback(delivery_id,submitted_by_user_id,complaint_code,title,description)
+             VALUES($1,$2,NULL,'Null code','Not null enforced')`,
+            [deliveryId, schoolUserId],
+          ),
+          (error) => sqlState(error, "23502"),
+        );
+        await assert.rejects(
+          legacy.query(
+            `INSERT INTO foodprint.ingredient_quality_feedback(delivery_id,submitted_by_user_id,complaint_code,title,description)
+             VALUES($1,$2,'FP-CP-00001','Duplicate code','Unique enforced')`,
+            [deliveryId, schoolUserId],
+          ),
+          (error) =>
+            sqlState(
+              error,
+              "23505",
+              "ingredient_quality_feedback_complaint_code_key",
+            ),
+        );
+        for (const badCode of [
+          "",
+          "FP-CP-00000",
+          "FP-CP-0001",
+          "FP-CP-000001",
+          "FP-CP-010000",
+          "fp-cp-00001",
+          "FP-CP-abcde",
+          "FP-CP-9223372036854775808",
+          "FP-CP-00001 ",
+          "FP-CP-00001\n",
+        ]) {
+          await assert.rejects(
+            legacy.query(
+              `INSERT INTO foodprint.ingredient_quality_feedback(delivery_id,submitted_by_user_id,complaint_code,title,description)
+               VALUES($1,$2,$3,'Bad code','CHECK enforced')`,
+              [deliveryId, schoolUserId, badCode],
+            ),
+            (error) =>
+              sqlState(
+                error,
+                "23514",
+                "ingredient_quality_feedback_complaint_code_format",
+              ),
+            `Expected format CHECK failure for ${JSON.stringify(badCode)}`,
+          );
+        }
+        // Preserved chk_ingredient_feedback_response must still reject partial response tuple.
+        await assert.rejects(
+          legacy.query(
+            `INSERT INTO foodprint.ingredient_quality_feedback(delivery_id,submitted_by_user_id,complaint_code,title,description,status,supplier_response)
+             VALUES($1,$2,'FP-CP-00004','Bad response tuple','Missing actor/time','RESPONDED','Incomplete')`,
+            [deliveryId, schoolUserId],
+          ),
+          (error) =>
+            sqlState(error, "23514", "chk_ingredient_feedback_response"),
+        );
+        // Valid 6-digit (>=100000) and MAX_BIGINT codes succeed under CHECK and varchar(25).
+        await legacy.query(
+          `INSERT INTO foodprint.ingredient_quality_feedback(delivery_id,submitted_by_user_id,complaint_code,title,description)
+           VALUES($1,$2,'FP-CP-100000','Six digits','Allowed'),($1,$2,'FP-CP-9223372036854775807','Max bigint','Allowed')`,
+          [deliveryId, schoolUserId],
+        );
+
+        // Deploy replay idempotency and migrate diff parity against prisma/schema.prisma.
+        const deployedHistory = (
+          await legacy.query<MigrationHistoryRow>(
+            "SELECT migration_name,checksum,finished_at,rolled_back_at FROM foodprint._prisma_migrations ORDER BY migration_name",
+          )
+        ).rows;
+        assert.equal(deployedHistory.at(-1)?.migration_name, migration);
+        await deploy();
+        assert.deepEqual(
+          (
+            await legacy.query<MigrationHistoryRow>(
+              "SELECT migration_name,checksum,finished_at,rolled_back_at FROM foodprint._prisma_migrations ORDER BY migration_name",
+            )
+          ).rows,
+          deployedHistory,
+        );
+        for (const subsequent of migrationNames.filter(
+          (item) => item > migration,
+        )) {
+          await copyMigration(subsequent);
+        }
+        await deploy();
+        await runPrisma(isolated.toString(), [
+          "migrate",
+          "diff",
+          "--from-config-datasource",
+          "--to-schema",
+          path.join(root, "prisma/schema.prisma"),
+          "--exit-code",
+          "--config",
+          config,
+        ]);
+
+        // Prove actual backfill does not truncate >99999 rows in a dedicated clean legacy DB.
+        await db.query(`CREATE DATABASE "${largeName}"`);
+        recordLocalTestDatabase(largeName);
+        await largeClient.connect();
+        await largeClient.query(
+          "CREATE SCHEMA IF NOT EXISTS foodprint; SET search_path = foodprint, public;",
+        );
+        for (const previous of migrationNames.filter(
+          (item) => item < migration,
+        )) {
+          await largeClient.query(
+            await readFile(
+              path.join(root, "prisma/migrations", previous, "migration.sql"),
+              "utf8",
+            ),
+          );
+        }
+        await largeClient.query("SET search_path = public;");
+        await largeClient.query(`
+          INSERT INTO foodprint.roles(code,name,type) VALUES
+            ('SCHOOL_MANAGEMENT_BOARD','Large BGH','SCHOOL'),
+            ('INGREDIENT_SUPPLIER_ADMIN','Large Supplier Admin','SUPPLIER')
+          ON CONFLICT (code) DO NOTHING;
+        `);
+        const lRole = (
+          await largeClient.query<{ id: string }>(
+            "SELECT id FROM foodprint.roles WHERE code='SCHOOL_MANAGEMENT_BOARD'",
+          )
+        ).rows[0].id;
+        const lSupRole = (
+          await largeClient.query<{ id: string }>(
+            "SELECT id FROM foodprint.roles WHERE code='INGREDIENT_SUPPLIER_ADMIN'",
+          )
+        ).rows[0].id;
+        const lSchool = (
+          await largeClient.query<{ id: string }>(
+            "INSERT INTO foodprint.schools(name) VALUES('Large School') RETURNING id",
+          )
+        ).rows[0].id;
+        const lSupplier = (
+          await largeClient.query<{ id: string }>(
+            "INSERT INTO foodprint.suppliers(name) VALUES('Large Supplier') RETURNING id",
+          )
+        ).rows[0].id;
+        const lUser = (
+          await largeClient.query<{ id: string }>(
+            `INSERT INTO foodprint.users(role_id,role_code,school_id,username,email,password_hash,full_name,status)
+             VALUES($1,'SCHOOL_MANAGEMENT_BOARD',$2,'large-bgh','large-bgh@example.test','h','Large User','ACTIVE') RETURNING id`,
+            [lRole, lSchool],
+          )
+        ).rows[0].id;
+        const lSupUser = (
+          await largeClient.query<{ id: string }>(
+            `INSERT INTO foodprint.users(role_id,role_code,supplier_id,username,email,password_hash,full_name,status)
+             VALUES($1,'INGREDIENT_SUPPLIER_ADMIN',$2,'large-sup','large-sup@example.test','h','Large Sup','ACTIVE') RETURNING id`,
+            [lSupRole, lSupplier],
+          )
+        ).rows[0].id;
+        const lDelivery = (
+          await largeClient.query<{ id: string }>(
+            `INSERT INTO foodprint.deliveries(delivery_no,supply_request_id,school_id,supplier_id,creation_mode,creation_key,creation_fingerprint,status,created_by_user_id)
+             VALUES('FP-DE-99999',NULL,$1,$2,'STANDALONE',$3,$4,'CREATED',$5) RETURNING id`,
+            [lSchool, lSupplier, randomUUID(), "b".repeat(64), lSupUser],
+          )
+        ).rows[0].id;
+        await largeClient.query(
+          `INSERT INTO foodprint.ingredient_quality_feedback(delivery_id,submitted_by_user_id,title,description,created_at,updated_at)
+           SELECT $1, $2, 'Row ' || g, 'Desc ' || g,
+                  TIMESTAMPTZ '2026-01-01T00:00:00Z' + (g * interval '1 second'),
+                  TIMESTAMPTZ '2026-01-01T00:00:00Z' + (g * interval '1 second')
+           FROM generate_series(1, 100001) AS g`,
+          [lDelivery, lUser],
+        );
+        await largeClient.query(migrationSql);
+        const tailCodes = (
+          await largeClient.query<{ complaint_code: string }>(
+            `SELECT complaint_code FROM foodprint.ingredient_quality_feedback
+             WHERE complaint_code IN ('FP-CP-00001','FP-CP-99999','FP-CP-100000','FP-CP-100001')
+             ORDER BY created_at ASC, id ASC`,
+          )
+        ).rows.map((r) => r.complaint_code);
+        assert.deepEqual(tailCodes, [
+          "FP-CP-00001",
+          "FP-CP-99999",
+          "FP-CP-100000",
+          "FP-CP-100001",
+        ]);
+        assert.equal(
+          (
+            await largeClient.query<{ value: string }>(
+              "SELECT nextval('foodprint.ingredient_quality_feedback_complaint_code_seq') AS value",
+            )
+          ).rows[0].value,
+          "100002",
+        );
+      } finally {
+        await largeClient.end().catch(() => undefined);
+        await db
+          .query(`DROP DATABASE IF EXISTS "${largeName}"`)
+          .catch(() => undefined);
+        await legacy.end();
+        await rm(temporary, { recursive: true, force: true });
+        await db.query(`DROP DATABASE "${name}"`);
+      }
+    },
+  );
 });

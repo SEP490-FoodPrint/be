@@ -20,6 +20,8 @@ import {
   databaseOperation,
 } from "../src/utils/authorization";
 import {
+  ingredientQualityFeedbackReadScope,
+  ingredientQualityFeedbackResponseScope,
   listScopes,
   RESOURCE_PERMISSIONS,
   supplierSchoolReadScope,
@@ -848,4 +850,183 @@ void test("non-conflict adapter failures are sanitized without retry", async (co
       !error.message.includes("private"),
   );
   assert.equal(attempts, 1);
+});
+
+void test("ingredient-quality-feedback scopes enforce supplier ADMIN/STAFF membership, view_details read, AND respond write, and keep SCHOOL/SYSTEM boundaries", () => {
+  const supplierId = "00000000-0000-4000-8000-000000000075";
+  const otherSupplierId = "00000000-0000-4000-8000-000000000076";
+  const supplierAdmin = {
+    ...testAdmin,
+    role: "INGREDIENT_SUPPLIER_ADMIN",
+    orgType: "SUPPLIER" as const,
+    supplierId,
+    permissions: ["ingredient_quality_feedback.view_details"],
+  };
+  const supplierStaff = {
+    ...supplierAdmin,
+    role: "INGREDIENT_SUPPLIER_STAFF",
+  };
+  assert.deepEqual(ingredientQualityFeedbackReadScope(supplierAdmin, "list"), {
+    kind: "SUPPLIER",
+    supplierId,
+  });
+  assert.deepEqual(
+    ingredientQualityFeedbackReadScope(supplierStaff, "detail"),
+    { kind: "SUPPLIER", supplierId },
+  );
+  assert.deepEqual(listScopes["ingredient-quality-feedback"](supplierStaff), {
+    Delivery: { supplierId },
+  });
+  assert.deepEqual(
+    ingredientQualityFeedbackResponseScope({
+      ...supplierStaff,
+      supplierId: otherSupplierId,
+      permissions: [
+        "ingredient_quality_feedback.view_details",
+        "ingredient_quality_feedback.respond",
+      ],
+    }),
+    { supplierId: otherSupplierId },
+  );
+
+  // AND requirement on write; view_own-only or malformed supplier actors must be rejected.
+  for (const deniedRead of [
+    { ...supplierAdmin, permissions: [] },
+    { ...supplierAdmin, permissions: ["ingredient_quality_feedback.view_own"] },
+    { ...supplierStaff, permissions: ["ingredient_quality_feedback.respond"] },
+    { ...supplierAdmin, role: "FUTURE_SUPPLIER_ROLE" },
+    { ...supplierAdmin, role: "SYSTEM_ADMIN" },
+    { ...supplierAdmin, supplierId: null },
+    { ...supplierAdmin, schoolId: testStaff.schoolId },
+    { ...supplierAdmin, communeFoodSafetyUnitId: testAdmin.id },
+    { ...supplierAdmin, orgType: "AUTHORITY" as const },
+    {
+      ...testStaff,
+      role: "COMMUNE_FOOD_SAFETY_OFFICER",
+      orgType: "AUTHORITY" as const,
+      schoolId: null,
+      communeFoodSafetyUnitId: testAdmin.id,
+      permissions: ["ingredient_quality_feedback.view_details"],
+    },
+  ]) {
+    assert.throws(
+      () => ingredientQualityFeedbackReadScope(deniedRead, "list"),
+      status(403),
+    );
+    assert.throws(
+      () => ingredientQualityFeedbackReadScope(deniedRead, "detail"),
+      status(403),
+    );
+    assert.throws(
+      () => listScopes["ingredient-quality-feedback"](deniedRead),
+      status(403),
+    );
+  }
+
+  for (const deniedWrite of [
+    supplierAdmin, // only view_details
+    { ...supplierStaff, permissions: ["ingredient_quality_feedback.respond"] }, // missing view_details
+    {
+      ...supplierStaff,
+      permissions: [
+        "ingredient_quality_feedback.view_own",
+        "ingredient_quality_feedback.respond",
+      ],
+    },
+    {
+      ...testStaff,
+      permissions: [
+        "ingredient_quality_feedback.view_details",
+        "ingredient_quality_feedback.respond",
+      ],
+    },
+    {
+      ...testAdmin,
+      permissions: [
+        "ingredient_quality_feedback.view_details",
+        "ingredient_quality_feedback.respond",
+      ],
+    },
+    {
+      ...supplierAdmin,
+      schoolId: testStaff.schoolId,
+      permissions: [
+        "ingredient_quality_feedback.view_details",
+        "ingredient_quality_feedback.respond",
+      ],
+    },
+  ]) {
+    assert.throws(
+      () => ingredientQualityFeedbackResponseScope(deniedWrite),
+      status(403),
+    );
+  }
+
+  // SCHOOL keeps own vs details scope; SYSTEM keeps list but cannot open detail or response.
+  const schoolOwn = {
+    ...testStaff,
+    permissions: ["ingredient_quality_feedback.view_own"],
+  };
+  const schoolDetails = {
+    ...testStaff,
+    permissions: ["ingredient_quality_feedback.view_details"],
+  };
+  assert.deepEqual(ingredientQualityFeedbackReadScope(schoolOwn, "list"), {
+    kind: "SCHOOL",
+    schoolId: testStaff.schoolId!,
+    submittedByUserId: testStaff.id,
+  });
+  assert.deepEqual(ingredientQualityFeedbackReadScope(schoolOwn, "detail"), {
+    kind: "SCHOOL",
+    schoolId: testStaff.schoolId!,
+    submittedByUserId: testStaff.id,
+  });
+  assert.deepEqual(
+    ingredientQualityFeedbackReadScope(schoolDetails, "detail"),
+    {
+      kind: "SCHOOL",
+      schoolId: testStaff.schoolId!,
+      submittedByUserId: null,
+    },
+  );
+  const systemViewer = {
+    ...testAdmin,
+    permissions: ["ingredient_quality_feedback.view_details"],
+  };
+  assert.deepEqual(ingredientQualityFeedbackReadScope(systemViewer, "list"), {
+    kind: "SYSTEM",
+  });
+  assert.throws(
+    () => ingredientQualityFeedbackReadScope(systemViewer, "detail"),
+    status(403),
+  );
+  assert.throws(
+    () =>
+      ingredientQualityFeedbackReadScope(
+        { ...testAdmin, permissions: [] },
+        "list",
+      ),
+    status(403),
+  );
+
+  // Verify default catalog grants for supplier roles without changing catalog/bootstrap.
+  const grants: readonly (readonly [string, string])[] =
+    INITIAL_ROLE_PERMISSIONS;
+  for (const role of [
+    "INGREDIENT_SUPPLIER_ADMIN",
+    "INGREDIENT_SUPPLIER_STAFF",
+  ]) {
+    assert(
+      grants.some(
+        ([r, perm]) =>
+          r === role && perm === "ingredient_quality_feedback.view_details",
+      ),
+    );
+    assert(
+      grants.some(
+        ([r, perm]) =>
+          r === role && perm === "ingredient_quality_feedback.respond",
+      ),
+    );
+  }
 });

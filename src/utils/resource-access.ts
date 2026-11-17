@@ -398,26 +398,17 @@ export const listScopes = {
   "ingredient-quality-feedback": (
     p: AuthPrincipal,
   ): Prisma.IngredientQualityFeedbackWhereInput => {
-    assertPermission(p, ...RESOURCE_PERMISSIONS["ingredient-quality-feedback"]);
-    if (p.orgType === "SYSTEM") return {};
-    if (p.orgType === "SCHOOL")
+    const scope = ingredientQualityFeedbackReadScope(p, "list");
+    if (scope.kind === "SYSTEM") return {};
+    if (scope.kind === "SCHOOL") {
       return {
-        Delivery: { schoolId: school(p) },
-        ...(p.permissions.includes("ingredient_quality_feedback.view_details")
-          ? {}
-          : { submittedByUserId: p.id }),
+        Delivery: { schoolId: scope.schoolId },
+        ...(scope.submittedByUserId
+          ? { submittedByUserId: scope.submittedByUserId }
+          : {}),
       };
-    if (p.orgType === "SUPPLIER")
-      return {
-        Delivery: { supplierId: supplier(p) },
-        ...(p.permissions.includes("ingredient_quality_feedback.view_details")
-          ? {}
-          : { submittedByUserId: p.id }),
-      };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    }
+    return { Delivery: { supplierId: scope.supplierId } };
   },
   reporting: (
     p: AuthPrincipal,
@@ -679,4 +670,95 @@ export function blockchainProofScope(principal: AuthPrincipal): string | null {
     403,
     "Loại tổ chức không có phạm vi truy cập tài nguyên này",
   );
+}
+
+export type IngredientQualityFeedbackReadScope =
+  | { readonly kind: "SUPPLIER"; readonly supplierId: string }
+  | {
+      readonly kind: "SCHOOL";
+      readonly schoolId: string;
+      readonly submittedByUserId: string | null;
+    }
+  | { readonly kind: "SYSTEM" };
+
+export type IngredientQualityFeedbackDetailScope = Exclude<
+  IngredientQualityFeedbackReadScope,
+  { kind: "SYSTEM" }
+>;
+
+export interface IngredientQualityFeedbackResponseScope {
+  readonly supplierId: string;
+}
+
+function assertSupplierFeedbackActor(principal: AuthPrincipal): string {
+  if (
+    (principal.role !== ROLES.INGREDIENT_SUPPLIER_ADMIN &&
+      principal.role !== ROLES.INGREDIENT_SUPPLIER_STAFF) ||
+    principal.orgType !== ORG_TYPES.SUPPLIER ||
+    !principal.supplierId ||
+    principal.schoolId ||
+    principal.communeFoodSafetyUnitId
+  ) {
+    throw new HttpError(
+      403,
+      "Chỉ quản trị viên hoặc nhân viên nhà cung cấp được truy cập phản hồi chất lượng nguyên liệu",
+    );
+  }
+  return principal.supplierId;
+}
+
+export function ingredientQualityFeedbackReadScope(
+  principal: AuthPrincipal,
+  mode: "list",
+): IngredientQualityFeedbackReadScope;
+export function ingredientQualityFeedbackReadScope(
+  principal: AuthPrincipal,
+  mode: "detail",
+): IngredientQualityFeedbackDetailScope;
+export function ingredientQualityFeedbackReadScope(
+  principal: AuthPrincipal,
+  mode: "list" | "detail",
+): IngredientQualityFeedbackReadScope {
+  assertPermission(
+    principal,
+    ...RESOURCE_PERMISSIONS["ingredient-quality-feedback"],
+  );
+  if (principal.orgType === "SYSTEM") {
+    if (mode === "detail") {
+      throw new HttpError(
+        403,
+        "Loại tổ chức không có phạm vi truy cập chi tiết phản hồi này",
+      );
+    }
+    return { kind: "SYSTEM" };
+  }
+  if (principal.orgType === "SCHOOL") {
+    const schoolId = school(principal);
+    const hasViewDetails = principal.permissions.includes(
+      "ingredient_quality_feedback.view_details",
+    );
+    return {
+      kind: "SCHOOL",
+      schoolId,
+      submittedByUserId: hasViewDetails ? null : principal.id,
+    };
+  }
+  if (principal.orgType === "SUPPLIER") {
+    const supplierId = assertSupplierFeedbackActor(principal);
+    assertPermission(principal, "ingredient_quality_feedback.view_details");
+    return { kind: "SUPPLIER", supplierId };
+  }
+  throw new HttpError(
+    403,
+    "Loại tổ chức không có phạm vi truy cập tài nguyên này",
+  );
+}
+
+export function ingredientQualityFeedbackResponseScope(
+  principal: AuthPrincipal,
+): IngredientQualityFeedbackResponseScope {
+  const supplierId = assertSupplierFeedbackActor(principal);
+  assertPermission(principal, "ingredient_quality_feedback.view_details");
+  assertPermission(principal, "ingredient_quality_feedback.respond");
+  return { supplierId };
 }
