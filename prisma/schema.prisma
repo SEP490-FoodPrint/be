@@ -177,6 +177,7 @@ model CookingBatch {
   id                    String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   batchGroupId          String                @map("batch_group_id") @db.Uuid
   batchCode             String                @map("batch_code") @db.VarChar(100)
+  batchNumber           Int?                  @map("batch_number") @db.Integer
   menuDayId             String                @map("menu_day_id") @db.Uuid
   /// Compatibility field: only populated for a single-dish child. dishes is authoritative.
   dishId                String?               @map("dish_id") @db.Uuid
@@ -210,8 +211,7 @@ model CookingBatch {
   cookingBatchLots      CookingBatchLot[]     @relation("cooking_batch_lots_cooking_batch_id__cooking_batches")
   RetainedFoodSample    RetainedFoodSample[]  @relation("retained_food_samples_cooking_batch_id__cooking_batches")
   mealAllocationBatches MealAllocationBatch[] @relation("meal_allocation_batches_cooking_batch_id__cooking_batches")
-  traceabilityAnchors   TraceabilityAnchor[]  @relation("traceability_anchors_cooking_batch_id__cooking_batches")
-  blockchainVersions    CookingBatchVersion[] @relation("cooking_batch_versions_cooking_batch_id__cooking_batches")
+  blockchainProofs      BlockchainProof[]     @relation("blockchain_proofs_cooking_batch_id__cooking_batches")
 
   @@unique([batchCode])
   @@unique([id, menuDayId, mealType])
@@ -298,8 +298,7 @@ model Delivery {
   deliveryApprovals         DeliveryApproval[]          @relation("delivery_approvals_delivery_id__deliveries")
   deliveryItems             DeliveryItem[]              @relation("delivery_items_delivery_id__deliveries")
   ingredientQualityFeedback IngredientQualityFeedback[] @relation("ingredient_quality_feedback_delivery_id__deliveries")
-  traceabilityAnchors       TraceabilityAnchor[]        @relation("traceability_anchors_delivery_id__deliveries")
-  inspectionVersions        DeliveryInspectionVersion[] @relation("delivery_inspection_versions_delivery_id__deliveries")
+  blockchainProofs          BlockchainProof[]           @relation("blockchain_proofs_delivery_id__deliveries")
 
   @@unique([supplierId, deliveryNo], map: "uq_deliveries_supplier_no")
   @@unique([supplyRequestId], map: "uq_deliveries_request_mode", where: raw("(creation_mode = 'REQUEST'::delivery_creation_mode)"))
@@ -540,7 +539,6 @@ model FoodSafetyIncident {
   foodSafetyReportForwardings   FoodSafetyReportForwarding[]   @relation("food_safety_report_forwardings_incident_id__food_safety_incidents")
   foodAnalysisResults           FoodAnalysisResult[]           @relation("food_analysis_results_incident_id__food_safety_incidents")
   incidentSchoolAlerts          IncidentSchoolAlert[]          @relation("incident_school_alerts_incident_id__food_safety_incidents")
-  traceabilityAnchors           TraceabilityAnchor[]           @relation("traceability_anchors_food_safety_incident_id__food_safety_incidents")
 
   @@index([schoolId, status], map: "idx_food_safety_incidents_school_status")
   @@map("food_safety_incidents")
@@ -656,7 +654,6 @@ model IngredientLot {
   menuMealSeasoningLots     MenuMealSeasoningLot[]
   ingredientQualityFeedback IngredientQualityFeedback[] @relation("ingredient_quality_feedback_ingredient_lot_id__ingredient_lots")
   foodAnalysisResults       FoodAnalysisResult[]        @relation("food_analysis_results_ingredient_lot_id__ingredient_lots")
-  traceabilityAnchors       TraceabilityAnchor[]        @relation("traceability_anchors_ingredient_lot_id__ingredient_lots")
 
   @@unique([qrToken])
   @@unique([deliveryItemId, lotCode])
@@ -791,7 +788,6 @@ model MealAllocation {
   distributedByUser             User?                          @relation("meal_allocations_distributed_by_user_id__users", fields: [distributedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   mealAllocationBatches         MealAllocationBatch[]          @relation("meal_allocation_batches_meal_allocation_id__meal_allocations")
   foodSafetyIncidentAllocations FoodSafetyIncidentAllocation[] @relation("food_safety_incident_allocations_meal_allocation_id__meal_allocations")
-  traceabilityAnchors           TraceabilityAnchor[]           @relation("traceability_anchors_meal_allocation_id__meal_allocations")
 
   @@unique([dailyMealPortionId])
   @@map("meal_allocations")
@@ -888,22 +884,22 @@ model MenuReviewRecord {
 
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
 model RegistrationRequest {
-  registrationNumber  BigInt                       @unique(map: "registration_requests_registration_number_key") @default(autoincrement()) @map("registration_number") @db.BigInt
-  id                  String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  applicantUserId     String                       @map("applicant_user_id") @db.Uuid
-  requestType         RegistrationRequestType      @map("request_type")
-  status              RegistrationRequestStatus    @default(PENDING)
-  profileData         Json                         @default("{}") @map("profile_data") @db.JsonB
-  supportingDocuments Json                         @default("[]") @map("supporting_documents") @db.JsonB
-  rejectionReason     String?                      @map("rejection_reason") @db.Text
-  reviewedByUserId    String?                      @map("reviewed_by_user_id") @db.Uuid
-  submittedAt         DateTime                     @default(now()) @map("submitted_at") @db.Timestamptz(6)
-  reviewedAt          DateTime?                    @map("reviewed_at") @db.Timestamptz(6)
-  updatedAt           DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  applicantUser       User                         @relation("registration_requests_applicant_user_id__users", fields: [applicantUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  reviewedByUser      User?                        @relation("registration_requests_reviewed_by_user_id__users", fields: [reviewedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  registrationNumber  BigInt                    @unique(map: "registration_requests_registration_number_key") @default(autoincrement()) @map("registration_number") @db.BigInt
+  id                  String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  applicantUserId     String                    @map("applicant_user_id") @db.Uuid
+  requestType         RegistrationRequestType   @map("request_type")
+  status              RegistrationRequestStatus @default(PENDING)
+  profileData         Json                      @default("{}") @map("profile_data") @db.JsonB
+  supportingDocuments Json                      @default("[]") @map("supporting_documents") @db.JsonB
+  rejectionReason     String?                   @map("rejection_reason") @db.Text
+  reviewedByUserId    String?                   @map("reviewed_by_user_id") @db.Uuid
+  submittedAt         DateTime                  @default(now()) @map("submitted_at") @db.Timestamptz(6)
+  reviewedAt          DateTime?                 @map("reviewed_at") @db.Timestamptz(6)
+  updatedAt           DateTime                  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  applicantUser       User                      @relation("registration_requests_applicant_user_id__users", fields: [applicantUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  reviewedByUser      User?                     @relation("registration_requests_reviewed_by_user_id__users", fields: [reviewedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   emailOutbox         EmailOutbox[]
-  blockchainVersions  RegistrationRequestVersion[] @relation("registration_request_versions_registration_request_id__registration_requests")
+  blockchainProofs    BlockchainProof[]         @relation("blockchain_proofs_registration_request_id__registration_requests")
 
   @@unique([applicantUserId])
   @@map("registration_requests")
@@ -935,27 +931,27 @@ model EmailOutbox {
 /// Current project rule: one CookingBatch has at most one retained sample; enforced by UNIQUE(cooking_batch_id).
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
 model RetainedFoodSample {
-  dishId              String                  @map("dish_id") @db.Uuid
-  id                  String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  cookingBatchId      String                  @map("cooking_batch_id") @db.Uuid
-  recordedByUserId    String                  @map("recorded_by_user_id") @db.Uuid
-  sampledAt           DateTime                @default(now()) @map("sampled_at") @db.Timestamptz(6)
-  quantity            Decimal?                @db.Decimal(12, 3)
-  unit                String?                 @db.VarChar(30)
-  storageLocation     String?                 @map("storage_location") @db.VarChar(255)
-  photoPublicId       String?                 @map("photo_public_id") @db.Text
-  photoHash           String?                 @map("photo_hash") @db.VarChar(64)
-  storageUnitId       String?                 @map("storage_unit_id") @db.Uuid
-  status              RetainedSampleStatus    @default(STORED)
-  disposedAt          DateTime?               @map("disposed_at") @db.Timestamptz(6)
-  disposalNote        String?                 @map("disposal_note") @db.Text
-  createdAt           DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt           DateTime                @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  CookingBatch        CookingBatch            @relation("retained_food_samples_cooking_batch_id__cooking_batches", fields: [cookingBatchId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  User                User                    @relation("retained_food_samples_recorded_by_user_id__users", fields: [recordedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  storageUnit         SampleStorageUnit?      @relation("retained_food_samples_storage_unit_id__sample_storage_units", fields: [storageUnitId], references: [id], onDelete: SetNull, onUpdate: NoAction)
-  foodAnalysisResults FoodAnalysisResult[]    @relation("food_analysis_results_retained_food_sample_id__retained_food_samples")
-  blockchainVersions  RetainedSampleVersion[] @relation("retained_sample_versions_retained_food_sample_id__retained_food_samples")
+  dishId              String               @map("dish_id") @db.Uuid
+  id                  String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  cookingBatchId      String               @map("cooking_batch_id") @db.Uuid
+  recordedByUserId    String               @map("recorded_by_user_id") @db.Uuid
+  sampledAt           DateTime             @default(now()) @map("sampled_at") @db.Timestamptz(6)
+  quantity            Decimal?             @db.Decimal(12, 3)
+  unit                String?              @db.VarChar(30)
+  storageLocation     String?              @map("storage_location") @db.VarChar(255)
+  photoPublicId       String?              @map("photo_public_id") @db.Text
+  photoHash           String?              @map("photo_hash") @db.VarChar(64)
+  storageUnitId       String?              @map("storage_unit_id") @db.Uuid
+  status              RetainedSampleStatus @default(STORED)
+  disposedAt          DateTime?            @map("disposed_at") @db.Timestamptz(6)
+  disposalNote        String?              @map("disposal_note") @db.Text
+  createdAt           DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  CookingBatch        CookingBatch         @relation("retained_food_samples_cooking_batch_id__cooking_batches", fields: [cookingBatchId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  User                User                 @relation("retained_food_samples_recorded_by_user_id__users", fields: [recordedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  storageUnit         SampleStorageUnit?   @relation("retained_food_samples_storage_unit_id__sample_storage_units", fields: [storageUnitId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  foodAnalysisResults FoodAnalysisResult[] @relation("food_analysis_results_retained_food_sample_id__retained_food_samples")
+  blockchainProofs    BlockchainProof[]    @relation("blockchain_proofs_retained_food_sample_id__retained_food_samples")
 
   CookingBatchDish CookingBatchDish @relation(fields: [cookingBatchId, dishId], references: [cookingBatchId, dishId], onDelete: Restrict, onUpdate: NoAction)
 
@@ -1085,6 +1081,8 @@ model School {
   incidentSchoolAlerts        IncidentSchoolAlert[]        @relation("incident_school_alerts_target_school_id__schools")
   userPermissionDenials       UserPermissionDenial[]       @relation("user_permission_denials_school_id__schools")
   sampleStorageUnits          SampleStorageUnit[]          @relation("sample_storage_units_school_id__schools")
+
+  blockchainProofs BlockchainProof[] @relation("blockchain_proofs_school_id__schools")
 
   @@unique([code])
   @@index([locationId], map: "idx_schools_location_id")
@@ -1267,41 +1265,6 @@ model SupplyRequest {
 
 /// Optional Blockchain evidence metadata. PostgreSQL remains the business source of truth; rows may be PREPARED without a submitted transaction.
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
-model TraceabilityAnchor {
-  id                   String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  deliveryId           String?                      @map("delivery_id") @db.Uuid
-  ingredientLotId      String?                      @map("ingredient_lot_id") @db.Uuid
-  cookingBatchId       String?                      @map("cooking_batch_id") @db.Uuid
-  mealAllocationId     String?                      @map("meal_allocation_id") @db.Uuid
-  foodSafetyIncidentId String?                      @map("food_safety_incident_id") @db.Uuid
-  payloadHash          String                       @map("payload_hash") @db.VarChar(128)
-  hashAlgorithm        String                       @default("SHA-256") @map("hash_algorithm") @db.VarChar(30)
-  networkName          String                       @map("network_name") @db.VarChar(80)
-  contractAddress      String?                      @map("contract_address") @db.VarChar(100)
-  transactionHash      String?                      @map("transaction_hash") @db.VarChar(100)
-  blockNumber          BigInt?                      @map("block_number") @db.BigInt
-  anchorStatus         BlockchainAnchorStatus       @default(PREPARED) @map("anchor_status")
-  verificationStatus   BlockchainVerificationStatus @default(NOT_VERIFIED) @map("verification_status")
-  verifiedAt           DateTime?                    @map("verified_at") @db.Timestamptz(6)
-  verificationResult   String?                      @map("verification_result") @db.Text
-  createdByUserId      String?                      @map("created_by_user_id") @db.Uuid
-  createdAt            DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt            DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  Delivery             Delivery?                    @relation("traceability_anchors_delivery_id__deliveries", fields: [deliveryId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  IngredientLot        IngredientLot?               @relation("traceability_anchors_ingredient_lot_id__ingredient_lots", fields: [ingredientLotId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  CookingBatch         CookingBatch?                @relation("traceability_anchors_cooking_batch_id__cooking_batches", fields: [cookingBatchId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  MealAllocation       MealAllocation?              @relation("traceability_anchors_meal_allocation_id__meal_allocations", fields: [mealAllocationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  FoodSafetyIncident   FoodSafetyIncident?          @relation("traceability_anchors_food_safety_incident_id__food_safety_incidents", fields: [foodSafetyIncidentId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  User                 User?                        @relation("traceability_anchors_created_by_user_id__users", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-
-  @@unique([transactionHash], map: "uq_traceability_anchor_tx_hash", where: raw("transaction_hash IS NOT NULL"))
-  @@index([ingredientLotId], map: "idx_traceability_anchors_lot")
-  @@index([cookingBatchId], map: "idx_traceability_anchors_batch")
-  @@index([mealAllocationId], map: "idx_traceability_anchors_allocation")
-  @@map("traceability_anchors")
-  @@schema("foodprint")
-}
-
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
 model User {
   id                                           String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -1363,11 +1326,7 @@ model User {
   foodSafetyReportForwardings                  FoodSafetyReportForwarding[] @relation("food_safety_report_forwardings_forwarded_by_user_id__users")
   foodAnalysisResults                          FoodAnalysisResult[]         @relation("food_analysis_results_recorded_by_user_id__users")
   incidentSchoolAlerts                         IncidentSchoolAlert[]        @relation("incident_school_alerts_sent_by_user_id__users")
-  traceabilityAnchors                          TraceabilityAnchor[]         @relation("traceability_anchors_created_by_user_id__users")
-  deliveryInspectionVersions                   DeliveryInspectionVersion[]  @relation("delivery_inspection_versions_created_by_user_id__users")
-  cookingBatchVersions                         CookingBatchVersion[]        @relation("cooking_batch_versions_created_by_user_id__users")
-  retainedSampleVersions                       RetainedSampleVersion[]      @relation("retained_sample_versions_created_by_user_id__users")
-  registrationRequestVersions                  RegistrationRequestVersion[] @relation("registration_request_versions_created_by_user_id__users")
+  blockchainProofs                             BlockchainProof[]            @relation("blockchain_proofs_created_by_user_id__users")
   permissionDenials                            UserPermissionDenial[]       @relation("user_permission_denials_user_id__users")
   permissionDenialsAsDisabledBy                UserPermissionDenial[]       @relation("user_permission_denials_disabled_by_user_id__users")
   confirmedMealPortionGroups                   DailyMealPortionGroup[]
@@ -1610,133 +1569,7 @@ enum BlockchainVerificationStatus {
   @@schema("foodprint")
 }
 
-enum RetainedSampleEventType {
-  STORED
-  DISPOSED
-
-  @@map("retained_sample_event_type")
-  @@schema("foodprint")
-}
-
-enum RegistrationProofEventType {
-  SUBMITTED
-  APPROVED
-
-  @@map("registration_proof_event_type")
-  @@schema("foodprint")
-}
-
 /// Blockchain proof versions (BLOCKCHAIN_GLOBAL.md 3.1). CHECK constraints live in migration 20261118000100.
-model DeliveryInspectionVersion {
-  id                 String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  deliveryId         String                       @map("delivery_id") @db.Uuid
-  version            Int                          @db.Integer
-  dataHash           String                       @map("data_hash") @db.VarChar(66)
-  hashAlgorithm      String                       @default("KECCAK-256") @map("hash_algorithm") @db.VarChar(30)
-  payloadVersion     Int                          @default(1) @map("payload_version") @db.SmallInt
-  snapshot           Json                         @db.JsonB
-  previousVersionId  String?                      @map("previous_version_id") @db.Uuid
-  changeReason       String?                      @map("change_reason") @db.VarChar(255)
-  networkName        String                       @map("network_name") @db.VarChar(80)
-  contractAddress    String?                      @map("contract_address") @db.VarChar(100)
-  transactionHash    String?                      @map("transaction_hash") @db.VarChar(100)
-  blockNumber        BigInt?                      @map("block_number") @db.BigInt
-  transactionStatus  BlockchainAnchorStatus       @default(PREPARED) @map("transaction_status")
-  attemptCount       Int                          @default(0) @map("attempt_count") @db.Integer
-  lastError          String?                      @map("last_error") @db.VarChar(500)
-  recordedAt         DateTime?                    @map("recorded_at") @db.Timestamptz(6)
-  verificationStatus BlockchainVerificationStatus @default(NOT_VERIFIED) @map("verification_status")
-  verificationResult String?                      @map("verification_result") @db.VarChar(500)
-  verifiedAt         DateTime?                    @map("verified_at") @db.Timestamptz(6)
-  createdByUserId    String                       @map("created_by_user_id") @db.Uuid
-  createdAt          DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt          DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  Delivery           Delivery                     @relation("delivery_inspection_versions_delivery_id__deliveries", fields: [deliveryId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  createdByUser      User                         @relation("delivery_inspection_versions_created_by_user_id__users", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  previousVersion    DeliveryInspectionVersion?   @relation("delivery_inspection_versions_previous", fields: [previousVersionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  nextVersions       DeliveryInspectionVersion[]  @relation("delivery_inspection_versions_previous")
-
-  @@unique([deliveryId, version], map: "uq_delivery_inspection_versions_delivery_version")
-  @@unique([transactionHash], map: "uq_delivery_inspection_versions_tx_hash", where: raw("transaction_hash IS NOT NULL"))
-  @@index([transactionStatus], map: "idx_delivery_inspection_versions_status")
-  @@map("delivery_inspection_versions")
-  @@schema("foodprint")
-}
-
-model CookingBatchVersion {
-  id                 String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  cookingBatchId     String                       @map("cooking_batch_id") @db.Uuid
-  version            Int                          @db.Integer
-  dataHash           String                       @map("data_hash") @db.VarChar(66)
-  hashAlgorithm      String                       @default("KECCAK-256") @map("hash_algorithm") @db.VarChar(30)
-  payloadVersion     Int                          @default(1) @map("payload_version") @db.SmallInt
-  snapshot           Json                         @db.JsonB
-  previousVersionId  String?                      @map("previous_version_id") @db.Uuid
-  changeReason       String?                      @map("change_reason") @db.VarChar(255)
-  networkName        String                       @map("network_name") @db.VarChar(80)
-  contractAddress    String?                      @map("contract_address") @db.VarChar(100)
-  transactionHash    String?                      @map("transaction_hash") @db.VarChar(100)
-  blockNumber        BigInt?                      @map("block_number") @db.BigInt
-  transactionStatus  BlockchainAnchorStatus       @default(PREPARED) @map("transaction_status")
-  attemptCount       Int                          @default(0) @map("attempt_count") @db.Integer
-  lastError          String?                      @map("last_error") @db.VarChar(500)
-  recordedAt         DateTime?                    @map("recorded_at") @db.Timestamptz(6)
-  verificationStatus BlockchainVerificationStatus @default(NOT_VERIFIED) @map("verification_status")
-  verificationResult String?                      @map("verification_result") @db.VarChar(500)
-  verifiedAt         DateTime?                    @map("verified_at") @db.Timestamptz(6)
-  createdByUserId    String                       @map("created_by_user_id") @db.Uuid
-  createdAt          DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt          DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  CookingBatch       CookingBatch                 @relation("cooking_batch_versions_cooking_batch_id__cooking_batches", fields: [cookingBatchId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  createdByUser      User                         @relation("cooking_batch_versions_created_by_user_id__users", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  previousVersion    CookingBatchVersion?         @relation("cooking_batch_versions_previous", fields: [previousVersionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  nextVersions       CookingBatchVersion[]        @relation("cooking_batch_versions_previous")
-
-  @@unique([cookingBatchId, version], map: "uq_cooking_batch_versions_batch_version")
-  @@unique([transactionHash], map: "uq_cooking_batch_versions_tx_hash", where: raw("transaction_hash IS NOT NULL"))
-  @@index([transactionStatus], map: "idx_cooking_batch_versions_status")
-  @@map("cooking_batch_versions")
-  @@schema("foodprint")
-}
-
-model RetainedSampleVersion {
-  id                   String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  retainedFoodSampleId String                       @map("retained_food_sample_id") @db.Uuid
-  eventType            RetainedSampleEventType      @map("event_type")
-  version              Int                          @db.Integer
-  dataHash             String                       @map("data_hash") @db.VarChar(66)
-  hashAlgorithm        String                       @default("KECCAK-256") @map("hash_algorithm") @db.VarChar(30)
-  payloadVersion       Int                          @default(1) @map("payload_version") @db.SmallInt
-  snapshot             Json                         @db.JsonB
-  previousVersionId    String?                      @map("previous_version_id") @db.Uuid
-  changeReason         String?                      @map("change_reason") @db.VarChar(255)
-  networkName          String                       @map("network_name") @db.VarChar(80)
-  contractAddress      String?                      @map("contract_address") @db.VarChar(100)
-  transactionHash      String?                      @map("transaction_hash") @db.VarChar(100)
-  blockNumber          BigInt?                      @map("block_number") @db.BigInt
-  transactionStatus    BlockchainAnchorStatus       @default(PREPARED) @map("transaction_status")
-  attemptCount         Int                          @default(0) @map("attempt_count") @db.Integer
-  lastError            String?                      @map("last_error") @db.VarChar(500)
-  recordedAt           DateTime?                    @map("recorded_at") @db.Timestamptz(6)
-  verificationStatus   BlockchainVerificationStatus @default(NOT_VERIFIED) @map("verification_status")
-  verificationResult   String?                      @map("verification_result") @db.VarChar(500)
-  verifiedAt           DateTime?                    @map("verified_at") @db.Timestamptz(6)
-  createdByUserId      String                       @map("created_by_user_id") @db.Uuid
-  createdAt            DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt            DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  RetainedFoodSample   RetainedFoodSample           @relation("retained_sample_versions_retained_food_sample_id__retained_food_samples", fields: [retainedFoodSampleId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  createdByUser        User                         @relation("retained_sample_versions_created_by_user_id__users", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  previousVersion      RetainedSampleVersion?       @relation("retained_sample_versions_previous", fields: [previousVersionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  nextVersions         RetainedSampleVersion[]      @relation("retained_sample_versions_previous")
-
-  @@unique([retainedFoodSampleId, version], map: "uq_retained_sample_versions_sample_version")
-  @@unique([retainedFoodSampleId, eventType], map: "uq_retained_sample_versions_sample_event")
-  @@unique([transactionHash], map: "uq_retained_sample_versions_tx_hash", where: raw("transaction_hash IS NOT NULL"))
-  @@index([transactionStatus], map: "idx_retained_sample_versions_status")
-  @@map("retained_sample_versions")
-  @@schema("foodprint")
-}
-
 enum ComplaintStatus {
   SUBMITTED
   IN_REVIEW
@@ -2100,16 +1933,52 @@ model DishGradeRecipeLine {
 
 /// Blockchain proof versions for registration documents (UC-01 supplier, UC-02 school).
 /// CHECK constraints are defined in the migration SQL and are not represented in Prisma.
-model RegistrationRequestVersion {
+
+enum BlockchainProofEntityType {
+  REGISTRATION
+  DELIVERY_DECLARATION
+  DELIVERY_INSPECTION
+  COOKING_BATCH
+  RETAINED_SAMPLE
+  MEAL_DISTRIBUTION
+
+  @@map("blockchain_proof_entity_type")
+  @@schema("foodprint")
+}
+
+enum BlockchainProofEventType {
+  SUBMITTED
+  APPROVED
+  DECLARED
+  INSPECTED
+  COMPLETED
+  STORED
+  DISPOSED
+  DISTRIBUTED
+
+  @@map("blockchain_proof_event_type")
+  @@schema("foodprint")
+}
+
+/// One row per anchored version of a business record. Exactly one subject link is set,
+/// matching entity_type (CHECK in SQL); see specs/unified-blockchain-proofs.
+model BlockchainProof {
   id                    String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  registrationRequestId String                       @map("registration_request_id") @db.Uuid
-  eventType             RegistrationProofEventType   @map("event_type")
+  entityType            BlockchainProofEntityType    @map("entity_type")
+  eventType             BlockchainProofEventType     @map("event_type")
   version               Int                          @db.Integer
+  previousProofId       String?                      @map("previous_proof_id") @db.Uuid
+  registrationRequestId String?                      @map("registration_request_id") @db.Uuid
+  deliveryId            String?                      @map("delivery_id") @db.Uuid
+  cookingBatchId        String?                      @map("cooking_batch_id") @db.Uuid
+  retainedFoodSampleId  String?                      @map("retained_food_sample_id") @db.Uuid
+  schoolId              String?                      @map("school_id") @db.Uuid
+  subjectDate           DateTime?                    @map("subject_date") @db.Date
+  recordId              String                       @map("record_id") @db.VarChar(66)
   dataHash              String                       @map("data_hash") @db.VarChar(66)
   hashAlgorithm         String                       @default("KECCAK-256") @map("hash_algorithm") @db.VarChar(30)
   payloadVersion        Int                          @default(1) @map("payload_version") @db.SmallInt
   snapshot              Json                         @db.JsonB
-  previousVersionId     String?                      @map("previous_version_id") @db.Uuid
   changeReason          String?                      @map("change_reason") @db.VarChar(255)
   networkName           String                       @map("network_name") @db.VarChar(80)
   contractAddress       String?                      @map("contract_address") @db.VarChar(100)
@@ -2125,15 +1994,25 @@ model RegistrationRequestVersion {
   createdByUserId       String                       @map("created_by_user_id") @db.Uuid
   createdAt             DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt             DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  RegistrationRequest   RegistrationRequest          @relation("registration_request_versions_registration_request_id__registration_requests", fields: [registrationRequestId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  createdByUser         User                         @relation("registration_request_versions_created_by_user_id__users", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  previousVersion       RegistrationRequestVersion?  @relation("registration_request_versions_previous", fields: [previousVersionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  nextVersions          RegistrationRequestVersion[] @relation("registration_request_versions_previous")
+  previousProof         BlockchainProof?             @relation("blockchain_proofs_previous", fields: [previousProofId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  nextProofs            BlockchainProof[]            @relation("blockchain_proofs_previous")
+  RegistrationRequest   RegistrationRequest?         @relation("blockchain_proofs_registration_request_id__registration_requests", fields: [registrationRequestId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  Delivery              Delivery?                    @relation("blockchain_proofs_delivery_id__deliveries", fields: [deliveryId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  CookingBatch          CookingBatch?                @relation("blockchain_proofs_cooking_batch_id__cooking_batches", fields: [cookingBatchId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  RetainedFoodSample    RetainedFoodSample?          @relation("blockchain_proofs_retained_food_sample_id__retained_food_samples", fields: [retainedFoodSampleId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  School                School?                      @relation("blockchain_proofs_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  createdByUser         User                         @relation("blockchain_proofs_created_by_user_id__users", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
-  @@unique([registrationRequestId, version], map: "uq_registration_request_versions_request_version")
-  @@unique([registrationRequestId], map: "uq_registration_request_versions_approved", where: raw("(event_type = 'APPROVED'::registration_proof_event_type)"))
-  @@unique([transactionHash], map: "uq_registration_request_versions_tx_hash", where: raw("transaction_hash IS NOT NULL"))
-  @@index([transactionStatus], map: "idx_registration_request_versions_status")
-  @@map("registration_request_versions")
+  @@unique([recordId], map: "uq_blockchain_proofs_record_id")
+  @@unique([registrationRequestId, version], map: "uq_blockchain_proofs_registration_version")
+  @@unique([registrationRequestId], map: "uq_blockchain_proofs_registration_approved", where: raw("(event_type = 'APPROVED'::blockchain_proof_event_type)"))
+  @@unique([deliveryId, entityType, version], map: "uq_blockchain_proofs_delivery_version")
+  @@unique([cookingBatchId, version], map: "uq_blockchain_proofs_cooking_batch_version")
+  @@unique([retainedFoodSampleId, version], map: "uq_blockchain_proofs_sample_version")
+  @@unique([retainedFoodSampleId, eventType], map: "uq_blockchain_proofs_sample_event")
+  @@unique([schoolId, subjectDate, version], map: "uq_blockchain_proofs_distribution_version")
+  @@unique([transactionHash], map: "uq_blockchain_proofs_tx_hash", where: raw("transaction_hash IS NOT NULL"))
+  @@index([transactionStatus], map: "idx_blockchain_proofs_status")
+  @@map("blockchain_proofs")
   @@schema("foodprint")
 }

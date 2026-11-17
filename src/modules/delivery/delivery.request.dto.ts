@@ -4,10 +4,14 @@ import type {
   deliveryArrivalQuerySchema,
   deliveryInspectionQuerySchema,
   deliveryInspectionDecisionSchema,
+  deliveryInspectionLookupSchema,
 } from "./delivery.validation";
 
 export type DeliveryInspectionQueryDTO = z.infer<
   typeof deliveryInspectionQuerySchema
+>;
+export type DeliveryInspectionLookupDTO = z.infer<
+  typeof deliveryInspectionLookupSchema
 >;
 export type DeliveryInspectionDecisionDTO = z.infer<
   typeof deliveryInspectionDecisionSchema

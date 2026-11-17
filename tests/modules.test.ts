@@ -13,7 +13,6 @@ import { Prisma } from "../src/generated/prisma/client";
 import { globalErrorHandler } from "../src/middlewares/error.middleware";
 import { createApiRateLimiter } from "../src/middlewares/rate-limit.middleware";
 import { createAllergyService } from "../src/modules/allergy/allergy.service";
-import { createTraceabilityService } from "../src/modules/traceability/traceability.service";
 import { createUserRouter } from "../src/modules/user/user.routes";
 import {
   createUserService,
@@ -1247,34 +1246,6 @@ void test("composite-primary-key lists use both keys for deterministic ordering"
   );
 });
 
-void test("traceability BigInt block numbers are serialized without losing precision", async () => {
-  const service = createTraceabilityService(() =>
-    Promise.resolve([
-      {
-        id: "anchor-1",
-        deliveryId: null,
-        ingredientLotId: null,
-        cookingBatchId: null,
-        mealAllocationId: null,
-        foodSafetyIncidentId: null,
-        payloadHash: "test-hash",
-        hashAlgorithm: "SHA-256",
-        networkName: "test-network",
-        transactionHash: null,
-        blockNumber: 9007199254740993n,
-        anchorStatus: "PREPARED",
-        verificationStatus: "NOT_VERIFIED",
-        verifiedAt: null,
-        createdAt: now,
-        updatedAt: now,
-      },
-    ]),
-  );
-  const result = await service.getAll({ page: 1, limit: 20 }, testAdmin);
-  assert.equal(result.items[0].blockNumber, "9007199254740993");
-  assert.doesNotThrow(() => JSON.stringify(result));
-});
-
 void test("warehouse Decimal quantities and dates remain JSON-compatible without rounding", async () => {
   const service = createWarehouseService(() =>
     Promise.resolve([
@@ -1629,7 +1600,6 @@ void test("every mounted business list rejects forged role claims when the datab
     "/api/food-safety-reports",
     "/api/food-analysis-results",
     "/api/incident-school-alerts",
-    "/api/traceability-anchors",
     "/api/menu-reviews",
   ];
   for (const path of paths) {

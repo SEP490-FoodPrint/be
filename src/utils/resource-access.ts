@@ -1,8 +1,47 @@
 import { ROLES, ORG_TYPES } from "../constants/roles";
 import type { Prisma } from "../generated/prisma/client";
 import type { AuthPrincipal } from "../types/auth";
-import { assertPermission, assertOrganizationManager } from "./authorization";
+import {
+  assertPermission,
+  assertOrganizationManager,
+  assertSystemManager,
+} from "./authorization";
 import { HttpError } from "./http-error";
+
+export interface PermissionCatalogScope {
+  kind: "SYSTEM";
+}
+export interface PermissionUserScope {
+  kind: "SYSTEM" | "ORGANIZATION";
+  schoolId: string | null;
+  supplierId: string | null;
+  communeFoodSafetyUnitId: string | null;
+}
+export function permissionCatalogScope(
+  principal: AuthPrincipal,
+  guard:
+    | "permission.view"
+    | "permission.create"
+    | "role.view"
+    | "role_permission.manage",
+): PermissionCatalogScope {
+  assertSystemManager(principal, guard);
+  return { kind: "SYSTEM" };
+}
+export function permissionUserScope(
+  principal: AuthPrincipal,
+  write = false,
+): PermissionUserScope {
+  if (principal.orgType === "SYSTEM" && !write)
+    assertSystemManager(principal, "user.manage");
+  else assertOrganizationManager(principal);
+  return {
+    kind: principal.orgType === "SYSTEM" ? "SYSTEM" : "ORGANIZATION",
+    schoolId: principal.schoolId,
+    supplierId: principal.supplierId,
+    communeFoodSafetyUnitId: principal.communeFoodSafetyUnitId,
+  };
+}
 function school(p: AuthPrincipal): string {
   if (!p.schoolId || p.orgType !== "SCHOOL")
     throw new HttpError(403, "Không có phạm vi trường");
@@ -454,55 +493,6 @@ export const listScopes = {
     assertPermission(p, ...RESOURCE_PERMISSIONS["menu-review"]);
     if (p.orgType === "SYSTEM") return {};
     if (p.orgType === "SCHOOL") return { WeeklyMenu: { schoolId: school(p) } };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
-  },
-  traceability: (p: AuthPrincipal): Prisma.TraceabilityAnchorWhereInput => {
-    assertPermission(p, ...RESOURCE_PERMISSIONS["traceability"]);
-    if (p.orgType === "SYSTEM") return {};
-    if (p.orgType === "SCHOOL")
-      return {
-        OR: [
-          { Delivery: { schoolId: school(p) } },
-          {
-            IngredientLot: {
-              DeliveryItem: {
-                Delivery: { schoolId: school(p) },
-              },
-            },
-          },
-          {
-            CookingBatch: { MenuDay: { WeeklyMenu: { schoolId: school(p) } } },
-          },
-          {
-            MealAllocation: {
-              DailyMealPortion: { Class: { schoolId: school(p) } },
-            },
-          },
-          { FoodSafetyIncident: { schoolId: school(p) } },
-        ],
-      };
-    if (p.orgType === "SUPPLIER")
-      return {
-        OR: [
-          { Delivery: { supplierId: supplier(p) } },
-          {
-            IngredientLot: {
-              DeliveryItem: { Delivery: { supplierId: supplier(p) } },
-            },
-          },
-        ],
-      };
-    if (p.orgType === "AUTHORITY")
-      return {
-        FoodSafetyIncident: {
-          foodSafetyReportForwardings: {
-            some: authorityReports(p),
-          },
-        },
-      };
     throw new HttpError(
       403,
       "Loại tổ chức không có phạm vi truy cập tài nguyên này",

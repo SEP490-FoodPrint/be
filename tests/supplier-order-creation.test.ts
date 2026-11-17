@@ -4685,9 +4685,20 @@ void test("US6 HTTP contract enforces dispatch strict validation, mount order, m
     },
     () => Promise.resolve(liveActor),
   );
+  const declared: string[] = [];
+  const scheduled: unknown[] = [];
   const service = createSupplierOrderService(repo, {
     transaction: (fn) => fn({} as never),
     guard,
+    proofs: {
+      prepareDeliveryDeclared: (_tx, id, actorId) => {
+        declared.push(`${id}:${actorId}`);
+        return Promise.resolve({ kind: "delivery-declarations", id: "p1" });
+      },
+      scheduleAnchor: (ref) => {
+        scheduled.push(ref);
+      },
+    },
   });
 
   let reqActor: AuthPrincipal | undefined = liveActor;
@@ -4888,6 +4899,12 @@ void test("US6 HTTP contract enforces dispatch strict validation, mount order, m
     "qrToken" in (okJson.data.items as Array<Record<string, unknown>>)[0],
     false,
   );
+  // The declaration is fixed in the dispatch transaction, sent after commit.
+  assert.deepEqual(declared, [`${deliveryId}:${liveActor.id}`]);
+  assert.deepEqual(scheduled.at(-1), {
+    kind: "delivery-declarations",
+    id: "p1",
+  });
 
   // Admin can replay same canonical body after staff dispatched -> 200
   const manageOnlyAdmin = makeSupplierActor(ROLES.INGREDIENT_SUPPLIER_ADMIN, [
@@ -4911,6 +4928,9 @@ void test("US6 HTTP contract enforces dispatch strict validation, mount order, m
     ((await replayRes.json()) as { data: { status: string } }).data.status,
     "IN_TRANSIT",
   );
+  // A replay never declares twice.
+  assert.equal(declared.length, 1);
+  assert.equal(scheduled.at(-1), null);
 });
 
 void test("US6 dispatch service handles continuation policy, all-state replay/409, rollback, renderer independence, and CAS race cleanly (T130)", async () => {

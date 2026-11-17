@@ -41,7 +41,6 @@ import { createIngredientQualityFeedbackRouter } from "../modules/ingredient-qua
 import { createReportingRouter } from "../modules/reporting/reporting.routes";
 import { createFoodAnalysisRouter } from "../modules/food-analysis/food-analysis.routes";
 import { createSchoolAlertRouter } from "../modules/school-alert/school-alert.routes";
-import { createTraceabilityRouter } from "../modules/traceability/traceability.routes";
 import { createBlockchainProofRouter } from "../modules/blockchain-proof/blockchain-proof.routes";
 import { createMenuReviewRouter } from "../modules/menu-review/menu-review.routes";
 import { createSchoolOverviewRouter } from "../modules/school-overview/school-overview.routes";
@@ -192,10 +191,6 @@ export function createApiRouter(
   router.use(
     "/incident-school-alerts",
     createSchoolAlertRouter(undefined, authHandler),
-  );
-  router.use(
-    "/traceability-anchors",
-    createTraceabilityRouter(undefined, authHandler),
   );
   router.use(
     "/blockchain-proofs",

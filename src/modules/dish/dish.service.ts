@@ -86,6 +86,9 @@ function recipeDTO(row: RecipeRows[number]): DishRecipeDTO {
         ingredientEntryId: line.ingredientEntryId,
         ingredientId: line.entry.ingredientId,
         name: line.entry.Ingredient.name,
+        category:
+          line.entry.Ingredient.ingredientCategory?.categoryName ?? null,
+        categoryId: line.entry.Ingredient.categoryId ?? null,
         supplierId: line.entry.Ingredient.supplierId,
         supplierName: line.entry.Ingredient.Supplier.name,
         ingredientRole: line.ingredientRole,
@@ -97,6 +100,9 @@ function recipeDTO(row: RecipeRows[number]): DishRecipeDTO {
       ingredientEntryId: r.ingredientEntryId,
       ingredientId: r.IngredientEntry.ingredientId,
       name: r.IngredientEntry.Ingredient.name,
+      category:
+        r.IngredientEntry.Ingredient.ingredientCategory?.categoryName ?? null,
+      categoryId: r.IngredientEntry.Ingredient.categoryId ?? null,
       supplierId: r.IngredientEntry.Ingredient.supplierId,
       supplierName: r.IngredientEntry.Ingredient.Supplier.name,
       ingredientRole: r.ingredientRole,
@@ -393,6 +399,8 @@ export function createDishRecipeService(
               id: e.id,
               ingredientId: e.ingredientId,
               name: e.Ingredient.name,
+              category: e.Ingredient.ingredientCategory?.categoryName ?? null,
+              categoryId: e.Ingredient.categoryId ?? null,
               defaultUnit: e.Ingredient.defaultUnit,
               supplierId: e.Ingredient.supplierId,
               supplierName: e.Ingredient.Supplier.name,
