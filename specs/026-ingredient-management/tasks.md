@@ -9,6 +9,6 @@
 - [x] T007 Bổ sung thông tin mặt hàng, nhà cung cấp, đợt giao nhận và cơ sở nguồn trong `GET /api/ingredient-lots` tại `src/modules/warehouse/warehouse.service.ts`.
 - [x] T008 Bổ sung hotline nhà cung cấp và ngày hẹn giao trong `GET /api/deliveries` phục vụ màn hình theo dõi đơn hàng và cập nhật test fixtures.
 - [x] T009 Bổ sung trường `note` lưu lịch hẹn giao trong `orderDraftSchema` và repository tạo đơn nháp `src/modules/supplier-onboarding/`.
-- [x] T010 Mở rộng `listSelect` và mapper `getAll` tại `src/modules/supply-order/` trả về ngày hẹn giao và thông tin nhà cung cấp cho trường học.
+- [x] T010 Bảo toàn projection 8 trường trong `listSelect` và mapper `getAll` tại `src/modules/supply-order/` để giữ tương thích ngược cho danh sách đơn legacy.
 - [x] T011 Thêm phương thức `findDetailForSchool` và mở quyền xem chi tiết đơn hàng cho vai trò School trong `src/modules/supply-order/supply-order.service.ts`.
 - [x] T012 Bổ sung `gradeId` và `gradeName` vào DTO và mapper `summary` tại `src/modules/meal-attendance/` phục vụ phân bổ suất ăn theo khối lớp.
