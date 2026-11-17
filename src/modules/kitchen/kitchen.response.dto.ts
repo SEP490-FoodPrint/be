@@ -26,6 +26,7 @@ export interface CookingBatchLotDTO {
 export interface CookingBatchDetailDTO {
   id: string;
   batchCode: string;
+  batchNumber?: number | null;
   menuDayId: string;
   dishId: string | null;
   batchGroupId: string;
@@ -113,6 +114,7 @@ export interface SchoolContextResponseDTO {
 export interface CookingBatchSummaryDTO {
   id: string;
   batchCode: string;
+  batchNumber?: number | null;
   menuDayId: string;
   dishId: string | null;
   batchGroupId: string;

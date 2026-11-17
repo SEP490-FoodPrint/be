@@ -177,6 +177,7 @@ model CookingBatch {
   id                    String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   batchGroupId          String                @map("batch_group_id") @db.Uuid
   batchCode             String                @map("batch_code") @db.VarChar(100)
+  batchNumber           Int?                  @map("batch_number") @db.Integer
   menuDayId             String                @map("menu_day_id") @db.Uuid
   /// Compatibility field: only populated for a single-dish child. dishes is authoritative.
   dishId                String?               @map("dish_id") @db.Uuid
