@@ -157,9 +157,21 @@ Mọi dòng đều yêu cầu một trong các permission liệt kê. SYSTEM có
 | `food-analysis`               | `food_analysis_result.view`                                                                                               | SCHOOL, AUTHORITY                                     |
 | `school-alert`                | `school_alert.view`                                                                                                       | SCHOOL                                                |
 | `menu-review`                 | `menu.view`, `menu.review`, `menu.approve`                                                                                | SCHOOL                                                |
-| `traceability`                | `traceability.view`                                                                                                       | SCHOOL, SUPPLIER, AUTHORITY                           |
 
-Bằng chứng blockchain (`/api/blockchain-proofs`): xem danh sách version cần `traceability.view`; gửi lại (`POST …/versions/:versionId/anchor`) và xác minh (`POST …/versions/:versionId/verify`) cần `traceability.verify`, cấp cho `SCHOOL_MANAGEMENT_BOARD` và `SCHOOL_NUTRITION_OFFICER`. Chỉ SCHOOL (theo trường của Delivery, hoặc CookingBatch → MenuDay → WeeklyMenu) và SYSTEM; ngoài phạm vi trả 404.
+Bằng chứng blockchain (`/api/blockchain-proofs`, bảng `blockchain_proofs`): xem danh sách version cần `traceability.view`; gửi lại (`POST …/versions/:versionId/anchor`) và xác minh (`POST …/versions/:versionId/verify`) cần `traceability.verify`, cấp cho `SCHOOL_MANAGEMENT_BOARD` và `SCHOOL_NUTRITION_OFFICER`. Chỉ SCHOOL (theo trường của Delivery, CookingBatch → MenuDay → WeeklyMenu, hoặc trường của ngày phân phối) và SYSTEM; ngoài phạm vi trả 404. Kind gồm `deliveries` (kiểm nhận), `delivery-declarations` (khai báo khi NCC bắt đầu giao), `cooking-batches`, `retained-samples`, `meal-distributions` (`recordId` là một `mealAllocationId` bất kỳ của ngày đó) và `registrations`.
+
+NCC (`INGREDIENT_SUPPLIER_ADMIN`/`INGREDIENT_SUPPLIER_STAFF` có `delivery.manage`) chỉ dùng được kind `delivery-declarations`, giới hạn trong delivery của chính NCC; các kind khác trả 403.
+
+`GET /api/blockchain-proofs/chains/meal-allocations/:mealAllocationId` trả mọi bằng chứng trên chuỗi khai báo → kiểm nhận → mẻ → mẫu → phân phối của một suất ăn, kèm trạng thái liên kết hash giữa các bước. Cần `traceability.view` trong phạm vi trường; thêm `?verify=true` thì cần `traceability.verify` và xác minh từng bằng chứng với chain.
+
+Truy xuất theo khối (đơn vị nhỏ nhất trên giao diện): `GET /api/blockchain-proofs/chains/grade-meals?date=YYYY-MM-DD` liệt kê bữa ăn của ngày theo khối; `GET /api/blockchain-proofs/chains/grade-meals/:gradeId?date=&mealType=LUNCH|AFTERNOON` (`gradeId` là UUID hoặc `none` cho lớp chưa xếp khối) trả hành trình của mọi lớp trong khối. Cần `traceability.view`, thêm `?verify=true` thì cần `traceability.verify`; tài khoản trường chỉ thấy trường mình, `schoolId` chỉ có tác dụng với tài khoản hệ thống (bắt buộc khi xem `none`).
+
+Truy xuất công khai không cần đăng nhập, theo mã trường `ACTIVE`:
+
+- `GET /api/blockchain-proofs/public/schools/:schoolCode/grade-meals?date=YYYY-MM-DD`
+- `GET /api/blockchain-proofs/public/schools/:schoolCode/grade-meals/:gradeId?date=YYYY-MM-DD&mealType=LUNCH|AFTERNOON&verify=true|false`
+
+Phản hồi công khai ẩn biển số xe, mã phiếu giao, mã mẻ nấu và lỗi gửi giao dịch. `verify=true` đọc chain nhưng không lưu kết quả kiểm chứng. Khối không có bữa trong ngày của trường trả 404.
 
 Riêng kind `registrations` (hồ sơ đăng ký NCC/trường, UC-01/UC-02) không thuộc trường nào nên chỉ `SYSTEM_ADMIN` thuộc tổ chức SYSTEM được dùng: xem và xác minh cần `registration.view`, gửi lại cần `registration.approve`. Vai trò trường có `traceability.*` vẫn nhận 403.
 

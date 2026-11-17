@@ -32,6 +32,7 @@ function fixture(): AllocationDay {
     batches: [60, 40].map((plannedPortions, index) => ({
       id: `b${index}`,
       batchCode: `b${index}`,
+      batchNumber: index + 1,
       menuDayId: "menu",
       mealType: "LUNCH",
       status: "COMPLETED",

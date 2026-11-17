@@ -326,27 +326,6 @@ void test("organization scope follows trusted membership and nested ownership", 
       DeliveryItem: { Delivery: { schoolId: deliverySchool.schoolId } },
     },
   });
-  assert.deepEqual(listScopes.traceability(deliverySchool), {
-    OR: [
-      { Delivery: { schoolId: deliverySchool.schoolId } },
-      {
-        IngredientLot: {
-          DeliveryItem: { Delivery: { schoolId: deliverySchool.schoolId } },
-        },
-      },
-      {
-        CookingBatch: {
-          MenuDay: { WeeklyMenu: { schoolId: deliverySchool.schoolId } },
-        },
-      },
-      {
-        MealAllocation: {
-          DailyMealPortion: { Class: { schoolId: deliverySchool.schoolId } },
-        },
-      },
-      { FoodSafetyIncident: { schoolId: deliverySchool.schoolId } },
-    ],
-  });
   const supplierBase = {
     ...testStaff,
     orgType: "SUPPLIER" as const,
@@ -422,9 +401,6 @@ void test("organization scope follows trusted membership and nested ownership", 
     foodSafetyReportForwardings: { some: reportScope },
   });
   assert.deepEqual(listScopes["food-analysis"](authorizedOfficer), {
-    FoodSafetyIncident: { foodSafetyReportForwardings: { some: reportScope } },
-  });
-  assert.deepEqual(listScopes.traceability(authorizedOfficer), {
     FoodSafetyIncident: { foodSafetyReportForwardings: { some: reportScope } },
   });
   assert.throws(() => listScopes.menu(authority), status(403));

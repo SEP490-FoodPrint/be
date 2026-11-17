@@ -5,6 +5,8 @@ import {
 
 /** Bump when a payload field list changes; old versions keep their own snapshot. */
 export const PAYLOAD_VERSION = 1;
+/** v2 adds `declarationHash`, linking the inspection to the supplier declaration. */
+export const DELIVERY_INSPECTED_VERSION = 2;
 export const HASH_ALGORITHM = "KECCAK-256";
 
 type DecimalLike = { toFixed(decimalPlaces: number): string };
@@ -71,6 +73,7 @@ export type DeliveryInspectedInput = {
   receivedAt: Date | null;
   receivedByUserId: string | null;
   vehiclePlate: string | null;
+  declarationHash: string | null;
   approvals: {
     roleCode: string;
     userId: string;
@@ -103,7 +106,7 @@ export function buildDeliveryInspectedPayload(
   input: DeliveryInspectedInput,
 ): ProofPayload {
   return {
-    v: PAYLOAD_VERSION,
+    v: DELIVERY_INSPECTED_VERSION,
     type: "DELIVERY_INSPECTED",
     deliveryId: input.id,
     deliveryNo: input.deliveryNo,
@@ -117,6 +120,7 @@ export function buildDeliveryInspectedPayload(
     receivedAt: iso(input.receivedAt),
     receivedByUserId: input.receivedByUserId,
     vehiclePlate: input.vehiclePlate,
+    declarationHash: input.declarationHash,
     approvals: [...input.approvals].sort(byKey((a) => a.roleCode)).map((a) => ({
       roleCode: a.roleCode,
       userId: a.userId,
@@ -143,6 +147,151 @@ export function buildDeliveryInspectedPayload(
         sourceFacilityId: lot.sourceFacilityId,
       })),
     })),
+  };
+}
+
+export type DeliveryDeclaredInput = {
+  id: string;
+  deliveryNo: string;
+  schoolId: string;
+  supplierId: string;
+  supplyRequestId: string | null;
+  creationMode: string | null;
+  expectedArrivalAt: Date | null;
+  vehiclePlate: string | null;
+  declaredAt: string | null;
+  declaredByUserId: string;
+  items: {
+    id: string;
+    ingredientId: string;
+    supplyRequestItemId: string | null;
+    sourceFacilityId: string | null;
+    requestedQuantity: DecimalLike | null;
+    requestedUnit: string | null;
+    actualQuantity: DecimalLike;
+    unit: string;
+    lots: {
+      id: string;
+      lotCode: string;
+      manufactureDate: Date | null;
+      expiryDate: Date | null;
+      receivedQuantity: DecimalLike;
+      unit: string;
+      sourceFacilityId: string | null;
+    }[];
+  }[];
+};
+
+/** What the supplier committed to when dispatching (UC-50, UC-51). */
+export function buildDeliveryDeclaredPayload(
+  input: DeliveryDeclaredInput,
+): ProofPayload {
+  return {
+    v: PAYLOAD_VERSION,
+    type: "DELIVERY_DECLARED",
+    deliveryId: input.id,
+    deliveryNo: input.deliveryNo,
+    supplierId: input.supplierId,
+    schoolId: input.schoolId,
+    supplyRequestId: input.supplyRequestId,
+    creationMode: input.creationMode,
+    expectedArrivalAt: iso(input.expectedArrivalAt),
+    vehiclePlate: input.vehiclePlate,
+    declaredAt: input.declaredAt,
+    declaredByUserId: input.declaredByUserId,
+    items: [...input.items].sort(byKey((item) => item.id)).map((item) => ({
+      deliveryItemId: item.id,
+      ingredientId: item.ingredientId,
+      supplyRequestItemId: item.supplyRequestItemId,
+      sourceFacilityId: item.sourceFacilityId,
+      requestedQuantity: decimal(item.requestedQuantity),
+      requestedUnit: item.requestedUnit,
+      quantity: decimal(item.actualQuantity),
+      unit: item.unit,
+      lots: [...item.lots].sort(byKey((lot) => lot.id)).map((lot) => ({
+        id: lot.id,
+        lotCode: lot.lotCode,
+        manufactureDate: day(lot.manufactureDate),
+        expiryDate: day(lot.expiryDate),
+        quantity: decimal(lot.receivedQuantity),
+        unit: lot.unit,
+        sourceFacilityId: lot.sourceFacilityId,
+      })),
+    })),
+  };
+}
+
+export type MealDistributedInput = {
+  schoolId: string;
+  date: string;
+  allocations: {
+    id: string;
+    dailyMealPortionId: string;
+    distributedAt: Date | null;
+    distributedByUserId: string | null;
+    DailyMealPortion: {
+      classId: string;
+      mealType: string;
+      totalPortions: number;
+    };
+    mealAllocationBatches: {
+      cookingBatchId: string;
+      dishId: string;
+      allocatedPortions: number;
+    }[];
+  }[];
+  cookingCompletedHash: (cookingBatchId: string) => string | null;
+};
+
+/** One school-day of confirmed distribution (UC-23). */
+export function buildMealDistributedPayload(
+  input: MealDistributedInput,
+): ProofPayload {
+  const allocations = [...input.allocations].sort(byKey((a) => a.id));
+  const times = allocations
+    .map((a) => a.distributedAt)
+    .filter((value): value is Date => value !== null)
+    .sort((a, b) => a.getTime() - b.getTime());
+  return {
+    v: PAYLOAD_VERSION,
+    type: "MEAL_DISTRIBUTED",
+    schoolId: input.schoolId,
+    date: input.date,
+    distributedAt: iso(times[0] ?? null),
+    distributedByUserId:
+      allocations.find((a) => a.distributedByUserId)?.distributedByUserId ??
+      null,
+    totalPortions: integer(
+      allocations.reduce((sum, a) => sum + a.DailyMealPortion.totalPortions, 0),
+    ),
+    allocations: allocations.map((a) => ({
+      mealAllocationId: a.id,
+      dailyMealPortionId: a.dailyMealPortionId,
+      classId: a.DailyMealPortion.classId,
+      mealType: a.DailyMealPortion.mealType,
+      portions: integer(a.DailyMealPortion.totalPortions),
+    })),
+    batches: allocations
+      .flatMap((a) =>
+        a.mealAllocationBatches.map((batch) => ({
+          ...batch,
+          allocationId: a.id,
+        })),
+      )
+      .sort(
+        byKey(
+          (batch) => batch.allocationId,
+          (batch) => batch.cookingBatchId,
+          (batch) => batch.dishId,
+        ),
+      )
+      .map((batch) => ({
+        mealAllocationId: batch.allocationId,
+        cookingBatchId: batch.cookingBatchId,
+        dishId: batch.dishId,
+        portions: integer(batch.allocatedPortions),
+        cookingCompletedHash: input.cookingCompletedHash(batch.cookingBatchId),
+      })),
   };
 }
 
