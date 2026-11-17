@@ -22,7 +22,10 @@ import {
   safeError,
   type ProofChain,
 } from "../src/modules/blockchain-proof/blockchain-proof.service";
-import type { VersionRow } from "../src/modules/blockchain-proof/blockchain-proof.repository";
+import {
+  mealStatus,
+  type VersionRow,
+} from "../src/modules/blockchain-proof/blockchain-proof.repository";
 import { createRetainedSampleService } from "../src/modules/retained-sample/retained-sample.service";
 import { testStaff } from "./helpers/authorization";
 
@@ -314,6 +317,58 @@ function proofHarness(
       ],
     },
   ];
+  const saved: string[] = [];
+  const chainSubjects = {
+    schoolId: C,
+    date: "2026-11-15",
+    cookingBatchIds: [B],
+    sampleIds: [],
+    deliveryIds: [A],
+    lotDeliveries: new Map([[C, A]]),
+    meal: {
+      gradeId: A,
+      gradeName: "Khối 3",
+      mealType: "LUNCH",
+      portions: 8,
+      status: "DISTRIBUTED",
+      distributedAt: null,
+      classes: [
+        {
+          id: A,
+          className: "3A",
+          portions: 8,
+          status: "DISTRIBUTED",
+          distributedAt: null,
+        },
+      ],
+    },
+    steps: {
+      deliveries: [
+        {
+          id: A,
+          deliveryNo: "DL-1",
+          supplierName: "NCC A",
+          status: "RECEIVED",
+          vehiclePlate: "51C-123.45",
+          expectedArrivalAt: null,
+          receivedAt: null,
+        },
+      ],
+      cookingBatches: [
+        {
+          id: B,
+          batchCode: "B-1",
+          status: "COMPLETED",
+          dishes: ["Canh"],
+          plannedPortions: 10,
+          allocatedPortions: 8,
+          completedAt: null,
+        },
+      ],
+      retainedSamples: [],
+      distribution: { recordId: `${C}:2026-11-15`, date: "2026-11-15" },
+    },
+  };
   let nextId = 0;
   const events: Record<string, VersionRow["eventType"]> = {
     INSPECTED: "DELIVERY_INSPECTED",
@@ -474,9 +529,24 @@ function proofHarness(
       id: string,
       data: object,
     ) => {
+      saved.push(id);
       Object.assign(find(id)!, data);
       return Promise.resolve();
     },
+    findPublicSchool: (_db: unknown, code: string) =>
+      Promise.resolve(
+        code.toLowerCase() === "th-demo" ? { id: C, name: "TH Demo" } : null,
+      ),
+    chainSubjects: (_db: unknown, id: string, school: string | null) =>
+      Promise.resolve(id === A && school === C ? chainSubjects : null),
+    gradeChainSubjects: (
+      _db: unknown,
+      query: { schoolId: string | null; gradeId: string | null },
+    ) =>
+      Promise.resolve(
+        query.schoolId === C && query.gradeId === A ? chainSubjects : null,
+      ),
+    listChain: () => Promise.resolve(versions),
   };
   const chain: ProofChain = {
     contractAddress: () => "0xRegistry",
@@ -515,6 +585,7 @@ function proofHarness(
   return {
     service,
     versions,
+    saved,
     anchored,
     onChain,
     txStates,
@@ -1120,6 +1191,29 @@ void test("chain API lists a meal's proofs in scope and flags a broken link", as
     sampleIds: [],
     deliveryIds: [A],
     lotDeliveries: new Map([[C, A]]),
+    meal: {
+      gradeId: A,
+      gradeName: "Khối 3",
+      mealType: "LUNCH",
+      portions: 30,
+      status: "DISTRIBUTED",
+      distributedAt: null,
+      classes: [
+        {
+          id: A,
+          className: "3A",
+          portions: 30,
+          status: "DISTRIBUTED",
+          distributedAt: null,
+        },
+      ],
+    },
+    steps: {
+      deliveries: [],
+      cookingBatches: [],
+      retainedSamples: [],
+      distribution: { recordId: `${C}:2026-11-15`, date: "2026-11-15" },
+    },
   };
   const seen: unknown[] = [];
   const service = createBlockchainProofService({
@@ -1140,6 +1234,10 @@ void test("chain API lists a meal's proofs in scope and flags a broken link", as
   );
   assert.deepEqual(seen, [verifier.schoolId]);
   assert.equal(chain.intact, true);
+  // Steps and the meal header come back even for steps without a proof.
+  assert.equal(chain.meal.classes[0].className, "3A");
+  assert.equal(chain.mealAllocationId, A);
+  assert.equal(chain.steps.distribution.recordId, `${C}:2026-11-15`);
   assert.deepEqual(
     chain.nodes.map((node) => [node.kind, node.links.map((l) => l.status)]),
     [
@@ -1172,5 +1270,135 @@ void test("chain API lists a meal's proofs in scope and flags a broken link", as
         { ...verifier, permissions: ["traceability.view"] },
       ),
     { statusCode: 403 },
+  );
+});
+
+void test("grade meals keep a school to its own grades", async () => {
+  const queries: unknown[] = [];
+  const service = createBlockchainProofService({
+    connect: () => Promise.resolve({} as never),
+    repository: {
+      listGradeMeals: (_db: unknown, query: unknown) => {
+        queries.push(query);
+        return Promise.resolve([]);
+      },
+      gradeChainSubjects: (_db: unknown, query: unknown) => {
+        queries.push(query);
+        return Promise.resolve(null);
+      },
+    } as never,
+    enabled: () => false,
+  });
+  // A school cannot widen its scope with another schoolId.
+  await service.gradeMeals({ date: "2026-11-16", schoolId: A }, verifier);
+  const system = {
+    ...verifier,
+    orgType: "SYSTEM",
+    schoolId: null,
+  } as typeof verifier;
+  await service.gradeMeals({ date: "2026-11-16", schoolId: A }, system);
+  await service.gradeMeals({ date: "2026-11-16" }, system);
+  await assert.rejects(
+    () =>
+      service.gradeChain(
+        { gradeId: null },
+        { date: "2026-11-16", mealType: "LUNCH", verify: false, schoolId: A },
+        verifier,
+      ),
+    { statusCode: 404 },
+  );
+  assert.deepEqual(queries, [
+    { date: "2026-11-16", schoolId: verifier.schoolId },
+    { date: "2026-11-16", schoolId: A },
+    { date: "2026-11-16", schoolId: null },
+    {
+      schoolId: verifier.schoolId,
+      gradeId: null,
+      date: "2026-11-16",
+      mealType: "LUNCH",
+    },
+  ]);
+  // Ungraded classes exist in every school, so the system must pick one.
+  await assert.rejects(
+    () =>
+      service.gradeChain(
+        { gradeId: null },
+        { date: "2026-11-16", mealType: "LUNCH", verify: false },
+        system,
+      ),
+    { statusCode: 400 },
+  );
+  await assert.rejects(
+    () =>
+      service.gradeMeals(
+        { date: "2026-11-16" },
+        { ...verifier, permissions: [] },
+      ),
+    { statusCode: 403 },
+  );
+});
+
+void test("meal status sums up the classes of a grade", () => {
+  assert.equal(mealStatus(["FINALIZED", "FINALIZED"]), "FINALIZED");
+  assert.equal(mealStatus(["FINALIZED", "DISTRIBUTED"]), "DISTRIBUTED");
+  assert.equal(mealStatus(["DISTRIBUTED", "ALLOCATED"]), "PARTIAL");
+  assert.equal(mealStatus(["ALLOCATED", "CANCELLED"]), "ALLOCATED");
+  assert.equal(mealStatus(["CANCELLED"]), "CANCELLED");
+});
+
+void test("public journey hides operational details and never saves a check", async () => {
+  const h = proofHarness();
+  const ref = await h.service.prepareCookingCompleted(tx, B, B);
+  await h.service.anchorVersion(ref!);
+  h.versions[0].lastError = "RPC down at https://rpc.example/key";
+  const lunch = { date: "2026-11-15", mealType: "LUNCH" as const };
+
+  const chain = await h.service.publicGradeChain(
+    { schoolCode: "TH-DEMO", gradeId: A },
+    { ...lunch, verify: true },
+  );
+  assert.equal(chain.nodes[0].verificationStatus, "VERIFIED");
+  assert.deepEqual(h.saved, []);
+  assert.equal(h.versions[0].verificationStatus, "NOT_VERIFIED");
+  assert.equal(chain.nodes[0].lastError, null);
+  assert.equal(chain.mealAllocationId, null);
+  assert.equal(chain.meal.gradeName, "Khối 3");
+  assert.equal(chain.steps.deliveries[0].vehiclePlate, null);
+  assert.equal(chain.steps.deliveries[0].deliveryNo, null);
+  assert.equal(chain.steps.deliveries[0].supplierName, "NCC A");
+  assert.equal(chain.steps.cookingBatches[0].batchCode, null);
+
+  // Staff checks are still saved.
+  await h.service.gradeChain(
+    { gradeId: A },
+    { ...lunch, verify: true },
+    { ...verifier, schoolId: C },
+  );
+  assert.equal(h.saved.length, 1);
+
+  await assert.rejects(
+    () =>
+      h.service.publicGradeChain(
+        { schoolCode: "khac", gradeId: A },
+        { ...lunch, verify: false },
+      ),
+    { statusCode: 404 },
+  );
+  await assert.rejects(
+    () =>
+      h.service.publicGradeChain(
+        { schoolCode: "TH-DEMO", gradeId: B },
+        { ...lunch, verify: false },
+      ),
+    { statusCode: 404 },
+  );
+  const disabled = proofHarness({ enabled: false });
+  await assert.rejects(
+    () =>
+      disabled.service.publicGradeChain(
+        { schoolCode: "TH-DEMO", gradeId: A },
+        { ...lunch, verify: true },
+      ),
+    { statusCode: 409 },
   );
 });
