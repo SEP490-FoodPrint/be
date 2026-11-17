@@ -40,42 +40,43 @@ Chỉ tuần `PENDING_APPROVAL` được quyết định. Quyết định cập 
 
 Tất cả đường dẫn bên dưới dùng phương thức **GET**.
 
-| Module                        | Đường dẫn                            | Prisma model chính           | Models chi tiết thuộc module   |
-| ----------------------------- | ------------------------------------ | ---------------------------- | ------------------------------ |
-| `auth`                        | `/api/auth/roles`                    | `Role`                       | —                              |
-| `user`                        | `/api/users`                         | `User`                       | —                              |
-| `organization`                | `/api/schools`                       | `School`                     | —                              |
-| `ingredient`                  | `/api/ingredients`                   | `Ingredient`                 | —                              |
-| `menu`                        | `/api/menus`                         | `WeeklyMenu`                 | MenuDay, MenuDayDish           |
-| `supply-order`                | `/api/supply-requests`               | `SupplyRequest`              | SupplyRequestItem              |
-| `warehouse`                   | `/api/ingredient-lots`               | `IngredientLot`              | —                              |
-| `kitchen`                     | `/api/cooking-batches`               | `CookingBatch`               | CookingBatchLot                |
-| `meal-attendance`             | `/api/meal-portions`                 | `DailyMealPortion`           | DailyAllergyPortion            |
-| `feedback`                    | `/api/meal-complaints`               | `MealComplaint`              | —                              |
-| `inspection`                  | `/api/food-safety-incidents`         | `FoodSafetyIncident`         | FoodSafetyIncidentAllocation   |
-| `supplier`                    | `/api/suppliers`                     | `Supplier`                   | —                              |
-| `authority`                   | `/api/commune-food-safety-units`     | `CommuneFoodSafetyUnit`      | —                              |
-| `class`                       | `/api/classes`                       | `Class`                      | —                              |
-| `source-facility`             | `/api/source-facilities`             | `SourceFacility`             | —                              |
-| `supplier-certification`      | `/api/supplier-certifications`       | `SupplierCertification`      | —                              |
-| `registration`                | `/api/registration-requests`         | `RegistrationRequest`        | —                              |
-| `school-supplier`             | `/api/school-supplier-relationships` | `SchoolSupplierRelationship` | —                              |
-| `ingredient-entry`            | `/api/ingredient-entries`            | `IngredientEntry`            | —                              |
-| `allergy`                     | `/api/class-allergies`               | `ClassAllergy`               | —                              |
-| `supplier-order`              | `/api/deliveries/management`         | `Delivery`                   | DeliveryItem                   |
-| `delivery`                    | `/api/deliveries`                    | `Delivery`                   | DeliveryItem, DeliveryApproval |
-| `delivery-trace`              | `/api/public/delivery-items`         | `DeliveryItem`               | Delivery, Supplier             |
-| `dish`                        | `/api/dishes`                        | `Dish`                       | DishIngredientEntry            |
-| `inventory`                   | `/api/inventory-transactions`        | `InventoryTransaction`       | —                              |
-| `retained-sample`             | `/api/retained-food-samples`         | `RetainedFoodSample`         | —                              |
-| `meal-allocation`             | `/api/meal-allocations`              | `MealAllocation`             | MealAllocationBatch            |
-| `ingredient-quality-feedback` | `/api/ingredient-quality-feedback`   | `IngredientQualityFeedback`  | —                              |
-| `reporting`                   | `/api/food-safety-reports`           | `FoodSafetyReportForwarding` | —                              |
-| `food-analysis`               | `/api/food-analysis-results`         | `FoodAnalysisResult`         | —                              |
-| `school-alert`                | `/api/incident-school-alerts`        | `IncidentSchoolAlert`        | —                              |
-| `traceability`                | `/api/traceability-anchors`          | `TraceabilityAnchor`         | —                              |
-| `blockchain-proof`            | `/api/blockchain-proofs`             | `*Version` (3 bảng)          | —                              |
-| `menu-review`                 | `/api/menu-reviews`                  | `MenuReviewRecord`           | —                              |
+| Module                        | Đường dẫn                            | Prisma model chính             | Models chi tiết thuộc module   |
+| ----------------------------- | ------------------------------------ | ------------------------------ | ------------------------------ |
+| `auth`                        | `/api/auth/roles`                    | `Role`                         | —                              |
+| `user`                        | `/api/users`                         | `User`                         | —                              |
+| `organization`                | `/api/schools`                       | `School`                       | —                              |
+| `ingredient`                  | `/api/ingredients`                   | `Ingredient`                   | —                              |
+| `menu`                        | `/api/menus`                         | `WeeklyMenu`                   | MenuDay, MenuDayDish           |
+| `supply-order`                | `/api/supply-requests`               | `SupplyRequest`                | SupplyRequestItem              |
+| `warehouse`                   | `/api/ingredient-lots`               | `IngredientLot`                | —                              |
+| `kitchen`                     | `/api/cooking-batches`               | `CookingBatch`                 | CookingBatchLot                |
+| `meal-attendance`             | `/api/meal-portions`                 | `DailyMealPortion`             | DailyAllergyPortion            |
+| `feedback`                    | `/api/meal-complaints`               | `MealComplaint`                | —                              |
+| `inspection`                  | `/api/food-safety-incidents`         | `FoodSafetyIncident`           | FoodSafetyIncidentAllocation   |
+| `supplier`                    | `/api/suppliers`                     | `Supplier`                     | —                              |
+| `supplier-staff`              | `/api/supplier-staff`                | `User`, `UserPermissionDenial` | —                              |
+| `authority`                   | `/api/commune-food-safety-units`     | `CommuneFoodSafetyUnit`        | —                              |
+| `class`                       | `/api/classes`                       | `Class`                        | —                              |
+| `source-facility`             | `/api/source-facilities`             | `SourceFacility`               | —                              |
+| `supplier-certification`      | `/api/supplier-certifications`       | `SupplierCertification`        | —                              |
+| `registration`                | `/api/registration-requests`         | `RegistrationRequest`          | —                              |
+| `school-supplier`             | `/api/school-supplier-relationships` | `SchoolSupplierRelationship`   | —                              |
+| `ingredient-entry`            | `/api/ingredient-entries`            | `IngredientEntry`              | —                              |
+| `allergy`                     | `/api/class-allergies`               | `ClassAllergy`                 | —                              |
+| `supplier-order`              | `/api/deliveries/management`         | `Delivery`                     | DeliveryItem                   |
+| `delivery`                    | `/api/deliveries`                    | `Delivery`                     | DeliveryItem, DeliveryApproval |
+| `delivery-trace`              | `/api/public/delivery-items`         | `DeliveryItem`                 | Delivery, Supplier             |
+| `dish`                        | `/api/dishes`                        | `Dish`                         | DishIngredientEntry            |
+| `inventory`                   | `/api/inventory-transactions`        | `InventoryTransaction`         | —                              |
+| `retained-sample`             | `/api/retained-food-samples`         | `RetainedFoodSample`           | —                              |
+| `meal-allocation`             | `/api/meal-allocations`              | `MealAllocation`               | MealAllocationBatch            |
+| `ingredient-quality-feedback` | `/api/ingredient-quality-feedback`   | `IngredientQualityFeedback`    | —                              |
+| `reporting`                   | `/api/food-safety-reports`           | `FoodSafetyReportForwarding`   | —                              |
+| `food-analysis`               | `/api/food-analysis-results`         | `FoodAnalysisResult`           | —                              |
+| `school-alert`                | `/api/incident-school-alerts`        | `IncidentSchoolAlert`          | —                              |
+| `traceability`                | `/api/traceability-anchors`          | `TraceabilityAnchor`           | —                              |
+| `blockchain-proof`            | `/api/blockchain-proofs`             | `*Version` (3 bảng)            | —                              |
+| `menu-review`                 | `/api/menu-reviews`                  | `MenuReviewRecord`             | —                              |
 
 `auth` cung cấp signup, login, refresh, logout bằng cookie HttpOnly/phiên Redis, thông tin tài khoản/quyền hiện tại, cập nhật hồ sơ cá nhân bằng PATCH /auth/me (fullName/phone) và danh sách Role; xem [AUTH_SESSIONS.md](../../docs/AUTH_SESSIONS.md). Signup tạo tài khoản UNVERIFIED chưa có yêu cầu duyệt; người dùng xác minh email bằng mã Resend rồi đăng nhập để nộp/xem hồ sơ của mình, chưa được gọi API nghiệp vụ. `onboarding` trong auth xử lý nộp hồ sơ/tài liệu; registration gắn API chi tiết/duyệt/từ chối vào cùng service để giữ một luồng transaction; xem [ONBOARDING.md](../../docs/ONBOARDING.md). Hợp đồng API quản trị role/permission ở [docs/AUTHORIZATION.md](../../docs/AUTHORIZATION.md). `organization` hiện quản lý khung cho School và chế độ nấu của trường trong phiên (`GET|PATCH /api/schools/me/cooking-mode`, quyền `school_cooking_mode.manage`; mẻ đã lập giữ chế độ cũ); Supplier và CommuneFoodSafetyUnit có module riêng. API traceability chỉ đọc bản ghi, không gửi transaction blockchain. `blockchain-proof` tạo version bằng chứng (`DeliveryInspectionVersion`, `CookingBatchVersion`, `RetainedSampleVersion`) trong transaction của kiểm nhận, hoàn thành mẻ, lưu và tiêu huỷ mẫu, rồi gửi hash lên contract `FoodPrintHashRegistry` sau khi commit (tắt mặc định qua `BLOCKCHAIN_ENABLED`); xem `specs/blockchain-anchoring/spec.md`.
 
@@ -171,3 +172,9 @@ Module `supplier-order` tách đủ 7 file (`routes`, `controller`, `validation`
 Module `delivery` bổ sung `POST /api/deliveries/:id/arrival` dành riêng cho trường (`delivery.view` và `delivery.inspect`, bốn vai trò kiểm nhận) để chuyển `IN_TRANSIT -> ARRIVED` cho đơn `traceabilityVersion = 1` trước khi ký nhận (chặn `PREPARING` bằng `409`), đối chiếu đồng bộ nguồn lô ở chữ ký thứ 4 bằng gom nhóm theo `supplyRequestItemId` (với `workflowVersion = 2` kiểm đủ tập nguồn và `currentGroup == requested`; legacy giữ `previous + currentGroup <= requested`), và tính mọi đơn `REQUEST` (cả `v1` lẫn legacy) vào `cap3` (hủy cả `PREPARING`/`IN_TRANSIT`/pending ở lần `REJECT` thứ 3; chỉ `STANDALONE` không đếm). Module công khai `delivery-trace` mount tại `/api/public/delivery-items` (`GET`/`HEAD /:token`) là ngoại lệ không yêu cầu đăng nhập, đàm phán HTML/JSON allowlist 8 trường (phản ánh đúng `PREPARING`), che token trên log và gắn đầy đủ header `no-store`/`no-referrer`/`CSP`/`noindex` dựa trên URL cố định từ `PUBLIC_TRACE_ORIGIN`. Khi triển khai, luôn áp dụng xong tuần tự enum `PREPARING` rồi marker `workflow_version`/CHECK/3 partial unique indexes trước khi dừng writer cũ và bật app/client hai bước; rollback app sau khi đã có đơn nhiều nguồn cần compatibility review, không gộp QR hay khôi phục full unique index cũ, không cấp quyền hoặc seed ngầm.
 
 Schema `Delivery.schoolId` (bắt buộc), `DeliveryItem.ingredientId` / `ingredientEntryId` (`supplyRequestId` và `supplyRequestItemId` nullable), `Delivery.traceabilityVersion`, `Delivery.workflowVersion` (`2` hoặc `null`), 3 partial unique indexes trên `delivery_items` (`uq_delivery_items_ingredient_source`, `uq_delivery_items_legacy_ingredient`, `uq_delivery_items_legacy_request_item`), dãy `FP-DE-00001` riêng mỗi supplier và `DeliveryItem.qrToken`/`qrUrl` cùng snapshot nguồn hỗ trợ thống nhất cả đơn `REQUEST`, đơn `STANDALONE` và dữ liệu legacy `creationMode = null`. Xem [hợp đồng supplier-orders](../../specs/supplier-order-creation/contracts/supplier-orders.md) và [hợp đồng public-trace](../../specs/supplier-order-creation/contracts/public-trace.md).
+
+## Supplier staff management
+
+`supplier-staff` sở hữu danh sách, chi tiết, tạo, khóa/mở khóa và quyền riêng của INGREDIENT_SUPPLIER_STAFF trong supplier của INGREDIENT_SUPPLIER_ADMIN. Bảy endpoint và scope `supplier_staff.manage` được mô tả tại [AUTHORIZATION.md](../../docs/AUTHORIZATION.md). Các file routes/controller/validation/service/repository cùng Request DTO (z.infer) và Response DTO tách riêng; controllers không import DTO, repositories không import DTO, service map allowlist và điều phối transaction. Không thêm model, role, grant hoặc seed.
+
+`auth` tiếp tục sở hữu login/session/recovery; mọi role chỉ login bằng email. Username vẫn là dữ liệu quản lí với uniqueness đã chốt; `user` chỉ điều chỉnh duplicate predicate của school create, giữ validation/role/default password/response. Generic permission và account-lifecycle giữ ownership; staff mutations dùng cùng lock protocol với lifecycle, không gọi module cũ mở transaction độc lập.

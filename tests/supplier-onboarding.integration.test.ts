@@ -1,3 +1,4 @@
+import { recordLocalTestDatabase } from "./helpers/local-test-database";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { randomUUID } from "node:crypto";
@@ -37,8 +38,7 @@ function stringField(value: Record<string, unknown>, key: string) {
 const execute = promisify(execFile);
 
 void test("supplier onboarding with real login, PostgreSQL migration, files, concurrent activation and order traceability", async (context) => {
-  const local =
-    process.env.LOCAL_DATABASE_URL || process.env.MIGRATION_TEST_DATABASE_URL;
+  const local = process.env.MIGRATION_TEST_DATABASE_URL;
   assert(
     local,
     "Configure an explicitly selected disposable local PostgreSQL instance.",
@@ -49,8 +49,12 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
     randomUUID().replaceAll("-", "").slice(0, 16);
   const owner = new Client({ connectionString: local });
   await owner.connect();
-  await owner.query(`CREATE DATABASE "${databaseName}"`);
-  await owner.end();
+  try {
+    await owner.query(`CREATE DATABASE "${databaseName}"`);
+    recordLocalTestDatabase(databaseName);
+  } finally {
+    await owner.end();
+  }
   target.pathname = "/" + databaseName;
   target.searchParams.set("schema", "foodprint");
   process.env.DATABASE_URL = target.toString();
@@ -280,9 +284,9 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
       data: result.data ? record(result.data) : {},
     };
   };
-  const login = async (username: string) => {
+  const login = async (email: string) => {
     const response = await call("/auth/login", "", "POST", {
-      identifier: username,
+      identifier: email,
       password: "123456",
     });
     assert.equal(response.status, 200);
@@ -292,10 +296,10 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
     );
     return response.cookies.join("; ");
   };
-  const tokenA = await login("managerA"),
-    tokenB = await login("managerB"),
-    warehouse = await login("warehouseA"),
-    health = await login("healthA");
+  const tokenA = await login("managerA@test.local"),
+    tokenB = await login("managerB@test.local"),
+    warehouse = await login("warehouseA@test.local"),
+    health = await login("healthA@test.local");
   const payload = (number: string) => ({
     supplierId: supplierA,
     number,
@@ -620,7 +624,7 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
         (
           await call(
             `/supply-requests/${sentId}/contract-evidence`,
-            await login("warehouseB"),
+            await login("warehouseB@test.local"),
           )
         ).status,
         404,
@@ -826,7 +830,7 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
           status: "ACTIVE",
         },
       });
-      const admin = await login("ingredient-admin");
+      const admin = await login("ingredient-admin@test.local");
       const menu = await db.weeklyMenu.create({
         data: {
           schoolId: schoolA,

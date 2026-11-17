@@ -32,6 +32,14 @@ Username dài 3–120 ký tự, gồm chữ/số/underscore/dấu chấm/gạch 
 
 Response signup chứa `user: { id, username, fullName, status: "UNVERIFIED" }`, `onboardingRequired: true`, `emailVerificationRequired: true` và `verificationEmailSent`. Nếu gửi email lỗi sau khi tạo tài khoản, vẫn trả 201 với verificationEmailSent=false; dùng API gửi lại thay vì đăng ký lại. Username/email trùng trả 409 với thông báo chung; lỗi DB trả 503, không trả URL hoặc lỗi driver. Xem [gửi/nhập mã, Resend và giới hạn](EMAIL_VERIFICATION.md).
 
+## Đăng nhập bằng email cho mọi vai trò
+
+`POST /api/auth/login` nhận đúng `{ identifier, password }`; mọi vai trò gửi **email** trong `identifier`. Identifier được trim/lowercase, tối đa 320 ký tự; mật khẩu giữ nguyên văn, từ 1 đến 72 byte UTF-8. Không nhận trường email/username riêng, role, orgId hoặc mã/link nhà cung cấp. Lỗi cấu trúc, thiếu/rỗng/quá dài hoặc trường lạ trả 400; chuỗi username/non-email không rỗng không khớp email nào nhận 401 chung `Email hoặc mật khẩu không đúng`.
+
+Repository chỉ tra unique email Citext, không OR/fallback username hoặc lỗi nhiều candidate. Email A trùng username B vẫn chỉ xác thực hash của A; mật khẩu chỉ đúng với B không mở được A. Sau khóa User theo id, repository kiểm lại cùng id/email tại DB và hash chưa đổi trước khi cấp phiên; role, membership, trạng thái và quyền được tải hiện hành. Không tìm thấy email vẫn thực hiện dummy bcrypt comparison.
+
+Username tiếp tục được lưu/hiển thị: staff duy nhất trong supplier (gồm tên admin cùng supplier), staff khác supplier có thể trùng; các non-staff vẫn duy nhất với nhau. Email duy nhất toàn hệ thống ở mọi trạng thái. School create chỉ kiểm username trong nhóm non-staff, email luôn toàn cục; signup giữ validation/role/defaults hiện hành. Client từng dùng username phải chuyển sang email đã có; không tự đổi dữ liệu tài khoản hoặc revoke toàn bộ phiên. Cookie/JWT/CSRF/refresh/logout và recovery theo email/User.id giữ nguyên.
+
 ## Hoàn thiện hồ sơ và duyệt tài khoản
 
 Luồng nghiệp vụ đã chốt:
@@ -121,7 +129,7 @@ const response = await fetch("http://localhost:5000/api/auth/login", {
     "X-CSRF-Protection": "1",
   },
   body: JSON.stringify({
-    identifier: "your-username-or-email",
+    identifier: "your-email@example.com",
     password: "your-password",
   }),
 });
