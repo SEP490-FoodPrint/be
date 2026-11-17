@@ -1513,7 +1513,8 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       assert.deepEqual(await organizations.getCookingMode(reviewer), {
         cookingMode: "SEPARATE_BY_LOT",
       });
-      const grPlan = await batches.plan({ ...grKey, dishId: grCommon }, chef);
+      // Without dishId the whole meal is planned; with dishId only that dish (kitchen-meal-workflow FR-001).
+      const grPlan = await batches.plan(grKey, chef);
       assert.deepEqual(
         grPlan.batches.map((b) => b.plannedPortions).sort((a, b) => a! - b!),
         [13, 45, 75, 107],
