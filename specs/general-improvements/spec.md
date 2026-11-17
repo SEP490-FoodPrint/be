@@ -12,7 +12,7 @@ Nhân viên bếp và BGH cần theo dõi số thứ tự lô chế biến (Lô 
 - **FR-001**: Model `CookingBatch` lưu trữ trường `batchNumber` kiểu số nguyên (`INTEGER`, ánh xạ tới cột `batch_number`).
 - **FR-002**: Khi chia lô chế biến (`SEPARATE_BY_LOT` hoặc `COMBINE_LOTS`), mỗi mẻ con được tự động gán số thứ tự lô tăng dần bắt đầu từ 1 (`batchNumber: index + 1`).
 - **FR-003**: DTOs và API trả về `batchNumber` cho các endpoint danh sách lô và chi tiết lô.
-- **FR-004**: Migration versioned `20261121000100_cooking_batch_number` bổ sung cột `batch_number` vào bảng `foodprint.cooking_batches`, tương thích dữ liệu cũ với giá trị `NULL`.
+- **FR-004**: Migration versioned `20261121000200_cooking_batch_number` bổ sung cột `batch_number` vào bảng `foodprint.cooking_batches`, tương thích dữ liệu cũ với giá trị `NULL`.
 - **FR-005**: Bảo toàn các ràng buộc dữ liệu, phân quyền trường học và kiểm thử đơn vị.
 
 ## Acceptance scenarios
