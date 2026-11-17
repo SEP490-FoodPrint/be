@@ -736,6 +736,7 @@ export const INITIAL_ROLE_PERMISSIONS = [
   ["INGREDIENT_SUPPLIER_ADMIN", "ingredient_quality_feedback.view_details"],
   ["INGREDIENT_SUPPLIER_ADMIN", "ingredient_quality_feedback.respond"],
   ["INGREDIENT_SUPPLIER_ADMIN", "delivery.view"],
+  ["INGREDIENT_SUPPLIER_ADMIN", "supplier_relationship.view"],
   ["INGREDIENT_SUPPLIER_STAFF", "dashboard.view"],
   ["INGREDIENT_SUPPLIER_STAFF", "delivery.manage"],
   ["INGREDIENT_SUPPLIER_STAFF", "supply_request.view"],

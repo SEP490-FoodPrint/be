@@ -22,6 +22,7 @@ import {
 import {
   listScopes,
   RESOURCE_PERMISSIONS,
+  supplierSchoolReadScope,
   supplierStaffManagementScope,
   supplierOrderManagementScope,
   supplierOrderReadScope,
@@ -99,7 +100,11 @@ void test("all list resources deny absent grants, including System Admin", () =>
       ...testAdmin,
       permissions: INITIAL_PERMISSIONS.map((p) => p.code),
     };
-    if (resource === "source-facility" || resource === "supplier-staff") {
+    if (
+      resource === "source-facility" ||
+      resource === "supplier-staff" ||
+      resource === "supplier-school"
+    ) {
       assert.throws(() => scope(grantedSystem), status(403));
     } else {
       assert.deepEqual(scope(grantedSystem), {});
@@ -153,6 +158,99 @@ void test("supplier staff management requires its admin role, trusted membership
   ]) {
     assert.throws(() => supplierStaffManagementScope(denied), status(403));
     assert.throws(() => listScopes["supplier-staff"](denied), status(403));
+  }
+});
+void test("supplier-school requires INGREDIENT_SUPPLIER_ADMIN, valid SUPPLIER membership and view/manage OR without SYSTEM bypass", () => {
+  const supplierId = "00000000-0000-4000-8000-000000000055";
+  const otherSupplierId = "00000000-0000-4000-8000-000000000066";
+  const principal = {
+    ...testAdmin,
+    role: "INGREDIENT_SUPPLIER_ADMIN",
+    orgType: "SUPPLIER" as const,
+    supplierId,
+    permissions: ["supplier_relationship.view"],
+  };
+  assert.deepEqual(RESOURCE_PERMISSIONS["supplier-school"], [
+    "supplier_relationship.view",
+    "supplier_relationship.manage",
+  ]);
+  assert.deepEqual(supplierSchoolReadScope(principal), { supplierId });
+  assert.deepEqual(listScopes["supplier-school"](principal), { supplierId });
+  assert.deepEqual(
+    supplierSchoolReadScope({
+      ...principal,
+      permissions: ["supplier_relationship.manage"],
+    }),
+    { supplierId },
+  );
+  assert.deepEqual(
+    supplierSchoolReadScope({
+      ...principal,
+      supplierId: otherSupplierId,
+      permissions: [
+        "supplier_relationship.view",
+        "supplier_relationship.manage",
+      ],
+    }),
+    { supplierId: otherSupplierId },
+  );
+  // Catalog adds default view only to INGREDIENT_SUPPLIER_ADMIN, not manage or staff.
+  const initialRolePermissions: readonly (readonly [string, string])[] =
+    INITIAL_ROLE_PERMISSIONS;
+  assert(
+    initialRolePermissions.some(
+      ([role, permission]) =>
+        role === "INGREDIENT_SUPPLIER_ADMIN" &&
+        permission === "supplier_relationship.view",
+    ),
+  );
+  assert(
+    !initialRolePermissions.some(
+      ([role, permission]) =>
+        role === "INGREDIENT_SUPPLIER_ADMIN" &&
+        permission === "supplier_relationship.manage",
+    ),
+  );
+  assert(
+    !initialRolePermissions.some(
+      ([role, permission]) =>
+        role === "INGREDIENT_SUPPLIER_STAFF" &&
+        (permission === "supplier_relationship.view" ||
+          permission === "supplier_relationship.manage"),
+    ),
+  );
+
+  for (const denied of [
+    { ...principal, permissions: [] },
+    { ...principal, permissions: ["supplier.view"] },
+    { ...principal, permissions: ["delivery.manage"] },
+    { ...principal, role: "INGREDIENT_SUPPLIER_STAFF" },
+    {
+      ...principal,
+      role: "INGREDIENT_SUPPLIER_STAFF",
+      permissions: ["supplier_relationship.manage"],
+    },
+    { ...principal, role: "FUTURE_SUPPLIER_ROLE" },
+    { ...principal, role: "SYSTEM_ADMIN" },
+    { ...principal, role: "SCHOOL_ADMINISTRATION" },
+    { ...principal, role: "SCHOOL_MANAGEMENT_BOARD" },
+    { ...principal, role: "COMMUNE_FOOD_SAFETY_OFFICER" },
+    { ...principal, supplierId: null },
+    { ...principal, schoolId: testStaff.schoolId },
+    { ...principal, communeFoodSafetyUnitId: testAdmin.id },
+    { ...principal, orgType: "SYSTEM" as const },
+    { ...principal, orgType: "SCHOOL" as const },
+    { ...principal, orgType: "AUTHORITY" as const },
+    {
+      ...testAdmin,
+      permissions: [
+        "supplier_relationship.view",
+        "supplier_relationship.manage",
+      ],
+    },
+  ]) {
+    assert.throws(() => supplierSchoolReadScope(denied), status(403));
+    assert.throws(() => listScopes["supplier-school"](denied), status(403));
   }
 });
 void test("school grade service requires BGH even when SYSTEM has class.manage", async () => {
@@ -577,6 +675,58 @@ void test("bootstrap preserves existing officer assignments while provisioning n
           row.permissionId === "food_safety_report.receive",
       ),
       !officerExists,
+    );
+  }
+});
+void test("bootstrap grants default supplier_relationship.view only when INGREDIENT_SUPPLIER_ADMIN is newly created", async () => {
+  const supplierAdminCode = "INGREDIENT_SUPPLIER_ADMIN";
+  for (const supplierAdminExists of [true, false]) {
+    let roleReads = 0;
+    let inserted: { roleId: string; permissionId: string }[] = [];
+    const roles = INITIAL_ROLES.map((role) => ({
+      id: role.code,
+      code: role.code,
+    }));
+    const permissions = INITIAL_PERMISSIONS.map((permission) => ({
+      id: permission.code,
+      code: permission.code,
+    }));
+    const mockTx = {
+      $executeRaw: () => Promise.resolve(0),
+      role: {
+        findMany: () =>
+          Promise.resolve(
+            ++roleReads === 1 && !supplierAdminExists
+              ? roles.filter((role) => role.code !== supplierAdminCode)
+              : roles,
+          ),
+        createMany: () => Promise.resolve({ count: 0 }),
+      },
+      permission: {
+        findMany: () => Promise.resolve(permissions),
+        createMany: () => Promise.resolve({ count: 0 }),
+      },
+      rolePermission: {
+        createMany: (args: {
+          data: { roleId: string; permissionId: string }[];
+        }) => {
+          inserted = args.data;
+          return Promise.resolve({ count: args.data.length });
+        },
+      },
+    };
+    const client = {
+      $transaction: (fn: (value: typeof mockTx) => Promise<unknown>) =>
+        fn(mockTx),
+    } as unknown as import("../src/generated/prisma/client").PrismaClient;
+    await bootstrapAuthorization(client);
+    assert.equal(
+      inserted.some(
+        (row) =>
+          row.roleId === supplierAdminCode &&
+          row.permissionId === "supplier_relationship.view",
+      ),
+      !supplierAdminExists,
     );
   }
 });
