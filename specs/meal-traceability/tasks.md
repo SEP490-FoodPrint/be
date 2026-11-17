@@ -9,6 +9,7 @@
 - [x] T005 Tích hợp nút 'Truy xuất suất ăn' và modal chọn Khối/Lớp tại `MenuDetailHeader.jsx`.
 - [x] T006 Dựng giao diện `MealTraceability` tuân thủ `ai_coding_rule.md`.
 - [x] T007 Kiểm thử end-to-end với biến môi trường `VITE_USE_MOCKDATA=true`.
+- [x] T008 Tích hợp chuỗi bằng chứng Blockchain 5 chặng qua blockchainProofService.publicMealAllocationChain.
 
 ## Kết quả kiểm tra
 

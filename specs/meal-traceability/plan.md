@@ -9,7 +9,7 @@ Triển khai module `src/modules/meal-traceability/` theo chuẩn 7 file:
 3. `meal-traceability.validation.ts`: Zod schema `z.strictObject()` xác thực query (`classId`, `date`, `mealType`, `mealAllocationId`).
 4. `meal-traceability.request.dto.ts`: Type inferred từ schema validation.
 5. `meal-traceability.response.dto.ts`: Output contract định nghĩa rõ các trường trả về.
-6. `meal-traceability.service.ts`: Orchestration logic, gọi repository, map dữ liệu sang Response DTO (đảm bảo `blockchainProof: null`).
+6. `meal-traceability.service.ts`: Orchestration logic, gọi repository, map dữ liệu sang Response DTO và tích hợp chuỗi `blockchainProof` qua `blockchainProofService.publicMealAllocationChain`.
 7. `meal-traceability.repository.ts`: Truy vấn Prisma schema hiện hành, không sửa đổi cấu trúc CSDL.
 
 Đăng ký router vào `src/routes/index.ts`.

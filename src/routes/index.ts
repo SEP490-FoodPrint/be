@@ -196,6 +196,7 @@ export function createApiRouter(
     "/blockchain-proofs",
     createBlockchainProofRouter(undefined, authHandler),
   );
+  router.use("/meal-traceability", createMealTraceabilityRouter());
   router.use("/menu-reviews", createMenuReviewRouter(undefined, authHandler));
 
   router.use("/v1/menus", createMenuRouter(undefined, authHandler, true));

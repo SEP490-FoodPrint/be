@@ -1,3 +1,5 @@
+import type { BlockchainProofChainResponseDTO } from "../blockchain-proof/blockchain-proof.response.dto";
+
 export interface SchoolDto {
   id: string;
   name: string;
@@ -97,5 +99,5 @@ export interface MealTraceabilityResponseDto {
   classInfo: ClassInfoDto;
   allocation: AllocationDto;
   dishes: DishTraceDto[];
-  blockchainProof: null;
+  blockchainProof: BlockchainProofChainResponseDTO | null;
 }

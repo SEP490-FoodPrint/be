@@ -9,6 +9,7 @@ import {
   mealTraceabilityRepository,
   type MealAllocationTraceRecord,
 } from "./meal-traceability.repository";
+import { blockchainProofService } from "../blockchain-proof/blockchain-proof.service";
 
 export const mealTraceabilityService = {
   async getMealTraceability(
@@ -166,12 +167,22 @@ export const mealTraceabilityService = {
       dishesMap.get(dish.id)?.batches.push(batchTrace);
     }
 
+    let blockchainProof = null;
+    try {
+      blockchainProof = await blockchainProofService.publicMealAllocationChain(
+        record.id,
+        Boolean(query.verify),
+      );
+    } catch {
+      // Giữ null an toàn nếu chuỗi bằng chứng chưa được neo hoặc blockchain tắt
+    }
+
     return {
       school,
       classInfo,
       allocation,
       dishes: Array.from(dishesMap.values()),
-      blockchainProof: null, // Tạm thời để trống cho kiểm tra ban đầu
+      blockchainProof,
     };
   },
 };

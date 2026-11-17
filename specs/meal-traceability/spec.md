@@ -7,5 +7,5 @@ Truy xuất toàn diện chuỗi cung ứng suất ăn học đường từ lớ
 - FR-003. Trả về danh sách món ăn trong thực đơn ngày (`MenuDayDish`, `Dish`) và các mẻ nấu cấu thành (`MealAllocationBatch`, `CookingBatch`).
 - FR-004. Với từng mẻ nấu, kèm thông tin mẫu lưu kiểm nghiệm (`RetainedFoodSample` gồm số lượng, vị trí lưu, trạng thái và ảnh niêm phong nếu có).
 - FR-005. Trích xuất định lượng nguyên liệu (`CookingBatchLot`), lô nguyên liệu (`IngredientLot`), cơ sở sản xuất (`SourceFacility`), đơn giao hàng (`Delivery`), nhà cung cấp (`Supplier`), chứng nhận (`SupplierCertification`), và duyệt kiểm thực (`DeliveryApproval`).
-- FR-006. Tạm thời trả về `blockchainProof: null` để người dùng kiểm tra đối soát dữ liệu chuỗi cung ứng trước khi kết nối ghi nhận on-chain.
+- FR-006. Tích hợp chuỗi bằng chứng Blockchain tự động thông qua publicMealAllocationChain của blockchainProofService, đóng gói 5 chặng bằng chứng số và hỗ trợ verify=true đối soát on-chain.
 - FR-007. Sử dụng 100% database schema hiện có, tuyệt đối không tạo migration hay bảng mới.

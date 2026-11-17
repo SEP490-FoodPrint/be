@@ -69,6 +69,15 @@ export function createBlockchainProofController(
       const result = await service.publicGradeChain(params, query);
       sendSuccess(res, result, "Lấy hành trình bữa ăn của khối thành công");
     }),
+    publicMealAllocationChain: asyncHandler(async (req, res) => {
+      const params = validateChainParams(req.params);
+      const query = validateChainQuery(req.query);
+      const result = await service.publicMealAllocationChain(
+        params.mealAllocationId,
+        query.verify,
+      );
+      sendSuccess(res, result, "Lấy chuỗi bằng chứng blockchain thành công");
+    }),
     chain: asyncHandler(async (req, res) => {
       const params = validateChainParams(req.params);
       const query = validateChainQuery(req.query);

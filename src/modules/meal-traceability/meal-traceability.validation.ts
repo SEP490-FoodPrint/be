@@ -11,4 +11,7 @@ export const getMealTraceabilitySchema = z.strictObject({
     .string()
     .uuid("mealAllocationId phải là định dạng UUID hợp lệ")
     .optional(),
+  verify: z
+    .preprocess((val) => val === "true" || val === true, z.boolean())
+    .optional(),
 });

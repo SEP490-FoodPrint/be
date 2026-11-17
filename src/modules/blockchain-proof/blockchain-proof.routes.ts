@@ -59,6 +59,10 @@ export function createBlockchainProofRouter(
     controller.publicGradeChain,
   );
   router.get(
+    "/public/meal-allocations/:mealAllocationId",
+    controller.publicMealAllocationChain,
+  );
+  router.get(
     "/chains/grade-meals",
     authHandler,
     requireChainPermission,
