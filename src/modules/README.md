@@ -2,7 +2,7 @@
 
 ## Query cho nhân viên dinh dưỡng và bếp
 
-Các API v1 của menu/kitchen/retained-sample lọc và phân trang tại DB với page mặc định1, limit mặc định20/tối đa100. Menu nhận search tiêu đề/tên món cùng date/weekStartDate/status. Kitchen nhận ngày/khoảng ngày, trạng thái, ca, phương thức, món/ngày thực đơn và search mã mẻ/tên món/số suất; KPI dùng cùng điều kiện. Lưu mẫu nhận status và search tủ/mẻ/món, trả totalItems/hasNext và expiresAt ISO. Mọi điều kiện kết hợp school scope từ principal, không lấy scope từ query.
+Các API v1 của menu/kitchen/retained-sample lọc và phân trang tại DB với page mặc định 1, limit mặc định20/tối đa100. Menu nhận search tiêu đề/tên món cùng date/weekStartDate/status. Kitchen nhận ngày/khoảng ngày, trạng thái, ca, phương thức, món/ngày thực đơn và search mã mẻ/tên món/số suất; KPI dùng cùng điều kiện. Lưu mẫu nhận status và search tủ/mẻ/món, trả totalItems/hasNext và expiresAt ISO. Mọi điều kiện kết hợp school scope từ principal, không lấy scope từ query.
 
 Ba module không cung cấp endpoint xuất báo cáo/in. PUT chỉnh sửa mẻ và code xử lý tương ứng đã bỏ; delete/confirm/complete/lưu mẫu vẫn giữ. Xem [query contract](../../specs/010-api-architecture-completion/contracts/api-audit.md#query-đã-kiểm-chứng--09112026).
 
@@ -201,3 +201,15 @@ Module `ingredient-quality-feedback` (mở rộng đầy đủ 7 file `routes`, 
 - `POST /api/ingredient-quality-feedback/:feedbackId/response`: dành cho `SUPPLIER` (`ADMIN`/`STAFF`) có **đồng thời** `ingredient_quality_feedback.view_details` **và** `ingredient_quality_feedback.respond`; body chỉ nhận `supplierResponse` (1–5.000 Unicode code points sau trim hai đầu). Khóa theo thứ tự chung và cập nhật có điều kiện `SUBMITTED -> RESPONDED` trong transaction `Serializable` (cạnh tranh kết thúc một `200` và một `409`, không ghi đè, không gọi allocator số thứ tự hay sửa `id`/`complaintCode`).
 
 **Phạm vi producer BGH:** API HTTP/service tạo khiếu nại phía Ban Giám hiệu và quyền mặc định tương ứng chưa tồn tại trong repository. Tính năng này mới chuẩn bị storage `complaintCode`/sequence, pure formatter/parser tại [complaint-code.ts](../utils/complaint-code.ts) và allocator nội bộ `nextComplaintCodeSequence(tx)` theo [producer contract](../../specs/supplier-complaint-response/contracts/complaint-code-producer.md); xem chi tiết API tại [ingredient-quality-feedback-api.md](../../specs/supplier-complaint-response/contracts/ingredient-quality-feedback-api.md).
+
+## Quản trị quyền toàn hệ thống
+
+Module permission sở hữu GET /api/roles, GET/POST /api/permissions, PATCH /api/permissions/:permissionId (name/description), PATCH /api/permissions/:permissionId/state (isActive) và GET/PUT /api/roles/:roleId/permissions. GET /api/auth/roles vẫn thuộc auth và giữ hợp đồng cũ. Catalog/role routes yêu cầu SYSTEM_ADMIN thuộc SYSTEM cùng role.view/permission.view/permission.create/role_permission.manage theo [ma trận](../../docs/AUTHORIZATION.md); hai PATCH dùng role_permission.manage, không thêm quyền hoặc bootstrap.
+
+Validation Zod là nguồn Request DTO trong permission.request.dto.ts; Response DTO tách tại permission.response.dto.ts. Controller chỉ validate/gọi service; service xác lập scope, transaction và ánh xạ allowlist; repository chứa toàn bộ Prisma queries và khóa. SYSTEM_ADMIN grant list chỉ đọc, nhưng trạng thái permission toàn cục vẫn áp dụng cho System Admin; off/on không sửa grants/denials. PUT bộ quyền giữ inactive đã có, chỉ cho thêm mới active, giữ assignedAt của grants không đổi. Không cache phân quyền.
+
+permissionConcurrencyRepository.touchUser/touchRole vẫn được export để phối hợp MVCC với intake/lifecycle/supplier-staff. Mọi write recheck actor/target sau khóa trong cùng Serializable transaction, retry raw query/COMMIT conflicts theo wrapper chung. API user permissions/denials giữ guard, ownership và điều kiện target ACTIVE hiện hành; không mở thêm quyền quản trị cho authority hoặc System Admin ghi denial toàn cục.
+
+GET /api/permissions hỗ trợ search optional theo một phần tên, không phân biệt hoa/thường, trim/max150, literal wildcard và lọc trước page/limit; GET /api/roles vẫn chỉ nhận pagination. DTO/validator query được tách riêng để giữ hợp đồng này.
+
+GET /api/permissions/inactive yêu cầu SYSTEM_ADMIN/SYSTEM + permission.view, chỉ trả isActive=false với tối đa 5 mục/trang; query chỉ page, mặc định 1. Schema chuẩn hóa limit=5, repository lọc trước pagination; không dùng để liệt kê grant chưa gán theo role.

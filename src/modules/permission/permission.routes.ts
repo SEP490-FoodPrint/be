@@ -11,19 +11,54 @@ export function createPermissionRouter(
 ) {
   const router = Router();
   const c = createPermissionController(service);
-  router.get("/permissions", authHandler, c.list);
-  router.post("/permissions", authHandler, c.create);
-  router.get("/roles/:roleId/permissions", authHandler, c.role);
-  router.put("/roles/:roleId/permissions", authHandler, c.replaceRole);
-  router.get("/users/:userId/permissions", authHandler, c.user);
+  const privateResponse: RequestHandler = (_req, res, next) => {
+    res.setHeader("Cache-Control", "private, no-store");
+    next();
+  };
+  router.get("/roles", authHandler, privateResponse, c.listRoles);
+  router.get("/permissions/inactive", authHandler, privateResponse, c.inactive);
+  router.get("/permissions", authHandler, privateResponse, c.list);
+  router.patch(
+    "/permissions/:permissionId",
+    authHandler,
+    privateResponse,
+    c.update,
+  );
+  router.patch(
+    "/permissions/:permissionId/state",
+    authHandler,
+    privateResponse,
+    c.setState,
+  );
+  router.post("/permissions", authHandler, privateResponse, c.create);
+  router.get(
+    "/roles/:roleId/permissions",
+    authHandler,
+    privateResponse,
+    c.role,
+  );
+  router.put(
+    "/roles/:roleId/permissions",
+    authHandler,
+    privateResponse,
+    c.replaceRole,
+  );
+  router.get(
+    "/users/:userId/permissions",
+    authHandler,
+    privateResponse,
+    c.user,
+  );
   router.put(
     "/users/:userId/permission-denials/:permissionId",
     authHandler,
+    privateResponse,
     c.disable,
   );
   router.delete(
     "/users/:userId/permission-denials/:permissionId",
     authHandler,
+    privateResponse,
     c.enable,
   );
   return router;

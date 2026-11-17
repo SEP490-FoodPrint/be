@@ -6,7 +6,10 @@ import {
   createSupplierStaffRepository,
   supplierStaffRepository,
 } from "../src/modules/supplier-staff/supplier-staff.repository";
-import { permissionConcurrencyRepository } from "../src/modules/permission/permission.repository";
+import {
+  createPermissionRepository,
+  permissionConcurrencyRepository,
+} from "../src/modules/permission/permission.repository";
 import { createSupplyOrderService } from "../src/modules/supply-order/supply-order.service";
 import { createSupplyOrderRepository } from "../src/modules/supply-order/supply-order.repository";
 import { createIntakeAccessService } from "../src/modules/account-lifecycle/intake-access.service";
@@ -8018,6 +8021,827 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
     },
   );
   await context.test(
+    "role permission management US1 preserves inactive grants, denials and complete concurrent saves",
+    async () => {
+      const roleId = staffA.roleId;
+      const original = await db.rolePermission.findMany({ where: { roleId } });
+      const principal = await loadPrincipal(system.id, db);
+      const repo = createPermissionRepository(() => Promise.resolve(db));
+      const service = createPermissionService(() => Promise.resolve(db), repo);
+      const code = "rp_" + randomUUID().replaceAll("-", "");
+      const a = await db.permission.create({
+        data: {
+          code: code + ".first",
+          name: "RP first",
+          module: code,
+          action: "first",
+        },
+      });
+      const b = await db.permission.create({
+        data: {
+          code: code + ".second",
+          name: "RP second",
+          module: code,
+          action: "second",
+          isActive: false,
+        },
+      });
+      const deny = await db.userPermissionDenial.create({
+        data: {
+          userId: staffA.id,
+          permissionId: a.id,
+          schoolId: schoolA.id,
+          disabledByUserId: adminA.id,
+        },
+      });
+      const snapshot = () =>
+        db.rolePermission.findMany({
+          where: { roleId },
+          orderBy: { permissionId: "asc" },
+        });
+      try {
+        await db.rolePermission.create({
+          data: { roleId, permissionId: b.id },
+        });
+        const kept = await db.rolePermission.findUniqueOrThrow({
+          where: { roleId_permissionId: { roleId, permissionId: b.id } },
+        });
+        await service.replaceRole(principal, roleId, [a.id, b.id]);
+        assert.equal(
+          (
+            await db.rolePermission.findUniqueOrThrow({
+              where: { roleId_permissionId: { roleId, permissionId: b.id } },
+            })
+          ).assignedAt.toISOString(),
+          kept.assignedAt.toISOString(),
+        );
+        assert(
+          await db.userPermissionDenial.findUnique({ where: { id: deny.id } }),
+        );
+        assert(
+          !(await loadPrincipal(staffA.id, db)).permissions.includes(a.code),
+        );
+        assert(
+          (await loadPrincipal(staffB.id, db)).permissions.includes(a.code),
+        );
+        await service.replaceRole(principal, roleId, [a.id]);
+        await assert.rejects(
+          service.replaceRole(principal, roleId, [a.id, b.id]),
+          (e: unknown) => e instanceof HttpError && e.statusCode === 400,
+        );
+        const before = await snapshot();
+        await assert.rejects(
+          service.replaceRole(principal, system.roleId, []),
+          (e: unknown) => e instanceof HttpError && e.statusCode === 403,
+        );
+        const faulty = createPermissionService(() => Promise.resolve(db), {
+          ...repo,
+          async replaceGrants(...args) {
+            await repo.replaceGrants(...args);
+            throw new Error("test rollback");
+          },
+        });
+        await assert.rejects(
+          faulty.replaceRole(principal, roleId, []),
+          (e: unknown) => e instanceof HttpError && e.statusCode === 503,
+        );
+        assert.deepEqual(await snapshot(), before);
+        const barrier = createBarrier(2);
+        const counts = [0, 0];
+        const competing = counts.map((_, i) =>
+          createPermissionService(() => Promise.resolve(db), {
+            ...repo,
+            async lockSystem(...args) {
+              if (++counts[i] === 1) await barrier.wait();
+              return repo.lockSystem(...args);
+            },
+          }),
+        );
+        const outcomes = await Promise.allSettled([
+          competing[0].replaceRole(principal, roleId, [a.id]),
+          competing[1].replaceRole(principal, roleId, []),
+        ]);
+        assert(outcomes.every((result) => result.status === "fulfilled"));
+        const final = (await snapshot()).map((row) => row.permissionId);
+        assert(final.length === 0 || (final.length === 1 && final[0] === a.id));
+        assert(
+          await db.userPermissionDenial.findUnique({ where: { id: deny.id } }),
+        );
+        const roles = await request("/api/roles?limit=100", system.id);
+        assert.equal(roles.status, 200);
+        assert.equal(
+          rows(roles.body).find((r) => r.code === "SYSTEM_ADMIN")?.editable,
+          false,
+        );
+        assert.equal(
+          (await request("/api/roles?schoolId=" + schoolB.id, system.id))
+            .status,
+          400,
+        );
+      } finally {
+        await db.rolePermission.deleteMany({ where: { roleId } });
+        if (original.length)
+          await db.rolePermission.createMany({ data: original });
+        await db.userPermissionDenial.deleteMany({ where: { id: deny.id } });
+        await db.permission.deleteMany({ where: { id: { in: [a.id, b.id] } } });
+      }
+    },
+  );
+
+  await context.test(
+    "role permission management US2 global state, guard races and self-disable",
+    async () => {
+      const code = "rp_" + randomUUID().replaceAll("-", "");
+      const p = await db.permission.create({
+        data: {
+          code: code + ".state",
+          name: "RP state",
+          module: code,
+          action: "state",
+        },
+      });
+      const race = await db.permission.create({
+        data: {
+          code: code + ".race",
+          name: "RP race",
+          module: code,
+          action: "race",
+        },
+      });
+      const original = await db.rolePermission.findMany({
+        where: { roleId: staffA.roleId },
+      });
+      await db.rolePermission.createMany({
+        data: [
+          { roleId: system.roleId, permissionId: p.id },
+          { roleId: staffA.roleId, permissionId: p.id },
+        ],
+      });
+      const denial = await db.userPermissionDenial.create({
+        data: {
+          userId: staffA.id,
+          permissionId: p.id,
+          schoolId: schoolA.id,
+          disabledByUserId: adminA.id,
+        },
+      });
+      const repo = createPermissionRepository(() => Promise.resolve(db));
+      const service = createPermissionService(() => Promise.resolve(db), repo);
+      const principal = await loadPrincipal(system.id, db);
+      const guard = await permission("role_permission.manage");
+      const grantsSnapshot = () =>
+        db.rolePermission.findMany({
+          orderBy: [{ roleId: "asc" }, { permissionId: "asc" }],
+        });
+      const denialSnapshot = () =>
+        db.userPermissionDenial.findMany({ orderBy: { id: "asc" } });
+      const signal = () => {
+        let release!: () => void;
+        const promise = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return { promise, release };
+      };
+      const baseIds = [...original.map((g) => g.permissionId), p.id];
+      try {
+        const grants = await grantsSnapshot(),
+          denials = await denialSnapshot();
+        const route = "/api/permissions/" + p.id + "/state";
+        assert.equal(
+          (await request(route, system.id, "PATCH", { isActive: false }))
+            .status,
+          200,
+        );
+        for (const account of [system, staffA, staffB])
+          assert(
+            !(await loadPrincipal(account.id, db)).permissions.includes(p.code),
+          );
+        assert.equal(
+          (await request(route, system.id, "PATCH", { isActive: false }))
+            .status,
+          200,
+        );
+        assert.equal(
+          (await request(route, system.id, "PATCH", { isActive: true })).status,
+          200,
+        );
+        assert(
+          (await loadPrincipal(staffB.id, db)).permissions.includes(p.code),
+        );
+        assert(
+          (await loadPrincipal(system.id, db)).permissions.includes(p.code),
+        );
+        assert(
+          !(await loadPrincipal(staffA.id, db)).permissions.includes(p.code),
+        );
+        assert.deepEqual(await grantsSnapshot(), grants);
+        assert.deepEqual(await denialSnapshot(), denials);
+        for (const offFirst of [true, false]) {
+          await db.permission.update({
+            where: { id: race.id },
+            data: { isActive: true },
+          });
+          await service.replaceRole(principal, staffA.roleId, baseIds);
+          const entered = signal(),
+            resume = signal();
+          let locks = 0;
+          const paused = createPermissionService(() => Promise.resolve(db), {
+            ...repo,
+            async lockSystem(...args) {
+              if (++locks === 1) {
+                entered.release();
+                await resume.promise;
+              }
+              return repo.lockSystem(...args);
+            },
+          });
+          const pending = Promise.allSettled([
+            offFirst
+              ? paused.replaceRole(principal, staffA.roleId, [
+                  ...baseIds,
+                  race.id,
+                ])
+              : paused.setPermissionState(principal, race.id, {
+                  isActive: false,
+                }),
+          ]);
+          try {
+            await entered.promise;
+            if (offFirst)
+              await service.setPermissionState(principal, race.id, {
+                isActive: false,
+              });
+            else
+              await service.replaceRole(principal, staffA.roleId, [
+                ...baseIds,
+                race.id,
+              ]);
+          } finally {
+            resume.release();
+          }
+          const [outcome] = await pending;
+          if (offFirst) {
+            assert.equal(outcome.status, "rejected");
+            if (outcome.status === "rejected")
+              assert(
+                outcome.reason instanceof HttpError &&
+                  outcome.reason.statusCode === 400,
+              );
+          } else assert.equal(outcome.status, "fulfilled");
+          assert.equal(
+            await db.rolePermission.count({
+              where: { roleId: staffA.roleId, permissionId: race.id },
+            }),
+            offFirst ? 0 : 1,
+          );
+          assert.equal(
+            (await db.permission.findUniqueOrThrow({ where: { id: race.id } }))
+              .isActive,
+            false,
+          );
+          if (offFirst)
+            assert(locks >= 2, "stale permission snapshot must retry");
+        }
+        // A state change must invalidate a stale permission snapshot. A grant
+        // change alone may serialize without retry when no permission row changed.
+        const schoolRole = await role("SCHOOL_KITCHEN_STAFF");
+        for (const mutation of ["status", "role", "guard"] as const) {
+          for (const commitFirst of [true, false]) {
+            await db.permission.update({
+              where: { id: p.id },
+              data: { isActive: true },
+            });
+            const actor = await user("SYSTEM_ADMIN");
+            const actorPrincipal = await loadPrincipal(actor.id, db);
+            const entered = signal(),
+              resume = signal();
+            let calls = 0;
+            const paused = createPermissionService(() => Promise.resolve(db), {
+              ...repo,
+              async lockSystem(...args) {
+                const first = ++calls === 1;
+                if (first && commitFirst) {
+                  entered.release();
+                  await resume.promise;
+                }
+                await repo.lockSystem(...args);
+                if (first && !commitFirst) {
+                  entered.release();
+                  await resume.promise;
+                }
+              },
+            });
+            const revoke = () =>
+              mutation === "guard"
+                ? db.permission.update({
+                    where: { id: guard.id },
+                    data: { isActive: false },
+                  })
+                : db.user.update({
+                    where: { id: actor.id },
+                    data:
+                      mutation === "status"
+                        ? { status: "LOCKED" }
+                        : {
+                            roleId: schoolRole.id,
+                            roleCode: schoolRole.code,
+                            schoolId: schoolA.id,
+                          },
+                  });
+            const pending = Promise.allSettled([
+              paused.setPermissionState(actorPrincipal, p.id, {
+                isActive: false,
+              }),
+            ]);
+            let revoking: Promise<unknown> | undefined;
+            try {
+              await entered.promise;
+              if (commitFirst) await revoke();
+              else revoking = Promise.resolve(revoke());
+            } finally {
+              resume.release();
+            }
+            try {
+              const [outcome] = await pending;
+              await revoking;
+              if (commitFirst) {
+                assert.equal(
+                  outcome.status,
+                  "rejected",
+                  mutation + " commits before point of acceptance",
+                );
+                if (outcome.status === "rejected")
+                  assert(
+                    outcome.reason instanceof HttpError &&
+                      outcome.reason.statusCode === 403,
+                  );
+              } else
+                assert.equal(
+                  outcome.status,
+                  "fulfilled",
+                  mutation + " waits until the accepted write commits",
+                );
+              assert.equal(
+                (await db.permission.findUniqueOrThrow({ where: { id: p.id } }))
+                  .isActive,
+                commitFirst,
+              );
+              await assert.rejects(
+                service.setPermissionState(actorPrincipal, p.id, {
+                  isActive: true,
+                }),
+                (error: unknown) =>
+                  error instanceof HttpError && error.statusCode === 403,
+              );
+            } finally {
+              await db.permission.update({
+                where: { id: guard.id },
+                data: { isActive: true },
+              });
+              await db.user.delete({ where: { id: actor.id } });
+            }
+          }
+        }
+        const statesBarrier = createBarrier(2);
+        const stateCalls = [0, 0];
+        const stateServices = stateCalls.map((_, index) =>
+          createPermissionService(() => Promise.resolve(db), {
+            ...repo,
+            async lockSystem(...args) {
+              if (++stateCalls[index] === 1) await statesBarrier.wait();
+              return repo.lockSystem(...args);
+            },
+          }),
+        );
+        const states = await Promise.all(
+          stateServices.map((writer, index) =>
+            writer.setPermissionState(principal, p.id, {
+              isActive: Boolean(index),
+            }),
+          ),
+        );
+        assert.deepEqual(
+          states.map((row) => row.isActive),
+          [false, true],
+        );
+        assert.equal(
+          (
+            await request(
+              "/api/permissions/" + guard.id + "/state",
+              system.id,
+              "PATCH",
+              { isActive: false },
+            )
+          ).status,
+          200,
+        );
+        assert.equal(
+          (await request(route, system.id, "PATCH", { isActive: false }))
+            .status,
+          403,
+        );
+      } finally {
+        await db.permission.update({
+          where: { id: guard.id },
+          data: { isActive: true },
+        });
+        await db.rolePermission.deleteMany({
+          where: { roleId: staffA.roleId },
+        });
+        if (original.length)
+          await db.rolePermission.createMany({ data: original });
+        await db.rolePermission.deleteMany({
+          where: { permissionId: { in: [p.id, race.id] } },
+        });
+        await db.userPermissionDenial.deleteMany({ where: { id: denial.id } });
+        await db.permission.deleteMany({
+          where: { id: { in: [p.id, race.id] } },
+        });
+      }
+    },
+  );
+
+  await context.test(
+    "role permission management US3 create uniqueness and unassigned defaults",
+    async () => {
+      const principal = await loadPrincipal(system.id, db);
+      const repo = createPermissionRepository(() => Promise.resolve(db));
+      const code = "rp_" + randomUUID().replaceAll("-", "") + ".create";
+      const body = {
+        code,
+        name: "RP create",
+        module: "rp",
+        action: "create",
+        description: null,
+      };
+      const before = await db.rolePermission.findMany({
+        orderBy: [{ roleId: "asc" }, { permissionId: "asc" }],
+      });
+      const barrier = createBarrier(2);
+      const counts = [0, 0];
+      const services = counts.map((_, i) =>
+        createPermissionService(() => Promise.resolve(db), {
+          ...repo,
+          async lockSystem(...args) {
+            if (++counts[i] === 1) await barrier.wait();
+            return repo.lockSystem(...args);
+          },
+        }),
+      );
+      try {
+        const outcomes = await Promise.allSettled(
+          services.map((service) => service.create(principal, body)),
+        );
+        assert.equal(
+          outcomes.filter((result) => result.status === "fulfilled").length,
+          1,
+        );
+        const loser = outcomes.find((result) => result.status === "rejected");
+        assert(
+          loser?.status === "rejected" &&
+            loser.reason instanceof HttpError &&
+            loser.reason.statusCode === 409,
+        );
+        const row = await db.permission.findUniqueOrThrow({ where: { code } });
+        assert.equal(row.isActive, true);
+        assert.equal(
+          await db.rolePermission.count({ where: { permissionId: row.id } }),
+          0,
+        );
+        assert.deepEqual(
+          await db.rolePermission.findMany({
+            orderBy: [{ roleId: "asc" }, { permissionId: "asc" }],
+          }),
+          before,
+        );
+        await db.permission.update({
+          where: { id: row.id },
+          data: { isActive: false },
+        });
+        assert.equal(
+          (await request("/api/permissions", system.id, "POST", body)).status,
+          409,
+        );
+      } finally {
+        await db.permission.deleteMany({ where: { code } });
+      }
+    },
+  );
+
+  await context.test(
+    "role permission management US4 partial metadata never overwrites concurrent state",
+    async () => {
+      const code = "rp_" + randomUUID().replaceAll("-", "") + ".metadata";
+      const p = await db.permission.create({
+        data: { code, name: "Original", module: "rp", action: "metadata" },
+      });
+      await db.rolePermission.create({
+        data: { roleId: staffA.roleId, permissionId: p.id },
+      });
+      const principal = await loadPrincipal(system.id, db);
+      const repo = createPermissionRepository(() => Promise.resolve(db));
+      const service = createPermissionService(() => Promise.resolve(db), repo);
+      const grants = await db.rolePermission.findMany({
+        where: { permissionId: p.id },
+      });
+      const signal = () => {
+        let release!: () => void;
+        const promise = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return { promise, release };
+      };
+      try {
+        for (const metadataFirst of [true, false]) {
+          await db.permission.update({
+            where: { id: p.id },
+            data: { name: "Original", description: null, isActive: true },
+          });
+          const entered = signal(),
+            resume = signal();
+          let locks = 0;
+          const paused = createPermissionService(() => Promise.resolve(db), {
+            ...repo,
+            async lockSystem(...args) {
+              if (++locks === 1) {
+                entered.release();
+                await resume.promise;
+              }
+              return repo.lockSystem(...args);
+            },
+          });
+          const pending = Promise.allSettled([
+            metadataFirst
+              ? paused.setPermissionState(principal, p.id, { isActive: false })
+              : paused.updatePermission(principal, p.id, {
+                  name: "Updated",
+                  description: "Nội dung",
+                }),
+          ]);
+          try {
+            await entered.promise;
+            if (metadataFirst)
+              await service.updatePermission(principal, p.id, {
+                name: "Updated",
+                description: "Nội dung",
+              });
+            else
+              await service.setPermissionState(principal, p.id, {
+                isActive: false,
+              });
+          } finally {
+            resume.release();
+          }
+          assert.equal((await pending)[0].status, "fulfilled");
+          const saved = await db.permission.findUniqueOrThrow({
+            where: { id: p.id },
+          });
+          assert.equal(saved.name, "Updated");
+          assert.equal(saved.description, "Nội dung");
+          assert.equal(saved.isActive, false);
+          assert.equal(saved.code, code);
+          assert(locks >= 2);
+        }
+        const before = await db.permission.findUniqueOrThrow({
+          where: { id: p.id },
+        });
+        const faulty = createPermissionService(() => Promise.resolve(db), {
+          ...repo,
+          async updateMetadata(...args) {
+            await repo.updateMetadata(...args);
+            throw new Error("test metadata rollback");
+          },
+        });
+        await assert.rejects(
+          faulty.updatePermission(principal, p.id, { description: null }),
+          (e: unknown) => e instanceof HttpError && e.statusCode === 503,
+        );
+        assert.deepEqual(
+          await db.permission.findUniqueOrThrow({ where: { id: p.id } }),
+          before,
+        );
+        assert.deepEqual(
+          await db.rolePermission.findMany({ where: { permissionId: p.id } }),
+          grants,
+        );
+        assert.equal(
+          (
+            await request("/api/permissions/" + p.id, system.id, "PATCH", {
+              description: null,
+            })
+          ).status,
+          200,
+        );
+        assert.equal(
+          (
+            await request("/api/permissions/" + p.id, system.id, "PATCH", {
+              code: "forged.code",
+            })
+          ).status,
+          400,
+        );
+        const detail = await request(
+          "/api/roles/" + staffA.roleId + "/permissions",
+          system.id,
+        );
+        const dto = record(detail.body).data as {
+          permissions: { id: string; name: string; isActive: boolean }[];
+        };
+        assert.equal(
+          dto.permissions.find((row) => row.id === p.id)?.name,
+          "Updated",
+        );
+        assert.equal(
+          dto.permissions.find((row) => row.id === p.id)?.isActive,
+          false,
+        );
+      } finally {
+        await db.rolePermission.deleteMany({ where: { permissionId: p.id } });
+        await db.permission.delete({ where: { id: p.id } });
+      }
+    },
+  );
+
+  await context.test(
+    "permission name search filters before pagination and treats wildcard characters literally",
+    async () => {
+      const prefix = "ps_" + randomUUID().replaceAll("-", "");
+      const input = [
+        { code: prefix + ".a", name: prefix + " Xem quyền alpha" },
+        {
+          code: prefix + ".b",
+          name: prefix + " xEM QUYỀN beta",
+          isActive: false,
+        },
+        { code: prefix + ".c", name: prefix + " Xem quyền gamma" },
+        {
+          code: prefix + ".codeonly",
+          name: "Tên không khớp",
+          description: prefix + " Xem quyền",
+        },
+        { code: prefix + ".percent", name: prefix + " percent%literal" },
+        { code: prefix + ".percent_decoy", name: prefix + " percentXliteral" },
+        { code: prefix + ".under", name: prefix + " under_score" },
+        { code: prefix + ".under_decoy", name: prefix + " underXscore" },
+        { code: prefix + ".slash", name: prefix + " slash\\path" },
+        { code: prefix + ".slash_decoy", name: prefix + " slashpath" },
+      ];
+      const created: { id: string }[] = [];
+      try {
+        for (const data of input)
+          created.push(
+            await db.permission.create({
+              data: { module: prefix, action: "search", ...data },
+            }),
+          );
+        const search = "  " + prefix.toUpperCase() + " XEM QUYỀN  ";
+        for (let page = 1; page <= 4; page++) {
+          const response = await request(
+            "/api/permissions?search=" +
+              encodeURIComponent(search) +
+              "&limit=1&page=" +
+              page,
+            system.id,
+          );
+          assert.equal(response.status, 200);
+          assert.deepEqual(
+            rows(response.body).map((row) => row.id),
+            page <= 3 ? [created[page - 1].id] : [],
+          );
+          assert.equal(
+            record(record(record(response.body).data).pagination).hasNext,
+            page < 3,
+          );
+          if (page === 2) assert.equal(rows(response.body)[0].isActive, false);
+        }
+        const allMatches = await request(
+          "/api/permissions?search=" + encodeURIComponent(prefix),
+          system.id,
+        );
+        assert.equal(rows(allMatches.body).length, 9);
+        assert(
+          !rows(allMatches.body).some((row) => row.id === created[3].id),
+          "code and description alone do not match",
+        );
+        for (const [suffix, index] of [
+          ["percent%literal", 4],
+          ["under_score", 6],
+          ["slash\\path", 8],
+        ] as const) {
+          const response = await request(
+            "/api/permissions?search=" +
+              encodeURIComponent(prefix + " " + suffix),
+            system.id,
+          );
+          assert.equal(response.status, 200);
+          assert.deepEqual(
+            rows(response.body).map((row) => row.id),
+            [created[index].id],
+          );
+        }
+        const none = await request(
+          "/api/permissions?search=" + encodeURIComponent(prefix + " missing"),
+          system.id,
+        );
+        assert.deepEqual(rows(none.body), []);
+        const baseline = await request("/api/permissions", system.id);
+        const blank = await request(
+          "/api/permissions?search=%20%20",
+          system.id,
+        );
+        assert.deepEqual(record(blank.body).data, record(baseline.body).data);
+        assert.equal(
+          (await request("/api/permissions?search=a&search=b", system.id))
+            .status,
+          400,
+        );
+        assert.equal(
+          (await request("/api/roles?search=name", system.id)).status,
+          400,
+        );
+        assert.equal(
+          (await request("/api/permissions?search=name", adminA.id)).status,
+          403,
+        );
+      } finally {
+        await db.permission.deleteMany({
+          where: { id: { in: created.map((row) => row.id) } },
+        });
+      }
+    },
+  );
+
+  await context.test(
+    "inactive permission API pages five disabled permissions without mixing active entries",
+    async () => {
+      const prefix = "ip_" + randomUUID().replaceAll("-", "");
+      const baseline = await db.permission.findMany({
+        where: { isActive: false },
+        select: { id: true, code: true },
+      });
+      const created: { id: string; code: string; isActive: boolean }[] = [];
+      try {
+        for (let i = 0; i < 8; i++)
+          created.push(
+            await db.permission.create({
+              data: {
+                code: prefix + ".p_" + i,
+                name: "Quyền chưa bật " + i,
+                module: prefix,
+                action: "test",
+                isActive: i === 7,
+              },
+            }),
+          );
+        const expected = [
+          ...baseline,
+          ...created.filter((row) => !row.isActive),
+        ]
+          .sort((a, b) => a.code.localeCompare(b.code))
+          .map((row) => row.id);
+        const found: string[] = [];
+        for (let page = 1; page <= Math.ceil(expected.length / 5) + 1; page++) {
+          const response = await request(
+            "/api/permissions/inactive?page=" + page,
+            system.id,
+          );
+          assert.equal(response.status, 200);
+          const items = rows(response.body);
+          assert(items.every((row) => row.isActive === false));
+          assert.deepEqual(
+            items.map((row) => row.id),
+            expected.slice((page - 1) * 5, page * 5),
+          );
+          found.push(...items.map((row) => String(row.id)));
+          assert.deepEqual(
+            record(record(record(response.body).data).pagination),
+            { page, limit: 5, hasNext: page * 5 < expected.length },
+          );
+        }
+        assert.equal(new Set(found).size, expected.length);
+        assert(!found.includes(created[7].id));
+        assert.equal(
+          (await request("/api/permissions/inactive", system.id)).status,
+          200,
+        );
+        assert.equal(
+          (await request("/api/permissions/inactive?limit=20", system.id))
+            .status,
+          400,
+        );
+        assert.equal(
+          (await request("/api/permissions/inactive", adminA.id)).status,
+          403,
+        );
+      } finally {
+        await db.permission.deleteMany({
+          where: { id: { in: created.map((row) => row.id) } },
+        });
+      }
+    },
+  );
+
+  await context.test(
     "catalog create is System-only and own System role cannot be edited",
     async () => {
       const body = {
@@ -9515,6 +10339,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         Promise.resolve(db),
       );
       const permService = createPermissionService(() => Promise.resolve(db));
+      const permissionSystem = await loadPrincipal(system.id, db);
       const respondPerm = await permission(
         "ingredient_quality_feedback.respond",
       );
@@ -9705,13 +10530,13 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         principalStaff2,
         () =>
           permService.replaceRole(
-            system.id,
+            permissionSystem,
             raceStaff1.roleId,
             originalStaffGrants.filter((id) => id !== respondPerm.id),
           ),
         () =>
           permService.replaceRole(
-            system.id,
+            permissionSystem,
             raceStaff1.roleId,
             originalStaffGrants,
           ),
@@ -9865,7 +10690,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         },
         () =>
           permService.replaceRole(
-            system.id,
+            permissionSystem,
             raceStaff1.roleId,
             originalStaffGrants,
           ),

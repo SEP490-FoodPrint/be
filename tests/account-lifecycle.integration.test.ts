@@ -936,6 +936,7 @@ void test("account lifecycle respects scope and intake state on disposable Postg
         where: { code: "supply_request.accept" },
       });
       const permissions = createPermissionService(() => Promise.resolve(db));
+      const permissionSystem = await loadPrincipal(system.id, db);
       for (const mutation of [
         "denial",
         "role-grant",
@@ -994,14 +995,14 @@ void test("account lifecycle respects scope and intake state on disposable Postg
             await read.promise;
             if (mutation === "denial")
               await permissions.toggle(
-                manager.id,
+                await loadPrincipal(manager.id, db),
                 member.id,
                 permission.id,
                 true,
               );
             else if (mutation === "role-grant")
               await permissions.replaceRole(
-                system.id,
+                permissionSystem,
                 actor.roleId,
                 originalGrants
                   .map((row) => row.permissionId)
@@ -1042,7 +1043,7 @@ void test("account lifecycle respects scope and intake state on disposable Postg
             await pending;
             if (mutation === "role-grant")
               await permissions.replaceRole(
-                system.id,
+                permissionSystem,
                 actor.roleId,
                 originalGrants.map((row) => row.permissionId),
               );
