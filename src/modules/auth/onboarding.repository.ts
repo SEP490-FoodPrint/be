@@ -60,6 +60,7 @@ function submissionData(input: SubmissionWrite) {
       format: document.format,
       fileName: document.fileName,
       bytes: document.bytes,
+      ...(document.sha256 ? { sha256: document.sha256 } : {}),
     })),
     submittedAt: input.submittedAt,
     reviewedAt: null,

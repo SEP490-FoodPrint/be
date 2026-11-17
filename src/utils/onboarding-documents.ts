@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { v2 as cloudinary } from "cloudinary";
 import type { UploadApiResponse } from "cloudinary";
 import { HttpError } from "./http-error";
@@ -14,6 +14,11 @@ export interface OnboardingDocument {
   format: "pdf" | "png" | "jpg";
   fileName: string;
   bytes: number;
+  /** SHA-256 of the file bytes (hex); absent on documents uploaded before UC-01/02 proofs. */
+  sha256?: string;
+}
+export function documentSha256(data: Buffer): string {
+  return createHash("sha256").update(data).digest("hex");
 }
 export interface DocumentStorage {
   upload(
@@ -108,7 +113,9 @@ export function readDocuments(
       row.publicId !==
         `foodprint/onboarding/${uuid(userId)}/${row.id}.${String(row.format)}` ||
       typeof row.fileName !== "string" ||
-      typeof row.bytes !== "number"
+      typeof row.bytes !== "number" ||
+      (row.sha256 !== undefined &&
+        (typeof row.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(row.sha256)))
     )
       throw new HttpError(503, "Metadata tài liệu không hợp lệ");
     return {
@@ -118,6 +125,7 @@ export function readDocuments(
       format: row.format as OnboardingDocument["format"],
       fileName: row.fileName,
       bytes: row.bytes,
+      ...(typeof row.sha256 === "string" ? { sha256: row.sha256 } : {}),
     };
   });
 }

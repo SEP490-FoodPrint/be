@@ -110,3 +110,106 @@ void test("cleanup refuses malformed or unsafe manifest content", () => {
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+void test("authorization group runs isolated children sequentially with shared environment and propagates failure", async () => {
+  const { runSuite, localTestSuites } =
+    await import("./helpers/run-local-tests.js");
+  const { EventEmitter } = await import("node:events");
+  type Spawn = typeof import("node:child_process").spawn;
+  assert.deepEqual(localTestSuites.authorization, [
+    "tests/authorization.integration.test.ts",
+    "tests/supplier-onboarding.integration.test.ts",
+  ]);
+  const env = { LOCAL_TEST_DATABASE_MANIFEST: "/tmp/invocation-only-manifest" };
+  for (const failure of [0, 7, null]) {
+    const launched: string[] = [];
+    let active = false;
+    const launch = ((
+      _command: string,
+      args: string[],
+      options: { env: unknown },
+    ) => {
+      assert.equal(active, false, "child processes must not overlap");
+      assert.equal(options.env, env);
+      launched.push(args.at(-1)!);
+      active = true;
+      const child = new EventEmitter();
+      queueMicrotask(() => {
+        active = false;
+        child.emit("close", failure, failure === null ? "SIGTERM" : null);
+      });
+      return child;
+    }) as unknown as Spawn;
+    const result = await runSuite("authorization", env, () => {}, launch);
+    assert.equal(result, failure === null ? 1 : failure);
+    assert.equal(launched.length, failure === 0 ? 2 : 1);
+  }
+});
+
+void test("CREATE is recorded only after success and cleanup checks exact names and ownership", async () => {
+  const { createRecordedDatabase, cleanupRun } =
+    await import("./helpers/run-local-tests.js");
+  const directory = mkdtempSync(
+    path.join(tmpdir(), "foodprint-registry-dispatch-"),
+  );
+  const manifest = path.join(directory, "manifest.jsonl");
+  const name = "foodprint_migration_test_dispatch";
+  type Admin = Parameters<typeof cleanupRun>[0];
+  const statements: { sql: string; values?: unknown[] }[] = [];
+  let owner = "unit-owner";
+  const admin = {
+    query(sql: string, values?: unknown[]) {
+      statements.push({ sql, values });
+      return Promise.resolve({
+        rows: sql.startsWith("SELECT") ? [{ owner }] : [],
+      });
+    },
+  } as unknown as Admin;
+  try {
+    await assert.rejects(() =>
+      createRecordedDatabase(
+        {
+          query: () => Promise.reject(new Error("create refused")),
+        } as unknown as Admin,
+        name,
+        manifest,
+      ),
+    );
+    assert.deepEqual(recordedLocalTestDatabases(manifest), []);
+    await createRecordedDatabase(admin, name, manifest);
+    assert.deepEqual(recordedLocalTestDatabases(manifest), [name]);
+    owner = "someone-else";
+    await assert.rejects(
+      () => cleanupRun(admin, manifest, "unit-owner"),
+      /Owner/,
+    );
+    assert.equal(
+      statements.some(({ sql }) => sql.startsWith("DROP")),
+      false,
+    );
+    owner = "unit-owner";
+    await cleanupRun(admin, manifest, owner);
+    assert.deepEqual(
+      statements
+        .filter(({ sql }) => sql.startsWith("SELECT"))
+        .map(({ values }) => values),
+      [[name], [name]],
+    );
+    assert.deepEqual(
+      statements
+        .filter(({ sql }) => sql.startsWith("DROP"))
+        .map(({ sql }) => sql),
+      [`DROP DATABASE "${name}" WITH (FORCE)`],
+    );
+    assert.equal(
+      statements.some(({ sql }) => /LIKE|datname\s*~/.test(sql)),
+      false,
+    );
+    writeFileSync(manifest, '"foodprint_db"\n');
+    const before = statements.length;
+    await assert.rejects(() => cleanupRun(admin, manifest, owner));
+    assert.equal(statements.length, before);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

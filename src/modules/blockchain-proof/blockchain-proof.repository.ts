@@ -1,12 +1,19 @@
 import type { Prisma } from "../../generated/prisma/client";
 
 type Db = Prisma.TransactionClient;
-export type ProofKind = "deliveries" | "cooking-batches" | "retained-samples";
+export type ProofKind =
+  "deliveries" | "cooking-batches" | "retained-samples" | "registrations";
 export type ProofEventType =
   | "DELIVERY_INSPECTED"
   | "COOKING_COMPLETED"
   | "SAMPLE_STORED"
-  | "SAMPLE_DISPOSED";
+  | "SAMPLE_DISPOSED"
+  | "REGISTRATION_SUBMITTED"
+  | "REGISTRATION_APPROVED";
+const registrationEvent = (eventType: "SUBMITTED" | "APPROVED") =>
+  eventType === "SUBMITTED"
+    ? ("REGISTRATION_SUBMITTED" as const)
+    : ("REGISTRATION_APPROVED" as const);
 
 const versionSelect = {
   id: true,
@@ -59,7 +66,7 @@ type OpenWhere = {
   id: string;
   transactionStatus: { in: ("PREPARED" | "SUBMITTED" | "FAILED")[] };
 };
-// The three version tables share every column except the business link,
+// The version tables share every column except the business link,
 // so status writes go through one structural interface.
 type VersionWriter = {
   updateMany(args: {
@@ -70,6 +77,7 @@ type VersionWriter = {
 function writer(db: Db, kind: ProofKind): VersionWriter {
   if (kind === "deliveries") return db.deliveryInspectionVersion;
   if (kind === "cooking-batches") return db.cookingBatchVersion;
+  if (kind === "registrations") return db.registrationRequestVersion;
   return db.retainedSampleVersion;
 }
 
@@ -178,6 +186,49 @@ export function createBlockchainProofRepository() {
         },
       });
     },
+    readRegistration(db: Db, id: string) {
+      return db.registrationRequest.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          requestType: true,
+          status: true,
+          applicantUserId: true,
+          profileData: true,
+          supportingDocuments: true,
+          submittedAt: true,
+          reviewedAt: true,
+          reviewedByUserId: true,
+          applicantUser: { select: { schoolId: true, supplierId: true } },
+        },
+      });
+    },
+    latestRegistrationVersion(db: Db, registrationRequestId: string) {
+      return db.registrationRequestVersion.findFirst({
+        where: { registrationRequestId },
+        select: {
+          id: true,
+          version: true,
+          dataHash: true,
+          eventType: true,
+          snapshot: true,
+        },
+        orderBy: { version: "desc" },
+      });
+    },
+    async createRegistrationVersion(
+      db: Db,
+      registrationRequestId: string,
+      eventType: "SUBMITTED" | "APPROVED",
+      data: NewVersion,
+    ) {
+      return (
+        await db.registrationRequestVersion.create({
+          data: { ...data, registrationRequestId, eventType },
+          select: { id: true },
+        })
+      ).id;
+    },
     async latestDeliveryHashes(db: Db, deliveryIds: string[]) {
       const rows = await db.deliveryInspectionVersion.findMany({
         where: { deliveryId: { in: [...new Set(deliveryIds)] } },
@@ -260,6 +311,26 @@ export function createBlockchainProofRepository() {
       id: string,
       schoolId: string | null,
     ): Promise<VersionRow | null> {
+      if (kind === "registrations") {
+        // Registrations are SYSTEM-only; a school scope never sees them.
+        if (schoolId) return null;
+        const row = await db.registrationRequestVersion.findUnique({
+          where: { id },
+          select: {
+            ...versionSelect,
+            registrationRequestId: true,
+            eventType: true,
+          },
+        });
+        return row
+          ? {
+              ...row,
+              kind,
+              recordId: row.registrationRequestId,
+              eventType: registrationEvent(row.eventType),
+            }
+          : null;
+      }
       if (kind === "deliveries") {
         const row = await db.deliveryInspectionVersion.findFirst({
           where: { id, ...(schoolId ? { Delivery: { schoolId } } : {}) },
@@ -321,6 +392,20 @@ export function createBlockchainProofRepository() {
       schoolId: string | null,
     ): Promise<VersionRow[]> {
       const orderBy = { version: "asc" } as const;
+      if (kind === "registrations") {
+        if (schoolId) return [];
+        const rows = await db.registrationRequestVersion.findMany({
+          where: { registrationRequestId: recordId },
+          select: { ...versionSelect, eventType: true },
+          orderBy,
+        });
+        return rows.map((row) => ({
+          ...row,
+          kind,
+          recordId,
+          eventType: registrationEvent(row.eventType),
+        }));
+      }
       if (kind === "deliveries") {
         const rows = await db.deliveryInspectionVersion.findMany({
           where: {

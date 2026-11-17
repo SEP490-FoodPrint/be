@@ -1,3 +1,5 @@
+import { createSupplierStaffRouter } from "../modules/supplier-staff/supplier-staff.routes";
+import { createSupplierSchoolRouter } from "../modules/supplier-school/supplier-school.routes";
 import { createClassSchoolRouter } from "../modules/class/class.routes";
 import { createSchoolSupplierSchoolRouter } from "../modules/school-supplier/school-supplier.routes";
 import { createUserSchoolRouter } from "../modules/user/user.routes";
@@ -81,6 +83,14 @@ export function createApiRouter(
   router.use(createSupplierOnboardingRouter(authHandler));
   router.use("/school-overview", createSchoolOverviewRouter(authHandler));
   router.use("/auth", createAuthRouter(undefined, authHandler, authServices));
+  router.use(
+    "/supplier-staff",
+    createSupplierStaffRouter(undefined, authHandler),
+  );
+  router.use(
+    "/supplier-schools",
+    createSupplierSchoolRouter(undefined, authHandler),
+  );
   router.use("/users", createUserRouter(undefined, authHandler));
   router.use("/users", createAccountLifecycleRouter(undefined, authHandler));
   router.use(

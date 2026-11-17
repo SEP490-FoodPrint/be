@@ -76,30 +76,30 @@ Tạo và sửa lớp nhận `gradeId` tùy chọn. Gửi `null` để bỏ gán
 
 Dùng envelope hiện có. Thiếu/sai token: 401; không ACTIVE khi gọi API nghiệp vụ hoặc thiếu quyền: 403; tài khoản đích ngoài phạm vi: 404; DTO sai: 400; permission trùng: 409; DB không sẵn sàng: 503.
 
-| API                                                        | Điều kiện/nội dung                                                                                                                          |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| POST /api/auth/signup                                      | Tạo user UNVERIFIED, chưa tạo hồ sơ PENDING; Resend gửi mã sau commit; JSON báo verificationEmailSent, không cấp token                      |
-| POST /api/auth/email-verification/request                  | Body email; gửi/gửi lại mã 6 số qua Resend; giới hạn theo email/IP, thông báo chung                                                         |
-| POST /api/auth/email-verification/verify                   | Body email/code; cập nhật emailVerifiedAt, giữ UNVERIFIED; không cấp cookie hoặc quyền                                                      |
-| POST /api/auth/login                                       | Body identifier/password; cho phép ACTIVE hợp lệ hoặc UNVERIFIED đã xác minh email; đặt cookie HttpOnly, JSON trả user và expiresIn         |
-| POST /api/auth/refresh                                     | Đọc refresh cookie, kiểm tra hash/TTL và trạng thái user từ DB, đổi refresh token; không tự kích hoạt tài khoản                             |
-| POST /api/auth/logout                                      | Thu hồi phiên Redis và xóa cookie                                                                                                           |
-| GET /api/auth/me                                           | Thông tin tài khoản, status/onboardingRequired và trạng thái hồ sơ; UNVERIFIED không có permissions                                         |
-| PATCH /api/auth/me                                         | Sửa fullName/phone của chính tài khoản ACTIVE hoặc UNVERIFIED đã xác minh email; không cần user.manage, không sửa email/role/status/tổ chức |
-| GET /api/auth/me/permissions                               | Danh sách mã quyền hiệu lực khi ACTIVE; UNVERIFIED nhận mảng rỗng                                                                           |
-| GET /api/auth/roles                                        | System, role.view; giữ nguyên đường dẫn cũ                                                                                                  |
-| GET /api/permissions                                       | System, permission.view; page/limit                                                                                                         |
-| POST /api/permissions                                      | System, permission.create; body code, name, module, action, description tùy chọn                                                            |
-| GET /api/roles/:roleId/permissions                         | System, role_permission.manage; SYSTEM_ADMIN có editable=false                                                                              |
-| PUT /api/roles/:roleId/permissions                         | System, role_permission.manage; body permissionIds là mảng UUID không trùng, chỉ permission active; role SYSTEM_ADMIN luôn bị chặn          |
-| GET /api/users/:userId/permissions                         | System có user.manage hoặc admin cùng tổ chức có quyền quản lý tương ứng                                                                    |
-| PUT /api/users/:userId/permission-denials/:permissionId    | Tắt; school admin có school_user.manage hoặc supplier admin có supplier_staff.manage                                                        |
-| DELETE /api/users/:userId/permission-denials/:permissionId | Bật lại quyền kế thừa; cùng điều kiện và phạm vi như PUT                                                                                    |
-| GET /api/schools/:schoolId/accounts                        | SCHOOL (school_user.manage / user.manage), xem danh sách tài khoản nhân viên trường (phân trang page/limit)                                 |
-| GET /api/schools/:schoolId/accounts/:userId                | SCHOOL (school_user.manage), xem thông tin chi tiết một tài khoản nhân viên trường                                                          |
-| POST /api/schools/:schoolId/accounts                       | SCHOOL (school_user.manage), tạo tài khoản nhân sự mới cho trường (Bếp, Y tế, GVCN...)                                                      |
-| PUT /api/schools/:schoolId/accounts/:userId                | SCHOOL (school_user.manage), cập nhật họ tên, SĐT, vai trò nhân sự                                                                          |
-| PATCH /api/schools/:schoolId/accounts/:userId/status       | SCHOOL (school_user.manage), khóa (LOCKED) hoặc mở khóa (ACTIVE) tài khoản nhân sự                                                          |
+| API                                                        | Điều kiện/nội dung                                                                                                                                     |
+| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| POST /api/auth/signup                                      | Tạo user UNVERIFIED, chưa tạo hồ sơ PENDING; Resend gửi mã sau commit; JSON báo verificationEmailSent, không cấp token                                 |
+| POST /api/auth/email-verification/request                  | Body email; gửi/gửi lại mã 6 số qua Resend; giới hạn theo email/IP, thông báo chung                                                                    |
+| POST /api/auth/email-verification/verify                   | Body email/code; cập nhật emailVerifiedAt, giữ UNVERIFIED; không cấp cookie hoặc quyền                                                                 |
+| POST /api/auth/login                                       | Body identifier=email/password cho mọi role; cho phép ACTIVE hợp lệ hoặc UNVERIFIED đã xác minh email; đặt cookie HttpOnly, JSON trả user và expiresIn |
+| POST /api/auth/refresh                                     | Đọc refresh cookie, kiểm tra hash/TTL và trạng thái user từ DB, đổi refresh token; không tự kích hoạt tài khoản                                        |
+| POST /api/auth/logout                                      | Thu hồi phiên Redis và xóa cookie                                                                                                                      |
+| GET /api/auth/me                                           | Thông tin tài khoản, status/onboardingRequired và trạng thái hồ sơ; UNVERIFIED không có permissions                                                    |
+| PATCH /api/auth/me                                         | Sửa fullName/phone của chính tài khoản ACTIVE hoặc UNVERIFIED đã xác minh email; không cần user.manage, không sửa email/role/status/tổ chức            |
+| GET /api/auth/me/permissions                               | Danh sách mã quyền hiệu lực khi ACTIVE; UNVERIFIED nhận mảng rỗng                                                                                      |
+| GET /api/auth/roles                                        | System, role.view; giữ nguyên đường dẫn cũ                                                                                                             |
+| GET /api/permissions                                       | System, permission.view; page/limit                                                                                                                    |
+| POST /api/permissions                                      | System, permission.create; body code, name, module, action, description tùy chọn                                                                       |
+| GET /api/roles/:roleId/permissions                         | System, role_permission.manage; SYSTEM_ADMIN có editable=false                                                                                         |
+| PUT /api/roles/:roleId/permissions                         | System, role_permission.manage; body permissionIds là mảng UUID không trùng, chỉ permission active; role SYSTEM_ADMIN luôn bị chặn                     |
+| GET /api/users/:userId/permissions                         | System có user.manage hoặc admin cùng tổ chức có quyền quản lý tương ứng                                                                               |
+| PUT /api/users/:userId/permission-denials/:permissionId    | Tắt; school admin có school_user.manage hoặc supplier admin có supplier_staff.manage                                                                   |
+| DELETE /api/users/:userId/permission-denials/:permissionId | Bật lại quyền kế thừa; cùng điều kiện và phạm vi như PUT                                                                                               |
+| GET /api/schools/:schoolId/accounts                        | SCHOOL (school_user.manage / user.manage), xem danh sách tài khoản nhân viên trường (phân trang page/limit)                                            |
+| GET /api/schools/:schoolId/accounts/:userId                | SCHOOL (school_user.manage), xem thông tin chi tiết một tài khoản nhân viên trường                                                                     |
+| POST /api/schools/:schoolId/accounts                       | SCHOOL (school_user.manage), tạo tài khoản nhân sự mới cho trường (Bếp, Y tế, GVCN...)                                                                 |
+| PUT /api/schools/:schoolId/accounts/:userId                | SCHOOL (school_user.manage), cập nhật họ tên, SĐT, vai trò nhân sự                                                                                     |
+| PATCH /api/schools/:schoolId/accounts/:userId/status       | SCHOOL (school_user.manage), khóa (LOCKED) hoặc mở khóa (ACTIVE) tài khoản nhân sự                                                                     |
 
 Các thao tác ghi xác minh lại actor và target trong transaction Serializable, có retry giới hạn cho serialization conflict. PUT/DELETE denial lặp lại an toàn; partial unique index và transaction ngăn tạo bản ghi trùng. Thêm permission vào catalog chưa tự tạo chức năng/API: endpoint phải kiểm tra mã quyền đó.
 
@@ -113,43 +113,47 @@ Xét duyệt yêu cầu SYSTEM_ADMIN cùng permission được gán: registratio
 
 Cooking Batch Phương án A bổ sung GET `/api/cooking-batches/:id` với `cooking_batch.view`, giữ scope đọc như danh sách; POST `/api/cooking-batches` dùng `cooking_batch.create`, POST `/:id/confirm` dùng `cooking_batch.confirm`, POST `/:id/complete` dùng `cooking_batch.complete`. Thao tác ghi yêu cầu SCHOOL có schoolId tin cậy, xác minh lại actor/quyền trong transaction; SYSTEM không có bypass. Không thêm role/grant/permission. Plan chỉ nhận menuDayId/dishId/mealType; confirm/complete không nhận số suất hoặc lượng nguyên liệu.
 
-Mọi dòng đều yêu cầu một trong các permission liệt kê. SYSTEM có phạm vi toàn hệ thống **khi được gán quyền**, trừ các chức năng giới hạn vai trò được nêu riêng, bao gồm quản lý cơ sở cung cấp chỉ dành quản trị nhà cung cấp. Tổ chức khác theo quan hệ sở hữu trong resource-access.ts. Phạm vi dưới đây là org-level, không tự suy diễn lớp được giao cho giáo viên.
+Mọi dòng đều yêu cầu một trong các permission liệt kê. SYSTEM có phạm vi toàn hệ thống **khi được gán quyền**, trừ các chức năng giới hạn vai trò được nêu riêng, bao gồm quản lý cơ sở cung cấp và nhân viên nhà cung cấp chỉ dành INGREDIENT_SUPPLIER_ADMIN. Tổ chức khác theo quan hệ sở hữu trong resource-access.ts. Phạm vi dưới đây là org-level, không tự suy diễn lớp được giao cho giáo viên.
 
-| Module                        | Permission (OR)                                                                    | Tổ chức ngoài SYSTEM được mở |
-| ----------------------------- | ---------------------------------------------------------------------------------- | ---------------------------- |
-| `auth`                        | `role.view`                                                                        | Không                        |
-| `user`                        | `user.manage`, `school_user.manage`, `supplier_staff.manage`                       | SCHOOL, SUPPLIER             |
-| `organization`                | `school.manage`                                                                    | SCHOOL                       |
-| `ingredient`                  | `ingredient.view`, `ingredient.manage`                                             | SCHOOL, SUPPLIER             |
-| `menu`                        | `menu.view`                                                                        | SCHOOL                       |
-| `supply-order`                | `supply_request.view`                                                              | SCHOOL, SUPPLIER             |
-| `warehouse`                   | `inventory.view`                                                                   | SCHOOL, SUPPLIER             |
-| `kitchen`                     | `cooking_batch.view`                                                               | SCHOOL                       |
-| `meal-attendance`             | `daily_meal_portion.view`                                                          | SCHOOL                       |
-| `feedback`                    | `meal_complaint.view`                                                              | SYSTEM, SCHOOL               |
-| `inspection`                  | `food_safety_incident.view`                                                        | SCHOOL, AUTHORITY            |
-| `supplier`                    | `supplier.view`, `supplier.manage`                                                 | SUPPLIER, SCHOOL             |
-| `authority`                   | `authority.view`, `food_safety_report.view`                                        | AUTHORITY                    |
-| `class`                       | `class.view`                                                                       | SCHOOL                       |
-| `source-facility`             | `source_facility.manage`                                                           | SUPPLIER (chỉ admin)         |
-| `supplier-certification`      | `supplier_certification.view`                                                      | SUPPLIER                     |
-| `registration`                | `registration.view`                                                                | Không                        |
-| `school-supplier`             | `supplier_relationship.view`, `supplier_relationship.manage`                       | SCHOOL, SUPPLIER             |
-| `ingredient-entry`            | `ingredient.view`, `ingredient.manage`                                             | SCHOOL                       |
-| `allergy`                     | `class_allergy.view`                                                               | SCHOOL                       |
-| `delivery`                    | `delivery.view`, `delivery.manage`, `delivery.receive`                             | SCHOOL, SUPPLIER             |
-| `dish`                        | `menu.view`                                                                        | SCHOOL                       |
-| `inventory`                   | `inventory.view`                                                                   | SCHOOL, SUPPLIER             |
-| `retained-sample`             | `retained_sample.view`                                                             | SCHOOL                       |
-| `meal-allocation`             | `meal_allocation.view`                                                             | SCHOOL                       |
-| `ingredient-quality-feedback` | `ingredient_quality_feedback.view_own`, `ingredient_quality_feedback.view_details` | SCHOOL, SUPPLIER             |
-| `reporting`                   | `food_safety_report.view`                                                          | SCHOOL, AUTHORITY            |
-| `food-analysis`               | `food_analysis_result.view`                                                        | SCHOOL, AUTHORITY            |
-| `school-alert`                | `school_alert.view`                                                                | SCHOOL                       |
-| `menu-review`                 | `menu.view`, `menu.review`, `menu.approve`                                         | SCHOOL                       |
-| `traceability`                | `traceability.view`                                                                | SCHOOL, SUPPLIER, AUTHORITY  |
+| Module                        | Permission (OR)                                                                                                           | Tổ chức ngoài SYSTEM được mở                          |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `auth`                        | `role.view`                                                                                                               | Không                                                 |
+| `user`                        | `user.manage`, `school_user.manage`, `supplier_staff.manage`                                                              | SCHOOL, SUPPLIER                                      |
+| `supplier-staff`              | `supplier_staff.manage`                                                                                                   | SUPPLIER, chỉ INGREDIENT_SUPPLIER_ADMIN               |
+| `organization`                | `school.manage`                                                                                                           | SCHOOL                                                |
+| `ingredient`                  | `ingredient.view`, `ingredient.manage`                                                                                    | SCHOOL, SUPPLIER                                      |
+| `menu`                        | `menu.view`                                                                                                               | SCHOOL                                                |
+| `supply-order`                | `supply_request.view`                                                                                                     | SCHOOL, SUPPLIER                                      |
+| `warehouse`                   | `inventory.view`                                                                                                          | SCHOOL, SUPPLIER                                      |
+| `kitchen`                     | `cooking_batch.view`                                                                                                      | SCHOOL                                                |
+| `meal-attendance`             | `daily_meal_portion.view`                                                                                                 | SCHOOL                                                |
+| `feedback`                    | `meal_complaint.view`                                                                                                     | SYSTEM, SCHOOL                                        |
+| `inspection`                  | `food_safety_incident.view`                                                                                               | SCHOOL, AUTHORITY                                     |
+| `supplier`                    | `supplier.view`, `supplier.manage`                                                                                        | SUPPLIER, SCHOOL                                      |
+| `authority`                   | `authority.view`, `food_safety_report.view`                                                                               | AUTHORITY                                             |
+| `class`                       | `class.view`                                                                                                              | SCHOOL                                                |
+| `source-facility`             | `source_facility.manage`                                                                                                  | SUPPLIER (chỉ admin)                                  |
+| `supplier-certification`      | `supplier_certification.view`                                                                                             | SUPPLIER                                              |
+| `registration`                | `registration.view`                                                                                                       | Không                                                 |
+| `school-supplier`             | `supplier_relationship.view`, `supplier_relationship.manage`                                                              | SCHOOL, SUPPLIER                                      |
+| `supplier-school`             | `supplier_relationship.view`, `supplier_relationship.manage`                                                              | SUPPLIER, chỉ INGREDIENT_SUPPLIER_ADMIN               |
+| `ingredient-entry`            | `ingredient.view`, `ingredient.manage`                                                                                    | SCHOOL                                                |
+| `allergy`                     | `class_allergy.view`                                                                                                      | SCHOOL                                                |
+| `delivery`                    | `delivery.view`, `delivery.manage`, `delivery.receive`                                                                    | SCHOOL, SUPPLIER                                      |
+| `dish`                        | `menu.view`                                                                                                               | SCHOOL                                                |
+| `inventory`                   | `inventory.view`                                                                                                          | SCHOOL, SUPPLIER                                      |
+| `retained-sample`             | `retained_sample.view`                                                                                                    | SCHOOL                                                |
+| `meal-allocation`             | `meal_allocation.view`                                                                                                    | SCHOOL                                                |
+| `ingredient-quality-feedback` | `ingredient_quality_feedback.view_own`, `ingredient_quality_feedback.view_details`, `ingredient_quality_feedback.respond` | SCHOOL (chỉ xem), SUPPLIER (`view_details`/`respond`) |
+| `reporting`                   | `food_safety_report.view`                                                                                                 | SCHOOL, AUTHORITY                                     |
+| `food-analysis`               | `food_analysis_result.view`                                                                                               | SCHOOL, AUTHORITY                                     |
+| `school-alert`                | `school_alert.view`                                                                                                       | SCHOOL                                                |
+| `menu-review`                 | `menu.view`, `menu.review`, `menu.approve`                                                                                | SCHOOL                                                |
+| `traceability`                | `traceability.view`                                                                                                       | SCHOOL, SUPPLIER, AUTHORITY                           |
 
 Bằng chứng blockchain (`/api/blockchain-proofs`): xem danh sách version cần `traceability.view`; gửi lại (`POST …/versions/:versionId/anchor`) và xác minh (`POST …/versions/:versionId/verify`) cần `traceability.verify`, cấp cho `SCHOOL_MANAGEMENT_BOARD` và `SCHOOL_NUTRITION_OFFICER`. Chỉ SCHOOL (theo trường của Delivery, hoặc CookingBatch → MenuDay → WeeklyMenu) và SYSTEM; ngoài phạm vi trả 404.
+
+Riêng kind `registrations` (hồ sơ đăng ký NCC/trường, UC-01/UC-02) không thuộc trường nào nên chỉ `SYSTEM_ADMIN` thuộc tổ chức SYSTEM được dùng: xem và xác minh cần `registration.view`, gửi lại cần `registration.approve`. Vai trò trường có `traceability.*` vẫn nhận 403.
 
 School xem supplier qua quan hệ ACTIVE/SUSPENDED; ingredient qua IngredientEntry của trường. Supplier xem tài nguyên supplier-owned hoặc delivery của supplier khi có permission phù hợp. ATTP xã chỉ thấy incident/report chuyển tới đơn vị mình; traceability chỉ mở phần liên quan trực tiếp. Với ingredient_quality_feedback.view_own, thêm điều kiện submittedByUserId; view_details vẫn giới hạn tổ chức. Các API cũ giữ phân trang, safe select và serialization Date/Decimal/BigInt.
 
@@ -397,3 +401,51 @@ Idempotency của `POST /api/deliveries/management` sử dụng khóa bền vữ
 Bản ghi công khai JSON chỉ trả đúng 8 trường trong allowlist (`supplierName`, `deliveryNo`, `status`, `statusLabel`, `ingredientName`, `actualQuantity`, `unit`, `sourceFacility: { name, facilityCode }`) với `status`/`statusLabel` phản ánh cả `PREPARING`; giao diện HTML escape toàn bộ ký tự đặc biệt; cả hai định dạng tuyệt đối không lộ tên trường, biển số xe, lịch giao, `workflowVersion`, `nextAction`, hợp đồng, ghi chú, thông tin liên hệ cơ sở/nhà cung cấp, danh sách chữ ký hay token, và áp dụng `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, `X-Robots-Tag: noindex`, `Content-Security-Policy`. Request/error logger che `qrToken` trên mọi đường dẫn `/api/public/delivery-items/...`. Khi triển khai, bắt buộc áp dụng tuần tự enum migration (`20261118000200_delivery_preparing_status`) rồi schema/CHECK/3 partial unique index (`20261118000300_supplier_order_stages`) trước khi phát hành backend/client `workflowVersion = 2` (tạm dừng writer cũ tạo thẳng `IN_TRANSIT`, giữ cố định `PUBLIC_TRACE_ORIGIN`, không seed/cấp quyền ngầm). Nếu cần rollback ứng dụng sau khi đã phát sinh đơn nhiều nguồn hoặc `PREPARING`, phải review tương thích trước và **không** gộp QR/dòng hàng hay khôi phục hai full unique index cũ.
 
 Thiết kế và hợp đồng: [supplier-orders](../specs/supplier-order-creation/contracts/supplier-orders.md) và [public-trace](../specs/supplier-order-creation/contracts/public-trace.md). Kết quả kiểm chứng được ghi tại [quickstart](../specs/supplier-order-creation/quickstart.md).
+
+## Quản lí nhân viên nhà cung cấp
+
+Module `supplier-staff` yêu cầu actor ACTIVE, INGREDIENT_SUPPLIER_ADMIN thuộc SUPPLIER có membership hợp lệ và quyền hiệu lực `supplier_staff.manage`. SYSTEM/staff hoặc admin thiếu quyền đều bị từ chối. Scope lấy từ principal; target chỉ INGREDIENT_SUPPLIER_STAFF thuộc supplier hiện tại, role type SUPPLIER. Không nhận organization/role để mở rộng phạm vi.
+
+| Method | Path                                                           | Hành vi                                                                                    |
+| ------ | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| GET    | `/api/supplier-staff`                                          | Mọi trạng thái; page/limit mặc định 1/20, tối đa100, hasNext; createdAt desc rồi id asc    |
+| GET    | `/api/supplier-staff/:userId`                                  | Detail mọi trạng thái, safe fields và ISO timestamps                                       |
+| POST   | `/api/supplier-staff`                                          | Tạo ACTIVE đúng supplier/role, mật khẩu khởi tạo bcrypt12; không registration hoặc session |
+| PATCH  | `/api/supplier-staff/:userId/status`                           | ACTIVE ↔ LOCKED; same-state không ghi, trạng thái khác409                                  |
+| GET    | `/api/supplier-staff/:userId/permissions`                      | Chỉ target ACTIVE; grants hiện có gồm inactive, enabled = active trừ scoped denial         |
+| PUT    | `/api/supplier-staff/:userId/permission-denials/:permissionId` | Tắt riêng một grant active thuộc role                                                      |
+| DELETE | `/api/supplier-staff/:userId/permission-denials/:permissionId` | Bật lại bằng xóa đúng denial, giữ trần role                                                |
+
+Target ngoài phạm vi/admin/không tồn tại cùng404; permission target trong phạm vi nhưng không ACTIVE trả403, permission thiếu/inactive/ngoài role trả400. Body/query/params strict; không raw input, hash hoặc secret trong output. Username staff case-sensitive duy nhất trong supplier kể cả admin và mọi status; staff khác supplier được trùng. Email Citext duy nhất toàn cục; duplicate409 chung không tiết lộ chủ sở hữu. Mọi vai trò login email-only theo [AUTH_SESSIONS.md](AUTH_SESSIONS.md).
+
+Write cùng Serializable transaction, khóa Supplier → User IDs → Role IDs rồi kiểm lại actor/target, scope và quyền; retry tối đa ba lần. Toggle denial lặp an toàn, chỉ touch User khi dữ liệu đổi, không sửa RolePermission. Đọc quyền dùng cùng RepeatableRead snapshot. Khóa tác động login/refresh/request tiếp theo, giữ denial/history/công việc; intake tạm dừng không tự cấm quản lí staff. Generic user/permission APIs giữ hợp đồng riêng; client tính năng này dùng bảy route chuyên biệt trên. Chi tiết request/response: [staff contract](../specs/supplier-staff-management/contracts/supplier-staff-api.md).
+
+## Xem trường đã liên kết và hợp đồng phía nhà cung cấp (`supplier-school`)
+
+Module `supplier-school` cung cấp năm endpoint GET chỉ đọc dưới `/api/supplier-schools`. Yêu cầu tài khoản `ACTIVE`, vai trò `INGREDIENT_SUPPLIER_ADMIN`, tổ chức `SUPPLIER` có `supplierId` hợp lệ (không có `schoolId`/`communeFoodSafetyUnitId`) và ít nhất một quyền hiệu lực `supplier_relationship.view` hoặc `supplier_relationship.manage` (`OR`, trừ denial trong tổ chức hiện tại). `INGREDIENT_SUPPLIER_STAFF`, `SYSTEM_ADMIN` (không bypass), `SCHOOL` và `AUTHORITY` bị chặn `403` kể cả khi được gán các quyền trên. Scope `{ supplierId }` luôn lấy từ principal nạp lại mỗi request, không nhận từ query/body và không cache phân quyền.
+
+| Method | Path                                                                          | Hành vi và kiểm tra phạm vi                                                                                                                                 |
+| ------ | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/supplier-schools`                                                       | Mỗi trường một mục (`id` UUID + `code`), đại diện `ACTIVE`/`SUSPENDED` trước `UNLINKED`, `linkedAt DESC`/`id ASC`; phân trang trước `page`/`limit` 1–100    |
+| GET    | `/api/supplier-schools/:schoolId`                                             | Chi tiết trường (gồm trường `INACTIVE`) và quan hệ đại diện (`ACTIVE`/`SUSPENDED`/`UNLINKED`), query rỗng; không nhúng hợp đồng                             |
+| GET    | `/api/supplier-schools/:schoolId/contracts`                                   | Yêu cầu cặp có quan hệ (`404` nếu không); danh sách `ACTIVE`/`CLOSED` mọi đợt (`createdAt DESC`, `id ASC`), giữ ngày hiệu lực tương lai/hết hạn             |
+| GET    | `/api/supplier-schools/:schoolId/contracts/:contractId`                       | Chi tiết hợp đồng `ACTIVE`/`CLOSED` đúng cặp `schoolId` + `supplierId` + `contractId`, query rỗng; gồm nguyên liệu và metadata `SIGNED_CONTRACT`/`APPENDIX` |
+| GET    | `/api/supplier-schools/:schoolId/contracts/:contractId/documents/:documentId` | Mở (`disposition=inline` mặc định) hoặc tải (`attachment`) bytes gốc `SIGNED_CONTRACT`/`APPENDIX` của hợp đồng `ACTIVE`/`CLOSED` đúng cặp                   |
+
+Bản nháp `DRAFT`, tài liệu `COMPLIANCE`, trường chỉ có nháp hoặc tài nguyên thuộc cặp/nhà cung cấp khác đều trả `404` thống nhất (`Không tìm thấy dữ liệu trong phạm vi được phép`), không làm lộ tên tệp hay metadata. Endpoint binary trả `Content-Type` (`application/pdf`, `image/png`, `image/jpeg`), `Content-Length`, `Content-Disposition` UTF-8 RFC 5987, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox` và `Cache-Control: private, no-store`; lỗi đọc hoặc bytes hỏng trả JSON `503` trước khi gửi headers thành công. Các endpoint JSON cũng đặt `Cache-Control: private, no-store`.
+
+Catalog chỉ thêm default grant `supplier_relationship.view` cho role `INGREDIENT_SUPPLIER_ADMIN` khởi tạo mới. Các hệ thống đã tồn tại role này không được `auth:bootstrap` tự cấp lại để bảo toàn cấu hình hiện hữu; operator phải cấp quyền theo quy trình quản lý role trong [quickstart](../specs/supplier-linked-schools/quickstart.md). Hợp đồng API đầy đủ: [supplier-schools-api.md](../specs/supplier-linked-schools/contracts/supplier-schools-api.md).
+
+## Phản hồi khiếu nại chất lượng nguyên liệu (`ingredient-quality-feedback`)
+
+Module `ingredient-quality-feedback` dùng phân quyền động theo DB trên từng request (tài khoản `ACTIVE`, membership tổ chức duy nhất, `Permission.isActive`, `RolePermission` trừ `UserPermissionDenial`, không cache phân quyền và không SYSTEM bypass). Quyền mặc định cho `INGREDIENT_SUPPLIER_ADMIN` và `INGREDIENT_SUPPLIER_STAFF` (`view_details`, `respond`) đã có trong `src/constants/permission-catalog.ts`; tính năng không sửa catalog hay tự cấp quyền cho role/tài khoản hiện có.
+
+| Method | Path                                                    | Nhóm được gọi                    | Quyền và phạm vi                                                                                                                              |
+| ------ | ------------------------------------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/ingredient-quality-feedback`                      | `SUPPLIER` (`ADMIN`/`STAFF`)     | `ingredient_quality_feedback.view_details` (`view_own` đơn lẻ bị `403`); phạm vi `Delivery.supplierId`                                        |
+| GET    | `/api/ingredient-quality-feedback`                      | `SCHOOL`, `SYSTEM` (legacy list) | `view_own` (thêm `submittedByUserId = actor.id`) hoặc `view_details` (toàn trường); `SYSTEM` cần quyền được gán                               |
+| GET    | `/api/ingredient-quality-feedback/:feedbackId`          | `SUPPLIER` (`ADMIN`/`STAFF`)     | `ingredient_quality_feedback.view_details`; phạm vi `Delivery.supplierId`; hỗ trợ lịch sử sau `SUSPENDED`/`UNLINKED`                          |
+| GET    | `/api/ingredient-quality-feedback/:feedbackId`          | `SCHOOL` (`FR-011`)              | `view_details`: toàn trường (`Delivery.schoolId`); chỉ `view_own`: đúng `submittedByUserId`; `SYSTEM`/`AUTHORITY` bị `403`                    |
+| POST   | `/api/ingredient-quality-feedback/:feedbackId/response` | `SUPPLIER` (`ADMIN`/`STAFF`)     | Bắt buộc **đồng thời** `ingredient_quality_feedback.view_details` **và** `ingredient_quality_feedback.respond`; phạm vi `Delivery.supplierId` |
+
+Điểm chấp nhận ghi phản hồi thực hiện trong transaction `Serializable`: đọc lại actor trực tiếp qua `identitySelect` -> khóa `school -> supplier -> actor user -> actor role (FOR SHARE) -> permission rows (view_details/respond FOR SHARE theo id) -> delivery -> complaint` -> kiểm lại actor (cùng `roleId`/`role`/`orgType`/`supplierId` và đủ cả hai quyền), trạng thái `SUBMITTED` và update có điều kiện. Thu hồi quyền, khóa user hoặc thay role grant hoàn tất trước điểm khóa khiến transaction retry đọc snapshot mới và từ chối `403`. `SCHOOL`, `SYSTEM`, `AUTHORITY` và supplier thiếu một trong hai quyền đều nhận `403` trên POST; mọi UUID ngoài phạm vi/không tồn tại trả cùng `404`. Producer HTTP/service tạo khiếu nại cho Ban Giám hiệu và default grants tương ứng nằm ngoài phạm vi và chưa được thêm vào repo. Chi tiết: [ingredient-quality-feedback-api.md](../specs/supplier-complaint-response/contracts/ingredient-quality-feedback-api.md).

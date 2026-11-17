@@ -1,3 +1,4 @@
+import { setTimeout as retryAfter } from "node:timers/promises";
 import type { Request } from "express";
 import type { Prisma, PrismaClient } from "../generated/prisma/client";
 import { ORG_TYPES, ROLES } from "../constants/roles";
@@ -206,6 +207,26 @@ function transactionConflict(error: unknown): boolean {
     if (error.code === "P2034" || error.code === "P2002") return true;
     if (error.code === "40001" || error.code === "40P01") return true;
   }
+  // COMMIT can return the adapter error directly instead of Prisma query metadata.
+  const directCause: unknown = "cause" in error ? error.cause : undefined;
+  if (
+    "name" in error &&
+    error.name === "DriverAdapterError" &&
+    directCause &&
+    typeof directCause === "object"
+  ) {
+    if (
+      "kind" in directCause &&
+      directCause.kind === "TransactionWriteConflict"
+    )
+      return true;
+    if (
+      "originalCode" in directCause &&
+      (directCause.originalCode === "40001" ||
+        directCause.originalCode === "40P01")
+    )
+      return true;
+  }
   const meta: unknown = "meta" in error ? error.meta : undefined;
   if (meta && typeof meta === "object") {
     if ("code" in meta && (meta.code === "40001" || meta.code === "40P01"))
@@ -249,7 +270,11 @@ export async function authorizationTransaction<T>(
           timeout: 20000,
         });
       } catch (error) {
-        if (attempt < 2 && transactionConflict(error)) continue;
+        if (attempt < 2 && transactionConflict(error)) {
+          // Give the competing transaction time to commit before taking a new snapshot.
+          await retryAfter(20 * 2 ** attempt);
+          continue;
+        }
         throw error;
       }
     }
