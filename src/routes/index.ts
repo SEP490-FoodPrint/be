@@ -48,6 +48,7 @@ import { createSupplierOnboardingRouter } from "../modules/supplier-onboarding/s
 import { createSchoolAcademicYearRouter } from "../modules/school-academic-year/school-academic-year.routes";
 import { createSampleStorageRouter } from "../modules/sample-storage/sample-storage.routes";
 import { createDeliveryTraceRouter } from "../modules/delivery-trace/delivery-trace.routes";
+import { createMealTraceabilityRouter } from "../modules/meal-traceability/meal-traceability.routes";
 import type { DeliveryTraceService } from "../modules/delivery-trace/delivery-trace.service";
 
 export type ApiRouterServices = {
@@ -195,6 +196,7 @@ export function createApiRouter(
     "/blockchain-proofs",
     createBlockchainProofRouter(undefined, authHandler),
   );
+  router.use("/meal-traceability", createMealTraceabilityRouter());
   router.use("/menu-reviews", createMenuReviewRouter(undefined, authHandler));
 
   router.use("/v1/menus", createMenuRouter(undefined, authHandler, true));
@@ -223,6 +225,7 @@ export function createApiRouter(
     "/sample-storage-units",
     createSampleStorageRouter(undefined, authHandler),
   );
+  router.use("/meal-traceability", createMealTraceabilityRouter());
 
   return router;
 }

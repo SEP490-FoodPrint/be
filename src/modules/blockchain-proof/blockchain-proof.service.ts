@@ -1000,6 +1000,19 @@ export function createBlockchainProofService(
       });
       return publicView(chain);
     },
+    async publicMealAllocationChain(
+      mealAllocationId: string,
+      verify = false,
+    ): Promise<BlockchainProofChainResponseDTO> {
+      if (verify) requireEnabled();
+      const db = await connect();
+      const subjects = await repo.chainSubjects(db, mealAllocationId, null);
+      const chain = await buildChain(db, subjects, mealAllocationId, {
+        verify,
+        persist: false,
+      });
+      return publicView(chain);
+    },
     async chain(
       params: BlockchainProofChainParamsDTO,
       query: BlockchainProofChainQueryDTO,
