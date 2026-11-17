@@ -121,7 +121,14 @@ function projectDistribution(
         batchId,
         (totalsByBatch.get(batchId) ?? 0) + allocatedPortions,
       );
-      return [{ batchId, allocatedPortions }];
+      return [
+        {
+          batchId,
+          allocatedPortions,
+          batchCode: batch.batchCode,
+          batchNumber: batch.batchNumber ?? null,
+        },
+      ];
     });
 
     const acceptedMenu = data.menus.find((menu) =>
@@ -219,6 +226,8 @@ export function projectAllocationDay(
   const batches: AllocationDayResponse["batches"] = data.batches.map(
     (batch) => ({
       id: batch.id,
+      batchCode: batch.batchCode,
+      batchNumber: batch.batchNumber ?? null,
       eligibleDemandIds: data.demands
         .filter((demand) => batchAcceptsDemand(data, batch.id, demand.id))
         .map((demand) => demand.id),
@@ -621,11 +630,13 @@ function buildGradeAllocationGroups(
         const batchRecord = rawBatch as {
           id: string;
           batchCode?: string | null;
+          batchNumber?: number | null;
         };
 
         dishBatches.push({
           cookingBatchId: rawBatch.id,
           batchCode: batchRecord.batchCode || rawBatch.id,
+          batchNumber: batchRecord.batchNumber ?? null,
           plannedPortions: batchCapacity,
           availablePortions,
           autoAssigned: false,
