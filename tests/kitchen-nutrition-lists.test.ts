@@ -234,13 +234,26 @@ void test("menu day allergy queries share the same school and grade scope as kit
         },
       },
     } as never,
-    [testStaff.id],
     principal.schoolId!,
     "menu-day",
   );
   const classFilter = (
     query as { where: { Class: { schoolId: string; OR: unknown[] } } }
   ).where.Class;
+  // Dị ứng chỉ tính nguyên liệu của NCC đang liên kết với trường.
+  assert.deepEqual(
+    (query as { where: { IngredientEntry: unknown } }).where.IngredientEntry,
+    {
+      schoolId: principal.schoolId,
+      Ingredient: {
+        Supplier: {
+          schoolSupplierRelationships: {
+            some: { schoolId: principal.schoolId, status: "ACTIVE" },
+          },
+        },
+      },
+    },
+  );
   assert.equal(classFilter.schoolId, principal.schoolId);
   assert.equal(classFilter.OR.length, 2);
   assert(JSON.stringify(classFilter).includes("menu-day"));

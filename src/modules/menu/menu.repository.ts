@@ -129,7 +129,14 @@ const menuDetail = {
         include: {
           dishes: { select: { dishId: true } },
 
-          avoidances: { select: { ingredientEntryId: true } },
+          avoidances: {
+            select: {
+              ingredientEntryId: true,
+              ingredientEntry: {
+                select: { Ingredient: { select: { name: true } } },
+              },
+            },
+          },
         },
       },
 
@@ -367,6 +374,17 @@ export const menuRepository = {
       select: { id: true, defaultUnit: true },
     });
   },
+  async ingredientEntryNames(
+    client: Tx,
+    ingredientEntryIds: string[],
+    schoolId: string,
+  ) {
+    const rows = await client.ingredientEntry.findMany({
+      where: { id: { in: ingredientEntryIds }, schoolId },
+      select: { Ingredient: { select: { name: true } } },
+    });
+    return rows.map((row) => row.Ingredient.name);
+  },
   activeSeasoningEntries(
     client: Tx,
     ingredientEntryIds: string[],
@@ -395,7 +413,14 @@ export const menuRepository = {
       include: {
         dishes: { select: { dishId: true } },
 
-        avoidances: { select: { ingredientEntryId: true } },
+        avoidances: {
+          select: {
+            ingredientEntryId: true,
+            ingredientEntry: {
+              select: { Ingredient: { select: { name: true } } },
+            },
+          },
+        },
       },
 
       orderBy: [{ isDefault: "desc" }, { id: "asc" }],
@@ -500,7 +525,14 @@ export const menuRepository = {
       include: {
         dishes: { select: { dishId: true } },
 
-        avoidances: { select: { ingredientEntryId: true } },
+        avoidances: {
+          select: {
+            ingredientEntryId: true,
+            ingredientEntry: {
+              select: { Ingredient: { select: { name: true } } },
+            },
+          },
+        },
       },
 
       orderBy: { id: "asc" },
@@ -530,9 +562,13 @@ export const menuRepository = {
       select: { id: true, name: true },
     });
   },
+  /**
+   * Dị ứng của các lớp trong phạm vi (cả trường, theo ngày thực đơn hoặc theo khối). Chỉ tính dị ứng
+   * khai báo bằng nguyên liệu của NCC đang liên kết (ACTIVE) với trường. Việc so với nguyên liệu
+   * thực đơn làm theo TÊN ở service (utils/allergy-match.ts), không theo mã.
+   */
   classAllergies(
     client: Tx,
-    ingredientIds: string[],
     schoolId: string,
     menuDayId?: string,
     gradeIds: string[] = [],
@@ -549,8 +585,13 @@ export const menuRepository = {
 
         IngredientEntry: {
           schoolId,
-
-          ingredientId: { in: ingredientIds },
+          Ingredient: {
+            Supplier: {
+              schoolSupplierRelationships: {
+                some: { schoolId, status: "ACTIVE" },
+              },
+            },
+          },
         },
 
         affectedCount: { gt: 0 },
@@ -564,7 +605,12 @@ export const menuRepository = {
 
         Class: { select: { name: true } },
 
-        IngredientEntry: { select: { ingredientId: true } },
+        IngredientEntry: {
+          select: {
+            ingredientId: true,
+            Ingredient: { select: { name: true } },
+          },
+        },
       },
     });
   },

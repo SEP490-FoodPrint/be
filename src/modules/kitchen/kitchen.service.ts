@@ -1,3 +1,4 @@
+import { allergyCountsFromGroups } from "../../utils/allergy-match";
 import { reserveFpCodes } from "../../utils/fp-code";
 import { classScopeForMenuDay } from "../menu/menu.repository";
 import { createHash } from "node:crypto";
@@ -448,7 +449,13 @@ export async function assertPortionGroupSafety(
       },
       avoidances: {
         include: {
-          ingredientEntry: { select: { schoolId: true, ingredientId: true } },
+          ingredientEntry: {
+            select: {
+              schoolId: true,
+              ingredientId: true,
+              Ingredient: { select: { name: true } },
+            },
+          },
         },
       },
     },
@@ -518,7 +525,20 @@ export async function readMealPortionDemand(
       status: "FINALIZED",
       Class: classScopeForMenuDay(schoolId, meal.menuDayId),
     },
-    include: { portionGroups: true, dailyAllergyPortions: true },
+    include: {
+      portionGroups: true,
+      dailyAllergyPortions: {
+        include: {
+          ClassAllergy: {
+            select: {
+              IngredientEntry: {
+                select: { Ingredient: { select: { name: true } } },
+              },
+            },
+          },
+        },
+      },
+    },
   });
   const totalPortions = daily.reduce((n, d) => n + d.totalPortions, 0);
   if (!Number.isSafeInteger(totalPortions) || totalPortions > 2147483647)
@@ -552,40 +572,40 @@ export async function readMealPortionDemand(
         409,
         "GVCN chưa chốt đủ nhóm suất không trùng cho từng lớp trong bữa ăn",
       );
-    const avoidCounts = new Map<string, number>();
+    const countOf = (groupId: string) =>
+      demand.portionGroups.find((p) => p.portionGroupId === groupId)!
+        .portionCount;
     for (const group of groups) {
-      const count = demand.portionGroups.find(
-        (p) => p.portionGroupId === group.id,
-      )!.portionCount;
+      const count = countOf(group.id);
       groupTotals.set(group.id, groupTotals.get(group.id)! + count);
       for (const dish of group.dishes)
         dishPortions.set(dish.dishId, dishPortions.get(dish.dishId)! + count);
-      for (const allergy of group.avoidances)
-        avoidCounts.set(
-          allergy.ingredientEntryId,
-          (avoidCounts.get(allergy.ingredientEntryId) ?? 0) + count,
-        );
     }
+    // Nhóm suất riêng quy về dị ứng khai báo của lớp theo mã hoặc tên (vd. tránh "Tôm nõn tươi" = dị ứng "Tôm nõn").
+    const { byAllergy, uncovered, relevant } = allergyCountsFromGroups(
+      groups,
+      countOf,
+      demand.dailyAllergyPortions.map((a) => ({
+        ingredientEntryId: a.ingredientEntryId,
+        allergenName: a.ClassAllergy.IngredientEntry.Ingredient.name,
+      })),
+    );
     if (
       demand.dailyAllergyPortions.some(
-        (a) => (avoidCounts.get(a.ingredientEntryId) ?? 0) !== a.portionCount,
+        (a) =>
+          relevant.has(a.ingredientEntryId) &&
+          (byAllergy.get(a.ingredientEntryId) ?? 0) !== a.portionCount,
       )
     )
       throw new HttpError(
         409,
         "Nhóm suất không khớp số suất dị ứng đã chốt của lớp",
       );
-    for (const [entryId, count] of avoidCounts)
-      if (
-        count > 0 &&
-        !demand.dailyAllergyPortions.some(
-          (a) => a.ingredientEntryId === entryId && a.portionCount === count,
-        )
-      )
-        throw new HttpError(
-          409,
-          "Thiếu xác nhận suất dị ứng tương ứng với nhóm suất",
-        );
+    if (uncovered)
+      throw new HttpError(
+        409,
+        "Thiếu xác nhận suất dị ứng tương ứng với nhóm suất",
+      );
   }
   return { totalPortions, dishPortions, groups, groupTotals, daily };
 }
