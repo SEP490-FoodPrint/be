@@ -53,6 +53,7 @@ export interface RespondIfSubmittedInput {
   supplierId: string;
   supplierResponse: string;
   respondedByUserId: string;
+  respondedRoleCode?: string;
   respondedAt: Date;
 }
 
@@ -67,13 +68,21 @@ const legacyFeedbackSelect = {
   id: true,
   deliveryId: true,
   ingredientLotId: true,
-  submittedByUserId: true,
-  title: true,
-  description: true,
-  status: true,
-  respondedAt: true,
-  createdAt: true,
-  updatedAt: true,
+  Complaint: {
+    select: {
+      senderUserId: true,
+      title: true,
+      description: true,
+      status: true,
+      createdAt: true,
+      updatedAt: true,
+      currentResponseVersion: {
+        select: {
+          createdAt: true,
+        },
+      },
+    },
+  },
 } as const satisfies Prisma.IngredientQualityFeedbackSelect;
 
 export type LegacyFeedbackRow = Prisma.IngredientQualityFeedbackGetPayload<{
@@ -82,11 +91,6 @@ export type LegacyFeedbackRow = Prisma.IngredientQualityFeedbackGetPayload<{
 
 const supplierFeedbackListSelect = {
   id: true,
-  complaintCode: true,
-  title: true,
-  status: true,
-  createdAt: true,
-  respondedAt: true,
   Delivery: {
     select: {
       id: true,
@@ -96,6 +100,19 @@ const supplierFeedbackListSelect = {
           id: true,
           name: true,
           code: true,
+        },
+      },
+    },
+  },
+  Complaint: {
+    select: {
+      complaintCode: true,
+      title: true,
+      status: true,
+      createdAt: true,
+      currentResponseVersion: {
+        select: {
+          createdAt: true,
         },
       },
     },
@@ -109,16 +126,8 @@ export type SupplierFeedbackListRow =
 
 const feedbackDetailSelect = {
   id: true,
-  complaintCode: true,
   deliveryId: true,
   ingredientLotId: true,
-  title: true,
-  description: true,
-  status: true,
-  supplierResponse: true,
-  respondedAt: true,
-  createdAt: true,
-  updatedAt: true,
   Delivery: {
     select: {
       id: true,
@@ -132,16 +141,32 @@ const feedbackDetailSelect = {
       },
     },
   },
-  submittedByUser: {
+  Complaint: {
     select: {
-      id: true,
-      fullName: true,
-    },
-  },
-  respondedByUser: {
-    select: {
-      id: true,
-      fullName: true,
+      complaintCode: true,
+      title: true,
+      description: true,
+      status: true,
+      createdAt: true,
+      updatedAt: true,
+      senderUser: {
+        select: {
+          id: true,
+          fullName: true,
+        },
+      },
+      currentResponseVersion: {
+        select: {
+          content: true,
+          createdAt: true,
+          respondedByUser: {
+            select: {
+              id: true,
+              fullName: true,
+            },
+          },
+        },
+      },
     },
   },
 } as const satisfies Prisma.IngredientQualityFeedbackSelect;
@@ -165,7 +190,7 @@ export function createIngredientQualityFeedbackRepository(connect = getPrisma) {
       tx: IngredientQualityFeedbackTx,
     ): Promise<bigint> {
       const rows = await tx.$queryRaw<{ value: bigint | string | number }[]>`
-        SELECT nextval('foodprint.ingredient_quality_feedback_complaint_code_seq'::regclass) AS value
+        SELECT nextval('foodprint.complaint_code_seq'::regclass) AS value
       `;
       const row = rows[0];
       if (!row) {
@@ -190,7 +215,7 @@ export function createIngredientQualityFeedbackRepository(connect = getPrisma) {
           : {
               Delivery: { schoolId: scope.schoolId },
               ...(scope.submittedByUserId
-                ? { submittedByUserId: scope.submittedByUserId }
+                ? { Complaint: { senderUserId: scope.submittedByUserId } }
                 : {}),
             };
       return db.ingredientQualityFeedback.findMany({
@@ -213,7 +238,7 @@ export function createIngredientQualityFeedbackRepository(connect = getPrisma) {
         skip,
         take,
         select: supplierFeedbackListSelect,
-        orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+        orderBy: [{ Complaint: { createdAt: "desc" } }, { id: "asc" }],
       });
     },
     async findDetail(
@@ -229,7 +254,7 @@ export function createIngredientQualityFeedbackRepository(connect = getPrisma) {
                 id: feedbackId,
                 Delivery: { schoolId: scope.schoolId },
                 ...(scope.submittedByUserId
-                  ? { submittedByUserId: scope.submittedByUserId }
+                  ? { Complaint: { senderUserId: scope.submittedByUserId } }
                   : {}),
               },
         select: feedbackDetailSelect,
@@ -259,7 +284,6 @@ export function createIngredientQualityFeedbackRepository(connect = getPrisma) {
       tx: IngredientQualityFeedbackTx,
       userId: string,
     ): Promise<AuthPrincipal> {
-      // Keep query errors raw so authorizationTransaction can retry serialization conflicts.
       return principalFromIdentity(
         await tx.user.findUnique({
           where: { id: userId },
@@ -292,8 +316,6 @@ export function createIngredientQualityFeedbackRepository(connect = getPrisma) {
       scope: SupplierResponseScope,
       context: ResponseLockContext,
     ): Promise<void> {
-      // Lock order matches lifecycle/staff/permission writers:
-      // school -> supplier -> actor user -> actor role -> permission rows -> delivery -> complaint.
       await parentLocks.lockParents(tx, {
         ...(context.schoolId ? { schoolId: context.schoolId } : {}),
         supplierId: scope.supplierId,
@@ -338,8 +360,8 @@ export function createIngredientQualityFeedbackRepository(connect = getPrisma) {
         select: {
           id: true,
           deliveryId: true,
-          status: true,
           Delivery: { select: { schoolId: true } },
+          Complaint: { select: { status: true } },
         },
       });
       if (!row) return null;
@@ -347,27 +369,57 @@ export function createIngredientQualityFeedbackRepository(connect = getPrisma) {
         id: row.id,
         deliveryId: row.deliveryId,
         schoolId: row.Delivery.schoolId,
-        status: row.status,
+        status: row.Complaint.status,
       };
     },
     async respondIfSubmitted(
       tx: IngredientQualityFeedbackTx,
       input: RespondIfSubmittedInput,
     ): Promise<number> {
-      const result = await tx.ingredientQualityFeedback.updateMany({
+      const target = await tx.ingredientQualityFeedback.findFirst({
         where: {
           id: input.feedbackId,
-          status: "SUBMITTED",
           Delivery: { supplierId: input.supplierId },
+          Complaint: { status: "SUBMITTED" },
         },
-        data: {
-          status: "RESPONDED",
-          supplierResponse: input.supplierResponse,
-          respondedByUserId: input.respondedByUserId,
-          respondedAt: input.respondedAt,
+        select: {
+          id: true,
         },
       });
-      return result.count;
+      if (!target) return 0;
+
+      const version = await tx.complaintResponseVersion.create({
+        data: {
+          complaintId: input.feedbackId,
+          version: 1,
+          content: input.supplierResponse,
+          respondedByUserId: input.respondedByUserId,
+          respondedRoleCode: input.respondedRoleCode,
+          createdAt: input.respondedAt,
+        },
+      });
+
+      await tx.complaint.update({
+        where: { id: input.feedbackId },
+        data: {
+          status: "RESPONDED",
+          currentResponseVersionId: version.id,
+        },
+      });
+
+      await tx.complaintStatusHistory.create({
+        data: {
+          complaintId: input.feedbackId,
+          fromStatus: "SUBMITTED",
+          toStatus: "RESPONDED",
+          responseVersionId: version.id,
+          actorUserId: input.respondedByUserId,
+          actorRoleCode: input.respondedRoleCode,
+          createdAt: input.respondedAt,
+        },
+      });
+
+      return 1;
     },
   };
 }
