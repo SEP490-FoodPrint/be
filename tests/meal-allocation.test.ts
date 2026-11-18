@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AllocationDay } from "../src/modules/meal-allocation/meal-allocation.repository";
-import { projectAllocationDay } from "../src/modules/meal-allocation/meal-allocation.service";
+import {
+  prepareChanges,
+  projectAllocationDay,
+} from "../src/modules/meal-allocation/meal-allocation.service";
 import { validateAllocationApply } from "../src/modules/meal-allocation/meal-allocation.validation";
 
 const date = "2026-11-12";
@@ -307,5 +310,105 @@ void test("payload chỉ chấp nhận số suất nguyên dương và từ ch�
         ],
       }),
     { statusCode: 400 },
+  );
+});
+
+void test("cấu trúc phân cấp grades trả về đúng mô hình Khối -> Món -> Lô -> Lớp", () => {
+  const data = fixture();
+  data.demands.forEach((d) => {
+    d.Class.gradeId = "grade-1";
+    d.Class.grade = { name: "Khối 1" };
+  });
+  const view = projectAllocationDay(data, date);
+  assert.ok(view.grades, "phải có trường grades");
+  assert.equal(view.grades.length, 1);
+
+  const grade = view.grades[0];
+  assert.equal(grade.gradeName, "Khối 1");
+  assert.equal(grade.demands.length, 3);
+  assert.equal(grade.dishes.length, 2);
+
+  const riceDish = grade.dishes.find((d) => d.dishId === "rice");
+  assert.ok(riceDish, "phải có món rice");
+  assert.equal(riceDish.batches.length, 2);
+  assert.equal(riceDish.totalRequiredPortions, 100);
+
+  const mainDish = grade.dishes.find((d) => d.dishId === "main");
+  assert.ok(mainDish, "phải có món main");
+  assert.equal(mainDish.batches.length, 2);
+});
+
+void test("prepareChanges bảo lưu phân bổ món khác khi FE chỉ gửi món được chỉnh sửa", () => {
+  const data = fixture();
+  data.demands.forEach((d) => {
+    d.Class.gradeId = "grade-1";
+    d.Class.grade = { name: "Khối 1" };
+  });
+  // Giả sử d0 đã có phân bổ rice = 40 từ b0-rice và main = 40 từ b0-main
+  data.demands[0].MealAllocation = {
+    id: "alloc-d0",
+    status: "ALLOCATED",
+    mealAllocationBatches: [
+      { cookingBatchId: "b0-rice", dishId: "rice", allocatedPortions: 40 },
+      { cookingBatchId: "b0-main", dishId: "main", allocatedPortions: 40 },
+    ],
+  };
+
+  const view = projectAllocationDay(data, date);
+
+  // FE chỉ chỉnh sửa lô b1-rice cho d1 (35 suất)
+  const changes = prepareChanges(data, view, {
+    revision: view.revision,
+    batches: [
+      {
+        cookingBatchId: "b1-rice",
+        dishId: "rice",
+        entries: [{ dailyMealPortionId: "d1", allocatedPortions: 35 }],
+      },
+    ],
+  });
+
+  // d0 giữ nguyên cả rice và main nên không cần ghi đè vào DB (changes không có d0)
+  const d0Change = changes.find((c) => c.demandId === "d0");
+  assert.equal(d0Change, undefined, "d0 không bị ghi đè khi không đổi");
+
+  // d1 có thay đổi mới
+  const d1Change = changes.find((c) => c.demandId === "d1");
+  assert.ok(d1Change, "d1 phải có thay đổi");
+  assert.equal(d1Change.rows.length, 1);
+  assert.equal(d1Change.rows[0].cookingBatchId, "b1-rice");
+  assert.equal(d1Change.rows[0].allocatedPortions, 35);
+
+  // Nếu FE chỉnh sửa d0 ở món rice (đổi thành 30), món main không gửi vẫn phải được bảo lưu 40
+  const changesWithD0 = prepareChanges(data, view, {
+    revision: view.revision,
+    batches: [
+      {
+        cookingBatchId: "b0-rice",
+        dishId: "rice",
+        entries: [{ dailyMealPortionId: "d0", allocatedPortions: 30 }],
+      },
+    ],
+  });
+
+  const modifiedD0 = changesWithD0.find((c) => c.demandId === "d0");
+  assert.ok(modifiedD0, "d0 phải có trong changes khi được chỉnh sửa");
+  assert.equal(modifiedD0.rows.length, 2, "d0 phải có đủ 2 món rice và main");
+  assert.ok(
+    modifiedD0.rows.some(
+      (r) =>
+        r.cookingBatchId === "b0-rice" &&
+        r.dishId === "rice" &&
+        r.allocatedPortions === 30,
+    ),
+  );
+  assert.ok(
+    modifiedD0.rows.some(
+      (r) =>
+        r.cookingBatchId === "b0-main" &&
+        r.dishId === "main" &&
+        r.allocatedPortions === 40,
+    ),
+    "món main không gửi vẫn được bảo lưu 40",
   );
 });
