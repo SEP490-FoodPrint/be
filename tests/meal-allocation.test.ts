@@ -7,12 +7,17 @@ import { validateAllocationApply } from "../src/modules/meal-allocation/meal-all
 const date = "2026-11-12";
 
 function fixture(): AllocationDay {
+  // Single-dish batches: mỗi lô chỉ chứa 1 món.
+  // Bữa trưa gồm 2 món (rice, main) và 2 mức suất (60, 40).
+  // => 4 lô: rice-60, main-60, rice-40, main-40.
+  const dishIds = ["rice", "main"];
+  const portions = [60, 40];
   return {
     menus: [
       {
         id: "menu",
         portionGroups: [],
-        menuDayDishes: ["rice", "main"].map((dishId) => ({
+        menuDayDishes: dishIds.map((dishId) => ({
           mealType: "LUNCH",
           dishId,
           Dish: { name: dishId },
@@ -29,27 +34,32 @@ function fixture(): AllocationDay {
       dailyAllergyPortions: [],
       MealAllocation: null,
     })),
-    batches: [60, 40].map((plannedPortions, index) => ({
-      id: `b${index}`,
-      batchCode: `b${index}`,
-      batchNumber: index + 1,
-      menuDayId: "menu",
-      mealType: "LUNCH",
-      status: "COMPLETED",
-      completedAt: new Date(date),
-      note: null,
-      plannedPortions,
-      dishes: ["rice", "main"].map((dishId) => ({
-        dishId,
+    batches: portions.flatMap((plannedPortions, pIdx) =>
+      dishIds.map((dishId, dIdx) => ({
+        id: `b${pIdx}-${dishId}`,
+        batchCode: `b${pIdx}-${dishId}`,
+        batchNumber: pIdx * dishIds.length + dIdx + 1,
+        menuDayId: "menu",
+        mealType: "LUNCH" as const,
+        status: "COMPLETED" as const,
+        completedAt: new Date(date),
+        note: null,
         plannedPortions,
-        retainedFoodSamples: [{ id: dishId }],
-        mealAllocationBatches: [],
+        dishes: [
+          {
+            dishId,
+            plannedPortions,
+            retainedFoodSamples: [{ id: `${dishId}-sample-${pIdx}` }],
+            mealAllocationBatches: [],
+          },
+        ],
       })),
-    })),
+    ),
   };
 }
 
 function gradeFixture(): AllocationDay {
+  // 2 khối, mỗi khối 1 thực đơn riêng, 1 món riêng, 1 lô riêng.
   const data = fixture();
   data.demands = data.demands.slice(0, 2);
   data.demands.forEach((demand, index) => {
@@ -73,13 +83,26 @@ function gradeFixture(): AllocationDay {
       },
     ],
   }));
-  data.batches.forEach((batch, index) => {
-    batch.menuDayId = `menu${index}`;
-    batch.plannedPortions = 50;
-    batch.dishes = [
-      { ...batch.dishes[0], dishId: `dish${index}`, plannedPortions: 50 },
-    ];
-  });
+  // Single-dish batch per grade
+  data.batches = [0, 1].map((index) => ({
+    id: `b${index}`,
+    batchCode: `b${index}`,
+    batchNumber: index + 1,
+    menuDayId: `menu${index}`,
+    mealType: "LUNCH" as const,
+    status: "COMPLETED" as const,
+    completedAt: new Date(date),
+    note: null,
+    plannedPortions: 50,
+    dishes: [
+      {
+        dishId: `dish${index}`,
+        plannedPortions: 50,
+        retainedFoodSamples: [{ id: `sample${index}` }],
+        mealAllocationBatches: [],
+      },
+    ],
+  }));
   return data;
 }
 
@@ -125,53 +148,75 @@ void test("lớp chưa gán khối và lịch sử phân bổ sai khối phải 
 void test("mở màn hình khi đủ suất, ưu tiên nấu trước lưu mẫu", () => {
   const data = fixture();
   assert.equal(projectAllocationDay(data, date).status, "READY");
-  data.batches[1].dishes[0].retainedFoodSamples = [];
+  // Bỏ mẫu lưu trên 1 lô (b1-main) → sampled giảm
+  const batchMainB1 = data.batches.find((b) => b.id === "b1-main")!;
+  batchMainB1.dishes[0].retainedFoodSamples = [];
   const pending = projectAllocationDay(data, date);
   assert.equal(pending.status, "SAMPLES_PENDING");
+  // rice sampled = 60+40=100, main sampled = 60+0=60 → min = 60
   assert.equal(pending.totals.sampled, 60);
   assert.equal(pending.missingSampleBatches, 1);
-  data.batches[0].status = "CONFIRMED";
+  // Chuyển 1 lô sang CONFIRMED → ưu tiên trạng thái nấu
+  const batchRiceB0 = data.batches.find((b) => b.id === "b0-rice")!;
+  batchRiceB0.status = "CONFIRMED";
   assert.equal(projectAllocationDay(data, date).action, "COOKING");
-  data.batches.pop();
+  // Xóa 1 lô → thiếu suất → COOKING_PENDING
+  data.batches = data.batches.filter((b) => b.id !== "b1-main");
   assert.equal(projectAllocationDay(data, date).status, "COOKING_PENDING");
 });
 
 void test("chỉ mở xác nhận khi cả ngày đủ suất và không cộng lặp các món", () => {
   const data = fixture();
-  const [lunch, afternoon] = data.batches;
-  lunch.plannedPortions = 75;
-  afternoon.plannedPortions = 25;
-  afternoon.mealType = "AFTERNOON";
+  // Chuyển một cặp lô (b1-rice, b1-main) thành bữa phụ
+  // LUNCH: b0-rice(60) + b0-main(60) → 2 lô, suất trưa = 60
+  // AFTERNOON: b1-rice(40) + b1-main(40) → 2 lô, suất phụ = 40
+  // Nhưng ta cần suất trưa = 75 để đủ cho d0(40)+d1(35)
   for (const batch of data.batches) {
-    for (const dish of batch.dishes)
-      dish.plannedPortions = batch.plannedPortions!;
+    if (batch.id.startsWith("b0-")) {
+      batch.plannedPortions = 75;
+      batch.dishes[0].plannedPortions = 75;
+    } else {
+      batch.mealType = "AFTERNOON";
+      batch.plannedPortions = 25;
+      batch.dishes[0].plannedPortions = 25;
+    }
   }
+  // Thêm các món bữa phụ vào thực đơn
   data.menus[0].menuDayDishes.push(
-    ...afternoon.dishes.map(({ dishId }) => ({
-      mealType: "AFTERNOON" as const,
+    ...["rice", "main"].map((dishId) => ({
       dishId,
+      mealType: "AFTERNOON" as const,
       Dish: { name: dishId },
     })),
   );
   data.demands[2].mealType = "AFTERNOON";
-  const allocate = (index: number, batch: typeof lunch) => {
-    const demand = data.demands[index];
+
+  // Phân bổ cho 1 lớp = phân bổ từ tất cả các lô đơn món liên quan
+  const allocate = (
+    demandIndex: number,
+    batchFilter: (b: (typeof data.batches)[number]) => boolean,
+  ) => {
+    const demand = data.demands[demandIndex];
+    const matchBatches = data.batches.filter(batchFilter);
     demand.MealAllocation = {
-      id: `allocation${index}`,
+      id: `allocation${demandIndex}`,
       status: "ALLOCATED",
-      mealAllocationBatches: batch.dishes.map(({ dishId }) => ({
+      mealAllocationBatches: matchBatches.map((batch) => ({
         cookingBatchId: batch.id,
-        dishId,
+        dishId: batch.dishes[0].dishId,
         allocatedPortions: demand.totalPortions,
       })),
     };
   };
-  allocate(0, lunch);
-  allocate(1, lunch);
+  const isLunch = (b: (typeof data.batches)[number]) => b.mealType === "LUNCH";
+  const isAfternoon = (b: (typeof data.batches)[number]) =>
+    b.mealType === "AFTERNOON";
+  allocate(0, isLunch);
+  allocate(1, isLunch);
   const pending = projectAllocationDay(data, date).distribution;
   assert.equal(pending.status, "PENDING");
   assert.equal(pending.meals[0].allocatedPortions, 75);
-  allocate(2, afternoon);
+  allocate(2, isAfternoon);
   assert.equal(projectAllocationDay(data, date).distribution.status, "READY");
   for (const demand of data.demands)
     demand.MealAllocation!.status = "DISTRIBUTED";
@@ -206,22 +251,30 @@ void test("không bù số suất giữa hai bữa và không đoán số suất
 
 void test("gộp dòng món thành suất, giữ khóa và chặn lịch sử thiếu món", () => {
   const data = fixture();
+  // Single-dish batches: phân bổ cho d0 từ cả b0-rice và b0-main
   const allocation: NonNullable<
     AllocationDay["demands"][number]["MealAllocation"]
   > = {
     id: "allocation",
     status: "DISTRIBUTED",
-    mealAllocationBatches: ["rice", "main"].map((dishId) => ({
-      cookingBatchId: "b0",
-      dishId,
-      allocatedPortions: 40,
-    })),
+    mealAllocationBatches: [
+      { cookingBatchId: "b0-rice", dishId: "rice", allocatedPortions: 40 },
+      { cookingBatchId: "b0-main", dishId: "main", allocatedPortions: 40 },
+    ],
   };
   data.demands[0].MealAllocation = allocation;
   const ready = projectAllocationDay(data, date);
-  assert.deepEqual(ready.batches[0].entries, [
+  // b0-rice là batches[0] → phải có entry từ d0
+  const riceEntries = ready.batches.find((b) => b.id === "b0-rice")!.entries;
+  assert.deepEqual(riceEntries, [
     { dailyMealPortionId: "d0", allocatedPortions: 40, locked: true },
   ]);
+  // b0-main cũng phải có entry từ d0
+  const mainEntries = ready.batches.find((b) => b.id === "b0-main")!.entries;
+  assert.deepEqual(mainEntries, [
+    { dailyMealPortionId: "d0", allocatedPortions: 40, locked: true },
+  ]);
+  // Xóa 1 món khỏi phân bổ → thiếu → RECONCILE
   allocation.mealAllocationBatches.pop();
   assert.equal(projectAllocationDay(data, date).status, "RECONCILE");
 });
