@@ -34,8 +34,8 @@ function allowedActions(
     !principal.permissions.includes("meal_complaint.respond")
   )
     return [];
-  if (row.status === "SUBMITTED") return ["START_REVIEW", "RESOLVE"];
-  if (row.status === "IN_REVIEW") return ["RESOLVE"];
+  if (row.Complaint.status === "SUBMITTED") return ["START_REVIEW", "RESOLVE"];
+  if (row.Complaint.status === "IN_REVIEW") return ["RESOLVE"];
   return [];
 }
 function toResponse(
@@ -43,17 +43,34 @@ function toResponse(
   principal: AuthPrincipal,
 ): ComplaintResponseDTO {
   const portion = row.DailyMealPortion;
+  const complaint = row.Complaint;
+  const currentResponse = complaint.currentResponseVersion;
+  const status: "SUBMITTED" | "IN_REVIEW" | "RESOLVED" =
+    complaint.status === "RESPONDED" || complaint.status === "CLOSED"
+      ? "RESOLVED"
+      : complaint.status === "IN_REVIEW"
+        ? "IN_REVIEW"
+        : "SUBMITTED";
+
   return {
     id: row.id,
     complaintType: row.complaintType,
-    description: row.description,
-    status: row.status,
-    submittedAt: row.submittedAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString(),
-    resolvedAt: row.resolvedAt?.toISOString() ?? null,
-    resolution: row.resolution,
-    submitter: row.submittedByUser,
-    handler: row.handledByUser,
+    description: complaint.description,
+    status,
+    submittedAt: complaint.createdAt.toISOString(),
+    updatedAt: complaint.updatedAt.toISOString(),
+    resolvedAt: currentResponse?.createdAt.toISOString() ?? null,
+    resolution: currentResponse?.content ?? null,
+    submitter: {
+      id: complaint.senderUser.id,
+      fullName: complaint.senderUser.fullName,
+    },
+    handler: currentResponse?.respondedByUser
+      ? {
+          id: currentResponse.respondedByUser.id,
+          fullName: currentResponse.respondedByUser.fullName,
+        }
+      : null,
     meal: {
       dailyMealPortionId: portion.id,
       allocationId: portion.MealAllocation?.id ?? null,
@@ -200,6 +217,8 @@ export function createFeedbackService(
             await repository.create(tx, {
               ...input,
               submittedByUserId: actor.id,
+              senderRoleCode: actor.role,
+              schoolId: actor.schoolId!,
             }),
             actor,
           );
@@ -226,19 +245,24 @@ export function createFeedbackService(
           if (!row)
             throw new HttpError(404, "Không tìm thấy khiếu nại trong trường");
           if (input.action === "START_REVIEW") {
-            if (row.status !== "SUBMITTED")
+            if (row.Complaint.status !== "SUBMITTED")
               throw new HttpError(409, "Chỉ khiếu nại mới gửi được tiếp nhận");
             return toResponse(
               await repository.updateStatus(tx, id, {
                 status: "IN_REVIEW",
                 handledByUserId: actor.id,
+                handledByRoleCode: actor.role,
+                fromStatus: "SUBMITTED",
               }),
               actor,
             );
           }
           if (!input.resolution)
             throw new HttpError(400, "Cần nhập kết quả xử lý");
-          if (row.status !== "SUBMITTED" && row.status !== "IN_REVIEW")
+          if (
+            row.Complaint.status !== "SUBMITTED" &&
+            row.Complaint.status !== "IN_REVIEW"
+          )
             throw new HttpError(
               409,
               "Trạng thái khiếu nại không cho phép phản hồi",
@@ -247,6 +271,8 @@ export function createFeedbackService(
             await repository.updateStatus(tx, id, {
               status: "RESOLVED",
               handledByUserId: actor.id,
+              handledByRoleCode: actor.role,
+              fromStatus: row.Complaint.status,
               resolution: input.resolution,
               resolvedAt: new Date(),
             }),

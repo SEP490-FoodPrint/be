@@ -107,6 +107,7 @@ model CommuneFoodSafetyUnit {
   users                       User[]                       @relation("users_commune_food_safety_unit_id__commune_food_safety_units")
   foodSafetyReportForwardings FoodSafetyReportForwarding[] @relation("food_safety_report_forwardings_recipient_commune_food_safety_unit_id__commune_food_safety_units")
   userPermissionDenials       UserPermissionDenial[]       @relation("user_permission_denials_commune_food_safety_unit_id__commune_food_safety_units")
+  complaintsAsSenderUnit      Complaint[]                  @relation("complaints_sender_commune_food_safety_unit_id__commune_food_safety_units")
 
   @@unique([code])
   @@map("commune_food_safety_units")
@@ -664,29 +665,19 @@ model IngredientLot {
   @@schema("foodprint")
 }
 
-/// Feedback about ingredient quality on delivery/lot. Separate from meal_complaints, which concerns served meals. Only the Delivery Supplier may respond.
+/// Feedback about ingredient quality on delivery/lot. Subtype of complaints (kind = INGREDIENT). Only the Delivery Supplier may respond.
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
 model IngredientQualityFeedback {
-  id                String                          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  complaintCode     String                          @unique(map: "ingredient_quality_feedback_complaint_code_key") @map("complaint_code") @db.VarChar(25)
-  deliveryId        String                          @map("delivery_id") @db.Uuid
-  ingredientLotId   String?                         @map("ingredient_lot_id") @db.Uuid
-  submittedByUserId String                          @map("submitted_by_user_id") @db.Uuid
-  title             String                          @db.VarChar(255)
-  description       String                          @db.Text
-  status            IngredientQualityFeedbackStatus @default(SUBMITTED)
-  supplierResponse  String?                         @map("supplier_response") @db.Text
-  respondedByUserId String?                         @map("responded_by_user_id") @db.Uuid
-  respondedAt       DateTime?                       @map("responded_at") @db.Timestamptz(6)
-  createdAt         DateTime                        @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt         DateTime                        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  Delivery          Delivery                        @relation("ingredient_quality_feedback_delivery_id__deliveries", fields: [deliveryId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  IngredientLot     IngredientLot?                  @relation("ingredient_quality_feedback_ingredient_lot_id__ingredient_lots", fields: [ingredientLotId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  submittedByUser   User                            @relation("ingredient_quality_feedback_submitted_by_user_id__users", fields: [submittedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  respondedByUser   User?                           @relation("ingredient_quality_feedback_responded_by_user_id__users", fields: [respondedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  id              String         @id @db.Uuid
+  kind            ComplaintKind  @default(INGREDIENT)
+  deliveryId      String         @map("delivery_id") @db.Uuid
+  ingredientLotId String?        @map("ingredient_lot_id") @db.Uuid
+  Complaint       Complaint      @relation(fields: [id, kind], references: [id, kind], onDelete: Restrict, onUpdate: NoAction)
+  Delivery        Delivery       @relation("ingredient_quality_feedback_delivery_id__deliveries", fields: [deliveryId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  IngredientLot   IngredientLot? @relation("ingredient_quality_feedback_ingredient_lot_id__ingredient_lots", fields: [ingredientLotId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
-  @@index([deliveryId, createdAt(sort: Desc)], map: "idx_ingredient_quality_feedback_delivery")
-  @@index([status, createdAt(sort: Desc)], map: "idx_ingredient_quality_feedback_status")
+  @@unique([id, kind], map: "uq_ingredient_quality_feedback_id_kind")
+  @@index([deliveryId], map: "idx_ingredient_quality_feedback_delivery")
   @@map("ingredient_quality_feedback")
   @@schema("foodprint")
 }
@@ -794,24 +785,112 @@ model MealAllocation {
   @@schema("foodprint")
 }
 
+/// Supertype table for unified complaints across all domains.
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model Complaint {
+  id                            String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  kind                          ComplaintKind
+  complaintCode                 String                     @unique(map: "uq_complaints_complaint_code") @map("complaint_code") @db.VarChar(25)
+  senderUserId                  String                     @map("sender_user_id") @db.Uuid
+  senderRoleCode                String                     @map("sender_role_code") @db.VarChar(60)
+  senderSchoolId                String?                    @map("sender_school_id") @db.Uuid
+  senderSupplierId              String?                    @map("sender_supplier_id") @db.Uuid
+  senderCommuneFoodSafetyUnitId String?                    @map("sender_commune_food_safety_unit_id") @db.Uuid
+  title                         String?                    @db.VarChar(255)
+  description                   String                     @db.Text
+  status                        ComplaintStatus            @default(SUBMITTED)
+  currentResponseVersionId      String?                    @map("current_response_version_id") @db.Uuid
+  createdAt                     DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                     DateTime                   @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  senderUser                    User                       @relation("complaints_sender_user_id__users", fields: [senderUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  senderRole                    Role                       @relation("complaints_sender_role_code__roles", fields: [senderRoleCode], references: [code], onDelete: Restrict, onUpdate: NoAction)
+  senderSchool                  School?                    @relation("complaints_sender_school_id__schools", fields: [senderSchoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  senderSupplier                Supplier?                  @relation("complaints_sender_supplier_id__suppliers", fields: [senderSupplierId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  senderCommuneFoodSafetyUnit   CommuneFoodSafetyUnit?     @relation("complaints_sender_commune_food_safety_unit_id__commune_food_safety_units", fields: [senderCommuneFoodSafetyUnitId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  currentResponseVersion        ComplaintResponseVersion?  @relation("complaints_current_response_version", fields: [currentResponseVersionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  responseVersions              ComplaintResponseVersion[] @relation("complaint_response_versions_complaint_id__complaints")
+  statusHistories               ComplaintStatusHistory[]   @relation("complaint_status_histories_complaint_id__complaints")
+
+  mealComplaint                 MealComplaint?
+  ingredientQualityFeedback     IngredientQualityFeedback?
+
+  @@unique([id, kind], map: "uq_complaints_id_kind")
+  @@index([kind, createdAt(sort: Desc), id], map: "idx_complaints_kind_created")
+  @@index([senderUserId, createdAt(sort: Desc)], map: "idx_complaints_sender_created")
+  @@index([status, createdAt(sort: Desc)], map: "idx_complaints_status_created")
+  @@map("complaints")
+  @@schema("foodprint")
+}
+
+/// Append-only official response versions for complaints.
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model ComplaintResponseVersion {
+  id                   String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  complaintId          String                     @map("complaint_id") @db.Uuid
+  version              Int
+  previousVersionId    String?                    @map("previous_version_id") @db.Uuid
+  content              String                     @db.Text
+  changeReason         String?                    @map("change_reason") @db.Text
+  respondedByUserId    String?                    @map("responded_by_user_id") @db.Uuid
+  respondedRoleCode    String?                    @map("responded_role_code") @db.VarChar(60)
+  createdAt            DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  Complaint            Complaint                  @relation("complaint_response_versions_complaint_id__complaints", fields: [complaintId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  previousVersion      ComplaintResponseVersion?  @relation("crv_history", fields: [previousVersionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  nextVersions         ComplaintResponseVersion[] @relation("crv_history")
+  respondedByUser      User?                      @relation("crv_responded_by_user_id__users", fields: [respondedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  respondedRole        Role?                      @relation("crv_responded_role_code__roles", fields: [respondedRoleCode], references: [code], onDelete: Restrict, onUpdate: NoAction)
+
+  currentForComplaints Complaint[]                @relation("complaints_current_response_version")
+  statusHistories      ComplaintStatusHistory[]   @relation("csh_version")
+
+  @@unique([complaintId, version], map: "uq_crv_complaint_version")
+  @@unique([complaintId, id], map: "uq_crv_complaint_id")
+  @@index([complaintId, version(sort: Desc)], map: "idx_crv_complaint")
+  @@map("complaint_response_versions")
+  @@schema("foodprint")
+}
+
+/// Status audit log for complaints.
+model ComplaintStatusHistory {
+  id                String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  complaintId       String                    @map("complaint_id") @db.Uuid
+  fromStatus        ComplaintStatus?          @map("from_status")
+  toStatus          ComplaintStatus           @map("to_status")
+  responseVersionId String?                   @map("response_version_id") @db.Uuid
+  actorUserId       String?                   @map("actor_user_id") @db.Uuid
+  actorRoleCode     String?                   @map("actor_role_code") @db.VarChar(60)
+  note              String?                   @db.Text
+  createdAt         DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  Complaint         Complaint                 @relation("complaint_status_histories_complaint_id__complaints", fields: [complaintId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  responseVersion   ComplaintResponseVersion? @relation("csh_version", fields: [responseVersionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  actorUser         User?                     @relation("csh_actor_user_id__users", fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  actorRole         Role?                     @relation("csh_actor_role_code__roles", fields: [actorRoleCode], references: [code], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([complaintId, createdAt(sort: Desc)], map: "idx_csh_complaint_created")
+  @@map("complaint_status_histories")
+  @@schema("foodprint")
+}
+
+/// Meal complaints concerning served meals. Subtype of complaints (kind = MEAL). Handled by School Management Board.
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
 model MealComplaint {
-  id                 String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  id                 String            @id @db.Uuid
+  kind               ComplaintKind     @default(MEAL)
   dailyMealPortionId String            @map("daily_meal_portion_id") @db.Uuid
-  submittedByUserId  String            @map("submitted_by_user_id") @db.Uuid
+  schoolId           String            @map("school_id") @db.Uuid
   complaintType      MealComplaintType @map("complaint_type")
-  description        String            @db.Text
-  status             ComplaintStatus   @default(SUBMITTED)
-  handledByUserId    String?           @map("handled_by_user_id") @db.Uuid
-  resolution         String?           @db.Text
-  submittedAt        DateTime          @default(now()) @map("submitted_at") @db.Timestamptz(6)
-  resolvedAt         DateTime?         @map("resolved_at") @db.Timestamptz(6)
-  updatedAt          DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  Complaint          Complaint         @relation(fields: [id, kind], references: [id, kind], onDelete: Restrict, onUpdate: NoAction)
   DailyMealPortion   DailyMealPortion  @relation(fields: [dailyMealPortionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  submittedByUser    User              @relation("meal_complaints_submitted_by_user_id__users", fields: [submittedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  handledByUser      User?             @relation("meal_complaints_handled_by_user_id__users", fields: [handledByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  School             School            @relation("meal_complaints_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
+  @@unique([id, kind], map: "uq_meal_complaints_id_kind")
   @@index([dailyMealPortionId], map: "idx_meal_complaints_daily_meal_portion")
+  @@index([schoolId], map: "idx_meal_complaints_school")
   @@map("meal_complaints")
   @@schema("foodprint")
 }
@@ -969,9 +1048,12 @@ model Role {
   type              RoleType
   description       String?            @db.Text
   createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
-  users             User[]             @relation("users_role_id__roles")
-  deliveryApprovals DeliveryApproval[] @relation("delivery_approvals_role_id__roles")
-  rolePermissions   RolePermission[]   @relation("role_permissions_role_id__roles")
+  users                                    User[]                     @relation("users_role_id__roles")
+  deliveryApprovals                        DeliveryApproval[]         @relation("delivery_approvals_role_id__roles")
+  rolePermissions                          RolePermission[]           @relation("role_permissions_role_id__roles")
+  complaintsAsSenderRole                   Complaint[]                @relation("complaints_sender_role_code__roles")
+  complaintResponseVersionsAsRespondedRole ComplaintResponseVersion[] @relation("crv_responded_role_code__roles")
+  complaintStatusHistoriesAsActorRole      ComplaintStatusHistory[]   @relation("csh_actor_role_code__roles")
 
   @@unique([code])
   @@unique([id, code], map: "uq_roles_id_code")
@@ -1081,6 +1163,8 @@ model School {
   incidentSchoolAlerts        IncidentSchoolAlert[]        @relation("incident_school_alerts_target_school_id__schools")
   userPermissionDenials       UserPermissionDenial[]       @relation("user_permission_denials_school_id__schools")
   sampleStorageUnits          SampleStorageUnit[]          @relation("sample_storage_units_school_id__schools")
+  complaintsAsSenderSchool    Complaint[]                  @relation("complaints_sender_school_id__schools")
+  mealComplaints              MealComplaint[]              @relation("meal_complaints_school_id__schools")
 
   blockchainProofs BlockchainProof[] @relation("blockchain_proofs_school_id__schools")
 
@@ -1206,6 +1290,7 @@ model Supplier {
   supplyRequests              SupplyRequest[]              @relation("supply_requests_supplier_id__suppliers")
   deliveries                  Delivery[]                   @relation("deliveries_supplier_id__suppliers")
   userPermissionDenials       UserPermissionDenial[]       @relation("user_permission_denials_supplier_id__suppliers")
+  complaintsAsSenderSupplier  Complaint[]                  @relation("complaints_sender_supplier_id__suppliers")
 
   @@unique([taxCode])
   @@map("suppliers")
@@ -1318,11 +1403,10 @@ model User {
   retainedFoodSamples                          RetainedFoodSample[]         @relation("retained_food_samples_recorded_by_user_id__users")
   mealAllocationsAsCreatedByUser               MealAllocation[]             @relation("meal_allocations_created_by_user_id__users")
   mealAllocationsAsDistributedByUser           MealAllocation[]             @relation("meal_allocations_distributed_by_user_id__users")
-  mealComplaintsAsSubmittedByUser              MealComplaint[]              @relation("meal_complaints_submitted_by_user_id__users")
-  mealComplaintsAsHandledByUser                MealComplaint[]              @relation("meal_complaints_handled_by_user_id__users")
+  complaintsAsSenderUser                       Complaint[]                  @relation("complaints_sender_user_id__users")
+  complaintResponseVersionsAsRespondedUser     ComplaintResponseVersion[]   @relation("crv_responded_by_user_id__users")
+  complaintStatusHistoriesAsActorUser          ComplaintStatusHistory[]     @relation("csh_actor_user_id__users")
   foodSafetyIncidents                          FoodSafetyIncident[]         @relation("food_safety_incidents_reported_by_user_id__users")
-  ingredientQualityFeedbackAsSubmittedByUser   IngredientQualityFeedback[]  @relation("ingredient_quality_feedback_submitted_by_user_id__users")
-  ingredientQualityFeedbackAsRespondedByUser   IngredientQualityFeedback[]  @relation("ingredient_quality_feedback_responded_by_user_id__users")
   foodSafetyReportForwardings                  FoodSafetyReportForwarding[] @relation("food_safety_report_forwardings_forwarded_by_user_id__users")
   foodAnalysisResults                          FoodAnalysisResult[]         @relation("food_analysis_results_recorded_by_user_id__users")
   incidentSchoolAlerts                         IncidentSchoolAlert[]        @relation("incident_school_alerts_sent_by_user_id__users")
@@ -1570,9 +1654,20 @@ enum BlockchainVerificationStatus {
 }
 
 /// Blockchain proof versions (BLOCKCHAIN_GLOBAL.md 3.1). CHECK constraints live in migration 20261118000100.
+enum ComplaintKind {
+  MEAL
+  INGREDIENT
+  AUTHORITY
+  SYSTEM
+
+  @@map("complaint_kind")
+  @@schema("foodprint")
+}
+
 enum ComplaintStatus {
   SUBMITTED
   IN_REVIEW
+  RESPONDED
   RESOLVED
   CLOSED
 

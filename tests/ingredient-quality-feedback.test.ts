@@ -10,6 +10,7 @@ import { createApiRateLimiter } from "../src/middlewares/rate-limit.middleware";
 import { globalErrorHandler } from "../src/middlewares/error.middleware";
 import {
   createIngredientQualityFeedbackRepository,
+  type FeedbackDetailRow,
   type IngredientQualityFeedbackRepository,
   type SupplierFeedbackListRow,
 } from "../src/modules/ingredient-quality-feedback/ingredient-quality-feedback.repository";
@@ -403,25 +404,29 @@ void test("T018 baseline legacy SCHOOL and SYSTEM list keeps 10 fields, explicit
           id: feedbackId1,
           deliveryId: deliveryId1,
           ingredientLotId: lotId1,
-          submittedByUserId: schoolUserX.id,
-          title: "Cải bó xôi bị dập",
-          description: "Một số thùng có lá úa",
-          status: "RESPONDED",
-          respondedAt: responded,
-          createdAt: created,
-          updatedAt: updated,
+          Complaint: {
+            senderUserId: schoolUserX.id,
+            title: "Cải bó xôi bị dập",
+            description: "Một số thùng có lá úa",
+            status: "RESPONDED" as const,
+            createdAt: created,
+            updatedAt: updated,
+            currentResponseVersion: { createdAt: responded },
+          },
         },
         {
           id: "66666666-6666-4666-8666-666666666662",
           deliveryId: deliveryId1,
           ingredientLotId: null,
-          submittedByUserId: schoolUserX.id,
-          title: "Thiếu chứng từ",
-          description: "Bổ sung hóa đơn",
-          status: "SUBMITTED",
-          respondedAt: null,
-          createdAt: created,
-          updatedAt: updated,
+          Complaint: {
+            senderUserId: schoolUserX.id,
+            title: "Thiếu chứng từ",
+            description: "Bổ sung hóa đơn",
+            status: "SUBMITTED" as const,
+            createdAt: created,
+            updatedAt: updated,
+            currentResponseVersion: null,
+          },
         },
       ]);
     },
@@ -526,41 +531,47 @@ void test("T019 US1 supplier GET list returns exact allowlist with UUID + stored
   const sampleRows: SupplierFeedbackListRow[] = [
     {
       id: feedbackId1,
-      complaintCode: "FP-CP-00012",
-      title: "Rau cải bị úa",
-      status: "RESPONDED",
-      createdAt: created1,
-      respondedAt: responded1,
       Delivery: {
         id: deliveryId1,
         deliveryNo: "FP-DE-00001",
         School: { id: schoolIdX, name: "Trường X", code: "SCH-DUP" },
       },
+      Complaint: {
+        complaintCode: "FP-CP-00012",
+        title: "Rau cải bị úa",
+        status: "RESPONDED" as const,
+        createdAt: created1,
+        currentResponseVersion: { createdAt: responded1 },
+      },
     },
     {
       id: "66666666-6666-4666-8666-666666666662",
-      complaintCode: "FP-CP-100001",
-      title: "Thiếu chứng từ lô gạo",
-      status: "SUBMITTED",
-      createdAt: created2,
-      respondedAt: null,
       Delivery: {
         id: "55555555-5555-4555-8555-555555555552",
         deliveryNo: "FP-DE-00002",
         School: { id: schoolIdY, name: "Trường Y", code: null },
       },
+      Complaint: {
+        complaintCode: "FP-CP-100001",
+        title: "Thiếu chứng từ lô gạo",
+        status: "SUBMITTED" as const,
+        createdAt: created2,
+        currentResponseVersion: null,
+      },
     },
     {
       id: "66666666-6666-4666-8666-666666666663",
-      complaintCode: "FP-CP-00003",
-      title: "Trang sau",
-      status: "SUBMITTED",
-      createdAt: created2,
-      respondedAt: null,
       Delivery: {
         id: deliveryId1,
         deliveryNo: "FP-DE-00001",
         School: { id: schoolIdX, name: "Trường X", code: "SCH-DUP" },
+      },
+      Complaint: {
+        complaintCode: "FP-CP-00003",
+        title: "Trang sau",
+        status: "SUBMITTED" as const,
+        createdAt: created2,
+        currentResponseVersion: null,
       },
     },
   ];
@@ -742,36 +753,41 @@ void test("T025 US2 GET detail returns exact FeedbackDetail in one RepeatableRea
   let allocatorCalls = 0;
 
   // 1. RESPONDED complaint with verified lot in delivery + SUBMITTED complaint with null lot
-  const baseRespondedRow = {
+  const baseRespondedRow: FeedbackDetailRow = {
     id: feedbackId1,
-    complaintCode: "FP-CP-00042",
     deliveryId: deliveryId1,
     ingredientLotId: lotId1,
-    title: "Cà rốt bị dập",
-    description: "Thùng số 2 bị dập phần đầu",
-    status: "RESPONDED" as const,
-    supplierResponse: "Nhà cung cấp sẽ bù lô mới trong ngày mai.",
-    respondedAt: responded,
-    createdAt: created,
-    updatedAt: updated,
     Delivery: {
       id: deliveryId1,
       deliveryNo: "FP-DE-00001",
       School: { id: schoolIdX, name: "Trường X", code: null },
     },
-    submittedByUser: { id: schoolUserX.id, fullName: "Nhân viên trường X" },
-    respondedByUser: { id: supplierStaffA.id, fullName: "Nhân viên NCC A" },
+    Complaint: {
+      complaintCode: "FP-CP-00042",
+      title: "Cà rốt bị dập",
+      description: "Thùng số 2 bị dập phần đầu",
+      status: "RESPONDED" as const,
+      createdAt: created,
+      updatedAt: updated,
+      senderUser: { id: schoolUserX.id, fullName: "Nhân viên trường X" },
+      currentResponseVersion: {
+        content: "Nhà cung cấp sẽ bù lô mới trong ngày mai.",
+        createdAt: responded,
+        respondedByUser: { id: supplierStaffA.id, fullName: "Nhân viên NCC A" },
+      },
+    },
   };
-  const submittedNullLotRow = {
+  const submittedNullLotRow: FeedbackDetailRow = {
     ...baseRespondedRow,
     id: "66666666-6666-4666-8666-666666666662",
-    complaintCode: "FP-CP-100005",
     ingredientLotId: null,
-    status: "SUBMITTED" as const,
-    supplierResponse: null,
-    respondedAt: null,
-    respondedByUser: null,
-    updatedAt: created,
+    Complaint: {
+      ...baseRespondedRow.Complaint,
+      complaintCode: "FP-CP-100005",
+      status: "SUBMITTED" as const,
+      updatedAt: created,
+      currentResponseVersion: null,
+    },
   };
 
   let lotQueries = 0;
@@ -801,7 +817,7 @@ void test("T025 US2 GET detail returns exact FeedbackDetail in one RepeatableRea
         ) {
           if (
             scope.submittedByUserId &&
-            scope.submittedByUserId !== baseRespondedRow.submittedByUser.id
+            scope.submittedByUserId !== baseRespondedRow.Complaint.senderUser.id
           ) {
             return Promise.resolve(null);
           }
@@ -883,7 +899,7 @@ void test("T025 US2 GET detail returns exact FeedbackDetail in one RepeatableRea
   assert.equal(
     (resSchool.body as { data: { supplierResponse: string } }).data
       .supplierResponse,
-    baseRespondedRow.supplierResponse,
+    baseRespondedRow.Complaint.currentResponseVersion?.content,
   );
   const apiSchoolOwnOther = await startIngredientQualityFeedbackApi(
     context,
@@ -1008,25 +1024,25 @@ void test("T031 US3 supplier POST response enforces AND permissions, Serializabl
   const validText = "Chúng tôi đã tiếp nhận và sẽ đổi lô trong sáng mai.";
   let allocatorCalls = 0;
 
-  const baseSubmittedDetail = {
+  const baseSubmittedDetail: FeedbackDetailRow = {
     id: feedbackId1,
-    complaintCode: "FP-CP-00088",
     deliveryId: deliveryId1,
     ingredientLotId: lotId1,
-    title: "Cải bị dập",
-    description: "Một thùng bị dập",
-    status: "SUBMITTED" as const,
-    supplierResponse: null,
-    respondedAt: null,
-    createdAt: created,
-    updatedAt: created,
     Delivery: {
       id: deliveryId1,
       deliveryNo: "FP-DE-00010",
       School: { id: schoolIdX, name: "Trường X", code: "SCH-X" },
     },
-    submittedByUser: { id: schoolUserX.id, fullName: "Trường X" },
-    respondedByUser: null,
+    Complaint: {
+      complaintCode: "FP-CP-00088",
+      title: "Cải bị dập",
+      description: "Một thùng bị dập",
+      status: "SUBMITTED" as const,
+      createdAt: created,
+      updatedAt: created,
+      senderUser: { id: schoolUserX.id, fullName: "Trường X" },
+      currentResponseVersion: null,
+    },
   };
 
   // 1. Happy path for ADMIN and STAFF + shared tx + server-owned actor/time/status + zero allocator calls
@@ -1112,11 +1128,16 @@ void test("T031 US3 supplier POST response enforces AND permissions, Serializabl
         callOrder.push("findDetail");
         return Promise.resolve({
           ...baseSubmittedDetail,
-          status: "RESPONDED",
-          supplierResponse: String(savedInput?.supplierResponse),
-          respondedAt,
-          updatedAt: updated,
-          respondedByUser: { id: actor.id, fullName: actor.fullName },
+          Complaint: {
+            ...baseSubmittedDetail.Complaint,
+            status: "RESPONDED" as const,
+            updatedAt: updated,
+            currentResponseVersion: {
+              content: String(savedInput?.supplierResponse),
+              createdAt: respondedAt,
+              respondedByUser: { id: actor.id, fullName: actor.fullName },
+            },
+          },
         });
       },
       findLotInDelivery: async (tx) => {
@@ -1399,12 +1420,18 @@ void test("T031 US3 supplier POST response enforces AND permissions, Serializabl
         findDetail: async () =>
           Promise.resolve({
             ...baseSubmittedDetail,
-            status: "RESPONDED",
-            supplierResponse: validText,
-            respondedAt,
-            respondedByUser: {
-              id: supplierAdminA.id,
-              fullName: supplierAdminA.fullName,
+            Complaint: {
+              ...baseSubmittedDetail.Complaint,
+              status: "RESPONDED" as const,
+              updatedAt: respondedAt,
+              currentResponseVersion: {
+                content: validText,
+                createdAt: respondedAt,
+                respondedByUser: {
+                  id: supplierAdminA.id,
+                  fullName: supplierAdminA.fullName,
+                },
+              },
             },
           }),
         findLotInDelivery: async () => Promise.resolve(null),
@@ -1512,12 +1539,18 @@ void test("T031 US3 supplier POST response enforces AND permissions, Serializabl
           Promise.resolve({
             ...baseSubmittedDetail,
             ingredientLotId: null,
-            status: "RESPONDED",
-            supplierResponse: validText,
-            respondedAt,
-            respondedByUser: {
-              id: supplierAdminA.id,
-              fullName: supplierAdminA.fullName,
+            Complaint: {
+              ...baseSubmittedDetail.Complaint,
+              status: "RESPONDED" as const,
+              updatedAt: respondedAt,
+              currentResponseVersion: {
+                content: validText,
+                createdAt: respondedAt,
+                respondedByUser: {
+                  id: supplierAdminA.id,
+                  fullName: supplierAdminA.fullName,
+                },
+              },
             },
           }),
       },

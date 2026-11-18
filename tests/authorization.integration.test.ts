@@ -10363,15 +10363,26 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       const mkFeedback = async (title: string) =>
         db.$transaction(async (tx) => {
           const seq = await iqfRepo.nextComplaintCodeSequence(tx);
-          return tx.ingredientQualityFeedback.create({
+          const complaintCode = formatComplaintCode(seq);
+          const complaint = await tx.complaint.create({
             data: {
-              complaintCode: formatComplaintCode(seq),
-              deliveryId: del1.id,
-              submittedByUserId: raceSubmitter.id,
+              complaintCode,
+              kind: "INGREDIENT",
               title,
               description: `${title} description`,
+              senderUserId: raceSubmitter.id,
+              senderRoleCode: "SCHOOL_KITCHEN_STAFF",
+              status: "SUBMITTED",
             },
           });
+          const feedback = await tx.ingredientQualityFeedback.create({
+            data: {
+              id: complaint.id,
+              kind: "INGREDIENT",
+              deliveryId: del1.id,
+            },
+          });
+          return { ...feedback, complaintCode };
         });
 
       const principalAdmin = await loadPrincipal(raceAdmin.id, db);
@@ -10441,12 +10452,13 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             ),
           (err: unknown) => err instanceof HttpError && err.statusCode === 409,
         );
-        const saved = await db.ingredientQualityFeedback.findUniqueOrThrow({
+        const saved = await db.complaint.findUniqueOrThrow({
           where: { id: fRace.id },
+          include: { currentResponseVersion: true },
         });
         assert.equal(saved.status, "RESPONDED");
-        assert.equal(saved.supplierResponse, winner.supplierResponse);
-        assert.equal(saved.respondedByUserId, winner.respondedBy?.id);
+        assert.equal(saved.currentResponseVersion?.content, winner.supplierResponse);
+        assert.equal(saved.currentResponseVersion?.respondedByUserId, winner.respondedBy?.id);
         assert.equal(saved.complaintCode, fRace.complaintCode);
       }
 
@@ -10512,11 +10524,12 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             txRuns >= 2,
             `${label} should retry stale snapshot instead of failing 503`,
           );
-          const row = await db.ingredientQualityFeedback.findUniqueOrThrow({
+          const row = await db.complaint.findUniqueOrThrow({
             where: { id: feedbackId },
+            include: { currentResponseVersion: true },
           });
           assert.equal(row.status, "SUBMITTED");
-          assert.equal(row.supplierResponse, null);
+          assert.equal(row.currentResponseVersion, null);
         } finally {
           await restoreAction();
         }
@@ -10849,15 +10862,26 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         const mkFb = async (title: string) =>
           db.$transaction(async (tx) => {
             const seq = await iqfRepo.nextComplaintCodeSequence(tx);
-            return tx.ingredientQualityFeedback.create({
+            const complaintCode = formatComplaintCode(seq);
+            const complaint = await tx.complaint.create({
               data: {
-                complaintCode: formatComplaintCode(seq),
-                deliveryId: del1.id,
-                submittedByUserId: schoolSubmitter.id,
+                complaintCode,
+                kind: "INGREDIENT",
                 title,
                 description: "Dynamic auth test",
+                senderUserId: schoolSubmitter.id,
+                senderRoleCode: "SCHOOL_KITCHEN_STAFF",
+                status: "SUBMITTED",
               },
             });
+            const feedback = await tx.ingredientQualityFeedback.create({
+              data: {
+                id: complaint.id,
+                kind: "INGREDIENT",
+                deliveryId: del1.id,
+              },
+            });
+            return { ...feedback, complaintCode };
           });
         const fb1 = await mkFb("Dynamic feedback 1");
 

@@ -1,4 +1,3 @@
-import { ORG_TYPES } from "../../constants/roles";
 import type { AuthPrincipal } from "../../types/auth";
 import {
   authorizationTransaction,
@@ -64,27 +63,31 @@ function toNullableIsoTimestamp(value: Date | null): string | null {
 }
 
 function mapLegacyFeedbackItem(row: LegacyFeedbackRow): LegacyFeedbackListItem {
+  const complaint = row.Complaint;
+  const currentResponse = complaint.currentResponseVersion;
   return {
     id: row.id,
     deliveryId: row.deliveryId,
     ingredientLotId: row.ingredientLotId ?? null,
-    submittedByUserId: row.submittedByUserId,
-    title: row.title,
-    description: row.description,
-    status: toFeedbackStatus(row.status),
-    respondedAt: toNullableIsoTimestamp(row.respondedAt),
-    createdAt: toIsoTimestamp(row.createdAt),
-    updatedAt: toIsoTimestamp(row.updatedAt),
+    submittedByUserId: complaint.senderUserId,
+    title: complaint.title ?? "",
+    description: complaint.description,
+    status: toFeedbackStatus(complaint.status),
+    respondedAt: toNullableIsoTimestamp(currentResponse?.createdAt ?? null),
+    createdAt: toIsoTimestamp(complaint.createdAt),
+    updatedAt: toIsoTimestamp(complaint.updatedAt),
   };
 }
 
 function mapSupplierListItem(
   row: SupplierFeedbackListRow,
 ): SupplierFeedbackListItem {
+  const complaint = row.Complaint;
+  const currentResponse = complaint.currentResponseVersion;
   return {
     id: row.id,
-    complaintCode: assertStoredComplaintCode(row.complaintCode),
-    title: row.title,
+    complaintCode: assertStoredComplaintCode(complaint.complaintCode),
+    title: complaint.title ?? "",
     school: {
       id: row.Delivery.School.id,
       name: row.Delivery.School.name,
@@ -94,9 +97,9 @@ function mapSupplierListItem(
       id: row.Delivery.id,
       deliveryNo: row.Delivery.deliveryNo,
     },
-    status: toFeedbackStatus(row.status),
-    createdAt: toIsoTimestamp(row.createdAt),
-    respondedAt: toNullableIsoTimestamp(row.respondedAt),
+    status: toFeedbackStatus(complaint.status),
+    createdAt: toIsoTimestamp(complaint.createdAt),
+    respondedAt: toNullableIsoTimestamp(currentResponse?.createdAt ?? null),
   };
 }
 
@@ -104,21 +107,19 @@ function mapFeedbackDetail(
   row: FeedbackDetailRow,
   lot: FeedbackLotRow | null,
 ): FeedbackDetail {
-  const status = toFeedbackStatus(row.status);
-  const complaintCode = assertStoredComplaintCode(row.complaintCode);
-  if (
-    status === "SUBMITTED" &&
-    (row.supplierResponse !== null ||
-      row.respondedByUser !== null ||
-      row.respondedAt !== null)
-  ) {
+  const complaint = row.Complaint;
+  const currentResponse = complaint.currentResponseVersion;
+  const status = toFeedbackStatus(complaint.status);
+  const complaintCode = assertStoredComplaintCode(complaint.complaintCode);
+  if (status === "SUBMITTED" && currentResponse !== null) {
     throw new HttpError(503, CORRUPT_DATA_MESSAGE);
   }
   if (
     status === "RESPONDED" &&
-    (row.supplierResponse === null ||
-      row.respondedByUser === null ||
-      row.respondedAt === null)
+    (currentResponse === null ||
+      currentResponse.content === null ||
+      currentResponse.respondedByUser === null ||
+      currentResponse.createdAt === null)
   ) {
     throw new HttpError(503, CORRUPT_DATA_MESSAGE);
   }
@@ -128,7 +129,7 @@ function mapFeedbackDetail(
   return {
     id: row.id,
     complaintCode,
-    title: row.title,
+    title: complaint.title ?? "",
     school: {
       id: row.Delivery.School.id,
       name: row.Delivery.School.name,
@@ -139,24 +140,27 @@ function mapFeedbackDetail(
       deliveryNo: row.Delivery.deliveryNo,
     },
     status,
-    createdAt: toIsoTimestamp(row.createdAt),
+    createdAt: toIsoTimestamp(complaint.createdAt),
     respondedAt:
-      status === "RESPONDED" && row.respondedAt
-        ? toIsoTimestamp(row.respondedAt)
+      status === "RESPONDED" && currentResponse?.createdAt
+        ? toIsoTimestamp(currentResponse.createdAt)
         : null,
-    description: row.description,
-    updatedAt: toIsoTimestamp(row.updatedAt),
+    description: complaint.description,
+    updatedAt: toIsoTimestamp(complaint.updatedAt),
     submittedBy: {
-      id: row.submittedByUser.id,
-      fullName: row.submittedByUser.fullName,
+      id: complaint.senderUser.id,
+      fullName: complaint.senderUser.fullName,
     },
     ingredientLot: lot ? { id: lot.id, lotCode: lot.lotCode } : null,
-    supplierResponse: status === "RESPONDED" ? row.supplierResponse : null,
+    supplierResponse:
+      status === "RESPONDED" && currentResponse
+        ? currentResponse.content
+        : null,
     respondedBy:
-      status === "RESPONDED" && row.respondedByUser
+      status === "RESPONDED" && currentResponse?.respondedByUser
         ? {
-            id: row.respondedByUser.id,
-            fullName: row.respondedByUser.fullName,
+            id: currentResponse.respondedByUser.id,
+            fullName: currentResponse.respondedByUser.fullName,
           }
         : null,
   };
@@ -170,14 +174,11 @@ function assertActorMatchesOriginal(
   const currentScope = ingredientQualityFeedbackResponseScope(current);
   if (
     current.id !== original.id ||
-    current.roleId !== original.roleId ||
     current.role !== original.role ||
-    current.orgType !== ORG_TYPES.SUPPLIER ||
-    currentScope.supplierId !== originalScope.supplierId ||
-    current.schoolId !== null ||
-    current.communeFoodSafetyUnitId !== null
+    current.orgType !== original.orgType ||
+    currentScope.supplierId !== originalScope.supplierId
   ) {
-    throw new HttpError(403, SCOPE_CHANGED_MESSAGE);
+    throw new HttpError(409, SCOPE_CHANGED_MESSAGE);
   }
 }
 
@@ -296,6 +297,7 @@ export function createIngredientQualityFeedbackService(
           supplierId: originalScope.supplierId,
           supplierResponse: body.supplierResponse,
           respondedByUserId: currentActor.id,
+          respondedRoleCode: currentActor.role,
           respondedAt: new Date(),
         });
         if (updatedCount === 0) {
