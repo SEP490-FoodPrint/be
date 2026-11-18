@@ -38,6 +38,8 @@ function mapSample(row: SampleRow): RetainedSampleResponseDTO {
     quantity: row.quantity?.toString() ?? null,
     unit: row.unit,
     storageLocation: row.storageLocation,
+    storageUnitId: row.storageUnitId,
+    storageUnitName: row.storageUnit?.name ?? null,
     photoUrl: recordPhotoUrl(row.photoPublicId),
     status: row.status,
     disposedAt: row.disposedAt?.toISOString() ?? null,
@@ -106,6 +108,16 @@ export function createRetainedSampleService(
             (batch.dishes.length === 1 ? batch.dishes[0].dishId : undefined);
           if (!dishId || !batch.dishes.some((d) => d.dishId === dishId))
             throw new HttpError(400, "Cần chọn đúng món trong mẻ để lưu mẫu");
+          const unit = await repository.lockStorageUnit(
+            tx,
+            input.storageUnitId,
+            schoolId,
+          );
+          if (!unit)
+            throw new HttpError(404, "Không tìm thấy tủ lưu mẫu của trường");
+          const storageLocation = input.storageLocation
+            ? `${unit.name} – ${input.storageLocation}`
+            : unit.name;
           const existing = await repository.findForBatch(
             tx,
             cookingBatchId,
@@ -116,7 +128,8 @@ export function createRetainedSampleService(
               existing.quantity?.toString() !==
                 String(Number(input.quantity)) ||
               existing.unit !== input.unit ||
-              existing.storageLocation !== input.storageLocation ||
+              existing.storageUnitId !== unit.id ||
+              existing.storageLocation !== storageLocation ||
               +existing.sampledAt !== +input.sampledAt ||
               (existing.photoHash ?? null) !== (photo?.photoHash ?? null)
             ) {
@@ -135,9 +148,27 @@ export function createRetainedSampleService(
               422,
               "Thời điểm lấy mẫu phải từ lúc hoàn thành mẻ đến hiện tại",
             );
+          if (unit.status !== "ACTIVE")
+            throw new HttpError(
+              409,
+              unit.status === "MAINTENANCE"
+                ? `Tủ ${unit.name} đang bảo trì, hãy chọn tủ khác`
+                : `Tủ ${unit.name} đã ngưng sử dụng, hãy chọn tủ khác`,
+            );
+          // Cùng công thức với màn tủ lưu mẫu: max(số đã khai báo, số mẫu đang lưu).
+          const stored = Math.max(
+            unit.currentUsage,
+            await repository.countStoredInUnit(tx, unit.id),
+          );
+          if (stored >= unit.capacity)
+            throw new HttpError(
+              409,
+              `Tủ ${unit.name} đã đầy (${stored}/${unit.capacity} mẫu), hãy chọn tủ khác`,
+            );
           const sample = await repository.create(tx, cookingBatchId, actor.id, {
             ...input,
             ...photo,
+            storageLocation,
             dishId,
           });
           proof = await proofs.prepareSampleStored(tx, sample.id, actor.id);

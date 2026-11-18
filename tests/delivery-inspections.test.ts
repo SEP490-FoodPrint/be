@@ -867,6 +867,8 @@ void test("standalone deliveries list, inspect, attach IngredientEntry on final 
             ],
           }),
       },
+      // Trường chưa có danh mục cho nguyên liệu này: báo sớm ở chi tiết.
+      ingredientEntry: { findMany: () => Promise.resolve([]) },
     } as never),
   );
 
@@ -888,6 +890,11 @@ void test("standalone deliveries list, inspect, attach IngredientEntry on final 
   assert.ok(detailResult.deliveryItems);
   assert.equal(detailResult.deliveryItems[0].id, deliveryItemId);
   assert.equal(detailResult.deliveryItems[0].ingredientName, "Thịt gà");
+  if (["ARRIVED", "PENDING_APPROVAL"].includes(detailResult.status))
+    assert.equal(
+      detailResult.receiptIssue,
+      "Chưa cấu hình danh mục nguyên liệu đang hoạt động của trường để tiếp nhận lô",
+    );
 
   const setupStandaloneHarness = (activeEntry: boolean) => {
     const ref = decisionFixture();
@@ -1155,24 +1162,18 @@ void test("standalone deliveries list, inspect, attach IngredientEntry on final 
     };
   };
 
+  // Thiếu danh mục nguyên liệu: chặn ngay chữ ký "Đạt" đầu tiên, không đợi bộ phận thứ 4.
   const missingEntry = setupStandaloneHarness(false);
-  for (const actor of missingEntry.actors.slice(0, 3)) {
-    const step = await missingEntry.service.decide(
-      deliveryId,
-      approve(),
-      actor,
+  for (const actor of missingEntry.actors) {
+    await assert.rejects(
+      () => missingEntry.service.decide(deliveryId, approve(), actor),
+      {
+        statusCode: 409,
+        message:
+          "Chưa cấu hình danh mục nguyên liệu đang hoạt động của trường để tiếp nhận lô",
+      },
     );
-    assert.equal(step.status, "PENDING_APPROVAL");
   }
-  await assert.rejects(
-    () =>
-      missingEntry.service.decide(
-        deliveryId,
-        approve(),
-        missingEntry.actors[3],
-      ),
-    { statusCode: 409 },
-  );
   assert.equal(missingEntry.getState().receipts.length, 0);
 
   const activeEntryHarness = setupStandaloneHarness(true);
@@ -2959,17 +2960,37 @@ void test("v2 grouped/identity/unit/budget violations rollback cleanly while leg
     }
 
     sub.state.deliveries.push(delivery);
-    await sub.service.arrive(delivery.id, {}, {}, sub.actors[0]);
+    const arrived = await sub.service.arrive(
+      delivery.id,
+      {},
+      {},
+      sub.actors[0],
+    );
+    if (scenario !== "final-write-error-rollback") {
+      // Lỗi dữ liệu được báo ngay khi xe đến và chặn từ chữ ký "Đạt" đầu tiên.
+      assert.ok(arrived.receiptIssue, scenario);
+      await assert.rejects(
+        () => sub.service.decide(delivery.id, approve(), sub.actors[0]),
+        { statusCode: 409, message: arrived.receiptIssue },
+      );
+      const blocked = sub.state.deliveries.find((d) => d.id === delivery.id)!;
+      assert.equal(
+        sub.state.decisions.filter((d) => d.deliveryId === delivery.id).length,
+        0,
+      );
+      assert.equal(blocked.status, "ARRIVED");
+      assert.equal(sub.state.receipts.length, 0);
+      continue;
+    }
+    assert.equal(arrived.receiptIssue, null);
     for (const actor of sub.actors.slice(0, 3)) {
       await sub.service.decide(delivery.id, approve(), actor);
     }
-    if (scenario === "final-write-error-rollback") {
-      sub.state.failReceipt = true;
-    }
+    sub.state.failReceipt = true;
 
     await assert.rejects(
       () => sub.service.decide(delivery.id, approve(), sub.actors[3]),
-      scenario === "final-write-error-rollback" ? Error : { statusCode: 409 },
+      Error,
     );
     const rolledBack = sub.state.deliveries.find((d) => d.id === delivery.id)!;
     assert.equal(

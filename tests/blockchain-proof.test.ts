@@ -883,7 +883,8 @@ function sampleTx(existing: boolean, disposed: boolean) {
     storageLocation: "Tủ 1",
     photoPublicId: null,
     photoHash: null,
-    storageUnitId: null,
+    storageUnitId: C,
+    storageUnit: { name: "Tủ 1" },
     status: disposed ? "DISPOSED" : "STORED",
     disposedAt: disposed ? new Date(Date.now() - 3600000) : null,
     disposalNote: disposed ? "Hết hạn" : null,
@@ -928,6 +929,17 @@ function sampleTx(existing: boolean, disposed: boolean) {
       findFirst: () => Promise.resolve(sample),
       create: () => Promise.resolve(sample),
       update: () => Promise.resolve({ ...sample, status: "DISPOSED" }),
+      count: () => Promise.resolve(0),
+    },
+    sampleStorageUnit: {
+      findFirst: () =>
+        Promise.resolve({
+          id: C,
+          name: "Tủ 1",
+          status: "ACTIVE",
+          capacity: 40,
+          currentUsage: 0,
+        }),
     },
     foodSafetyIncident: { findFirst: () => Promise.resolve(null) },
   };
@@ -962,7 +974,7 @@ void test("sample create and dispose prepare a version once and schedule it afte
   const input = {
     quantity: "0.1",
     unit: "kg",
-    storageLocation: "Tủ 1",
+    storageUnitId: C,
     sampledAt: new Date(Date.now() - 3600000),
   };
   const created = await fresh.service.create(B, input, fresh.principal);

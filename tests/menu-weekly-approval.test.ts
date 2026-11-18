@@ -1,3 +1,9 @@
+import {
+  assertMenuDaysEditable,
+  assertMenuWeekOpen,
+  assertNoHolidayMenuDays,
+  menuWeekLock,
+} from "../src/utils/menu-week";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { PrismaClient } from "../src/generated/prisma/client";
@@ -454,4 +460,123 @@ void test("approval detail is restricted to the school management board", async 
     (error: unknown) => error instanceof HttpError && error.statusCode === 403,
   );
   assert.equal(reads, 0);
+});
+
+void test("BE từ chối lập thực đơn vào ngày nghỉ đã cấu hình", () => {
+  const years = [
+    {
+      startDate: new Date("2026-09-07T00:00:00Z"),
+      endDate: new Date("2027-05-28T00:00:00Z"),
+      holidays: [
+        { date: "2026-11-20", reason: "Ngày Nhà giáo Việt Nam" },
+        { startDate: "2027-02-08", endDate: "2027-02-12", reason: "Tết" },
+      ],
+    },
+  ];
+  const day = (iso: string) => ({ menuDate: new Date(`${iso}T00:00:00Z`) });
+  assert.doesNotThrow(() =>
+    assertNoHolidayMenuDays([day("2026-11-16"), day("2026-11-19")], years),
+  );
+  assert.throws(
+    () =>
+      assertNoHolidayMenuDays([day("2026-11-19"), day("2026-11-20")], years),
+    (error: unknown) =>
+      error instanceof HttpError &&
+      error.statusCode === 422 &&
+      error.message.includes("20/11/2026 (Ngày Nhà giáo Việt Nam)"),
+  );
+  assert.throws(
+    () => assertNoHolidayMenuDays([day("2027-02-10")], years),
+    HttpError,
+  );
+});
+
+void test("không lập hoặc đổi món cho ngày đã qua, không lập ngoài năm học", () => {
+  const years = [
+    {
+      startDate: new Date("2026-09-07T00:00:00Z"),
+      endDate: new Date("2027-05-28T00:00:00Z"),
+      holidays: [],
+    },
+  ];
+  const today = "2026-11-18";
+  const day = (iso: string, dishIds: string[]) => ({
+    menuDate: new Date(`${iso}T00:00:00Z`),
+    meals: [
+      { mealType: "LUNCH", dishes: dishIds.map((dishId) => ({ dishId })) },
+    ],
+  });
+  const stored = [
+    {
+      menuDate: new Date("2026-11-16T00:00:00Z"),
+      menuDayDishes: [{ mealType: "LUNCH", dishId: "rice" }],
+    },
+  ];
+  const rejects = (fn: () => void, pattern: RegExp) =>
+    assert.throws(
+      fn,
+      (error: unknown) =>
+        error instanceof HttpError &&
+        error.statusCode === 422 &&
+        pattern.test(error.message),
+    );
+  // Tuần hiện tại: gửi lại thứ Hai (đã qua) y nguyên và sửa thứ Năm là hợp lệ.
+  assert.doesNotThrow(() =>
+    assertMenuDaysEditable(
+      [day("2026-11-16", ["rice"]), day("2026-11-19", ["soup"])],
+      stored,
+      years,
+      today,
+    ),
+  );
+  rejects(
+    () =>
+      assertMenuDaysEditable(
+        [day("2026-11-17", ["rice"])],
+        stored,
+        years,
+        today,
+      ),
+    /Không lập thực đơn cho ngày đã qua: 17\/11\/2026/,
+  );
+  rejects(
+    () =>
+      assertMenuDaysEditable(
+        [day("2026-11-16", ["fish"])],
+        stored,
+        years,
+        today,
+      ),
+    /Không sửa thực đơn của ngày đã qua: 16\/11\/2026/,
+  );
+  rejects(
+    () =>
+      assertMenuDaysEditable([day("2027-06-07", ["rice"])], [], years, today),
+    /ngoài năm học đã cấu hình: 07\/06\/2027/,
+  );
+});
+
+void test("thực đơn tuần phải tạo và gửi duyệt trước hết Chủ nhật trước tuần đó", () => {
+  const week = new Date("2026-11-23T00:00:00Z");
+  // Đến hết Chủ nhật 22/11 vẫn được tạo, sửa, gửi duyệt.
+  assert.doesNotThrow(() => assertMenuWeekOpen(week, "2026-11-22", false));
+  // Từ thứ Hai 23/11 tuần bị khóa.
+  assert.throws(
+    () => assertMenuWeekOpen(week, "2026-11-23", false),
+    (error: unknown) =>
+      error instanceof HttpError &&
+      error.statusCode === 422 &&
+      error.message ===
+        "Đã quá hạn lập và gửi duyệt thực đơn tuần 23/11/2026–27/11/2026 (hạn chót hết Chủ nhật 22/11/2026)",
+  );
+  // BGH đã yêu cầu sửa thì vẫn được sửa và gửi lại trong tuần.
+  assert.doesNotThrow(() => assertMenuWeekOpen(week, "2026-11-25", true));
+  // week-schedule trả hạn chót và trạng thái khóa cho FE.
+  assert.deepEqual(menuWeekLock(week, "2026-11-22", false), {
+    deadline: "2026-11-22",
+    locked: false,
+    reason: null,
+  });
+  assert.equal(menuWeekLock(week, "2026-11-24", false).locked, true);
+  assert.equal(menuWeekLock(week, "2026-11-24", true).locked, false);
 });

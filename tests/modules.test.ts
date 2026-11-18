@@ -373,10 +373,20 @@ void test("retained samples and kitchen filters reject malformed quantities, tim
   const input = {
     quantity: 150,
     unit: "g",
-    storageLocation: "Tủ 1",
+    storageUnitId: "00000000-0000-4000-8000-0000000000aa",
+    storageLocation: "Ngăn 1",
     sampledAt: "2026-11-01T10:30:00Z",
   };
   assert.equal(validateFoodSample(input).quantity, "150");
+  // Mẫu lưu bắt buộc chọn tủ lưu mẫu hợp lệ.
+  assert.throws(
+    () => validateFoodSample({ ...input, storageUnitId: undefined }),
+    HttpError,
+  );
+  assert.throws(
+    () => validateFoodSample({ ...input, storageUnitId: "Tủ 1" }),
+    HttpError,
+  );
   for (const quantity of [0, -1, 0.0001, Infinity, { toString: "bad" }])
     assert.throws(() => validateFoodSample({ ...input, quantity }), HttpError);
   assert.throws(() => validateFoodSample({ ...input, unit: "kg" }), HttpError);

@@ -969,10 +969,19 @@ void test("kitchen and nutrition wire contracts use real scoped PostgreSQL data"
         ).status,
         "STORED",
       );
+      // Mẫu lưu phải gắn với tủ lưu mẫu đang hoạt động của trường.
+      const wireFridge = await db.sampleStorageUnit.create({
+        data: {
+          schoolId: schoolA.id,
+          code: "WIRE-FRIDGE",
+          name: "Wire created fridge",
+          location: "Wire kitchen",
+        },
+      });
       const newSample = {
         quantity: "125.375",
         unit: "g",
-        storageLocation: "Wire created fridge",
+        storageUnitId: wireFridge.id,
         sampledAt: new Date(Date.now() - 30_000).toISOString(),
       };
       assert.equal(
@@ -1016,6 +1025,8 @@ void test("kitchen and nutrition wire contracts use real scoped PostgreSQL data"
         where: { id },
       });
       assert.equal(stored.quantity?.toString(), "125.375");
+      assert.equal(stored.storageUnitId, wireFridge.id);
+      assert.equal(stored.storageLocation, "Wire created fridge");
       const reloaded = await request(
         `/api/v1/kitchen/${emptyBatch.id}/food-samples`,
         chefA.id,

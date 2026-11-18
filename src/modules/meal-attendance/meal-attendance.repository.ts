@@ -38,6 +38,47 @@ export function createMealAttendanceRepository() {
         select: assignedClassSelect,
       });
     },
+    findAcademicYearOn(
+      tx: Prisma.TransactionClient,
+      schoolId: string,
+      date: Date,
+    ) {
+      return tx.schoolAcademicYear.findFirst({
+        where: { schoolId, startDate: { lte: date }, endDate: { gte: date } },
+        select: { academicYear: true, holidays: true },
+        orderBy: { startDate: "desc" },
+      });
+    },
+    findClassMenuDay(
+      tx: Prisma.TransactionClient,
+      key: {
+        schoolId: string;
+        classId: string;
+        date: Date;
+        mealType: "LUNCH" | "AFTERNOON";
+      },
+    ) {
+      return tx.menuDay.findFirst({
+        where: {
+          menuDate: key.date,
+          menuDayDishes: { some: { mealType: key.mealType } },
+          WeeklyMenu: {
+            schoolId: key.schoolId,
+            OR: [
+              { isSchoolWide: true },
+              {
+                grades: {
+                  some: {
+                    grade: { classes: { some: { id: key.classId } } },
+                  },
+                },
+              },
+            ],
+          },
+        },
+        select: { id: true },
+      });
+    },
     findSubmission(
       tx: Prisma.TransactionClient,
       key: { classId: string; mealDate: Date; mealType: "LUNCH" | "AFTERNOON" },

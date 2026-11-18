@@ -1075,12 +1075,19 @@ export async function readSchoolContext(
 }
 
 /** All kitchen writes lock the trusted school first, then batch/lots by UUID. */
+/** Ngày hôm nay theo giờ Việt Nam (UTC+7), dạng YYYY-MM-DD. */
+function vietnamToday() {
+  return new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10);
+}
+
 export function createKitchenLifecycle(
   connect: () => Promise<PrismaClient> = getPrisma,
   proofs: Pick<
     typeof blockchainProofService,
     "prepareCookingCompleted" | "scheduleAnchor"
   > = blockchainProofService,
+  /** Ngày hôm nay (YYYY-MM-DD, giờ VN); tiêm vào để test cố định ngày. */
+  today: () => string = vietnamToday,
 ) {
   async function write<T>(
     principal: AuthPrincipal,
@@ -1220,6 +1227,17 @@ export function createKitchenLifecycle(
             409,
             "Chỉ lập mẻ cho thực đơn đã duyệt và món đang hoạt động",
           );
+        // Nấu (giữ nguyên liệu, trừ kho khi xong) chỉ cho bữa của hôm nay; xem trước thì không giới hạn.
+        if (!preview) {
+          const menuDay = menu.menuDate.toISOString().slice(0, 10);
+          const current = today();
+          const dmy = (iso: string) => iso.split("-").reverse().join("/");
+          if (menuDay !== current)
+            throw new HttpError(
+              422,
+              `${menuDay > current ? `Chưa tới ngày ${dmy(menuDay)}` : `Ngày ${dmy(menuDay)} đã qua`}: chỉ được nấu bữa ăn của hôm nay (${dmy(current)})`,
+            );
+        }
         const missingClasses = await repository.unfinalizedClasses(
           tx,
           meal,
@@ -1731,9 +1749,10 @@ export function createKitchenLifecycle(
 export function createKitchenService(
   read: KitchenListReader = readFromDatabase,
   connect: () => Promise<PrismaClient> = getPrisma,
+  today: () => string = vietnamToday,
 ) {
   return {
-    ...createKitchenLifecycle(connect),
+    ...createKitchenLifecycle(connect, undefined, today),
     async getContext(principal: AuthPrincipal) {
       return readSchoolContext(
         await connect(),

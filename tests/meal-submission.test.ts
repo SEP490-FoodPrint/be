@@ -88,7 +88,20 @@ void test("daily portion input is aggregate-only and strictly validated", () => 
   );
 });
 
-function database(status: "NONE" | "DRAFT" | "FINALIZED" = "NONE") {
+// 04/11/2026 (thứ Tư) lúc 08:00 giờ Việt Nam.
+const NOW = new Date("2026-11-04T01:00:00.000Z");
+const clock = () => NOW;
+
+interface CalendarFixture {
+  holidays?: unknown[];
+  hasYear?: boolean;
+  hasMenu?: boolean;
+}
+
+function database(
+  status: "NONE" | "DRAFT" | "FINALIZED" = "NONE",
+  calendar: CalendarFixture = {},
+) {
   const writes: Array<{ operation: string; args: unknown }> = [];
   const assignedClass = {
     id: CLASS_ID,
@@ -122,6 +135,18 @@ function database(status: "NONE" | "DRAFT" | "FINALIZED" = "NONE") {
     $queryRaw: () => Promise.resolve([]),
     school: { findUnique: () => Promise.resolve({ status: "ACTIVE" }) },
     user: { findUnique: () => Promise.resolve(identity) },
+    schoolAcademicYear: {
+      findFirst: () =>
+        Promise.resolve(
+          calendar.hasYear === false
+            ? null
+            : { academicYear: "2026-2027", holidays: calendar.holidays ?? [] },
+        ),
+    },
+    menuDay: {
+      findFirst: () =>
+        Promise.resolve(calendar.hasMenu === false ? null : { id: "menu-day" }),
+    },
     classHomeroomAssignment: {
       findFirst: (args: { select?: { Class?: unknown } }) =>
         Promise.resolve(
@@ -162,8 +187,11 @@ function database(status: "NONE" | "DRAFT" | "FINALIZED" = "NONE") {
 
 void test("GVCN creates a draft for the assigned academic-year class", async () => {
   const { db, writes } = database();
-  const service = createMealAttendanceService(undefined, () =>
-    Promise.resolve(db),
+  const service = createMealAttendanceService(
+    undefined,
+    () => Promise.resolve(db),
+    undefined,
+    clock,
   );
   const result = await service.saveDraft(
     {
@@ -184,8 +212,11 @@ void test("GVCN creates a draft for the assigned academic-year class", async () 
 
 void test("finalized portions are immutable and finalization is idempotent", async () => {
   const finalized = database("FINALIZED");
-  const service = createMealAttendanceService(undefined, () =>
-    Promise.resolve(finalized.db),
+  const service = createMealAttendanceService(
+    undefined,
+    () => Promise.resolve(finalized.db),
+    undefined,
+    clock,
   );
   await assert.rejects(
     service.saveDraft(
@@ -205,21 +236,85 @@ void test("finalized portions are immutable and finalization is idempotent", asy
   assert.equal(finalized.writes.length, 0);
 });
 
-void test("GVCN can declare portions exceeding registeredMealPortions for ad-hoc boarding students", async () => {
-  const { db } = database();
-  const service = createMealAttendanceService(undefined, () =>
-    Promise.resolve(db),
+const draftInput = (overrides: Record<string, unknown> = {}) => ({
+  date: DATE,
+  mealType: "LUNCH" as const,
+  totalPortions: 25,
+  allergyNotes: null,
+  allergies: [],
+  ...overrides,
+});
+
+void test("GVCN không khai vượt số suất đăng ký của lớp", async () => {
+  const { db, writes } = database();
+  const service = createMealAttendanceService(
+    undefined,
+    () => Promise.resolve(db),
+    undefined,
+    clock,
   );
-  // registeredMealPortions is 30 in assignedClass fixture, totalPortions is 36
+  // registeredMealPortions của lớp trong fixture là 30.
+  await assert.rejects(
+    service.saveDraft(draftInput({ totalPortions: 31 }), teacher),
+    (error: unknown) =>
+      isHttp(422)(error) && /vượt số suất đăng ký/.test(String(error)),
+  );
+  assert.equal(writes.length, 0);
   const result = await service.saveDraft(
-    {
-      date: DATE,
-      mealType: "LUNCH",
-      totalPortions: 36,
-      allergyNotes: "Phát sinh thêm 6 học sinh ăn bán trú",
-      allergies: [],
-    },
+    draftInput({ totalPortions: 30 }),
     teacher,
   );
   assert.equal(result.id, DEMAND_ID);
+});
+
+void test("GVCN chỉ khai và chốt cho hôm nay, đúng ngày học có thực đơn", async () => {
+  const build = (
+    calendar: CalendarFixture = {},
+    status: "NONE" | "DRAFT" = "NONE",
+  ) => {
+    const { db, writes } = database(status, calendar);
+    return {
+      writes,
+      service: createMealAttendanceService(
+        undefined,
+        () => Promise.resolve(db),
+        undefined,
+        clock,
+      ),
+    };
+  };
+  const rejects = async (promise: Promise<unknown>, pattern: RegExp) =>
+    assert.rejects(
+      promise,
+      (error: unknown) => isHttp(422)(error) && pattern.test(String(error)),
+    );
+
+  const yesterday = new Date("2026-11-03T00:00:00.000Z");
+  const tomorrow = new Date("2026-11-05T00:00:00.000Z");
+  await rejects(
+    build().service.saveDraft(draftInput({ date: yesterday }), teacher),
+    /hôm nay \(04\/11\/2026\)/,
+  );
+  await rejects(
+    build().service.saveDraft(draftInput({ date: tomorrow }), teacher),
+    /hôm nay/,
+  );
+  await rejects(
+    build({
+      holidays: [{ date: "2026-11-04", reason: "Nghỉ bù" }],
+    }).service.saveDraft(draftInput(), teacher),
+    /ngày nghỉ \(Nghỉ bù\)/,
+  );
+  await rejects(
+    build({ hasYear: false }).service.saveDraft(draftInput(), teacher),
+    /ngoài năm học/,
+  );
+  await rejects(
+    build({ hasMenu: false }).service.saveDraft(draftInput(), teacher),
+    /chưa có thực đơn bữa trưa/,
+  );
+  // Chốt cũng đi qua cùng bước kiểm tra ngày (ở đây: không có thực đơn).
+  const stale = build({ hasMenu: false }, "DRAFT");
+  await rejects(stale.service.finalize(DEMAND_ID, teacher), /chưa có thực đơn/);
+  assert.equal(stale.writes.length, 0);
 });

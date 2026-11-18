@@ -816,8 +816,12 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       const chef = await loadPrincipal(chefAccount.id, db);
       const reviewer = await loadPrincipal(reviewerAccount.id, db);
       const menus = createMenuService(undefined, () => Promise.resolve(db));
-      const batches = createKitchenService(undefined, () =>
-        Promise.resolve(db),
+      // Bếp chỉ nấu bữa của hôm nay: đặt "hôm nay" theo ngày thực đơn đang test.
+      let kitchenToday = "";
+      const batches = createKitchenService(
+        undefined,
+        () => Promise.resolve(db),
+        () => kitchenToday,
       );
       const samples = createRetainedSampleService(undefined, () =>
         Promise.resolve(db),
@@ -1075,6 +1079,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       const sideDish = day.menuDayDishes.find(
         (d) => d.Dish.name === "API side",
       )!;
+      kitchenToday = day.menuDate.toISOString().slice(0, 10);
       const key = {
         menuDayId: day.id,
         dishId: mainDish.dishId,
@@ -1215,11 +1220,20 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         }),
         1,
       );
+      // Mẫu lưu phải gắn với tủ lưu mẫu đang hoạt động của trường.
+      const fridge = await db.sampleStorageUnit.create({
+        data: {
+          schoolId: school.id,
+          code: "FRIDGE-1",
+          name: "Fridge 1",
+          location: "Kitchen",
+        },
+      });
       const sampleInput = validateFoodSample({
         dishId: mainDish.dishId,
         quantity: 150,
         unit: "g",
-        storageLocation: "Fridge 1",
+        storageUnitId: fridge.id,
         sampledAt: new Date().toISOString(),
       });
       const saved = await samples.create(batch.id, sampleInput, chef);
@@ -1353,6 +1367,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         ["2032-01-05", "2032-01-06", "2032-01-07", "2032-01-08", "2032-01-09"],
       );
       const grKey = { menuDayId: grDay.id, mealType: "LUNCH" as const };
+      kitchenToday = grDay.menuDate.toISOString().slice(0, 10);
       const grDefinition = validateMenuPortionGroups({
         groups: [
           {
@@ -9629,7 +9644,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         );
 
         // 2. Manual replacement via STANDALONE: two-stage creation -> dispatch -> fresh deliveryNo, fresh qrUrl, fresh approvals;
-        //    4th signature rolls back on missing IngredientEntry, then succeeds once attached.
+        //    missing IngredientEntry is reported on arrival and blocks the first APPROVE (FR-014), then succeeds once attached.
         const standaloneRes = await http.request("/api/deliveries/management", {
           method: "POST",
           headers: {
@@ -9681,41 +9696,42 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         );
         assert.notEqual(standaloneQrUrl, reqQrUrl);
 
+        const missingEntryIssue =
+          "Chưa cấu hình danh mục nguyên liệu đang hoạt động của trường để tiếp nhận lô";
+        const standaloneArrival = await http.request(
+          `/api/deliveries/${standaloneId}/arrival`,
+          {
+            method: "POST",
+            headers: headers(deptUser.id),
+          },
+        );
+        assert.equal(standaloneArrival.status, 200);
+        // FR-014: the receipt problem is reported as soon as the vehicle arrives.
         assert.equal(
-          (
-            await http.request(`/api/deliveries/${standaloneId}/arrival`, {
-              method: "POST",
-              headers: headers(deptUser.id),
-            })
-          ).status,
-          200,
+          record(record(standaloneArrival.body).data).receiptIssue,
+          missingEntryIssue,
         );
 
-        for (const reviewer of [kitchenUser, nutritionUser, parentUser]) {
-          const ok = await inspect(standaloneId, reviewer.id, "APPROVE");
-          assert.equal(ok.status, 200, JSON.stringify(ok.body));
-        }
-        assert.equal(
-          (await db.delivery.findUniqueOrThrow({ where: { id: standaloneId } }))
-            .status,
-          "PENDING_APPROVAL",
-        );
-
-        // Missing IngredientEntry on 4th APPROVE -> 409 rollback (count stays 3, zero warehouse writes)
+        // Missing IngredientEntry blocks the FIRST APPROVE -> 409 rollback (no decision, zero warehouse writes)
         const uploadsBeforeRollback = uploadedFiles.size;
-        const rollbackRes = await inspect(standaloneId, deptUser.id, "APPROVE");
+        const rollbackRes = await inspect(
+          standaloneId,
+          kitchenUser.id,
+          "APPROVE",
+        );
         assert.equal(rollbackRes.status, 409);
+        assert.equal(record(rollbackRes.body).message, missingEntryIssue);
         assert.equal(uploadedFiles.size, uploadsBeforeRollback);
         assert.equal(
           await db.deliveryApproval.count({
             where: { deliveryId: standaloneId },
           }),
-          3,
+          0,
         );
         assert.equal(
           (await db.delivery.findUniqueOrThrow({ where: { id: standaloneId } }))
             .status,
-          "PENDING_APPROVAL",
+          "ARRIVED",
         );
         const plannedLotBeforeEntry = await db.ingredientLot.findFirstOrThrow({
           where: {
@@ -9743,6 +9759,15 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             status: "ACTIVE",
           },
         });
+        for (const reviewer of [kitchenUser, nutritionUser, parentUser]) {
+          const ok = await inspect(standaloneId, reviewer.id, "APPROVE");
+          assert.equal(ok.status, 200, JSON.stringify(ok.body));
+        }
+        assert.equal(
+          (await db.delivery.findUniqueOrThrow({ where: { id: standaloneId } }))
+            .status,
+          "PENDING_APPROVAL",
+        );
         const receiveRes = await inspect(standaloneId, deptUser.id, "APPROVE");
         assert.equal(receiveRes.status, 200, JSON.stringify(receiveRes.body));
         const receivedDelivery = await db.delivery.findUniqueOrThrow({

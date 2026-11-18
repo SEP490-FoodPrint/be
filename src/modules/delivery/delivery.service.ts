@@ -220,9 +220,11 @@ function inspectionDTO(
 function inspectionDetailDTO(
   row: DeliveryInspectionDetailRow,
   principal: AuthPrincipal,
+  receiptIssue: string | null = null,
 ): DeliveryInspectionDTO {
   return {
     ...inspectionDTO(row, principal),
+    receiptIssue,
     deliveryItems: row.deliveryItems.map((item) => ({
       id: item.id,
       ingredientName:
@@ -520,6 +522,63 @@ async function verifyRequestDeliveryReceipt(
   }
 }
 
+/**
+ * Chạy trước (chỉ đọc) đúng các kiểm tra tiếp nhận của chữ ký cuối, để báo ngay
+ * khi xe đến thay vì đợi bộ phận thứ 4. Trả về lý do hoặc null nếu hợp lệ.
+ */
+async function receiptIssue(
+  tx: Parameters<typeof inspections.listRequestSourceItems>[0],
+  row: DeliveryInspectionDetailRow,
+  schoolId: string,
+  at: Date,
+): Promise<string | null> {
+  if (!["ARRIVED", "PENDING_APPROVAL"].includes(row.status)) return null;
+  let candidate = row;
+  if (row.supplyRequestId === null) {
+    const entries = await inspections.findSchoolIngredientEntries(
+      tx,
+      schoolId,
+      row.deliveryItems.map((item) => item.ingredientId),
+    );
+    const byIngredient = new Map(
+      entries.map((entry) => [entry.ingredientId, entry]),
+    );
+    if (
+      row.deliveryItems.some(
+        (item) => byIngredient.get(item.ingredientId)?.status !== "ACTIVE",
+      )
+    )
+      return "Chưa cấu hình danh mục nguyên liệu đang hoạt động của trường để tiếp nhận lô";
+    // Mô phỏng bước gắn danh mục của chữ ký cuối, không ghi DB.
+    candidate = {
+      ...row,
+      deliveryItems: row.deliveryItems.map((item) => {
+        const entry = byIngredient.get(item.ingredientId)!;
+        return {
+          ...item,
+          ingredientEntryId: entry.id,
+          IngredientEntry: {
+            ...item.IngredientEntry,
+            id: entry.id,
+            schoolId: entry.schoolId,
+            ingredientId: entry.ingredientId,
+            status: entry.status,
+          } as typeof item.IngredientEntry,
+        };
+      }),
+    };
+  }
+  try {
+    assertReceipt(candidate, schoolId, at);
+    if (candidate.supplyRequestId !== null)
+      await verifyRequestDeliveryReceipt(tx, candidate, schoolId);
+    return null;
+  } catch (error) {
+    if (error instanceof HttpError) return error.message;
+    throw error;
+  }
+}
+
 export function createDeliveryInspectionService(
   connect: () => Promise<PrismaClient> = getPrisma,
   now = () => new Date(),
@@ -569,7 +628,11 @@ export function createDeliveryInspectionService(
               row.status,
             )
           ) {
-            return inspectionDetailDTO(row, actor);
+            return inspectionDetailDTO(
+              row,
+              actor,
+              await receiptIssue(tx, row, schoolId, now()),
+            );
           }
           if (row.status !== "IN_TRANSIT" || row.arrivedAt !== null) {
             throw new HttpError(
@@ -590,7 +653,11 @@ export function createDeliveryInspectionService(
             );
           }
           const saved = (await inspections.detail(tx, schoolId, id))!;
-          return inspectionDetailDTO(saved, actor);
+          return inspectionDetailDTO(
+            saved,
+            actor,
+            await receiptIssue(tx, saved, schoolId, now()),
+          );
         },
       );
     },
@@ -654,6 +721,9 @@ export function createDeliveryInspectionService(
               "Đợt giao không còn được phép kiểm tra/tiếp nhận",
             );
           if (input.decision === "APPROVE") {
+            // Chặn ngay chữ ký "Đạt" khi dữ liệu không thể tiếp nhận, không đợi bộ phận thứ 4.
+            const issue = await receiptIssue(tx, row, schoolId, now());
+            if (issue) throw new HttpError(409, issue);
             const approvedRoles = new Set(
               row.deliveryApprovals
                 .filter((approval) => approval.decision === "APPROVE")
@@ -826,10 +896,15 @@ export function createDeliveryInspectionService(
     ): Promise<DeliveryInspectionDTO> {
       const schoolId = inspectionScope(principal);
       return databaseOperation(async () => {
-        const row = await inspections.detail(await connect(), schoolId, id);
+        const db = await connect();
+        const row = await inspections.detail(db, schoolId, id);
         if (!row)
           throw new HttpError(404, "Không tìm thấy đợt giao trong trường");
-        return inspectionDetailDTO(row, principal);
+        return inspectionDetailDTO(
+          row,
+          principal,
+          await receiptIssue(db, row, schoolId, now()),
+        );
       });
     },
   };
