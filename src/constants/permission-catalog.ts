@@ -726,6 +726,7 @@ export const INITIAL_ROLE_PERMISSIONS = [
   ["INGREDIENT_MANAGEMENT_DEPARTMENT", "delivery.inspect"],
   ["INGREDIENT_MANAGEMENT_DEPARTMENT", "delivery.receive"],
   ["INGREDIENT_MANAGEMENT_DEPARTMENT", "supplier.view"],
+  ["INGREDIENT_MANAGEMENT_DEPARTMENT", "supplier_relationship.view"],
   ["INGREDIENT_SUPPLIER_ADMIN", "dashboard.view"],
   ["INGREDIENT_SUPPLIER_ADMIN", "ingredient.manage"],
   ["INGREDIENT_SUPPLIER_ADMIN", "source_facility.manage"],
