@@ -68,9 +68,10 @@ export function resolveSchoolTiers(
     roleCode?: string;
   }>,
 ): Record<DeliveryInspectionRoleCode, DeliveryInspectionTierCode> {
-  const result: Record<DeliveryInspectionRoleCode, DeliveryInspectionTierCode> = {
-    ...DEFAULT_INSPECTION_TIERS,
-  };
+  const result: Record<DeliveryInspectionRoleCode, DeliveryInspectionTierCode> =
+    {
+      ...DEFAULT_INSPECTION_TIERS,
+    };
 
   for (const row of rows) {
     const code = (row.Role?.code ?? row.roleCode) as DeliveryInspectionRoleCode;
@@ -104,9 +105,10 @@ export function resolveDeliveryTiers(
     return null;
   }
 
-  const result: Record<DeliveryInspectionRoleCode, DeliveryInspectionTierCode> = {
-    ...DEFAULT_INSPECTION_TIERS,
-  };
+  const result: Record<DeliveryInspectionRoleCode, DeliveryInspectionTierCode> =
+    {
+      ...DEFAULT_INSPECTION_TIERS,
+    };
 
   let hasValid = false;
   for (const row of snapshotRows) {

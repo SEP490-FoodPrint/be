@@ -5,9 +5,7 @@ import type { AuthPrincipal } from "../src/types/auth";
 import { HttpError } from "../src/utils/http-error";
 import { INSPECTION_TIER_LABELS } from "../src/constants/delivery-inspection";
 import { ROLES, ROLE_LABELS } from "../src/constants/roles";
-import {
-  createOrganizationService,
-} from "../src/modules/organization/organization.service";
+import { createOrganizationService } from "../src/modules/organization/organization.service";
 import type { OrganizationRepository } from "../src/modules/organization/organization.repository";
 import {
   validateDeliveryInspectionRoles,
@@ -166,7 +164,10 @@ void test("T2: PUT validation chặn 2 PRIMARY, 0 PRIMARY, trùng role, thiếu 
       }),
     (err: unknown) => {
       assert(err instanceof OrganizationValidationError);
-      assert.equal(err.fields[0].message, "Phải chọn đúng một người duyệt chính");
+      assert.equal(
+        err.fields[0].message,
+        "Phải chọn đúng một người duyệt chính",
+      );
       return true;
     },
   );
@@ -183,7 +184,10 @@ void test("T2: PUT validation chặn 2 PRIMARY, 0 PRIMARY, trùng role, thiếu 
       }),
     (err: unknown) => {
       assert(err instanceof OrganizationValidationError);
-      assert.equal(err.fields[0].message, "Phải chọn đúng một người duyệt chính");
+      assert.equal(
+        err.fields[0].message,
+        "Phải chọn đúng một người duyệt chính",
+      );
       return true;
     },
   );
@@ -200,7 +204,11 @@ void test("T2: PUT validation chặn 2 PRIMARY, 0 PRIMARY, trùng role, thiếu 
       }),
     (err: unknown) => {
       assert(err instanceof OrganizationValidationError);
-      assert(err.fields.some((f) => f.message === "Mỗi bộ phận chỉ được khai báo một lần"));
+      assert(
+        err.fields.some(
+          (f) => f.message === "Mỗi bộ phận chỉ được khai báo một lần",
+        ),
+      );
       return true;
     },
   );
@@ -284,8 +292,14 @@ void test("T3: PUT bởi role khác BGH hoặc thiếu permission bị từ ch�
 // Helper dựng mock delivery inspection
 // ==========================================
 function createInspectionFixture(options?: {
-  schoolTiers?: Array<{ tier: "PRIMARY" | "REQUIRED" | "OPTIONAL"; roleCode: string }>;
-  deliverySnapshotTiers?: Array<{ tier: "PRIMARY" | "REQUIRED" | "OPTIONAL"; roleCode: string }>;
+  schoolTiers?: Array<{
+    tier: "PRIMARY" | "REQUIRED" | "OPTIONAL";
+    roleCode: string;
+  }>;
+  deliverySnapshotTiers?: Array<{
+    tier: "PRIMARY" | "REQUIRED" | "OPTIONAL";
+    roleCode: string;
+  }>;
   status?: string;
   approvals?: Array<{ roleCode: string; decision: "APPROVE" | "REJECT" }>;
 }) {
@@ -324,7 +338,11 @@ function createInspectionFixture(options?: {
         ),
     },
     deliveryInspectionRole: {
-      createMany: ({ data }: { data: { roleId: string; tier: "PRIMARY" | "REQUIRED" | "OPTIONAL" }[] }) => {
+      createMany: ({
+        data,
+      }: {
+        data: { roleId: string; tier: "PRIMARY" | "REQUIRED" | "OPTIONAL" }[];
+      }) => {
         for (const item of data) {
           const r = roles.find((role) => role.id === item.roleId);
           snapshotTiers.push({ roleCode: r?.code ?? "", tier: item.tier });
@@ -339,9 +357,13 @@ function createInspectionFixture(options?: {
     },
     user: {
       findUnique: ({ where }: { where: { id: string } }) => {
-        const u = [bghPrincipal, kitchenPrincipal, warehousePrincipal, nutritionPrincipal, parentsPrincipal].find(
-          (p) => p.id === where.id,
-        );
+        const u = [
+          bghPrincipal,
+          kitchenPrincipal,
+          warehousePrincipal,
+          nutritionPrincipal,
+          parentsPrincipal,
+        ].find((p) => p.id === where.id);
         return Promise.resolve(
           u
             ? {
@@ -364,7 +386,11 @@ function createInspectionFixture(options?: {
     $queryRaw: () => Promise.resolve([]),
     ingredientEntry: { findMany: () => Promise.resolve([]) },
     delivery: {
-      updateMany: ({ data }: { data: { status?: string; arrivedAt?: Date } }) => {
+      updateMany: ({
+        data,
+      }: {
+        data: { status?: string; arrivedAt?: Date };
+      }) => {
         if (data.status) currentStatus = data.status;
         if (data.arrivedAt) arrivedAt = data.arrivedAt;
         return Promise.resolve({ count: 1 });
@@ -410,7 +436,8 @@ function createInspectionFixture(options?: {
             supplierId: uid(90),
             status: "IN_PROGRESS",
             _count: {
-              deliveries: approvals.filter((a) => a.decision === "REJECT").length,
+              deliveries: approvals.filter((a) => a.decision === "REJECT")
+                .length,
             },
           },
           inspectionRoles: snapshotTiers.map((s) => ({
@@ -426,7 +453,12 @@ function createInspectionFixture(options?: {
             photoPublicId: null,
             photoHash: null,
             decidedAt: now,
-            Role: { code: a.roleCode, name: ROLE_LABELS[a.roleCode as keyof typeof ROLE_LABELS] ?? a.roleCode },
+            Role: {
+              code: a.roleCode,
+              name:
+                ROLE_LABELS[a.roleCode as keyof typeof ROLE_LABELS] ??
+                a.roleCode,
+            },
             User: { fullName: a.roleCode },
           })),
           deliveryItems: [
@@ -438,7 +470,11 @@ function createInspectionFixture(options?: {
               sourceFacilityId: uid(88),
               actualQuantity: new Prisma.Decimal("10"),
               unit: "kg",
-              Ingredient: { name: "Thịt lợn", supplierId: uid(90), ingredientCategory: null },
+              Ingredient: {
+                name: "Thịt lợn",
+                supplierId: uid(90),
+                ingredientCategory: null,
+              },
               IngredientEntry: {
                 id: uid(402),
                 schoolId,
@@ -458,7 +494,11 @@ function createInspectionFixture(options?: {
                   ingredientId: uid(401),
                   status: "ACTIVE",
                   handlingType: "DIRECT_USE",
-                  Ingredient: { name: "Thịt lợn", supplierId: uid(90), ingredientCategory: null },
+                  Ingredient: {
+                    name: "Thịt lợn",
+                    supplierId: uid(90),
+                    ingredientCategory: null,
+                  },
                 },
               },
               ingredientLots: itemLots,
@@ -466,13 +506,14 @@ function createInspectionFixture(options?: {
           ],
         });
       },
-      count: () =>
-        Promise.resolve(
-          currentStatus === "REJECTED" ? 1 : 0,
-        ),
+      count: () => Promise.resolve(currentStatus === "REJECTED" ? 1 : 0),
     },
     deliveryApproval: {
-      create: ({ data }: { data: { roleId: string; decision: "APPROVE" | "REJECT" } }) => {
+      create: ({
+        data,
+      }: {
+        data: { roleId: string; decision: "APPROVE" | "REJECT" };
+      }) => {
         const r = roles.find((role) => role.id === data.roleId);
         approvals.push({ roleCode: r?.code ?? "", decision: data.decision });
         return Promise.resolve({});
@@ -555,7 +596,10 @@ void test("T4: Arrival bởi role REQUIRED/OPTIONAL bị từ chối 403", async
     (err: unknown) => {
       assert(err instanceof HttpError);
       assert.equal(err.statusCode, 403);
-      assert.match(err.message, /Chỉ người duyệt chính.*được xác nhận xe đã đến/);
+      assert.match(
+        err.message,
+        /Chỉ người duyệt chính.*được xác nhận xe đã đến/,
+      );
       return true;
     },
   );
@@ -574,22 +618,35 @@ void test("T5: Arrival bởi PRIMARY -> ARRIVED và tạo 4 dòng snapshot", asy
   const f = createInspectionFixture();
 
   // Bếp là PRIMARY -> thành công
-  const result = await f.service.arrive(
-    f.deliveryId,
-    {},
-    {},
-    kitchenPrincipal,
-  );
+  const result = await f.service.arrive(f.deliveryId, {}, {}, kitchenPrincipal);
 
   assert.equal(result.status, "ARRIVED");
   assert.equal(f.getStatus(), "ARRIVED");
   assert.equal(f.getSnapshotTiers().length, 4);
 
   const snapshotTiers = f.getSnapshotTiers();
-  assert(snapshotTiers.some((s) => s.roleCode === ROLES.SCHOOL_KITCHEN_STAFF && s.tier === "PRIMARY"));
-  assert(snapshotTiers.some((s) => s.roleCode === ROLES.INGREDIENT_MANAGEMENT && s.tier === "REQUIRED"));
-  assert(snapshotTiers.some((s) => s.roleCode === ROLES.SCHOOL_NUTRITION_OFFICER && s.tier === "REQUIRED"));
-  assert(snapshotTiers.some((s) => s.roleCode === ROLES.PARENTS_COMMITTEE && s.tier === "OPTIONAL"));
+  assert(
+    snapshotTiers.some(
+      (s) => s.roleCode === ROLES.SCHOOL_KITCHEN_STAFF && s.tier === "PRIMARY",
+    ),
+  );
+  assert(
+    snapshotTiers.some(
+      (s) =>
+        s.roleCode === ROLES.INGREDIENT_MANAGEMENT && s.tier === "REQUIRED",
+    ),
+  );
+  assert(
+    snapshotTiers.some(
+      (s) =>
+        s.roleCode === ROLES.SCHOOL_NUTRITION_OFFICER && s.tier === "REQUIRED",
+    ),
+  );
+  assert(
+    snapshotTiers.some(
+      (s) => s.roleCode === ROLES.PARENTS_COMMITTEE && s.tier === "OPTIONAL",
+    ),
+  );
 });
 
 // ==========================================
@@ -619,15 +676,27 @@ void test("T7: PRIMARY + mọi REQUIRED APPROVE -> RECEIVED dù Phụ huynh chư
   });
 
   // Bếp APPROVE -> PENDING_APPROVAL
-  const r1 = await f.service.decide(f.deliveryId, approveDecision, kitchenPrincipal);
+  const r1 = await f.service.decide(
+    f.deliveryId,
+    approveDecision,
+    kitchenPrincipal,
+  );
   assert.equal(r1.status, "PENDING_APPROVAL");
 
   // Kho APPROVE -> PENDING_APPROVAL
-  const r2 = await f.service.decide(f.deliveryId, approveDecision, warehousePrincipal);
+  const r2 = await f.service.decide(
+    f.deliveryId,
+    approveDecision,
+    warehousePrincipal,
+  );
   assert.equal(r2.status, "PENDING_APPROVAL");
 
   // Dinh dưỡng APPROVE -> Hoàn thành! (Phụ huynh chưa ký)
-  const r3 = await f.service.decide(f.deliveryId, approveDecision, nutritionPrincipal);
+  const r3 = await f.service.decide(
+    f.deliveryId,
+    approveDecision,
+    nutritionPrincipal,
+  );
   assert.equal(r3.status, "RECEIVED");
   assert.equal(f.getStatus(), "RECEIVED");
 });
@@ -647,7 +716,11 @@ void test("T8: Nhóm 2 rỗng, chỉ PRIMARY APPROVE là chuyển RECEIVED ngay"
   });
 
   // Chỉ Bếp duyệt APPROVE -> Đủ điều kiện RECEIVED ngay lập tức!
-  const res = await f.service.decide(f.deliveryId, approveDecision, kitchenPrincipal);
+  const res = await f.service.decide(
+    f.deliveryId,
+    approveDecision,
+    kitchenPrincipal,
+  );
   assert.equal(res.status, "RECEIVED");
   assert.equal(f.getStatus(), "RECEIVED");
 });
@@ -679,10 +752,18 @@ void test("T9: Phụ huynh REJECT khi PENDING_APPROVAL không làm hỏng đợt
   assert.equal(f.getStatus(), "PENDING_APPROVAL");
 
   // Các bộ phận khác (Kho, Dinh dưỡng) vẫn tiếp tục duyệt được
-  const resKho = await f.service.decide(f.deliveryId, approveDecision, warehousePrincipal);
+  const resKho = await f.service.decide(
+    f.deliveryId,
+    approveDecision,
+    warehousePrincipal,
+  );
   assert.equal(resKho.status, "PENDING_APPROVAL");
 
-  const resDD = await f.service.decide(f.deliveryId, approveDecision, nutritionPrincipal);
+  const resDD = await f.service.decide(
+    f.deliveryId,
+    approveDecision,
+    nutritionPrincipal,
+  );
   assert.equal(resDD.status, "RECEIVED");
 });
 
@@ -762,7 +843,9 @@ void test("T12: BGH đổi cấu hình sau khi xe đến, đợt đang kiểm gi
   const detail = await f.service.detail(f.deliveryId, kitchenPrincipal);
   // Bếp vẫn là PRIMARY của đợt này theo snapshot
   assert.equal(detail.currentTier, "PRIMARY");
-  const kitchenRole = detail.requiredRoles.find((r) => r.code === ROLES.SCHOOL_KITCHEN_STAFF);
+  const kitchenRole = detail.requiredRoles.find(
+    (r) => r.code === ROLES.SCHOOL_KITCHEN_STAFF,
+  );
   assert.equal(kitchenRole?.tier, "PRIMARY");
 });
 
@@ -776,19 +859,35 @@ void test("T13: Đợt legacy không snapshot cần đủ cả 4 role APPROVE m�
   });
 
   // Bếp APPROVE -> PENDING_APPROVAL
-  const r1 = await f.service.decide(f.deliveryId, approveDecision, kitchenPrincipal);
+  const r1 = await f.service.decide(
+    f.deliveryId,
+    approveDecision,
+    kitchenPrincipal,
+  );
   assert.equal(r1.status, "PENDING_APPROVAL");
 
   // Kho APPROVE -> PENDING_APPROVAL
-  const r2 = await f.service.decide(f.deliveryId, approveDecision, warehousePrincipal);
+  const r2 = await f.service.decide(
+    f.deliveryId,
+    approveDecision,
+    warehousePrincipal,
+  );
   assert.equal(r2.status, "PENDING_APPROVAL");
 
   // Dinh dưỡng APPROVE -> Vẫn PENDING_APPROVAL (vì theo luật legacy cần đủ cả Phụ huynh)
-  const r3 = await f.service.decide(f.deliveryId, approveDecision, nutritionPrincipal);
+  const r3 = await f.service.decide(
+    f.deliveryId,
+    approveDecision,
+    nutritionPrincipal,
+  );
   assert.equal(r3.status, "PENDING_APPROVAL");
 
   // Phụ huynh APPROVE -> lúc này mới RECEIVED!
-  const r4 = await f.service.decide(f.deliveryId, approveDecision, parentsPrincipal);
+  const r4 = await f.service.decide(
+    f.deliveryId,
+    approveDecision,
+    parentsPrincipal,
+  );
   assert.equal(r4.status, "RECEIVED");
 });
 
@@ -833,7 +932,10 @@ void test("T15: Response DTO tính đúng canConfirmArrival, canInspect, current
   assert.equal(kitchenDetail.currentTier, "PRIMARY");
 
   // Kho (REQUIRED) -> canConfirmArrival = false
-  const warehouseDetail = await f.service.detail(f.deliveryId, warehousePrincipal);
+  const warehouseDetail = await f.service.detail(
+    f.deliveryId,
+    warehousePrincipal,
+  );
   assert.equal(warehouseDetail.canConfirmArrival, false);
   assert.equal(warehouseDetail.canInspect, false);
   assert.equal(warehouseDetail.currentTier, "REQUIRED");

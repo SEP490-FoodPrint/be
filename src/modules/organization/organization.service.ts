@@ -7,9 +7,7 @@ import {
   type DeliveryInspectionRoleCode,
   type DeliveryInspectionTierCode,
 } from "../../constants/delivery-inspection";
-import type {
-  PrismaClient,
-} from "../../generated/prisma/client";
+import type { PrismaClient } from "../../generated/prisma/client";
 import {
   assertPermission,
   withSchoolTransaction,

@@ -9698,11 +9698,22 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
 
         const missingEntryIssue =
           "Chưa cấu hình danh mục nguyên liệu đang hoạt động của trường để tiếp nhận lô";
+        // Only the school's PRIMARY inspection role (kitchen staff by default)
+        // may confirm arrival; REQUIRED/OPTIONAL roles receive 403.
+        assert.equal(
+          (
+            await http.request(`/api/deliveries/${standaloneId}/arrival`, {
+              method: "POST",
+              headers: headers(deptUser.id),
+            })
+          ).status,
+          403,
+        );
         const standaloneArrival = await http.request(
           `/api/deliveries/${standaloneId}/arrival`,
           {
             method: "POST",
-            headers: headers(deptUser.id),
+            headers: headers(kitchenUser.id),
           },
         );
         assert.equal(standaloneArrival.status, 200);

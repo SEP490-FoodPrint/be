@@ -12,14 +12,15 @@ Triển khai tính năng phân nhóm bộ phận kiểm tra nguyên liệu đầ
 
 **Language/Version**: Node.js 24.22.1, TypeScript strict, CommonJS
 **Primary Dependencies**: Express, Zod, Prisma 7.10.1, PostgreSQL
-**Storage**: 
+**Storage**:
+
 - Enum `DeliveryInspectionTier` (`PRIMARY`, `REQUIRED`, `OPTIONAL`).
 - Bảng `school_delivery_inspection_roles` (cấu hình theo trường, partial unique index 1 PRIMARY).
 - Bảng `delivery_inspection_roles` (snapshot theo đợt giao, partial unique index 1 PRIMARY).
-**Testing**: Node test runner qua `tsx --test`, unit tests T1–T15, update existing tests.
-**Target Platform**: Backend Express CommonJS
-**Project Type**: REST API service
-**Constraints**: 
+  **Testing**: Node test runner qua `tsx --test`, unit tests T1–T15, update existing tests.
+  **Target Platform**: Backend Express CommonJS
+  **Project Type**: REST API service
+  **Constraints**:
 - Tuân thủ constitution: không chạy migration/seed ngoài quy định.
 - Giữ nguyên envelope, không N+1 queries.
 - Chỉ BGH có quyền cấu hình; `schoolId` lấy từ principal.
@@ -27,14 +28,14 @@ Triển khai tính năng phân nhóm bộ phận kiểm tra nguyên liệu đầ
 
 ## Constitution Check
 
-| Nguyên tắc | Trạng thái | Bằng chứng thiết kế |
-|---|---|---|
-| I. Kiến trúc module phân lớp | PASS | Controller chỉ điều phối; Zod schema strict; DTO tách biệt request/response; repository sở hữu Prisma queries. |
-| II. Phân quyền và cô lập tổ chức | PASS | Permission `school_delivery_inspection.manage`; kiểm tra BGH; `schoolId` lấy từ session; recheck trong transaction. |
-| III. An toàn cơ sở dữ liệu | PASS | Tạo migration file mới `20261123000100_delivery_inspection_tiers/migration.sql`; không sửa migration cũ; không db push; apply local có kiểm soát. |
-| IV. Transaction, cache và rate limit | PASS | `withSchoolTransaction` cho cấu hình; transaction nội bộ cho arrival (markArrived + snapshot) và decide. |
-| V. Hợp đồng HTTP và dữ liệu đầu ra | PASS | Giữ nguyên response envelope `sendSuccess`/`sendError`, map trường cho phép trong response DTO. |
-| VI. Phát triển theo spec | PASS | Nhánh `feat/delivery-inspection-tiers`; spec/plan/tasks đầy đủ; không có điểm chưa làm rõ. |
+| Nguyên tắc                           | Trạng thái | Bằng chứng thiết kế                                                                                                                               |
+| ------------------------------------ | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| I. Kiến trúc module phân lớp         | PASS       | Controller chỉ điều phối; Zod schema strict; DTO tách biệt request/response; repository sở hữu Prisma queries.                                    |
+| II. Phân quyền và cô lập tổ chức     | PASS       | Permission `school_delivery_inspection.manage`; kiểm tra BGH; `schoolId` lấy từ session; recheck trong transaction.                               |
+| III. An toàn cơ sở dữ liệu           | PASS       | Tạo migration file mới `20261123000100_delivery_inspection_tiers/migration.sql`; không sửa migration cũ; không db push; apply local có kiểm soát. |
+| IV. Transaction, cache và rate limit | PASS       | `withSchoolTransaction` cho cấu hình; transaction nội bộ cho arrival (markArrived + snapshot) và decide.                                          |
+| V. Hợp đồng HTTP và dữ liệu đầu ra   | PASS       | Giữ nguyên response envelope `sendSuccess`/`sendError`, map trường cho phép trong response DTO.                                                   |
+| VI. Phát triển theo spec             | PASS       | Nhánh `feat/delivery-inspection-tiers`; spec/plan/tasks đầy đủ; không có điểm chưa làm rõ.                                                        |
 
 ## Design
 
@@ -91,10 +92,34 @@ model DeliveryInspectionRole {
      {
        "configured": false,
        "roles": [
-         { "roleCode": "SCHOOL_KITCHEN_STAFF", "roleName": "Nhân viên Bếp / Bếp trưởng", "tier": "PRIMARY", "tierLabel": "Người duyệt chính", "editable": true },
-         { "roleCode": "INGREDIENT_MANAGEMENT_DEPARTMENT", "roleName": "Bộ phận Quản lý Kho & Nguyên liệu", "tier": "REQUIRED", "tierLabel": "Bắt buộc duyệt", "editable": true },
-         { "roleCode": "SCHOOL_NUTRITION_OFFICER", "roleName": "Nhân viên Dinh dưỡng", "tier": "REQUIRED", "tierLabel": "Bắt buộc duyệt", "editable": true },
-         { "roleCode": "PARENTS_COMMITTEE", "roleName": "Ban Đại diện Phụ huynh", "tier": "OPTIONAL", "tierLabel": "Tùy chọn", "editable": false }
+         {
+           "roleCode": "SCHOOL_KITCHEN_STAFF",
+           "roleName": "Nhân viên Bếp / Bếp trưởng",
+           "tier": "PRIMARY",
+           "tierLabel": "Người duyệt chính",
+           "editable": true
+         },
+         {
+           "roleCode": "INGREDIENT_MANAGEMENT_DEPARTMENT",
+           "roleName": "Bộ phận Quản lý Kho & Nguyên liệu",
+           "tier": "REQUIRED",
+           "tierLabel": "Bắt buộc duyệt",
+           "editable": true
+         },
+         {
+           "roleCode": "SCHOOL_NUTRITION_OFFICER",
+           "roleName": "Nhân viên Dinh dưỡng",
+           "tier": "REQUIRED",
+           "tierLabel": "Bắt buộc duyệt",
+           "editable": true
+         },
+         {
+           "roleCode": "PARENTS_COMMITTEE",
+           "roleName": "Ban Đại diện Phụ huynh",
+           "tier": "OPTIONAL",
+           "tierLabel": "Tùy chọn",
+           "editable": false
+         }
        ],
        "updatedAt": null
      }

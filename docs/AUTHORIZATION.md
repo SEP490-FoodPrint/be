@@ -471,16 +471,17 @@ Module `ingredient-quality-feedback` dùng phân quyền động theo DB trên t
 ## Cấu hình nhóm duyệt kiểm nhận nguyên liệu theo trường (delivery-inspection-tiers)
 
 Module `organization` và `delivery` hỗ trợ cấu hình phân nhóm duyệt linh hoạt theo từng trường thay vì hardcode 4 bộ phận cố định:
+
 - Nhóm 1 (`PRIMARY`): Đúng 1 vai trò (mặc định Bếp trưởng `SCHOOL_KITCHEN_STAFF`). Duy nhất vai trò này được bấm "Xác nhận xe đã đến" (`POST /api/deliveries/:id/arrival`), đồng thời bắt buộc phải duyệt kiểm nhận.
 - Nhóm 2 (`REQUIRED`): Bắt buộc phải duyệt chấp thuận (`ACCEPTED`) thì đợt giao mới hoàn tất chuyển sang `RECEIVED` (mặc định Kho `INGREDIENT_MANAGEMENT_DEPARTMENT` và Dinh dưỡng `SCHOOL_NUTRITION_OFFICER`).
 - Nhóm 3 (`OPTIONAL`): Ban Đại diện Phụ huynh (`PARENTS_COMMITTEE`) luôn cố định ở nhóm này (chỉ đọc trên UI, không cho BGH sửa, không lưu vào DB cấu hình trường). Ý kiến từ chối (`REJECTED`) của nhóm OPTIONAL chỉ mang tính chất tham khảo, không làm chuyển đợt giao sang `REJECTED` và không tính vào giới hạn `cap3`.
 
-| Method | Path                                          | Vai trò và quyền                                                                                                                                                 |
-| ------ | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| GET    | `/api/schools/me/delivery-inspection-roles`   | `school_delivery_inspection.manage`; vai trò `SCHOOL_MANAGEMENT_BOARD`, tổ chức `SCHOOL`. Trả danh sách 4 vai trò kèm `tier`, nhãn tiếng Việt và cờ `editable`.   |
-| PUT    | `/api/schools/me/delivery-inspection-roles`   | `school_delivery_inspection.manage`; vai trò `SCHOOL_MANAGEMENT_BOARD`, tổ chức `SCHOOL`. Body gồm 3 vai trò (`PARENTS_COMMITTEE` bị loại trừ), đúng 1 PRIMARY. |
-| POST   | `/api/deliveries/:id/arrival`                 | `delivery.inspect`; chỉ tài khoản có vai trò `PRIMARY` theo snapshot của đợt giao (hoặc cấu hình trường) mới được xác nhận xe đến.                              |
-| POST   | `/api/deliveries/:id/inspections`             | `delivery.inspect`; tài khoản có vai trò thuộc đợt giao. Sau khi đợt giao đã `RECEIVED`, khóa duyệt trả `409 Conflict`.                                          |
+| Method | Path                                        | Vai trò và quyền                                                                                                                                                |
+| ------ | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/schools/me/delivery-inspection-roles` | `school_delivery_inspection.manage`; vai trò `SCHOOL_MANAGEMENT_BOARD`, tổ chức `SCHOOL`. Trả danh sách 4 vai trò kèm `tier`, nhãn tiếng Việt và cờ `editable`. |
+| PUT    | `/api/schools/me/delivery-inspection-roles` | `school_delivery_inspection.manage`; vai trò `SCHOOL_MANAGEMENT_BOARD`, tổ chức `SCHOOL`. Body gồm 3 vai trò (`PARENTS_COMMITTEE` bị loại trừ), đúng 1 PRIMARY. |
+| POST   | `/api/deliveries/:id/arrival`               | `delivery.inspect`; chỉ tài khoản có vai trò `PRIMARY` theo snapshot của đợt giao (hoặc cấu hình trường) mới được xác nhận xe đến.                              |
+| POST   | `/api/deliveries/:id/inspections`           | `delivery.inspect`; tài khoản có vai trò thuộc đợt giao. Sau khi đợt giao đã `RECEIVED`, khóa duyệt trả `409 Conflict`.                                         |
 
 Khi xe đến, snapshot cấu hình nhóm duyệt được lưu bất biến vào bảng `delivery_inspection_roles`. Mọi cập nhật cấu hình của Ban Giám hiệu sau thời điểm đó chỉ áp dụng cho các đợt xe đến mới.
 

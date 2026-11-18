@@ -17,12 +17,14 @@ Là thành viên Ban Giám Hiệu (`SCHOOL_MANAGEMENT_BOARD`), tôi muốn xem v
 **Why this priority**: Cung cấp khả năng tùy biến quy trình kiểm nhận cho từng trường, chuyển từ cơ chế hardcode 4 bên sang cơ chế phân nhóm linh hoạt.
 
 **Independent Test**:
+
 - Đăng nhập tài khoản BGH, truy cập API cấu hình: kiểm tra trường chưa cấu hình nhận giá trị mặc định (Bếp = PRIMARY, Kho & Dinh dưỡng = REQUIRED, Phụ huynh = OPTIONAL).
 - Gửi cấu hình hợp lệ (đủ 3 role, đúng 1 PRIMARY): dữ liệu được cập nhật trong transaction.
 - Gửi cấu hình không hợp lệ (0 PRIMARY, 2 PRIMARY, trùng role, gửi Phụ huynh, role lạ): nhận HTTP 400 và lỗi tiếng Việt.
 - Tài khoản không phải BGH hoặc thiếu permission `school_delivery_inspection.manage`: nhận HTTP 403.
 
 **Acceptance Scenarios**:
+
 1. **Given** trường chưa cấu hình, **When** BGH gọi `GET /api/schools/me/delivery-inspection-roles`, **Then** hệ thống trả về cấu hình mặc định với `configured: false`, Bếp là `PRIMARY`, Kho & Dinh dưỡng là `REQUIRED`, Phụ huynh là `OPTIONAL`.
 2. **Given** BGH gửi `PUT /api/schools/me/delivery-inspection-roles` với 3 role hợp lệ và đúng 1 `PRIMARY`, **Then** hệ thống ghi nhận cấu hình mới và trả về `configured: true`.
 3. **Given** BGH gửi payload sai (thiếu role, trùng role, 0 hoặc 2 PRIMARY, hoặc gửi `PARENTS_COMMITTEE`), **Then** hệ thống trả về HTTP 400 với thông báo lỗi tiếng Việt cụ thể.
@@ -36,11 +38,13 @@ Là nhân sự thuộc bộ phận duyệt chính (`PRIMARY`) của trường, t
 **Why this priority**: Đảm bảo chỉ đúng 1 bộ phận chịu trách nhiệm tiếp nhận xe được quyền xác nhận xe đến, đồng thời lưu giữ snapshot bất biến cho toàn bộ đợt giao đó.
 
 **Independent Test**:
+
 - Tài khoản thuộc role PRIMARY gọi `POST /api/deliveries/:id/arrival`: thành công chuyển trạng thái `ARRIVED` và tạo 4 dòng snapshot trong `delivery_inspection_roles`.
 - Tài khoản thuộc role REQUIRED hoặc OPTIONAL gọi `POST /api/deliveries/:id/arrival`: nhận HTTP 403.
 - Khi BGH thay đổi cấu hình sau khi xe đến: đợt đang kiểm nhận vẫn áp dụng snapshot cũ lúc xe đến.
 
 **Acceptance Scenarios**:
+
 1. **Given** đợt giao `IN_TRANSIT` và người dùng thuộc role `PRIMARY` của trường, **When** gọi `POST /api/deliveries/:id/arrival`, **Then** đợt giao chuyển sang `ARRIVED` và tạo snapshot nhóm duyệt tương ứng.
 2. **Given** người dùng thuộc role `REQUIRED` hoặc `OPTIONAL`, **When** gọi `POST /api/deliveries/:id/arrival`, **Then** hệ thống từ chối với HTTP 403 "Chỉ người duyệt chính (<tên role PRIMARY>) được xác nhận xe đã đến".
 
@@ -53,12 +57,14 @@ Là nhân viên kiểm nhận (Bếp, Kho, Dinh dưỡng, hoặc Ban Phụ huynh
 **Why this priority**: Tự động hóa tiếp nhận kho khi các bộ phận bắt buộc đồng ý mà không bị nghẽn bởi bộ phận tùy chọn, đồng thời bảo vệ quy trình trước quyết định từ chối không hợp lệ.
 
 **Independent Test**:
+
 - Role PRIMARY + tất cả role REQUIRED duyệt `APPROVE` (kể cả khi Phụ huynh chưa duyệt): đợt giao chuyển ngay sang `RECEIVED` và nhập kho.
 - Role OPTIONAL (Phụ huynh) bấm `REJECT`: hệ thống ghi nhận ý kiến, giữ nguyên trạng thái đợt giao, không tăng số lần từ chối (cap3).
 - Role PRIMARY hoặc REQUIRED bấm `REJECT`: đợt giao chuyển sang `REJECTED` và tăng số lần từ chối cap3.
 - Sau khi đợt giao đã `RECEIVED` hoặc `REJECTED`: mọi hành vi duyệt tiếp theo đều bị chặn với HTTP 409.
 
 **Acceptance Scenarios**:
+
 1. **Given** đợt giao `ARRIVED` hoặc `PENDING_APPROVAL`, **When** role `PRIMARY` và tất cả role `REQUIRED` duyệt `APPROVE`, **Then** đợt giao chuyển `RECEIVED` và các lot được nhập kho.
 2. **Given** role `OPTIONAL` (Ban Phụ huynh) duyệt `REJECT`, **Then** ý kiến được lưu, trạng thái không đổi và không tính vào cap3 từ chối đợt giao.
 3. **Given** role `PRIMARY` hoặc `REQUIRED` duyệt `REJECT`, **Then** đợt giao chuyển sang `REJECTED` và tính vào cap3.

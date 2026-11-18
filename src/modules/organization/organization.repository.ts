@@ -193,9 +193,7 @@ export interface OrganizationRepository {
     schoolId: string,
     data: { lunchTime: Date | null; afternoonMealTime: Date | null },
   ): Promise<{ lunchTime: Date | null; afternoonMealTime: Date | null }>;
-  findDeliveryInspectionRoles(
-    schoolId: string,
-  ): Promise<
+  findDeliveryInspectionRoles(schoolId: string): Promise<
     Array<{
       tier: DeliveryInspectionTier;
       updatedAt: Date;

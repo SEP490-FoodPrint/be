@@ -106,7 +106,7 @@ export async function databaseOperation<T>(
   } catch (error) {
     if (error instanceof HttpError) throw error;
     // Driver errors may include connection URLs or query details.
-    console.error("Database operation failed:", error);
+    console.error("Database operation failed");
     throw new HttpError(
       503,
       "Không thể xử lý phân quyền. Vui lòng thử lại sau.",
