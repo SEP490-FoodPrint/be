@@ -1,6 +1,9 @@
 import { asyncHandler } from "../../utils/async-handler";
 import { sendSuccess, sendError } from "../../utils/response";
-import { getMealTraceabilitySchema } from "./meal-traceability.validation";
+import {
+  getMealTraceabilitySchema,
+  publicSchoolClassesParamsSchema,
+} from "./meal-traceability.validation";
 import { mealTraceabilityService } from "./meal-traceability.service";
 
 export const mealTraceabilityController = {
@@ -29,5 +32,26 @@ export const mealTraceabilityController = {
     }
 
     sendSuccess(res, result, "Truy xuất nguồn gốc suất ăn thành công");
+  }),
+
+  listPublicSchoolClasses: asyncHandler(async (req, res) => {
+    const parsed = publicSchoolClassesParamsSchema.safeParse(req.params);
+    if (!parsed.success) {
+      sendError(
+        res,
+        "Mã trường không hợp lệ",
+        400,
+        parsed.error.flatten().fieldErrors,
+      );
+      return;
+    }
+    const result = await mealTraceabilityService.listPublicSchoolClasses(
+      parsed.data,
+    );
+    if (!result) {
+      sendError(res, "Không tìm thấy trường", 404);
+      return;
+    }
+    sendSuccess(res, result, "Danh sách lớp học");
   }),
 };
