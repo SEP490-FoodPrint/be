@@ -250,7 +250,7 @@ export const listScopes = {
     if (p.orgType === "SCHOOL" && isComplaintSubmitter(p.role))
       return {
         DailyMealPortion: { Class: { schoolId: school(p) } },
-        submittedByUserId: p.id,
+        Complaint: { senderUserId: p.id },
       };
     throw new HttpError(403, "Vai trò không được phép xem khiếu nại");
   },
@@ -443,7 +443,7 @@ export const listScopes = {
       return {
         Delivery: { schoolId: scope.schoolId },
         ...(scope.submittedByUserId
-          ? { submittedByUserId: scope.submittedByUserId }
+          ? { Complaint: { senderUserId: scope.submittedByUserId } }
           : {}),
       };
     }

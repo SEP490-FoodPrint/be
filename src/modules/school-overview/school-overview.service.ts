@@ -36,16 +36,18 @@ export async function getSchoolOverview(
         select: { id: true, title: true, status: true, weekStartDate: true },
         orderBy: { weekStartDate: "desc" },
       }),
-      db.mealComplaint.groupBy({
-        by: ["status", "complaintType"],
+      db.mealComplaint.findMany({
         where: {
-          DailyMealPortion: { Class: { schoolId } },
+          schoolId,
           ...(isComplaintSubmitter(principal.role)
-            ? { submittedByUserId: principal.id }
+            ? { Complaint: { senderUserId: principal.id } }
             : {}),
           ...(!canReadComplaints ? { id: { in: [] } } : {}),
         },
-        _count: { _all: true },
+        select: {
+          complaintType: true,
+          Complaint: { select: { status: true } },
+        },
       }),
       db.schoolSupplierRelationship.groupBy({
         by: ["status"],
@@ -79,11 +81,23 @@ export async function getSchoolOverview(
     school,
     menus: allowed("menu.view") ? menus : null,
     complaints: canReadComplaints
-      ? complaints.map(({ status, complaintType, _count }) => ({
-          status,
-          type: complaintType,
-          count: _count._all,
-        }))
+      ? (() => {
+          const map = new Map<string, { status: string; type: string; count: number }>();
+          for (const item of complaints) {
+            const status =
+              item.Complaint.status === "RESPONDED"
+                ? "RESOLVED"
+                : item.Complaint.status;
+            const key = `${status}_${item.complaintType}`;
+            const existing = map.get(key);
+            if (existing) {
+              existing.count += 1;
+            } else {
+              map.set(key, { status, type: item.complaintType, count: 1 });
+            }
+          }
+          return Array.from(map.values());
+        })()
       : null,
     suppliers: allowed(
       "supplier_relationship.view",

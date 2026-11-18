@@ -2184,23 +2184,59 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
     return db.$transaction(async (tx) => {
       const sequence = await feedbackRepoFixture.nextComplaintCodeSequence(tx);
       const complaintCode = formatComplaintCode(sequence);
-      return tx.ingredientQualityFeedback.create({
+      const complaintId = input.id ?? randomUUID();
+      const status = input.status ?? "SUBMITTED";
+      const complaint = await tx.complaint.create({
         data: {
-          ...(input.id ? { id: input.id } : {}),
+          id: complaintId,
           complaintCode,
-          deliveryId: input.deliveryId,
-          ingredientLotId: input.ingredientLotId ?? null,
-          submittedByUserId: input.submittedByUserId,
+          kind: "INGREDIENT",
           title: input.title,
           description: input.description,
-          status: input.status ?? "SUBMITTED",
-          supplierResponse: input.supplierResponse ?? null,
-          respondedByUserId: input.respondedByUserId ?? null,
-          respondedAt: input.respondedAt ?? null,
+          senderUserId: input.submittedByUserId,
+          senderRoleCode: "SCHOOL_KITCHEN_STAFF",
+          status,
           ...(input.createdAt ? { createdAt: input.createdAt } : {}),
           ...(input.updatedAt ? { updatedAt: input.updatedAt } : {}),
         },
       });
+      let responseVersion = null;
+      if (input.supplierResponse && input.respondedByUserId) {
+        responseVersion = await tx.complaintResponseVersion.create({
+          data: {
+            complaintId: complaint.id,
+            version: 1,
+            respondedByUserId: input.respondedByUserId,
+            content: input.supplierResponse,
+            createdAt: input.respondedAt ?? new Date(),
+          },
+        });
+        await tx.complaint.update({
+          where: { id: complaint.id },
+          data: { currentResponseVersionId: responseVersion.id },
+        });
+      }
+      const feedback = await tx.ingredientQualityFeedback.create({
+        data: {
+          id: complaint.id,
+          kind: "INGREDIENT",
+          deliveryId: input.deliveryId,
+          ingredientLotId: input.ingredientLotId ?? null,
+        },
+      });
+      return {
+        ...feedback,
+        complaintCode,
+        title: complaint.title,
+        description: complaint.description,
+        status: complaint.status,
+        submittedByUserId: complaint.senderUserId,
+        createdAt: complaint.createdAt,
+        updatedAt: complaint.updatedAt,
+        supplierResponse: responseVersion?.content ?? null,
+        respondedByUserId: responseVersion?.respondedByUserId ?? null,
+        respondedAt: responseVersion?.createdAt ?? null,
+      };
     });
   }
 
@@ -2314,14 +2350,23 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
       await assert.rejects(
         db.$transaction(async (tx) => {
           const seq = await feedbackRepoFixture.nextComplaintCodeSequence(tx);
-          await tx.ingredientQualityFeedback.create({
+          const complaint = await tx.complaint.create({
             data: {
               id: rolledBackId,
               complaintCode: formatComplaintCode(seq),
-              deliveryId: del1.id,
-              submittedByUserId: schActor1.id,
+              kind: "INGREDIENT",
               title: "Rolled back complaint",
               description: "Must not persist",
+              senderUserId: schActor1.id,
+              senderRoleCode: "SCHOOL_KITCHEN_STAFF",
+              status: "SUBMITTED",
+            },
+          });
+          await tx.ingredientQualityFeedback.create({
+            data: {
+              id: complaint.id,
+              kind: "INGREDIENT",
+              deliveryId: del1.id,
             },
           });
           throw new Error("SIMULATED_PRODUCER_ROLLBACK");
@@ -2343,7 +2388,7 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
       });
       const afterSeq = parseCanonicalComplaintCode(afterRollback.complaintCode);
       assert(afterSeq !== null && afterSeq > seqs[0] && afterSeq > seqs[1]);
-      const reloaded = await db.ingredientQualityFeedback.findUniqueOrThrow({
+      const reloaded = await db.complaint.findUniqueOrThrow({
         where: { id: afterRollback.id },
       });
       assert.equal(reloaded.complaintCode, afterRollback.complaintCode);
@@ -3282,15 +3327,14 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
 
       // External entities and complaint sequence remain untouched
       assert.deepEqual(await snapshotExternal(), before);
-      const updatedTarget =
-        await db.ingredientQualityFeedback.findUniqueOrThrow({
-          where: { id: fTarget.id },
-        });
+      const updatedTarget = await db.complaint.findUniqueOrThrow({
+        where: { id: fTarget.id },
+      });
       assert.equal(updatedTarget.id, fTarget.id);
       assert.equal(updatedTarget.complaintCode, fTarget.complaintCode);
       assert.equal(updatedTarget.title, fTarget.title);
       assert.equal(updatedTarget.description, fTarget.description);
-      assert.equal(updatedTarget.submittedByUserId, submitter.id);
+      assert.equal(updatedTarget.senderUserId, submitter.id);
       assert.equal(+updatedTarget.createdAt, +fTarget.createdAt);
       assert(+updatedTarget.updatedAt >= +fTarget.updatedAt);
 
@@ -3332,13 +3376,12 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
           ),
         (err: unknown) => err instanceof HttpError && err.statusCode === 503,
       );
-      const afterRb = await db.ingredientQualityFeedback.findUniqueOrThrow({
+      const afterRb = await db.complaint.findUniqueOrThrow({
         where: { id: fRollback.id },
+        include: { currentResponseVersion: true },
       });
       assert.equal(afterRb.status, "SUBMITTED");
-      assert.equal(afterRb.supplierResponse, null);
-      assert.equal(afterRb.respondedByUserId, null);
-      assert.equal(afterRb.respondedAt, null);
+      assert.equal(afterRb.currentResponseVersion, null);
     },
   );
 });
