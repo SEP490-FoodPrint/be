@@ -682,6 +682,17 @@ model IngredientQualityFeedback {
   @@schema("foodprint")
 }
 
+/// Technical and system complaints (kind = SYSTEM, C06).
+model SystemComplaint {
+  id        String        @id @db.Uuid
+  kind      ComplaintKind @default(SYSTEM)
+  Complaint Complaint     @relation(fields: [id, kind], references: [id, kind], onDelete: Restrict, onUpdate: NoAction)
+
+  @@unique([id, kind], map: "uq_system_complaints_id_kind")
+  @@map("system_complaints")
+  @@schema("foodprint")
+}
+
 model IngredientCategory {
   id                  String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   categoryName        String       @map("category_name") @db.VarChar(120)
@@ -816,6 +827,7 @@ model Complaint {
 
   mealComplaint                 MealComplaint?
   ingredientQualityFeedback     IngredientQualityFeedback?
+  systemComplaint               SystemComplaint?
 
   @@unique([id, kind], map: "uq_complaints_id_kind")
   @@index([kind, createdAt(sort: Desc), id], map: "idx_complaints_kind_created")
