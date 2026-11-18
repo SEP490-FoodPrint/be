@@ -943,6 +943,33 @@ export function createOrderIntakeService(
             400,
             "Nguyên liệu phải thuộc trường và đúng nhà cung cấp.",
           );
+        // Đợt 2 (mã đuôi -D2 / -D2-n) tính theo sĩ số thực tế: mọi lớp có đăng ký suất ăn phải chốt
+        // điểm danh bữa trưa của ngày giao trước khi được tạo yêu cầu nhập hàng.
+        if (/-D2(-\d+)?$/.test(body.requestNo)) {
+          const notFinalized = await tx.class.findMany({
+            where: {
+              schoolId,
+              status: "ACTIVE",
+              registeredMealPortions: { gt: 0 },
+              NOT: {
+                dailyMealPortions: {
+                  some: {
+                    mealDate: body.deliveryDate,
+                    mealType: "LUNCH",
+                    status: "FINALIZED",
+                  },
+                },
+              },
+            },
+            select: { name: true },
+            orderBy: { name: "asc" },
+          });
+          if (notFinalized.length)
+            throw new HttpError(
+              409,
+              `Chưa thể tạo yêu cầu nhập hàng Đợt 2: còn ${notFinalized.length} lớp chưa chốt điểm danh (${notFinalized.map((c) => c.name).join(", ")})`,
+            );
+        }
         const result = await orderRepository.createDraft(tx, {
           schoolId,
           supplierId: body.supplierId,

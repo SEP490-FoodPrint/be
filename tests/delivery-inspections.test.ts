@@ -50,6 +50,7 @@ void test("all four school inspection roles read scoped deliveries, filtered cou
   for (const role of deliveryInspectionRoles) {
     const principal = { ...testStaff, role, permissions: ["delivery.view"] };
     const database = {
+      ingredientEntry: { findMany: () => Promise.resolve([]) },
       delivery: {
         findMany: ({
           where,
@@ -61,7 +62,10 @@ void test("all four school inspection roles read scoped deliveries, filtered cou
           take: number;
         }) => {
           assert.equal(where.schoolId, principal.schoolId);
-          assert.equal(where.AND.length, 2);
+          // Bộ phận khác Ban quản lý nguyên liệu có thêm điều kiện ẩn xe đồ khô.
+          const hidesDry = role !== "INGREDIENT_MANAGEMENT_DEPARTMENT";
+          assert.equal(where.AND.length, hidesDry ? 3 : 2);
+          assert.equal(JSON.stringify(where).includes('"NOT"'), hidesDry);
           assert.equal(skip, 10);
           assert.equal(take, 10);
           assert.match(JSON.stringify(where), /2026-11-12T17:00:00.000Z/);
@@ -103,6 +107,7 @@ void test("inspection detail keeps separate delivery identities and serializes a
   const otherId = "22222222-2222-4222-8222-222222222222";
   const service = createDeliveryInspectionService(() =>
     Promise.resolve({
+      ingredientEntry: { findMany: () => Promise.resolve([]) },
       delivery: {
         findFirst: ({ where }: { where: { id: string; schoolId: string } }) => {
           assert.equal(where.schoolId, principal.schoolId);
@@ -121,7 +126,7 @@ void test("inspection detail keeps separate delivery identities and serializes a
                   schoolId: principal.schoolId,
                   ingredientId: id,
                   status: "ACTIVE",
-                  handlingType: "DRY_STOCK",
+                  handlingType: "DIRECT_USE",
                 },
                 SupplyRequestItem: {
                   IngredientEntry: {
@@ -154,6 +159,125 @@ void test("inspection detail keeps separate delivery identities and serializes a
   assert.equal(first.supplyRequestId, second.supplyRequestId);
   assert.equal(first.deliveryItems?.[0].actualQuantity, "6.125");
   assert.equal(first.deliveryItems?.[0].ingredientLots[0].status, "BLOCKED");
+});
+
+void test("xe chỉ có đồ khô: bộ phận khác không xem được, Ban quản lý nguyên liệu xem được", async () => {
+  const dryRow = {
+    ...row(id),
+    deliveryItems: [
+      {
+        id,
+        ingredientId: id,
+        ingredientEntryId: id,
+        actualQuantity: "5",
+        unit: "kg",
+        Ingredient: { name: "Gạo", ingredientCategory: null },
+        IngredientEntry: {
+          id,
+          schoolId: testStaff.schoolId,
+          ingredientId: id,
+          status: "ACTIVE",
+          handlingType: "DRY_STOCK",
+        },
+        SupplyRequestItem: null,
+        ingredientLots: [],
+      },
+    ],
+  };
+  const service = createDeliveryInspectionService(() =>
+    Promise.resolve({
+      delivery: { findFirst: () => Promise.resolve(dryRow) },
+      ingredientEntry: { findMany: () => Promise.resolve([]) },
+      ingredientLot: { findMany: () => Promise.resolve([]) },
+    } as never),
+  );
+  for (const role of deliveryInspectionRoles.filter(
+    (r) => r !== "INGREDIENT_MANAGEMENT_DEPARTMENT",
+  ))
+    await assert.rejects(
+      () =>
+        service.detail(id, {
+          ...testStaff,
+          role,
+          permissions: ["delivery.view"],
+        }),
+      { statusCode: 404 },
+    );
+  const seen = await service.detail(id, {
+    ...testStaff,
+    role: "INGREDIENT_MANAGEMENT_DEPARTMENT",
+    permissions: ["delivery.view"],
+  });
+  assert.deepEqual(
+    seen.requiredRoles.map((r) => r.code),
+    ["INGREDIENT_MANAGEMENT_DEPARTMENT"],
+  );
+});
+
+void test("xe của NCC đồ khô (nhiều nguyên liệu khô hơn tươi) chỉ Ban quản lý nguyên liệu thấy, kể cả khi chở hàng tươi", async () => {
+  const drySupplier = "33333333-3333-4333-8333-333333333333";
+  const freshRow = {
+    ...row(id),
+    supplierId: drySupplier,
+    deliveryItems: [
+      {
+        id,
+        ingredientId: id,
+        ingredientEntryId: id,
+        actualQuantity: "5",
+        unit: "hộp",
+        Ingredient: { name: "Sữa chua", ingredientCategory: null },
+        IngredientEntry: {
+          id,
+          schoolId: testStaff.schoolId,
+          ingredientId: id,
+          status: "ACTIVE",
+          handlingType: "DIRECT_USE",
+        },
+        SupplyRequestItem: null,
+        ingredientLots: [],
+      },
+    ],
+  };
+  // Danh mục trường: NCC này có 2 nguyên liệu khô, 1 tươi -> NCC đồ khô.
+  const entries = ["DRY_STOCK", "DRY_STOCK", "DIRECT_USE"].map(
+    (handlingType) => ({
+      handlingType,
+      Ingredient: { supplierId: drySupplier },
+    }),
+  );
+  let listWhere: unknown;
+  const service = createDeliveryInspectionService(() =>
+    Promise.resolve({
+      delivery: {
+        findFirst: () => Promise.resolve(freshRow),
+        findMany: ({ where }: { where: unknown }) => {
+          listWhere = where;
+          return Promise.resolve([]);
+        },
+        groupBy: () => Promise.resolve([]),
+      },
+      ingredientEntry: { findMany: () => Promise.resolve(entries) },
+      ingredientLot: { findMany: () => Promise.resolve([]) },
+    } as never),
+  );
+  const kitchen = {
+    ...testStaff,
+    role: "SCHOOL_KITCHEN_STAFF",
+    permissions: ["delivery.view"],
+  };
+  await assert.rejects(() => service.detail(id, kitchen), { statusCode: 404 });
+  await service.list(validateDeliveryInspectionQuery({}), kitchen);
+  assert(JSON.stringify(listWhere).includes(drySupplier));
+  const seen = await service.detail(id, {
+    ...testStaff,
+    role: "INGREDIENT_MANAGEMENT_DEPARTMENT",
+    permissions: ["delivery.view"],
+  });
+  assert.deepEqual(
+    seen.requiredRoles.map((r) => r.code),
+    ["INGREDIENT_MANAGEMENT_DEPARTMENT"],
+  );
 });
 
 void test("inspection rejects foreign organizations, wrong roles and missing permissions before database access", async () => {
@@ -327,7 +451,7 @@ function decisionFixture(
           schoolId: delivery.wrongSchool ? uid(999) : uid(20),
           ingredientId: uid(25),
           status: "ACTIVE",
-          handlingType: delivery.handlingType ?? "DRY_STOCK",
+          handlingType: delivery.handlingType ?? "DIRECT_USE",
         },
         SupplyRequestItem: {
           supplyRequestId: uid(22),
@@ -365,6 +489,7 @@ function decisionFixture(
     },
     school: { findUnique: () => Promise.resolve({ status: "ACTIVE" }) },
     $queryRaw: () => Promise.resolve([]),
+    ingredientEntry: { findMany: () => Promise.resolve([]) },
     delivery: {
       findFirst: ({
         where,
@@ -699,19 +824,46 @@ void test("hạn dùng: đồ khô còn ít nhất 7 ngày kể từ ngày nhậ
       delivery = f.data.deliveries[0];
     delivery.handlingType = handlingType;
     delivery.lots[0].expiry = expiry;
+    // Đồ khô chỉ Ban quản lý nguyên liệu (actors[2]) ký; đồ tươi cần đủ 4 bộ phận.
+    const signers = handlingType === "DRY_STOCK" ? [f.actors[2]] : f.actors;
     if (issue) {
       // Bị chặn ngay ở chữ ký "Đạt" đầu tiên, không ghi quyết định.
       await assert.rejects(
-        () => f.service.decide(delivery.id, approve(), f.actors[0]),
+        () => f.service.decide(delivery.id, approve(), signers[0]),
         { statusCode: 409, message: issue },
       );
       assert.equal(f.data.decisions.length, 0);
     } else {
-      for (const actor of f.actors)
+      for (const actor of signers)
         await f.service.decide(delivery.id, approve(), actor);
       assert.equal(f.data.deliveries[0].status, "RECEIVED");
     }
   }
+});
+
+void test("chuyến chỉ có đồ khô: chỉ Ban quản lý nguyên liệu kiểm tra, một chữ ký là nhập kho", async () => {
+  const f = decisionFixture(),
+    delivery = f.data.deliveries[0];
+  delivery.handlingType = "DRY_STOCK";
+  // Các bộ phận khác không được ký chuyến đồ khô.
+  for (const actor of [f.actors[0], f.actors[1], f.actors[3]])
+    await assert.rejects(
+      () => f.service.decide(delivery.id, approve(), actor),
+      {
+        statusCode: 403,
+        message:
+          "Chuyến giao đồ khô: chỉ Ban quản lý nguyên liệu kiểm tra và ký nhận",
+      },
+    );
+  assert.equal(f.data.decisions.length, 0);
+  const result = await f.service.decide(delivery.id, approve(), f.actors[2]);
+  assert.equal(result.status, "RECEIVED");
+  assert.deepEqual(
+    result.requiredRoles.map((role) => role.code),
+    ["INGREDIENT_MANAGEMENT_DEPARTMENT"],
+  );
+  assert.equal(f.data.decisions.length, 1);
+  assert.equal(f.data.receipts.length, 1);
 });
 
 void test("decision bodies reject forged actors and require a rejection reason; live revoked permissions fail before mutation", async () => {
@@ -969,7 +1121,7 @@ void test("standalone deliveries list, inspect, attach IngredientEntry on final 
             schoolId,
             ingredientId,
             status: "ACTIVE",
-            handlingType: "DRY_STOCK",
+            handlingType: "DIRECT_USE",
           }
         : null,
       SupplyRequestItem: null,
@@ -1072,6 +1224,7 @@ void test("standalone deliveries list, inspect, attach IngredientEntry on final 
             ingredientId: { in: string[] };
           };
         }) => {
+          if (!where.ingredientId) return Promise.resolve([]);
           if (
             activeEntry &&
             where.schoolId === schoolId &&
@@ -1083,7 +1236,7 @@ void test("standalone deliveries list, inspect, attach IngredientEntry on final 
                 schoolId,
                 ingredientId,
                 status: "ACTIVE",
-                handlingType: "DRY_STOCK",
+                handlingType: "DIRECT_USE",
               },
             ]);
           }
@@ -1711,7 +1864,7 @@ function v1InspectionFixture() {
               schoolId: d.schoolId,
               ingredientId: item.ingredientId,
               status: state.entryStatus,
-              handlingType: "DRY_STOCK",
+              handlingType: "DIRECT_USE",
             }
           : null,
       SupplyRequestItem: item.supplyRequestItemId
@@ -1730,7 +1883,7 @@ function v1InspectionFixture() {
                 schoolId: d.schoolId,
                 ingredientId: source?.ingredientId ?? ingredientId,
                 status: state.entryStatus,
-                handlingType: "DRY_STOCK",
+                handlingType: "DIRECT_USE",
                 Ingredient: {
                   supplierId,
                   name: source?.ingredientName ?? "Gạo ST25",
@@ -1828,6 +1981,7 @@ function v1InspectionFixture() {
           ingredientId: { in: string[] };
         };
       }) => {
+        if (!where.ingredientId) return Promise.resolve([]);
         if (state.entryStatus === "MISSING" || where.schoolId !== schoolA) {
           return Promise.resolve([]);
         }
@@ -1838,7 +1992,7 @@ function v1InspectionFixture() {
             schoolId: schoolA,
             ingredientId: item.ingredientId,
             status: state.entryStatus,
-            handlingType: "DRY_STOCK",
+            handlingType: "DIRECT_USE",
           }));
         if (
           where.ingredientId.in.includes(ingredientId) &&
@@ -1849,7 +2003,7 @@ function v1InspectionFixture() {
             schoolId: schoolA,
             ingredientId,
             status: state.entryStatus,
-            handlingType: "DRY_STOCK",
+            handlingType: "DIRECT_USE",
           });
         }
         return Promise.resolve(results);
@@ -1871,7 +2025,7 @@ function v1InspectionFixture() {
             schoolId: schoolA,
             ingredientId,
             status: state.entryStatus,
-            handlingType: "DRY_STOCK",
+            handlingType: "DIRECT_USE",
           });
         }
         return Promise.resolve(null);
@@ -2129,6 +2283,7 @@ function v1InspectionFixture() {
   let queue = Promise.resolve();
   const client = {
     delivery: tx.delivery,
+    ingredientEntry: tx.ingredientEntry,
     $transaction: async <T>(fn: (clientTx: typeof tx) => Promise<T>) => {
       const previous = queue;
       let release!: () => void;

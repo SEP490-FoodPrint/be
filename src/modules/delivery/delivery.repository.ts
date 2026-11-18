@@ -120,6 +120,7 @@ const summarySelect = {
   id: true,
   deliveryNo: true,
   schoolId: true,
+  supplierId: true,
   creationMode: true,
   traceabilityVersion: true,
   workflowVersion: true,
@@ -159,6 +160,14 @@ const summarySelect = {
       decidedAt: true,
       Role: { select: { code: true, name: true } },
       User: { select: { fullName: true } },
+    },
+  },
+  deliveryItems: {
+    select: {
+      IngredientEntry: { select: { handlingType: true } },
+      SupplyRequestItem: {
+        select: { IngredientEntry: { select: { handlingType: true } } },
+      },
     },
   },
 } as const satisfies Prisma.DeliverySelect;
@@ -239,15 +248,71 @@ const detailSelect = {
   },
 } as const satisfies Prisma.DeliverySelect;
 
+/** Xe chỉ gồm đồ khô (mọi dòng hàng là DRY_STOCK), cùng tiêu chí với requiredInspectionRoles. */
+export const dryOnlyDeliveryWhere = {
+  deliveryItems: {
+    some: {},
+    every: {
+      OR: [
+        { IngredientEntry: { handlingType: "DRY_STOCK" } },
+        {
+          ingredientEntryId: null,
+          SupplyRequestItem: { IngredientEntry: { handlingType: "DRY_STOCK" } },
+        },
+      ],
+    },
+  },
+} satisfies Prisma.DeliveryWhereInput;
+
+/**
+ * NCC đồ khô của trường: NCC có số nguyên liệu DRY_STOCK nhiều hơn DIRECT_USE trong danh mục
+ * (ingredient entries ACTIVE) của trường. Mọi xe của NCC này chỉ Ban quản lý nguyên liệu kiểm tra.
+ */
+async function drySupplierIds(tx: Tx, schoolId: string): Promise<string[]> {
+  const entries = await tx.ingredientEntry.findMany({
+    where: { schoolId, status: "ACTIVE" },
+    select: {
+      handlingType: true,
+      Ingredient: { select: { supplierId: true } },
+    },
+  });
+  const balance = new Map<string, number>();
+  for (const entry of entries) {
+    const id = entry.Ingredient.supplierId;
+    balance.set(
+      id,
+      (balance.get(id) ?? 0) + (entry.handlingType === "DRY_STOCK" ? 1 : -1),
+    );
+  }
+  return [...balance].filter(([, n]) => n > 0).map(([id]) => id);
+}
+
+/** Xe chỉ Ban quản lý nguyên liệu được thấy: xe của NCC đồ khô hoặc xe chỉ gồm đồ khô. */
+const dryDeliveryWhere = (
+  drySuppliers: string[],
+): Prisma.DeliveryWhereInput => ({
+  OR: [dryOnlyDeliveryWhere, { supplierId: { in: drySuppliers } }],
+});
+
+const markDrySupplier = <T extends { supplierId: string }>(
+  row: T,
+  drySuppliers: string[],
+) => ({ ...row, supplierIsDry: drySuppliers.includes(row.supplierId) });
+
 function inspectionWhere(
   schoolId: string,
   query: DeliveryInspectionQueryFilter,
   range?: { gte: Date; lt: Date },
+  hiddenDrySuppliers?: string[],
 ): Prisma.DeliveryWhereInput {
   return {
     schoolId,
     ...(query.status ? { status: query.status } : {}),
     AND: [
+      // Xe đồ khô chỉ hiện cho Ban quản lý nguyên liệu.
+      ...(hiddenDrySuppliers
+        ? [{ NOT: dryDeliveryWhere(hiddenDrySuppliers) }]
+        : []),
       ...(query.search
         ? [
             {
@@ -273,9 +338,11 @@ function inspectionWhere(
       ...(range
         ? [
             {
+              // Xe thuộc cả ngày giao dự kiến lẫn ngày đến thực tế: bấm "xe đến" sớm/muộn không làm
+              // xe biến khỏi ngày giao của nó với các bộ phận kiểm tra khác.
               OR: [
+                { expectedArrivalAt: range },
                 { arrivedAt: range },
-                { arrivedAt: null, expectedArrivalAt: range },
                 { arrivedAt: null, expectedArrivalAt: null, receivedAt: range },
                 {
                   arrivedAt: null,
@@ -501,43 +568,61 @@ export const deliveryInspectionRepository = {
     });
     return true;
   },
-  list(
+  async list(
     tx: Tx,
     schoolId: string,
     query: DeliveryInspectionQueryFilter,
     range?: { gte: Date; lt: Date },
+    hideDryOnly = false,
   ) {
-    return tx.delivery.findMany({
-      where: inspectionWhere(schoolId, query, range),
+    const dry = await drySupplierIds(tx, schoolId);
+    const rows = await tx.delivery.findMany({
+      where: inspectionWhere(
+        schoolId,
+        query,
+        range,
+        hideDryOnly ? dry : undefined,
+      ),
       select: summarySelect,
       orderBy: [{ createdAt: "desc" }, { id: "asc" }],
       skip: (query.page - 1) * query.limit,
       take: query.limit,
     });
+    return rows.map((row) => markDrySupplier(row, dry));
   },
-  counts(
+  async counts(
     tx: Tx,
     schoolId: string,
     query: DeliveryInspectionQueryFilter,
     range?: { gte: Date; lt: Date },
+    hideDryOnly = false,
   ) {
+    const dry = hideDryOnly ? await drySupplierIds(tx, schoolId) : undefined;
     return tx.delivery.groupBy({
       by: ["status"],
-      where: inspectionWhere(schoolId, query, range),
+      where: inspectionWhere(schoolId, query, range, dry),
       _count: { _all: true },
     });
   },
-  detail(tx: Tx, schoolId: string, id: string) {
-    return tx.delivery.findFirst({
+  async detail(tx: Tx, schoolId: string, id: string) {
+    const row = await tx.delivery.findFirst({
       where: { id, schoolId },
       select: detailSelect,
     });
+    return row && markDrySupplier(row, await drySupplierIds(tx, schoolId));
   },
   /** Tìm đợt giao của trường theo mã QR dòng hàng, mã QR lô hoặc mã đợt giao. */
-  findByScanCode(tx: Tx, schoolId: string, code: string) {
+  async findByScanCode(
+    tx: Tx,
+    schoolId: string,
+    code: string,
+    hideDryOnly = false,
+  ) {
+    const dry = hideDryOnly ? await drySupplierIds(tx, schoolId) : undefined;
     return tx.delivery.findFirst({
       where: {
         schoolId,
+        ...(dry ? { NOT: dryDeliveryWhere(dry) } : {}),
         OR: [
           { deliveryNo: code },
           { deliveryItems: { some: { qrToken: code } } },
@@ -555,7 +640,7 @@ export const deliveryInspectionRepository = {
 };
 export type DeliveryInspectionRow = Prisma.DeliveryGetPayload<{
   select: typeof summarySelect;
-}>;
+}> & { supplierIsDry?: boolean };
 export type DeliveryInspectionDetailRow = Prisma.DeliveryGetPayload<{
   select: typeof detailSelect;
-}>;
+}> & { supplierIsDry?: boolean };

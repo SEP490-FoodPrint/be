@@ -575,7 +575,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         data: {
           schoolId: school.id,
           ingredientId: ingredient.id,
-          handlingType: "DRY_STOCK",
+          handlingType: "DIRECT_USE",
         },
       });
       const line = await db.supplyRequestItem.create({
@@ -9755,7 +9755,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           data: {
             schoolId: v1School.id,
             ingredientId: v1Ingredient2.id,
-            handlingType: "DRY_STOCK",
+            handlingType: "DIRECT_USE",
             status: "ACTIVE",
           },
         });

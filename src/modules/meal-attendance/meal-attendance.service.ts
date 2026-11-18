@@ -12,6 +12,10 @@ import type {
   DailyMealPortionInput,
 } from "./meal-attendance.validation";
 import { assertPortionGroupSafety } from "../kitchen/kitchen.service";
+import {
+  allergyCountsFromGroups,
+  splitPortionsIntoGroups,
+} from "../../utils/allergy-match";
 import { getPrisma } from "../../utils/database";
 import {
   listWindow,
@@ -55,6 +59,92 @@ const readFromDatabase: ListReader = async (args) => {
   const prisma = await getPrisma();
   return prisma.dailyMealPortion.findMany(args);
 };
+
+/**
+ * Sau khi GVCN chốt sĩ số: nếu thực đơn của bữa đã duyệt và có nhóm suất, tự ghi phần chia nhóm
+ * (suất dị ứng GVCN khai lúc điểm danh -> nhóm suất riêng; còn lại -> nhóm thường) để bếp chế biến được.
+ * Thực đơn chưa duyệt / chưa có nhóm suất / đã chia rồi thì bỏ qua.
+ */
+export async function autoSplitPortionGroups(
+  tx: Prisma.TransactionClient,
+  dailyMealPortionId: string,
+  userId: string,
+  schoolId: string,
+) {
+  const demand = await tx.dailyMealPortion.findUniqueOrThrow({
+    where: { id: dailyMealPortionId },
+    select: {
+      classId: true,
+      mealDate: true,
+      mealType: true,
+      totalPortions: true,
+      status: true,
+      _count: { select: { portionGroups: true } },
+      dailyAllergyPortions: {
+        select: {
+          ingredientEntryId: true,
+          portionCount: true,
+          ClassAllergy: {
+            select: {
+              IngredientEntry: {
+                select: { Ingredient: { select: { name: true } } },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+  if (demand.status !== "FINALIZED" || demand._count.portionGroups) return;
+  const day = await tx.menuDay.findFirst({
+    where: {
+      menuDate: demand.mealDate,
+      approvalStatus: "APPROVED",
+      WeeklyMenu: {
+        schoolId,
+        OR: [
+          { isSchoolWide: true },
+          {
+            grades: {
+              some: { grade: { classes: { some: { id: demand.classId } } } },
+            },
+          },
+        ],
+      },
+    },
+    select: { id: true },
+  });
+  if (!day) return;
+  const groups = await assertPortionGroupSafety(
+    tx,
+    { menuDayId: day.id, mealType: demand.mealType },
+    schoolId,
+  );
+  if (!groups.length) return;
+  const counts = splitPortionsIntoGroups(
+    groups,
+    demand.totalPortions,
+    demand.dailyAllergyPortions.map((a) => ({
+      ingredientEntryId: a.ingredientEntryId,
+      allergenName: a.ClassAllergy.IngredientEntry.Ingredient.name,
+      portionCount: a.portionCount,
+    })),
+  );
+  if (!counts)
+    throw new HttpError(
+      422,
+      "Số suất dị ứng đã khai vượt sĩ số đã chốt của lớp",
+    );
+  for (const [portionGroupId, portionCount] of counts)
+    await tx.dailyMealPortionGroup.create({
+      data: {
+        dailyMealPortionId,
+        portionGroupId,
+        portionCount,
+        confirmedByUserId: userId,
+      },
+    });
+}
 
 export function createMealAttendanceService(
   read: ListReader = readFromDatabase,
@@ -249,7 +339,14 @@ export function createMealAttendanceService(
             date: demand.mealDate,
             mealType: demand.mealType,
           });
-          return repository.finalizeSubmission(tx, id, actor.id, new Date());
+          const finalized = await repository.finalizeSubmission(
+            tx,
+            id,
+            actor.id,
+            new Date(),
+          );
+          await autoSplitPortionGroups(tx, id, actor.id, actor.schoolId!);
+          return finalized;
         },
       );
     },
@@ -369,42 +466,56 @@ export function createMealAttendanceService(
               409,
               "Su岷 膬n 膽茫 膽瓢峄 ch峄憈 cho th峄眂 膽啤n kh谩c; kh么ng ghi 膽猫",
             );
-          const avoidedCounts = new Map<string, number>();
-          for (const group of groups)
-            for (const avoid of group.avoidances)
-              avoidedCounts.set(
-                avoid.ingredientEntryId,
-                (avoidedCounts.get(avoid.ingredientEntryId) ?? 0) +
-                  input.groups.find((g) => g.portionGroupId === group.id)!
-                    .portionCount,
-              );
+          // Quy suất nhóm riêng về dị ứng khai báo của lớp theo mã hoặc tên.
+          const master = await tx.classAllergy.findMany({
+            where: { classId: demand.classId },
+            select: {
+              ingredientEntryId: true,
+              affectedCount: true,
+              IngredientEntry: {
+                select: { Ingredient: { select: { name: true } } },
+              },
+            },
+          });
+          const {
+            byAllergy: avoidedCounts,
+            uncovered,
+            relevant,
+          } = allergyCountsFromGroups(
+            groups,
+            (groupId) =>
+              input.groups.find((g) => g.portionGroupId === groupId)!
+                .portionCount,
+            master.map((m) => ({
+              ingredientEntryId: m.ingredientEntryId,
+              allergenName: m.IngredientEntry.Ingredient.name,
+            })),
+          );
           if (
             demand.dailyAllergyPortions.some(
               (a) =>
+                relevant.has(a.ingredientEntryId) &&
                 (avoidedCounts.get(a.ingredientEntryId) ?? 0) !==
-                a.portionCount,
+                  a.portionCount,
             )
           )
             throw new HttpError(
               422,
               "Nh贸m su岷 kh谩c s峄?su岷 d峄?峄﹏g 膽茫 ch峄憈; c岷 膽峄慽 chi岷縰, kh么ng t峄?ghi 膽猫",
             );
-          const master = await tx.classAllergy.findMany({
-            where: { classId: demand.classId },
-            select: { ingredientEntryId: true, affectedCount: true },
-          });
-          for (const [entryId, count] of avoidedCounts)
-            if (
-              count > 0 &&
-              !master.some(
-                (a) =>
-                  a.ingredientEntryId === entryId && count <= a.affectedCount,
-              )
+          if (
+            uncovered ||
+            [...avoidedCounts].some(
+              ([entryId, count]) =>
+                count >
+                (master.find((m) => m.ingredientEntryId === entryId)
+                  ?.affectedCount ?? 0),
             )
-              throw new HttpError(
-                422,
-                "S峄?su岷 nh贸m v瓢峄 th么ng tin d峄?峄﹏g c峄 l峄沺; c岷 y t岷?膽峄慽 chi岷縰",
-              );
+          )
+            throw new HttpError(
+              422,
+              "S峄?su岷 nh贸m v瓢峄 th么ng tin d峄?峄﹏g c峄 l峄沺; c岷 y t岷?膽峄慽 chi岷縰",
+            );
           const unchanged =
             demand.portionGroups.length === groups.length &&
             input.groups.every((g) =>
