@@ -77,11 +77,51 @@ export const supplierOrderIdempotencyHeaderSchema = z.strictObject({
     .pipe(requestUuidSchema),
 });
 
-export const requestSourceSelectionSchema = z.strictObject({
-  supplyRequestItemId: requestUuidSchema,
-  sourceFacilityId: requestUuidSchema,
-  actualQuantity: positiveDecimalQuantitySchema,
-});
+/** Ngày của lô (YYYY-MM-DD); không gửi hoặc null nghĩa là không có. */
+const optionalLotDateSchema = z
+  .union([
+    z
+      .string({ error: "Ngày phải có định dạng YYYY-MM-DD" })
+      .regex(/^\d{4}-\d{2}-\d{2}$/, {
+        error: "Ngày phải có định dạng YYYY-MM-DD",
+      })
+      .refine(
+        (value) =>
+          Number.isFinite(Date.parse(`${value}T00:00:00Z`)) &&
+          new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value,
+        { error: "Ngày không hợp lệ" },
+      ),
+    z.null(),
+  ])
+  .optional()
+  .transform((value) => value ?? null);
+
+/** Ngày sản xuất không được sau hạn dùng. */
+const lotDatesOrder = (
+  value: { manufactureDate: string | null; expiryDate: string | null },
+  ctx: z.RefinementCtx,
+) => {
+  if (
+    value.manufactureDate &&
+    value.expiryDate &&
+    value.manufactureDate > value.expiryDate
+  )
+    ctx.addIssue({
+      code: "custom",
+      path: ["expiryDate"],
+      message: "Hạn dùng phải sau hoặc bằng ngày sản xuất",
+    });
+};
+
+export const requestSourceSelectionSchema = z
+  .strictObject({
+    supplyRequestItemId: requestUuidSchema,
+    sourceFacilityId: requestUuidSchema,
+    actualQuantity: positiveDecimalQuantitySchema,
+    manufactureDate: optionalLotDateSchema,
+    expiryDate: optionalLotDateSchema,
+  })
+  .superRefine(lotDatesOrder);
 
 export const createFromRequestBodySchema = z.strictObject({
   sourceType: z.literal("REQUEST", {
@@ -112,12 +152,16 @@ export const createFromRequestBodySchema = z.strictObject({
   note: optionalTrimmedText(2000, "Ghi chú"),
 });
 
-export const standaloneDeliveryItemSchema = z.strictObject({
-  ingredientId: requestUuidSchema,
-  sourceFacilityId: requestUuidSchema,
-  actualQuantity: positiveDecimalQuantitySchema,
-  unit: requiredText(30),
-});
+export const standaloneDeliveryItemSchema = z
+  .strictObject({
+    ingredientId: requestUuidSchema,
+    sourceFacilityId: requestUuidSchema,
+    actualQuantity: positiveDecimalQuantitySchema,
+    unit: requiredText(30),
+    manufactureDate: optionalLotDateSchema,
+    expiryDate: optionalLotDateSchema,
+  })
+  .superRefine(lotDatesOrder);
 
 export const createStandaloneBodySchema = z.strictObject({
   sourceType: z.literal("STANDALONE", {

@@ -14,6 +14,11 @@
 - FR-014 reuses `assertReceipt` and `verifyRequestDeliveryReceipt` inside a non-writing `receiptIssue` helper; standalone deliveries simulate the entry attachment in memory. The final-approval write path is unchanged. No schema change.
 - FR-015 is a business rule in `kitchen.service.ts` `executePlan`, checked after the menu approval guard and before any stock read or write. No schema change.
 - FR-016 uses the existing `retained_food_samples.storage_unit_id` column and `sample_storage_units`; no migration. The capacity check counts `STORED` samples in the transaction after locking the unit row.
+- FR-017 extends the existing lot date check in `assertReceipt`; it runs both in the read-only `receiptIssue` and in the final approval. No schema change.
+- FR-018 is opt-in so the default safe list projection and its tests stay unchanged; the extra fields match the existing school detail response. No schema change.
+- FR-019 writes the existing `ingredient_lots.manufacture_date`/`expiry_date` columns; handling type comes from the school ingredient entry. No schema change.
+- FR-020 derives the status at read time instead of a scheduled write, so no background job is needed and stored history stays unchanged.
+- FR-021 needs no migration: codes are computed from existing columns (`lot_code`, `batch_code`, `code`) with `pg_advisory_xact_lock(hashtext('foodprint:fp-code:<type>'))`; regex filtering precedes the numeric cast so legacy codes never break the query.
 
 ## Approach
 

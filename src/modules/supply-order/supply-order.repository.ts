@@ -15,6 +15,30 @@ const listSelect = {
   createdAt: true,
   updatedAt: true,
 } as const satisfies Prisma.SupplyRequestSelect;
+/** Danh sách của trường kèm dữ liệu chi tiết (?include=items); chỉ gồm trường mà API chi tiết đã trả cho trường. */
+const schoolListWithItemsSelect = {
+  ...listSelect,
+  requestedDeliveryDate: true,
+  note: true,
+  sentAt: true,
+  Supplier: { select: { name: true, phone: true } },
+  supplyRequestItems: {
+    select: {
+      id: true,
+      ingredientEntryId: true,
+      requestedQuantity: true,
+      unit: true,
+      note: true,
+      IngredientEntry: {
+        select: { handlingType: true, Ingredient: { select: { name: true } } },
+      },
+    },
+    orderBy: [{ id: "asc" as const }],
+  },
+} as const satisfies Prisma.SupplyRequestSelect;
+export type SchoolOrderListWithItemsRow = Prisma.SupplyRequestGetPayload<{
+  select: typeof schoolListWithItemsSelect;
+}>;
 const supplierOrderStatuses = [
   "SENT",
   "ACCEPTED",
@@ -54,7 +78,7 @@ const supplierDetailSelect = {
       unit: true,
       note: true,
       IngredientEntry: {
-        select: { Ingredient: { select: { name: true } } },
+        select: { handlingType: true, Ingredient: { select: { name: true } } },
       },
     },
     orderBy: [{ id: "asc" }],
@@ -86,6 +110,18 @@ export function createSupplyOrderRepository(connect = getPrisma) {
         ...listWindow(query),
         where: scope,
         select: listSelect,
+        orderBy: [{ id: "asc" }],
+      });
+    },
+    async listWithItems(
+      query: ListQuery,
+      scope: Prisma.SupplyRequestWhereInput,
+    ) {
+      const db = await connect();
+      return db.supplyRequest.findMany({
+        ...listWindow(query),
+        where: scope,
+        select: schoolListWithItemsSelect,
         orderBy: [{ id: "asc" }],
       });
     },

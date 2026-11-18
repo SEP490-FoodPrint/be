@@ -1,5 +1,6 @@
+import { reserveFpCodes } from "../../utils/fp-code";
 import { classScopeForMenuDay } from "../menu/menu.repository";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   Prisma,
   type PrismaClient,
@@ -1425,10 +1426,13 @@ export function createKitchenLifecycle(
             409,
             "Phương án đã thay đổi; vui lòng xem lại trước khi tạo lô",
           );
+        // Mã thống nhất: nhóm lô FP-BG-xxxxx, lô nấu FP-CB-xxxxx (cấp trong cùng transaction).
+        const [groupCode] = await reserveFpCodes(tx, "BG", 1);
+        const childCodes = await reserveFpCodes(tx, "CB", children.length);
         const group = await repository.createPlanGroup(tx, {
           ...meal,
           createdByUserId: actor.id,
-          batchCode: `B-${randomUUID()}`,
+          batchCode: groupCode,
         });
         const created: Detail[] = [];
         // Lô được đánh số theo từng món trong bữa: Lô 1, Lô 2... tiếp nối các lô đã có.
@@ -1448,7 +1452,7 @@ export function createKitchenLifecycle(
               {
                 ...meal,
                 batchGroupId: group.id,
-                batchCode: `CB-${randomUUID()}`,
+                batchCode: childCodes[i],
                 batchNumber,
                 dishId:
                   child.dishes.length === 1 ? child.dishes[0].dishId : null,
