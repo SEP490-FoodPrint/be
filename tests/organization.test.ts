@@ -211,6 +211,9 @@ void test("organization service maps school rows correctly and respects paginati
     findApprovedWeekStartDates: () => Promise.resolve([]),
     findWeekGrades: () => Promise.resolve([]),
     findPortionGroupsRaw: () => Promise.resolve([]),
+    findDeliveryInspectionRoles: () => Promise.resolve([]),
+    findRoleIdsByCodes: () => Promise.resolve([]),
+    replaceDeliveryInspectionRoles: () => Promise.resolve([]),
   };
 
   const service = createOrganizationService(mockRepo);

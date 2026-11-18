@@ -490,7 +490,18 @@ function decisionFixture(
     school: { findUnique: () => Promise.resolve({ status: "ACTIVE" }) },
     $queryRaw: () => Promise.resolve([]),
     ingredientEntry: { findMany: () => Promise.resolve([]) },
+    schoolDeliveryInspectionRole: { findMany: () => Promise.resolve([]) },
+    deliveryInspectionRole: { createMany: () => Promise.resolve({ count: 4 }) },
+    blockchainProof: {
+      count: () => Promise.resolve(0),
+      findFirst: () => Promise.resolve(null),
+      create: () => Promise.resolve({ id: uid(99) }),
+    },
     delivery: {
+      findUnique: ({ where }: { where: { id: string } }) => {
+        const found = data.deliveries.find((d) => d.id === where.id);
+        return Promise.resolve(found ? snapshot(found) : null);
+      },
       findFirst: ({
         where,
         select,
@@ -2088,6 +2099,10 @@ function v1InspectionFixture() {
       },
     },
     delivery: {
+      findUnique: ({ where }: { where: { id: string } }) => {
+        const found = state.deliveries.find((d) => d.id === where.id);
+        return Promise.resolve(found ? buildSnapshot(found) : null);
+      },
       findFirst: ({
         where,
         select,

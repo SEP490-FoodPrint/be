@@ -1,6 +1,15 @@
 import type { AuthPrincipal } from "../../types/auth";
-import { ROLES, ORG_TYPES } from "../../constants/roles";
-import type { PrismaClient } from "../../generated/prisma/client";
+import { ROLES, ORG_TYPES, ROLE_LABELS } from "../../constants/roles";
+import {
+  CONFIGURABLE_INSPECTION_ROLES,
+  INSPECTION_TIER_LABELS,
+  resolveSchoolTiers,
+  type DeliveryInspectionRoleCode,
+  type DeliveryInspectionTierCode,
+} from "../../constants/delivery-inspection";
+import type {
+  PrismaClient,
+} from "../../generated/prisma/client";
 import {
   assertPermission,
   withSchoolTransaction,
@@ -22,6 +31,7 @@ import {
 import type {
   CookingModeRequestDTO,
   MealTimesRequestDTO,
+  DeliveryInspectionRolesRequestDTO,
   OrganizationListRequestDTO,
   OrganizationSummaryRequestDTO,
   OrganizationDetailRequestDTO,
@@ -41,6 +51,7 @@ import type {
   AvailableWeekSummaryDTO,
   CookingModeResponseDTO,
   MealTimesResponseDTO,
+  DeliveryInspectionRolesResponseDTO,
   DishItemDTO,
   SnackItemDTO,
   PortionGroupDTO,
@@ -149,6 +160,66 @@ function formatMealTime(value: Date | null): string | null {
 
 function parseMealTime(value: string | null): Date | null {
   return value ? new Date(`1970-01-01T${value}:00.000Z`) : null;
+}
+
+const DELIVERY_INSPECTION_PERMISSION = "school_delivery_inspection.manage";
+
+function assertDeliveryInspectionManager(
+  principal: AuthPrincipal,
+): asserts principal is AuthPrincipal & { schoolId: string } {
+  assertPermission(principal, DELIVERY_INSPECTION_PERMISSION);
+  if (
+    principal.role !== ROLES.SCHOOL_MANAGEMENT_BOARD ||
+    principal.orgType !== "SCHOOL" ||
+    !principal.schoolId
+  ) {
+    throw new HttpError(
+      403,
+      "Chỉ Ban Giám hiệu được cấu hình nhóm duyệt nguyên liệu",
+    );
+  }
+}
+
+function mapToDeliveryInspectionRolesResponseDTO(
+  rows: Array<{
+    tier: DeliveryInspectionTierCode;
+    updatedAt: Date;
+    Role: { code: string };
+  }>,
+): DeliveryInspectionRolesResponseDTO {
+  const configured = rows.length > 0;
+  const tiers = resolveSchoolTiers(rows);
+
+  let maxUpdatedAt: Date | null = null;
+  if (configured) {
+    for (const row of rows) {
+      if (!maxUpdatedAt || row.updatedAt > maxUpdatedAt) {
+        maxUpdatedAt = row.updatedAt;
+      }
+    }
+  }
+
+  const order: DeliveryInspectionRoleCode[] = [
+    ...CONFIGURABLE_INSPECTION_ROLES,
+    ROLES.PARENTS_COMMITTEE,
+  ];
+
+  const roles = order.map((code) => {
+    const tier = tiers[code];
+    return {
+      roleCode: code,
+      roleName: ROLE_LABELS[code] ?? code,
+      tier,
+      tierLabel: INSPECTION_TIER_LABELS[tier],
+      editable: code !== ROLES.PARENTS_COMMITTEE,
+    };
+  });
+
+  return {
+    configured,
+    roles,
+    updatedAt: maxUpdatedAt ? maxUpdatedAt.toISOString() : null,
+  };
 }
 
 export function createOrganizationService(
@@ -260,6 +331,48 @@ export function createOrganizationService(
         lunchTime: formatMealTime(value.lunchTime),
         afternoonMealTime: formatMealTime(value.afternoonMealTime),
       };
+    },
+
+    async getDeliveryInspectionRoles(
+      principal: AuthPrincipal,
+    ): Promise<DeliveryInspectionRolesResponseDTO> {
+      assertDeliveryInspectionManager(principal);
+      const rows = await data.findDeliveryInspectionRoles(principal.schoolId);
+      return mapToDeliveryInspectionRolesResponseDTO(rows);
+    },
+
+    // Đợt giao đã xác nhận xe đến giữ snapshot cũ; cấu hình mới áp dụng cho đợt đến sau.
+    async updateDeliveryInspectionRoles(
+      input: DeliveryInspectionRolesRequestDTO,
+      principal: AuthPrincipal,
+    ): Promise<DeliveryInspectionRolesResponseDTO> {
+      assertDeliveryInspectionManager(principal);
+      const rows = await withSchoolTransaction(
+        await getClient(),
+        principal,
+        DELIVERY_INSPECTION_PERMISSION,
+        async (tx, actor, schoolId) => {
+          assertDeliveryInspectionManager(actor);
+          const roleCodes = input.roles.map((r) => r.roleCode);
+          const roleRows = await data.findRoleIdsByCodes(tx, roleCodes);
+          const roleIdByCode = new Map(roleRows.map((r) => [r.code, r.id]));
+
+          const toInsert = input.roles.map((r) => {
+            const roleId = roleIdByCode.get(r.roleCode);
+            if (!roleId) {
+              throw new HttpError(400, `Không tìm thấy vai trò: ${r.roleCode}`);
+            }
+            return {
+              roleId,
+              tier: r.tier,
+              updatedByUserId: actor.id,
+            };
+          });
+
+          return data.replaceDeliveryInspectionRoles(tx, schoolId, toInsert);
+        },
+      );
+      return mapToDeliveryInspectionRolesResponseDTO(rows);
     },
 
     async getPublicSchools(

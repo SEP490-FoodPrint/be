@@ -1,5 +1,6 @@
 import type {
   CookingMode,
+  DeliveryInspectionTier,
   Prisma,
   PrismaClient,
 } from "../../generated/prisma/client";
@@ -192,6 +193,34 @@ export interface OrganizationRepository {
     schoolId: string,
     data: { lunchTime: Date | null; afternoonMealTime: Date | null },
   ): Promise<{ lunchTime: Date | null; afternoonMealTime: Date | null }>;
+  findDeliveryInspectionRoles(
+    schoolId: string,
+  ): Promise<
+    Array<{
+      tier: DeliveryInspectionTier;
+      updatedAt: Date;
+      Role: { code: string };
+    }>
+  >;
+  findRoleIdsByCodes(
+    tx: Prisma.TransactionClient,
+    codes: string[],
+  ): Promise<Array<{ id: string; code: string }>>;
+  replaceDeliveryInspectionRoles(
+    tx: Prisma.TransactionClient,
+    schoolId: string,
+    rows: Array<{
+      roleId: string;
+      tier: DeliveryInspectionTier;
+      updatedByUserId: string;
+    }>,
+  ): Promise<
+    Array<{
+      tier: DeliveryInspectionTier;
+      updatedAt: Date;
+      Role: { code: string };
+    }>
+  >;
   listSchools(
     query: ListQuery,
     principal: AuthPrincipal,
@@ -314,6 +343,49 @@ export function createOrganizationRepository(
         where: { id: schoolId },
         data,
         select: { lunchTime: true, afternoonMealTime: true },
+      });
+    },
+
+    async findDeliveryInspectionRoles(schoolId) {
+      const prisma = await getClient();
+      return prisma.schoolDeliveryInspectionRole.findMany({
+        where: { schoolId },
+        select: {
+          tier: true,
+          updatedAt: true,
+          Role: { select: { code: true } },
+        },
+      });
+    },
+
+    findRoleIdsByCodes(tx, codes) {
+      return tx.role.findMany({
+        where: { code: { in: codes } },
+        select: { id: true, code: true },
+      });
+    },
+
+    async replaceDeliveryInspectionRoles(tx, schoolId, rows) {
+      await tx.schoolDeliveryInspectionRole.deleteMany({
+        where: { schoolId },
+      });
+      if (rows.length > 0) {
+        await tx.schoolDeliveryInspectionRole.createMany({
+          data: rows.map((r) => ({
+            schoolId,
+            roleId: r.roleId,
+            tier: r.tier,
+            updatedByUserId: r.updatedByUserId,
+          })),
+        });
+      }
+      return tx.schoolDeliveryInspectionRole.findMany({
+        where: { schoolId },
+        select: {
+          tier: true,
+          updatedAt: true,
+          Role: { select: { code: true } },
+        },
       });
     },
 

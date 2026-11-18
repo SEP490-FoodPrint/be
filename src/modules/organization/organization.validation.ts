@@ -303,3 +303,61 @@ export function validatePublicWeeklyMenuQuery(value: unknown) {
   }
   return result.data;
 }
+
+const deliveryInspectionTierEnum = z.enum(["PRIMARY", "REQUIRED", "OPTIONAL"], {
+  error: "Nhóm duyệt không hợp lệ",
+});
+
+export const deliveryInspectionRolesBodySchema = z
+  .strictObject({
+    roles: z
+      .array(
+        z.strictObject({
+          roleCode: z.enum(
+            [
+              "SCHOOL_KITCHEN_STAFF",
+              "INGREDIENT_MANAGEMENT_DEPARTMENT",
+              "SCHOOL_NUTRITION_OFFICER",
+            ],
+            { error: "Bộ phận không thuộc danh sách được cấu hình" },
+          ),
+          tier: deliveryInspectionTierEnum,
+        }),
+      )
+      .length(3, "Phải cấu hình đủ 3 bộ phận"),
+  })
+  .superRefine((value, ctx) => {
+    const roleCodes = new Set<string>();
+    let primaryCount = 0;
+
+    value.roles.forEach((item, index) => {
+      if (roleCodes.has(item.roleCode)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Mỗi bộ phận chỉ được khai báo một lần",
+          path: ["roles", index, "roleCode"],
+        });
+      }
+      roleCodes.add(item.roleCode);
+
+      if (item.tier === "PRIMARY") {
+        primaryCount++;
+      }
+    });
+
+    if (primaryCount !== 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Phải chọn đúng một người duyệt chính",
+        path: ["roles"],
+      });
+    }
+  });
+
+export function validateDeliveryInspectionRoles(value: unknown) {
+  const result = deliveryInspectionRolesBodySchema.safeParse(value);
+  if (!result.success) {
+    throw new OrganizationValidationError(mapZodIssues(result.error.issues));
+  }
+  return result.data;
+}

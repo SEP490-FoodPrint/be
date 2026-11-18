@@ -1,4 +1,8 @@
-import type { DeliveryStatus, Prisma } from "../../generated/prisma/client";
+import type {
+  DeliveryInspectionTier,
+  DeliveryStatus,
+  Prisma,
+} from "../../generated/prisma/client";
 import { getPrisma } from "../../utils/database";
 
 type Tx = Prisma.TransactionClient;
@@ -141,10 +145,16 @@ const summarySelect = {
       _count: {
         select: {
           deliveries: {
-            where: { deliveryApprovals: { some: { decision: "REJECT" } } },
+            where: { status: "REJECTED" },
           },
         },
       },
+    },
+  },
+  inspectionRoles: {
+    select: {
+      tier: true,
+      Role: { select: { code: true } },
     },
   },
   deliveryApprovals: {
@@ -505,11 +515,50 @@ export const deliveryInspectionRepository = {
       },
     });
   },
+  findSchoolInspectionTiers(tx: Tx, schoolId: string) {
+    if (!tx.schoolDeliveryInspectionRole?.findMany) {
+      return Promise.resolve([]);
+    }
+    return tx.schoolDeliveryInspectionRole.findMany({
+      where: { schoolId },
+      select: {
+        tier: true,
+        Role: { select: { code: true } },
+      },
+    });
+  },
+  snapshotInspectionRoles(
+    tx: Tx,
+    deliveryId: string,
+    rows: { roleId: string; tier: DeliveryInspectionTier }[],
+  ) {
+    if (!tx.deliveryInspectionRole?.createMany) {
+      return Promise.resolve({ count: rows.length });
+    }
+    return tx.deliveryInspectionRole.createMany({
+      data: rows.map((r) => ({
+        deliveryId,
+        roleId: r.roleId,
+        tier: r.tier,
+      })),
+    });
+  },
+  findInspectionRoleIds(tx: Tx, codes: string[]) {
+    if (!tx.role?.findMany) {
+      return Promise.resolve(
+        codes.map((code, idx) => ({ id: `role-id-${idx}`, code })),
+      );
+    }
+    return tx.role.findMany({
+      where: { code: { in: codes } },
+      select: { id: true, code: true },
+    });
+  },
   rejectedCount(tx: Tx, supplyRequestId: string) {
     return tx.delivery.count({
       where: {
         supplyRequestId,
-        deliveryApprovals: { some: { decision: "REJECT" } },
+        status: "REJECTED",
       },
     });
   },

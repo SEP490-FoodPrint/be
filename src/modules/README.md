@@ -44,7 +44,7 @@ Tất cả đường dẫn bên dưới dùng phương thức **GET**.
 | ----------------------------- | ------------------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------ |
 | `auth`                        | `/api/auth/roles`                    | `Role`                                 | —                                                                                    |
 | `user`                        | `/api/users`                         | `User`                                 | —                                                                                    |
-| `organization`                | `/api/schools`                       | `School`                               | —                                                                                    |
+| `organization`                | `/api/schools`                       | `School`                               | `SchoolDeliveryInspectionRole`                                                       |
 | `ingredient`                  | `/api/ingredients`                   | `Ingredient`                           | —                                                                                    |
 | `menu`                        | `/api/menus`                         | `WeeklyMenu`                           | MenuDay, MenuDayDish                                                                 |
 | `supply-order`                | `/api/supply-requests`               | `SupplyRequest`                        | SupplyRequestItem                                                                    |
@@ -65,7 +65,7 @@ Tất cả đường dẫn bên dưới dùng phương thức **GET**.
 | `ingredient-entry`            | `/api/ingredient-entries`            | `IngredientEntry`                      | —                                                                                    |
 | `allergy`                     | `/api/class-allergies`               | `ClassAllergy`                         | —                                                                                    |
 | `supplier-order`              | `/api/deliveries/management`         | `Delivery`                             | DeliveryItem                                                                         |
-| `delivery`                    | `/api/deliveries`                    | `Delivery`                             | DeliveryItem, DeliveryApproval                                                       |
+| `delivery`                    | `/api/deliveries`                    | `Delivery`                             | DeliveryItem, DeliveryApproval, DeliveryInspectionRole                               |
 | `delivery-trace`              | `/api/public/delivery-items`         | `DeliveryItem`                         | Delivery, Supplier                                                                   |
 | `dish`                        | `/api/dishes`                        | `Dish`                                 | DishIngredientEntry                                                                  |
 | `inventory`                   | `/api/inventory-transactions`        | `InventoryTransaction`                 | —                                                                                    |
