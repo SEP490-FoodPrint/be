@@ -253,6 +253,7 @@ function decisionFixture(
     actual: string;
     wrongSchool: boolean;
     wrongSupplier: boolean;
+    handlingType?: "DRY_STOCK" | "DIRECT_USE";
   };
   const data = {
     requestStatus: "IN_PROGRESS",
@@ -326,7 +327,7 @@ function decisionFixture(
           schoolId: delivery.wrongSchool ? uid(999) : uid(20),
           ingredientId: uid(25),
           status: "ACTIVE",
-          handlingType: "DRY_STOCK",
+          handlingType: delivery.handlingType ?? "DRY_STOCK",
         },
         SupplyRequestItem: {
           supplyRequestId: uid(22),
@@ -678,6 +679,38 @@ void test("invalid lot totals, ownership and expiry roll back the final approval
     assert.equal(f.data.deliveries[0].status, "PENDING_APPROVAL");
     assert.equal(f.data.deliveries[0].lots[0].available, "0");
     assert.equal(f.data.receipts.length, invalid === "history" ? 1 : 0);
+  }
+});
+
+void test("hạn dùng: đồ khô còn ít nhất 7 ngày kể từ ngày nhận, đồ tươi chỉ cần còn hạn hôm nay", async () => {
+  // Đồng hồ fixture: 13/11/2026 (giờ VN).
+  const cases = [
+    [
+      "DRY_STOCK",
+      "2026-11-19",
+      "Lô (đồ khô) chỉ còn hạn đến 19/11/2026; cần còn hạn ít nhất 7 ngày kể từ ngày nhận (đến 20/11/2026)",
+    ],
+    ["DRY_STOCK", "2026-11-20", null],
+    ["DIRECT_USE", "2026-11-12", "Lô đã hết hạn dùng (12/11/2026)"],
+    ["DIRECT_USE", "2026-11-13", null],
+  ] as const;
+  for (const [handlingType, expiry, issue] of cases) {
+    const f = decisionFixture(),
+      delivery = f.data.deliveries[0];
+    delivery.handlingType = handlingType;
+    delivery.lots[0].expiry = expiry;
+    if (issue) {
+      // Bị chặn ngay ở chữ ký "Đạt" đầu tiên, không ghi quyết định.
+      await assert.rejects(
+        () => f.service.decide(delivery.id, approve(), f.actors[0]),
+        { statusCode: 409, message: issue },
+      );
+      assert.equal(f.data.decisions.length, 0);
+    } else {
+      for (const actor of f.actors)
+        await f.service.decide(delivery.id, approve(), actor);
+      assert.equal(f.data.deliveries[0].status, "RECEIVED");
+    }
   }
 });
 

@@ -510,6 +510,12 @@ void test("meal API creates one child per dish and lot, and retry never reserves
   const result = await f.service.plan(validateKitchenPlan(meal), principal);
   assert.equal(result.groups.length, 1);
   assert.equal(result.batches.length, 5);
+  // Mã thống nhất FP-XX-xxxxx cho nhóm lô và lô nấu.
+  assert.equal(f.groups[0].batchCode, "FP-BG-00001");
+  assert.deepEqual(
+    f.children.map((child) => child.batchCode),
+    ["FP-CB-00001", "FP-CB-00002", "FP-CB-00003", "FP-CB-00004", "FP-CB-00005"],
+  );
   assert.deepEqual(
     result.batches.map((b) => b.dishes.length),
     [1, 1, 1, 1, 1],

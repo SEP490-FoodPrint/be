@@ -12,6 +12,21 @@ export interface SupplyOrderListResponseDTO {
     acceptedAt: string | null;
     createdAt: string;
     updatedAt: string;
+    /** Chỉ có khi trường gọi với ?include=items. */
+    requestedDeliveryDate?: string | null;
+    sentAt?: string | null;
+    note?: string | null;
+    supplierName?: string;
+    supplierPhone?: string | null;
+    items?: {
+      id: string;
+      ingredientEntryId: string;
+      ingredientName: string;
+      handlingType: string;
+      requestedQuantity: string;
+      unit: string;
+      note: string | null;
+    }[];
   }[];
   pagination: { page: number; limit: number; hasNext: boolean };
 }
@@ -63,6 +78,7 @@ export interface SupplierOrderDetailResponseDTO extends SupplierOrderListItemRes
     id: string;
     ingredientEntryId: string;
     ingredientName: string;
+    handlingType: string | null;
     requestedQuantity: string;
     unit: string;
     note: string | null;
