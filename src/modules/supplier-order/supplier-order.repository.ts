@@ -1,3 +1,4 @@
+import { reserveFpCodes } from "../../utils/fp-code";
 import {
   Prisma,
   type DeliveryCreationMode,
@@ -108,6 +109,7 @@ export const supplierOrderSupplyRequestSelect = {
         select: {
           id: true,
           ingredientId: true,
+          handlingType: true,
           Ingredient: {
             select: {
               id: true,
@@ -188,6 +190,7 @@ export type SupplierOrderLabelItemRecord = Prisma.DeliveryItemGetPayload<{
 export interface SupplierOrderIngredientEntryMatch {
   id: string;
   ingredientId: string;
+  handlingType: string;
 }
 
 export interface SupplierOrderCreateDeliveryItemInput {
@@ -204,6 +207,9 @@ export interface SupplierOrderCreateDeliveryItemInput {
   actualQuantity: Prisma.Decimal;
   unit: string;
   note: string | null;
+  /** Ngày của lô tạo kèm mặt hàng (đồ khô bắt buộc, đồ tươi để trống). */
+  manufactureDate?: Date | null;
+  expiryDate?: Date | null;
 }
 
 export interface SupplierOrderCreateDeliveryInput {
@@ -407,7 +413,12 @@ export const supplierOrderRepository: SupplierOrderRepository = {
     });
   },
 
-  createDeliveryWithItems(db, input) {
+  async createDeliveryWithItems(db, input) {
+    // Mỗi mặt hàng giao tạo một lô với mã FP-LO-xxxxx (đánh số toàn hệ thống).
+    const lotCodes =
+      input.traceabilityVersion === 1
+        ? await reserveFpCodes(db, "LO", input.items.length)
+        : [];
     return db.delivery.create({
       data: {
         deliveryNo: input.deliveryNo,
@@ -425,7 +436,7 @@ export const supplierOrderRepository: SupplierOrderRepository = {
         note: input.note,
         status: input.status,
         deliveryItems: {
-          create: input.items.map((item) => ({
+          create: input.items.map((item, index) => ({
             ...(item.id ? { id: item.id } : {}),
             supplyRequestItemId: item.supplyRequestItemId,
             ingredientId: item.ingredientId,
@@ -445,9 +456,9 @@ export const supplierOrderRepository: SupplierOrderRepository = {
                     create: [
                       {
                         sourceFacilityId: item.sourceFacilityId,
-                        lotCode: "PLAN-01",
-                        manufactureDate: null,
-                        expiryDate: null,
+                        lotCode: lotCodes[index],
+                        manufactureDate: item.manufactureDate ?? null,
+                        expiryDate: item.expiryDate ?? null,
                         receivedQuantity: item.actualQuantity,
                         availableQuantity: new Prisma.Decimal(0),
                         unit: item.unit,
@@ -550,7 +561,7 @@ export const supplierOrderRepository: SupplierOrderRepository = {
         ingredientId: { in: [...ingredientIds] },
         status: "ACTIVE",
       },
-      select: { id: true, ingredientId: true },
+      select: { id: true, ingredientId: true, handlingType: true },
     });
   },
 

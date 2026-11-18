@@ -237,11 +237,13 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     },
   });
 
+  // DIRECT_USE: các kịch bản ở đây kiểm tra phân bổ nguồn/tạo trùng/QR, không gửi ngày lô.
+  // Quy tắc đồ khô bắt buộc ngày sản xuất và hạn dùng có unit test riêng (supplier-order-creation.test.ts).
   const riceEntry = await db.ingredientEntry.create({
     data: {
       schoolId: schoolA.id,
       ingredientId: riceA.id,
-      handlingType: "DRY_STOCK",
+      handlingType: "DIRECT_USE",
       status: "ACTIVE",
     },
   });
@@ -1258,7 +1260,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     const matchedItem = multiStandalone.items.find(
       (item) => item.id === lot.deliveryItemId,
     )!;
-    assert.equal(lot.lotCode, "PLAN-01");
+    assert.match(lot.lotCode, /^FP-LO-[0-9]{5,}$/);
     assert.equal(lot.status, "BLOCKED");
     assert.equal(
       lot.receivedQuantity.toFixed(3),
@@ -1492,11 +1494,11 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     arrivedBody.arrivedAt,
   );
 
-  // PLAN-01 lot was created server-side with sourceFacilityId; update expiry before final receipt
+  // FP-LO lot was created server-side with sourceFacilityId; update expiry before final receipt
   const createdLot = await db.ingredientLot.findFirstOrThrow({
     where: { deliveryItemId: standaloneOrder.items[0].id },
   });
-  assert.equal(createdLot.lotCode, "PLAN-01");
+  assert.match(createdLot.lotCode, /^FP-LO-[0-9]{5,}$/);
   assert.equal(createdLot.status, "BLOCKED");
   assert.equal(createdLot.sourceFacilityId, facilityA2.id);
 

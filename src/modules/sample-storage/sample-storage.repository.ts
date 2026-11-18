@@ -1,3 +1,4 @@
+import { reserveFpCodes } from "../../utils/fp-code";
 import { getPrisma } from "../../utils/database";
 import type { Prisma } from "../../generated/prisma/client";
 import type { SampleStorageWriteInput } from "./sample-storage.validation";
@@ -93,6 +94,30 @@ export class SampleStorageRepository {
         status: data.status,
         description: data.description,
       },
+    });
+  }
+
+  /** Tạo tủ với mã FP-SU-xxxxx; cấp mã và ghi trong cùng transaction để không trùng số. */
+  async createWithGeneratedCode(
+    schoolId: string,
+    data: SampleStorageWriteInput,
+  ) {
+    return (await getPrisma()).$transaction(async (tx) => {
+      const [code] = await reserveFpCodes(tx, "SU", 1);
+      return tx.sampleStorageUnit.create({
+        data: {
+          schoolId,
+          code,
+          name: data.name,
+          location: data.location,
+          temperatureRange: data.temperatureRange,
+          currentTemperature: data.currentTemperature,
+          capacity: data.capacity,
+          compartmentCount: data.compartmentCount,
+          status: data.status,
+          description: data.description,
+        },
+      });
     });
   }
 

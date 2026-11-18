@@ -245,6 +245,54 @@ function canonicalizeCreateBody(
   };
 }
 
+function lotDatesFingerprint(line: {
+  manufactureDate?: string | null;
+  expiryDate?: string | null;
+}) {
+  return {
+    ...(line.manufactureDate ? { manufactureDate: line.manufactureDate } : {}),
+    ...(line.expiryDate ? { expiryDate: line.expiryDate } : {}),
+  };
+}
+
+/**
+ * Ngày của lô khi NCC tạo chuyến giao: đồ khô (DRY_STOCK) bắt buộc có ngày sản xuất và hạn dùng;
+ * ngày sản xuất không được sau hôm nay (giờ VN). Đồ tươi không bắt buộc.
+ */
+function assertLotDates(
+  lines: {
+    name: string;
+    handlingType: string | null;
+    manufactureDate?: string | null;
+    expiryDate?: string | null;
+  }[],
+) {
+  const missing = lines
+    .filter(
+      (line) =>
+        line.handlingType === "DRY_STOCK" &&
+        (!line.manufactureDate || !line.expiryDate),
+    )
+    .map((line) => line.name);
+  if (missing.length)
+    throw new HttpError(
+      422,
+      `Đồ khô cần nhập ngày sản xuất và hạn sử dụng của lô: ${[...new Set(missing)].join(", ")}`,
+    );
+  const today = new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10);
+  const future = lines
+    .filter((line) => line.manufactureDate && line.manufactureDate > today)
+    .map((line) => line.name);
+  if (future.length)
+    throw new HttpError(
+      422,
+      `Ngày sản xuất không được sau hôm nay: ${[...new Set(future)].join(", ")}`,
+    );
+}
+
+const lotDate = (value?: string | null) =>
+  value ? new Date(`${value}T00:00:00.000Z`) : null;
+
 function buildCreationFingerprint(body: CreateSupplierOrderBodyDTO): string {
   const payload =
     body.sourceType === "REQUEST"
@@ -257,6 +305,7 @@ function buildCreationFingerprint(body: CreateSupplierOrderBodyDTO): string {
             supplyRequestItemId: source.supplyRequestItemId,
             sourceFacilityId: source.sourceFacilityId,
             actualQuantity: canonicalDecimalString(source.actualQuantity),
+            ...lotDatesFingerprint(source),
           })),
         }
       : {
@@ -269,6 +318,7 @@ function buildCreationFingerprint(body: CreateSupplierOrderBodyDTO): string {
             sourceFacilityId: item.sourceFacilityId,
             actualQuantity: canonicalDecimalString(item.actualQuantity),
             unit: item.unit,
+            ...lotDatesFingerprint(item),
           })),
         };
   return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
@@ -597,6 +647,19 @@ export function createSupplierOrderService(
       }
     }
 
+    assertLotDates(
+      body.sources.map((allocation) => {
+        const requestItem = requestItemById.get(
+          allocation.supplyRequestItemId,
+        )!;
+        return {
+          name: requestItem.IngredientEntry.Ingredient.name,
+          handlingType: requestItem.IngredientEntry.handlingType,
+          manufactureDate: allocation.manufactureDate,
+          expiryDate: allocation.expiryDate,
+        };
+      }),
+    );
     const facilityById = await resolveAndValidateSourceFacilities(
       tx,
       liveScope.supplierId,
@@ -639,6 +702,8 @@ export function createSupplierOrderService(
           actualQuantity: new Prisma.Decimal(allocation.actualQuantity),
           unit: requestItem.unit,
           note: requestItem.note,
+          manufactureDate: lotDate(allocation.manufactureDate),
+          expiryDate: lotDate(allocation.expiryDate),
         };
       }),
     });
@@ -731,6 +796,17 @@ export function createSupplierOrderService(
     const entryByIngredientId = new Map(
       activeEntries.map((entry) => [entry.ingredientId, entry.id]),
     );
+    const handlingByIngredientId = new Map(
+      activeEntries.map((entry) => [entry.ingredientId, entry.handlingType]),
+    );
+    assertLotDates(
+      body.items.map((item) => ({
+        name: ingredientById.get(item.ingredientId)!.name,
+        handlingType: handlingByIngredientId.get(item.ingredientId) ?? null,
+        manufactureDate: item.manufactureDate,
+        expiryDate: item.expiryDate,
+      })),
+    );
     const deliveryNo = await reserveNextDeliveryNo(tx, liveScope.supplierId);
 
     const created = await repository.createDeliveryWithItems(tx, {
@@ -766,6 +842,8 @@ export function createSupplierOrderService(
           actualQuantity: new Prisma.Decimal(item.actualQuantity),
           unit: item.unit,
           note: null,
+          manufactureDate: lotDate(item.manufactureDate),
+          expiryDate: lotDate(item.expiryDate),
         };
       }),
     });

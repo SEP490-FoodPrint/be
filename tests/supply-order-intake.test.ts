@@ -51,6 +51,7 @@ function setup() {
       throw new Error("Unexpected database connection");
     },
     list: () => Promise.resolve([]),
+    listWithItems: () => Promise.resolve([]),
     listForSupplier: () => Promise.resolve([]),
     findDetailForSupplier: () => Promise.resolve(null),
     findDetailForSchool: () => Promise.resolve(null),
@@ -348,7 +349,10 @@ function detailRow(): SupplierOrderDetailRow {
           requestedQuantity: new Prisma.Decimal("99999999999.123"),
           unit: "kg",
           note: null,
-          IngredientEntry: { Ingredient: { name: "Gạo" } },
+          IngredientEntry: {
+            handlingType: "DRY_STOCK" as const,
+            Ingredient: { name: "Gạo" },
+          },
         },
       ],
     },
@@ -497,6 +501,7 @@ void test("detail serializes all item quantities and dates, allows null history 
         id: "00000000-0000-4000-8000-000000000010",
         ingredientEntryId: "00000000-0000-4000-8000-000000000011",
         ingredientName: "Gạo",
+        handlingType: "DRY_STOCK",
         requestedQuantity: "99999999999.123",
         unit: "kg",
         note: null,
@@ -717,7 +722,7 @@ void test("repository supplier reads retain scope, hide drafts, use bounded pagi
   assert.deepEqual(itemSelection.orderBy, [{ id: "asc" }]);
   assert.equal(itemSelection.where, undefined);
   assert.deepEqual(itemSelection.select!.IngredientEntry, {
-    select: { Ingredient: { select: { name: true } } },
+    select: { handlingType: true, Ingredient: { select: { name: true } } },
   });
   assert.equal(first[0].select!.acceptedByUser, undefined);
   assert.equal(first[0].select!.contractSnapshot, undefined);

@@ -286,6 +286,14 @@ function inspectionDateRange(
   };
 }
 
+/** Đồ khô phải còn hạn ít nhất số ngày này kể từ ngày nhận (đủ dùng một tuần thực đơn). */
+export const DRY_STOCK_MIN_SHELF_DAYS = 7;
+const dmy = (iso: string) => iso.split("-").reverse().join("/");
+const shiftIsoDate = (iso: string, days: number) =>
+  new Date(Date.parse(`${iso}T00:00:00Z`) + days * 86400000)
+    .toISOString()
+    .slice(0, 10);
+
 function assertReceipt(
   row: DeliveryInspectionDetailRow,
   schoolId: string,
@@ -385,15 +393,35 @@ function assertReceipt(
       }
       const manufacture = lot.manufactureDate?.toISOString().slice(0, 10);
       const expiry = lot.expiryDate?.toISOString().slice(0, 10);
-      if (
-        (manufacture && manufacture > today) ||
-        (expiry && expiry < today) ||
-        (manufacture && expiry && manufacture > expiry)
-      )
+      const lotName = lot.lotCode ? `Lô ${lot.lotCode}` : "Lô";
+      if (manufacture && manufacture > today)
         throw new HttpError(
           409,
-          "Ngày sản xuất/hạn dùng của lô không hợp lệ để tiếp nhận",
+          `${lotName}: ngày sản xuất ${dmy(manufacture)} sau ngày nhận hàng ${dmy(today)}`,
         );
+      if (manufacture && expiry && manufacture > expiry)
+        throw new HttpError(
+          409,
+          `${lotName}: ngày sản xuất ${dmy(manufacture)} sau hạn dùng ${dmy(expiry)}`,
+        );
+      if (expiry) {
+        // Đồ tươi dùng trong ngày: hạn ≥ ngày nhận. Đồ khô dùng dần: còn ít nhất DRY_STOCK_MIN_SHELF_DAYS ngày.
+        const handlingType =
+          item.IngredientEntry?.handlingType ??
+          item.SupplyRequestItem?.IngredientEntry?.handlingType ??
+          "DIRECT_USE";
+        const minimum =
+          handlingType === "DRY_STOCK"
+            ? shiftIsoDate(today, DRY_STOCK_MIN_SHELF_DAYS)
+            : today;
+        if (expiry < minimum)
+          throw new HttpError(
+            409,
+            handlingType === "DRY_STOCK"
+              ? `${lotName} (đồ khô) chỉ còn hạn đến ${dmy(expiry)}; cần còn hạn ít nhất ${DRY_STOCK_MIN_SHELF_DAYS} ngày kể từ ngày nhận (đến ${dmy(minimum)})`
+              : `${lotName} đã hết hạn dùng (${dmy(expiry)})`,
+          );
+      }
       total = total.add(
         convertQuantity(lot.receivedQuantity, lot.unit, item.unit),
       );
@@ -563,7 +591,8 @@ async function receiptIssue(
             schoolId: entry.schoolId,
             ingredientId: entry.ingredientId,
             status: entry.status,
-          } as typeof item.IngredientEntry,
+            handlingType: entry.handlingType,
+          },
         };
       }),
     };

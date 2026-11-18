@@ -86,6 +86,7 @@ function makeSupplyRequestRecord(
       IngredientEntry: {
         id: entryId,
         ingredientId,
+        handlingType: "DIRECT_USE" as const,
         Ingredient: {
           id: ingredientId,
           name: "Gạo ST25",
@@ -101,6 +102,7 @@ function makeSupplyRequestRecord(
       IngredientEntry: {
         id: entryId2,
         ingredientId: ingredientId2,
+        handlingType: "DIRECT_USE" as const,
         Ingredient: {
           id: ingredientId2,
           name: "Dầu ăn",
@@ -306,6 +308,78 @@ function setupUs1Harness(options?: {
   };
 }
 
+void test("đồ khô bắt buộc nhập ngày sản xuất và hạn dùng của lô khi tạo chuyến giao; đồ tươi không cần", async () => {
+  const dryRequest = () => {
+    const record = makeSupplyRequestRecord();
+    record.supplyRequestItems[0].IngredientEntry.handlingType = "DRY_STOCK";
+    return record;
+  };
+  const bodyWith = (dates: Record<string, string>) =>
+    validateCreateSupplierOrderBody({
+      sourceType: "REQUEST",
+      supplyRequestId,
+      sources: [
+        {
+          supplyRequestItemId: requestItemId,
+          sourceFacilityId,
+          actualQuantity: "12.500",
+          ...dates,
+        },
+      ],
+      note: null,
+    });
+
+  // Thiếu ngày: 422, không tạo chuyến giao.
+  const missing = setupUs1Harness({ supplyRequest: dryRequest() });
+  await assert.rejects(
+    () =>
+      missing.service.create(
+        {
+          idempotencyKey: idemKey1,
+          body: bodyWith({ expiryDate: "2027-05-01" }),
+        },
+        makeSupplierActor(),
+      ),
+    {
+      statusCode: 422,
+      message: "Đồ khô cần nhập ngày sản xuất và hạn sử dụng của lô: Gạo ST25",
+    },
+  );
+  assert.equal(missing.createdPayloads.length, 0);
+
+  // Hạn dùng trước ngày sản xuất: bị chặn ở bước kiểm tra đầu vào.
+  assert.throws(
+    () => bodyWith({ manufactureDate: "2026-11-10", expiryDate: "2026-11-01" }),
+    (err: unknown) =>
+      err instanceof RequestValidationError &&
+      err.fields.some((f) => f.field === "sources.0.expiryDate"),
+  );
+
+  // Đủ ngày: lô được tạo với đúng ngày sản xuất và hạn dùng.
+  const ok = setupUs1Harness({ supplyRequest: dryRequest() });
+  await ok.service.create(
+    {
+      idempotencyKey: idemKey1,
+      body: bodyWith({
+        manufactureDate: "2026-11-01",
+        expiryDate: "2027-05-01",
+      }),
+    },
+    makeSupplierActor(),
+  );
+  const item = ok.createdPayloads[0].items[0];
+  assert.equal(item.manufactureDate?.toISOString().slice(0, 10), "2026-11-01");
+  assert.equal(item.expiryDate?.toISOString().slice(0, 10), "2027-05-01");
+
+  // Đồ tươi: không cần ngày.
+  const fresh = setupUs1Harness();
+  await fresh.service.create(
+    { idempotencyKey: idemKey1, body: bodyWith({}) },
+    makeSupplierActor(),
+  );
+  assert.equal(fresh.createdPayloads[0].items[0].expiryDate, null);
+});
+
 void test("US1 validation enforces Idempotency-Key header and strict REQUEST body", () => {
   assert.equal(
     validateSupplierOrderIdempotencyKey(idemKey1.toUpperCase()),
@@ -341,6 +415,8 @@ void test("US1 validation enforces Idempotency-Key header and strict REQUEST bod
         supplyRequestItemId: requestItemId,
         sourceFacilityId,
         actualQuantity: "12.5",
+        manufactureDate: null,
+        expiryDate: null,
       },
     ],
     note: null,
@@ -851,13 +927,28 @@ void test("US1 rejects unauthorized roles/permissions, prior deliveries, mismatc
   assert.equal(raceHarness.getState().txRolledBack, true);
 });
 
-void test("US1 repository queries enforce supplier scope, ordering, locks, PLAN-01 lots and atomic item creation", async () => {
+void test("US1 repository queries enforce supplier scope, ordering, locks, FP-LO lot codes and atomic item creation", async () => {
   let seenCreateData: unknown;
   const rawQueries: string[] = [];
   const mockDb = {
-    $queryRaw: (strings: TemplateStringsArray, ...values: unknown[]) => {
-      const sql = strings.join("?");
+    $queryRaw: (
+      strings: TemplateStringsArray | { sql: string; values: unknown[] },
+      ...values: unknown[]
+    ) => {
+      // Mã lô FP-LO dùng Prisma.sql (không phải template string): giả lập số lớn nhất hiện có là 41.
+      if (!Array.isArray(strings)) {
+        const query = strings as { sql: string; values: unknown[] };
+        rawQueries.push(query.sql);
+        assert.ok(query.sql.includes("ingredient_lots"));
+        assert.deepEqual(query.values, ["^FP-LO-[0-9]{5,}$"]);
+        return Promise.resolve([{ maxSeq: "41" }]);
+      }
+      const sql = (strings as TemplateStringsArray).join("?");
       rawQueries.push(sql);
+      if (sql.includes("pg_advisory_xact_lock")) {
+        assert.equal(values[0], "foodprint:fp-code:LO");
+        return Promise.resolve([{ locked: 1 }]);
+      }
       if (sql.includes("MAX(substring")) {
         assert.equal(values[0], supplierId);
         return Promise.resolve([{ maxSeq: "99999" }]);
@@ -949,7 +1040,7 @@ void test("US1 repository queries enforce supplier scope, ordering, locks, PLAN-
   assert.equal(created.traceabilityVersion, 1);
   assert.equal(
     created.deliveryItems.create[0].ingredientLots.create[0].lotCode,
-    "PLAN-01",
+    "FP-LO-00042",
   );
   assert.equal(
     created.deliveryItems.create[0].ingredientLots.create[0].status,
@@ -1501,6 +1592,7 @@ void test("T111 REQUEST multi-source allocation supports 6A+4B split, prevents c
   sameIngTwoItems.supplyRequestItems[1].IngredientEntry = {
     id: entryId2,
     ingredientId,
+    handlingType: "DIRECT_USE" as const,
     Ingredient: { id: ingredientId, name: "Gạo ST25" },
   };
   const dupResolvedH = setupUs1Harness({ supplyRequest: sameIngTwoItems });
@@ -1919,7 +2011,11 @@ void test("US2 creates STANDALONE delivery for both supplier roles, links only e
       name: string;
       status: "ACTIVE" | "INACTIVE";
     }>;
-    existingEntries?: Array<{ id: string; ingredientId: string }>;
+    existingEntries?: Array<{
+      id: string;
+      ingredientId: string;
+      handlingType: string;
+    }>;
     guardError?: Error;
     renderError?: Error;
   }) {
@@ -1962,7 +2058,7 @@ void test("US2 creates STANDALONE delivery for both supplier roles, links only e
       },
     ];
     const entries = overrides?.existingEntries ?? [
-      { id: entryId, ingredientId },
+      { id: entryId, ingredientId, handlingType: "DIRECT_USE" },
     ];
     const now = new Date("2026-11-15T02:00:00Z");
     const repo: SupplierOrderRepository = {
@@ -2528,12 +2624,16 @@ void test("US2 creates STANDALONE delivery for both supplier roles, links only e
                 sourceFacilityId,
                 actualQuantity: "5",
                 unit: "kg",
+                manufactureDate: null,
+                expiryDate: null,
               },
               {
                 ingredientId,
                 sourceFacilityId,
                 actualQuantity: "5",
                 unit: "kg",
+                manufactureDate: null,
+                expiryDate: null,
               },
             ],
           },
