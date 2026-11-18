@@ -8,6 +8,8 @@ export interface RetainedSampleResponseDTO {
   quantity: string | null;
   unit: string | null;
   storageLocation: string | null;
+  storageUnitId: string | null;
+  storageUnitName: string | null;
   photoUrl: string | null;
   status: "STORED" | "DISPOSED";
   disposedAt: string | null;

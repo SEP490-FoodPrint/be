@@ -31,6 +31,10 @@ import { getPrisma } from "../../utils/database";
 import { HttpError } from "../../utils/http-error";
 import {
   assertCompleteMenuWeek,
+  assertMenuDaysEditable,
+  assertMenuWeekOpen,
+  assertNoHolidayMenuDays,
+  menuWeekLock,
   expandMenuHolidays,
 } from "../../utils/menu-week";
 
@@ -1092,7 +1096,10 @@ function gradeBatchWrite(
   return result;
 }
 
-function createMenuOperations(connect: () => Promise<PrismaClient>) {
+function createMenuOperations(
+  connect: () => Promise<PrismaClient>,
+  today: () => string = schoolToday,
+) {
   async function owned(tx: Tx, id: string, schoolId: string) {
     const menu = await repository.ownedMenu(tx, id, schoolId);
 
@@ -1675,6 +1682,10 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
       throw new HttpError(409, "Không đổi tuần của thực đơn đã tạo");
     if (input.title !== null && input.title !== menu.title)
       throw new HttpError(409, "Không thể đổi tên thực đơn tuần");
+    await assertWeekOpen(tx, menu.weekStartDate, menu.id);
+    const years = await repository.academicYears(tx, schoolId);
+    assertNoHolidayMenuDays(input.days, years);
+    assertMenuDaysEditable(input.days, menu.menuDays, years, today());
     await writeDays(tx, id, input, schoolId);
     await repository.resetForEditing(tx, id);
     return {
@@ -1683,12 +1694,25 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
     };
   }
 
+  /** Hạn chót hết Chủ nhật trước tuần; sau đó chỉ sửa/gửi lại khi BGH đã yêu cầu sửa. */
+  async function assertWeekOpen(
+    tx: Tx,
+    weekStartDate: Date,
+    menuId: string | null,
+  ) {
+    const revisionRequested =
+      menuId !== null &&
+      (await repository.revisionRequestCount(tx, menuId)) > 0;
+    assertMenuWeekOpen(weekStartDate, today(), revisionRequested);
+  }
+
   async function submitReady(
     tx: Tx,
     menu: Awaited<ReturnType<typeof owned>>,
     schoolId: string,
     previousSubmittedAt: Date | null = null,
   ) {
+    await assertWeekOpen(tx, menu.weekStartDate, menu.id);
     await ready(tx, menu, schoolId);
     assertCompleteMenuWeek(menu, await repository.academicYears(tx, schoolId));
     await repository.submitDraftDays(tx, menu.id);
@@ -1708,6 +1732,8 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
     gradeBatch = false,
   ) {
     assertPermission(actor, "class_allergy.view");
+    const calendarYears = await repository.academicYears(tx, schoolId);
+    assertNoHolidayMenuDays(input.days, calendarYears);
     const gradeIds = input.gradeIds ?? [];
     if (
       gradeIds.length &&
@@ -1723,6 +1749,13 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
       schoolId,
       input.weekStartDate,
       gradeIds,
+    );
+    await assertWeekOpen(tx, input.weekStartDate, existingWeekly?.id ?? null);
+    assertMenuDaysEditable(
+      input.days,
+      existingWeekly?.menuDays ?? [],
+      calendarYears,
+      today(),
     );
     if (gradeBatch) input = gradeBatchWrite(input, existingWeekly);
     if (existingWeekly) {
@@ -2392,6 +2425,13 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
         .map((d) => d.date);
 
       const targetDayNum = date.getUTCDay();
+      const lock = menuWeekLock(
+        new Date(weekInfo.weekStartDate + "T00:00:00.000Z"),
+        today(),
+        weeklyMenu
+          ? (await repository.revisionRequestCount(db, weeklyMenu.id)) > 0
+          : false,
+      );
 
       return {
         targetDate: date.toISOString().slice(0, 10),
@@ -2438,6 +2478,12 @@ function createMenuOperations(connect: () => Promise<PrismaClient>) {
 
         isWeekComplete:
           totalSchoolDays > 0 && completedDays === totalSchoolDays,
+
+        deadline: lock.deadline,
+
+        editLocked: lock.locked,
+
+        editLockReason: lock.reason,
       };
     },
 
@@ -2487,12 +2533,14 @@ function mapMenuSummary(row: MenuSummaryRow): MenuSummaryDTO {
 export function createMenuService(
   read?: MenuListReader,
   connect: () => Promise<PrismaClient> = getPrisma,
+  /** Ngày hôm nay (YYYY-MM-DD, giờ Việt Nam); tiêm vào để test cố định ngày. */
+  today: () => string = schoolToday,
 ) {
   const summaryRepository = createMenuSummaryRepository(read);
   return {
     ...createIngredientOperations(connect),
 
-    ...createMenuOperations(connect),
+    ...createMenuOperations(connect, today),
 
     async getAll(
       query: MenuListQuery,

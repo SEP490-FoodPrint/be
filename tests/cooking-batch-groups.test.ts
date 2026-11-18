@@ -138,6 +138,7 @@ function fixture(
   mode: CookingMode,
   shared = false,
   proofs?: Parameters<typeof createKitchenLifecycle>[1],
+  today?: string,
 ) {
   type Lot = {
     id: string;
@@ -442,6 +443,8 @@ function fixture(
     service: createKitchenLifecycle(
       () => Promise.resolve().then(() => db as never),
       proofs,
+      // Cố định "hôm nay" đúng ngày thực đơn của fixture (chỉ nấu bữa hôm nay).
+      () => today ?? date.toISOString().slice(0, 10),
     ),
     db,
     tx,
@@ -582,6 +585,13 @@ void test("single-dish samples are idempotent and historical multi-dish samples 
   await f.service.confirm(child.id, principal);
   await f.service.complete(child.id, principal);
   const saved: SampleRow[] = [];
+  const storageUnit = {
+    id: "unit-1",
+    name: "Tủ 1",
+    status: "ACTIVE",
+    capacity: 40,
+    currentUsage: 0,
+  };
   Object.assign(f.tx, {
     retainedFoodSample: {
       findUnique: ({
@@ -610,6 +620,7 @@ void test("single-dish samples are idempotent and historical multi-dish samples 
           recordedByUserId: string;
           quantity: string;
           unit: string;
+          storageUnitId: string;
           storageLocation: string;
           sampledAt: Date;
         };
@@ -618,6 +629,7 @@ void test("single-dish samples are idempotent and historical multi-dish samples 
           const dish = child.dishes.find((d) => d.dishId === data.dishId)!;
           const sample: SampleRow = {
             ...data,
+            storageUnit: { name: storageUnit.name },
             id: `sample-${saved.length}`,
             photoPublicId: null,
             photoHash: null,
@@ -641,7 +653,12 @@ void test("single-dish samples are idempotent and historical multi-dish samples 
           saved.push(sample);
           return sample;
         }),
+      count: () =>
+        Promise.resolve(
+          saved.filter((s) => s.storageUnitId === storageUnit.id).length,
+        ),
     },
+    sampleStorageUnit: { findFirst: () => Promise.resolve({ ...storageUnit }) },
   });
   const service = createRetainedSampleService(undefined, () =>
     Promise.resolve().then(() => f.db as never),
@@ -649,11 +666,28 @@ void test("single-dish samples are idempotent and historical multi-dish samples 
   const input = {
     quantity: "150",
     unit: "g",
-    storageLocation: "Fridge",
+    storageUnitId: storageUnit.id,
+    storageLocation: "Ngăn 2",
     sampledAt: new Date(),
   };
+  // Tủ bảo trì hoặc đã đầy thì không ghi mẫu.
+  storageUnit.status = "MAINTENANCE";
+  await assert.rejects(service.create(child.id, input, principal), {
+    statusCode: 409,
+    message: "Tủ Tủ 1 đang bảo trì, hãy chọn tủ khác",
+  });
+  storageUnit.status = "ACTIVE";
+  storageUnit.capacity = 0;
+  await assert.rejects(service.create(child.id, input, principal), {
+    statusCode: 409,
+    message: "Tủ Tủ 1 đã đầy (0/0 mẫu), hãy chọn tủ khác",
+  });
+  storageUnit.capacity = 40;
+  assert.equal(saved.length, 0);
   const single = await service.create(child.id, input, principal);
   assert.equal(single.created, true);
+  assert.equal(single.storageUnitId, storageUnit.id);
+  assert.equal(single.storageLocation, "Tủ 1 – Ngăn 2");
   assert.equal(single.dishId, child.dishes[0].dishId);
   const repeat = await service.create(child.id, input, principal);
   assert.equal(repeat.created, false);
@@ -738,4 +772,29 @@ void test("blockchain proof is prepared only on the first completion of a batch"
     { kind: "cooking-batches", id: f.children[0].id },
     null,
   ]);
+});
+
+void test("chỉ được nấu bữa của hôm nay; xem trước thì mọi ngày", async () => {
+  // Thực đơn của fixture là ngày 11/11/2026.
+  for (const [today, reason] of [
+    [
+      "2026-11-10",
+      "Chưa tới ngày 11/11/2026: chỉ được nấu bữa ăn của hôm nay (10/11/2026)",
+    ],
+    [
+      "2026-11-12",
+      "Ngày 11/11/2026 đã qua: chỉ được nấu bữa ăn của hôm nay (12/11/2026)",
+    ],
+  ] as const) {
+    const f = fixture("COMBINE_LOTS", false, undefined, today);
+    await assert.rejects(f.service.plan(validateKitchenPlan(meal), principal), {
+      statusCode: 422,
+      message: reason,
+    });
+    assert.equal(f.groups.length, 0);
+    assert.equal(f.children.length, 0);
+    assert.equal(f.usage.length, 0);
+    // Xem trước không ghi gì nên vẫn được phép.
+    await f.service.preview(validateKitchenPlan(meal), principal);
+  }
 });

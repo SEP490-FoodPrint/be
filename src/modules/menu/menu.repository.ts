@@ -1018,6 +1018,11 @@ export const menuRepository = {
       },
     });
   },
+  revisionRequestCount(client: Tx, id: string) {
+    return client.menuReviewRecord.count({
+      where: { weeklyMenuId: id, decision: "REVISION_REQUESTED" },
+    });
+  },
   weeklyReviewCount(client: Tx, id: string) {
     return client.menuReviewRecord.count({ where: { weeklyMenuId: id } });
   },

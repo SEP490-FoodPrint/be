@@ -6,6 +6,8 @@ import {
   requestUuidSchema,
   requiredText,
 } from "../../utils/request-validation";
+/** QĐ 1246/QĐ-BYT: mẫu thức ăn đặc tối thiểu 100 g, thức ăn lỏng tối thiểu 150 ml. */
+export const MINIMUM_SAMPLE_QUANTITY = { g: 100, ml: 150 } as const;
 const timestampSchema = z
   .string({ error: "Thời gian phải là ISO 8601 có múi giờ" })
   .transform((value, context) => {
@@ -36,26 +38,45 @@ export const retainedSampleBatchParamsSchema = z.strictObject({
 export const retainedSampleDisposalParamsSchema = z.strictObject({
   sampleId: requestUuidSchema,
 });
-export const foodSampleSchema = z.strictObject({
-  dishId: requestUuidSchema.optional(),
-  quantity: z
-    .union([z.number(), z.string()], {
-      error: "Lượng mẫu phải là số hoặc chuỗi số thập phân",
-    })
-    .transform(String)
-    .refine(
-      (value) =>
-        /^(?:0|[1-9]\d{0,8})(?:\.\d{1,3})?$/.test(value) && Number(value) > 0,
-      { error: "Lượng mẫu phải dương, tối đa 3 chữ số thập phân" },
-    ),
-  unit: requiredText(30)
-    .toLowerCase()
-    .refine((value) => ["g", "ml"].includes(value), {
-      error: "Đơn vị mẫu lưu phải là g hoặc ml",
-    }),
-  storageLocation: requiredText(255),
-  sampledAt: timestampSchema,
-});
+export const foodSampleSchema = z
+  .strictObject({
+    dishId: requestUuidSchema.optional(),
+    quantity: z
+      .union([z.number(), z.string()], {
+        error: "Lượng mẫu phải là số hoặc chuỗi số thập phân",
+      })
+      .transform(String)
+      .refine(
+        (value) =>
+          /^(?:0|[1-9]\d{0,8})(?:\.\d{1,3})?$/.test(value) && Number(value) > 0,
+        { error: "Lượng mẫu phải dương, tối đa 3 chữ số thập phân" },
+      ),
+    unit: requiredText(30)
+      .toLowerCase()
+      .refine((value) => ["g", "ml"].includes(value), {
+        error: "Đơn vị mẫu lưu phải là g hoặc ml",
+      }),
+    /** Tủ lưu mẫu của trường (bắt buộc); hệ thống kiểm tra trạng thái và sức chứa. */
+    storageUnitId: requestUuidSchema,
+    /** Ngăn/vị trí trong tủ (không bắt buộc). */
+    storageLocation: requiredText(255).optional(),
+    sampledAt: timestampSchema,
+  })
+  .superRefine((sample, context) => {
+    const minimum =
+      MINIMUM_SAMPLE_QUANTITY[
+        sample.unit as keyof typeof MINIMUM_SAMPLE_QUANTITY
+      ];
+    if (minimum !== undefined && Number(sample.quantity) < minimum)
+      context.addIssue({
+        code: "custom",
+        path: ["quantity"],
+        message:
+          sample.unit === "g"
+            ? `Mẫu thức ăn đặc tối thiểu ${minimum} g (QĐ 1246/QĐ-BYT)`
+            : `Mẫu thức ăn lỏng tối thiểu ${minimum} ml (QĐ 1246/QĐ-BYT)`,
+      });
+  });
 export const sampleDisposalSchema = z.strictObject({
   disposedAt: timestampSchema,
   disposalNote: requiredText(2000),

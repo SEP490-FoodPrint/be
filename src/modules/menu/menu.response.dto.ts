@@ -65,6 +65,11 @@ export interface MenuWeekScheduleDTO {
   completedDays: number;
   missingDays: string[];
   isWeekComplete: boolean;
+  /** Hạn chót tạo và gửi duyệt: hết Chủ nhật trước tuần (YYYY-MM-DD, giờ VN). */
+  deadline: string;
+  /** Tuần đã bắt đầu và BGH chưa yêu cầu sửa: không tạo/sửa/gửi duyệt được. */
+  editLocked: boolean;
+  editLockReason: string | null;
 }
 
 export interface MenuSummaryDTO {

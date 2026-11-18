@@ -263,6 +263,8 @@ function fixture(
   } as unknown as PrismaClient;
   const stub = (name: keyof typeof repository, value: unknown) =>
     t.mock.method(repository, name, () => Promise.resolve(value));
+  // Hạn chót tuần: fixture chưa có biên bản BGH yêu cầu sửa.
+  stub("revisionRequestCount", 0);
   stub(
     "academicYears",
     calendar
@@ -326,7 +328,12 @@ function fixture(
   return {
     db,
     tx,
-    service: createMenuService(undefined, () => Promise.resolve(db)),
+    // Cố định "hôm nay" trước tuần 09/11/2026 của fixture để test không phụ thuộc ngày chạy.
+    service: createMenuService(
+      undefined,
+      () => Promise.resolve(db),
+      () => "2026-11-02",
+    ),
     principal,
     createWeeklyMenuStub,
     input,

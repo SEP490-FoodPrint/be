@@ -19,6 +19,7 @@ import {
   type ListQuery,
 } from "../../utils/list-query";
 import { currentAcademicYear } from "../class/academic-year";
+import { expandMenuHolidays } from "../../utils/menu-week";
 import {
   mealAttendanceRepository,
   type MealAttendanceRepository,
@@ -59,7 +60,53 @@ export function createMealAttendanceService(
   read: ListReader = readFromDatabase,
   connect: () => Promise<PrismaClient> = getPrisma,
   repository: MealAttendanceRepository = mealAttendanceRepository,
+  clock: () => Date = () => new Date(),
 ) {
+  /** Ngày hôm nay theo giờ Việt Nam (UTC+7), dạng YYYY-MM-DD. */
+  const vietnamToday = () =>
+    new Date(clock().getTime() + 7 * 3600000).toISOString().slice(0, 10);
+  const dmy = (iso: string) => iso.split("-").reverse().join("/");
+
+  /** GVCN chỉ khai/chốt cho hôm nay, đúng ngày học có thực đơn bữa đó cho lớp. */
+  async function assertDeclarableDay(
+    db: Prisma.TransactionClient,
+    key: {
+      schoolId: string;
+      classId: string;
+      date: Date;
+      mealType: "LUNCH" | "AFTERNOON";
+    },
+  ) {
+    const iso = key.date.toISOString().slice(0, 10);
+    const today = vietnamToday();
+    if (iso !== today)
+      throw new HttpError(
+        422,
+        `Chỉ được khai và chốt suất ăn cho hôm nay (${dmy(today)})`,
+      );
+    const weekday = key.date.getUTCDay();
+    if (weekday === 0 || weekday === 6)
+      throw new HttpError(422, "Thứ Bảy, Chủ nhật không có bữa bán trú");
+    const year = await repository.findAcademicYearOn(
+      db,
+      key.schoolId,
+      key.date,
+    );
+    if (!year)
+      throw new HttpError(422, "Hôm nay nằm ngoài năm học đã cấu hình");
+    const holiday = expandMenuHolidays(year.holidays, iso, iso)[0];
+    if (holiday)
+      throw new HttpError(
+        422,
+        `Hôm nay là ngày nghỉ${holiday.reason ? ` (${holiday.reason})` : ""}, không khai suất ăn`,
+      );
+    if (!(await repository.findClassMenuDay(db, key)))
+      throw new HttpError(
+        422,
+        `Hôm nay chưa có thực đơn ${key.mealType === "LUNCH" ? "bữa trưa" : "bữa xế"} cho khối của lớp`,
+      );
+  }
+
   async function assignedClass(
     db: Prisma.TransactionClient,
     principal: AuthPrincipal,
@@ -132,6 +179,17 @@ export function createMealAttendanceService(
         "daily_meal_portion.update",
         async (tx, actor) => {
           const assigned = await assignedClass(tx, actor, input.date);
+          if (input.totalPortions > assigned.registeredMealPortions)
+            throw new HttpError(
+              422,
+              `Số suất (${input.totalPortions}) vượt số suất đăng ký của lớp (${assigned.registeredMealPortions})`,
+            );
+          await assertDeclarableDay(tx, {
+            schoolId: actor.schoolId!,
+            classId: assigned.id,
+            date: input.date,
+            mealType: input.mealType,
+          });
           for (const allergy of input.allergies) {
             const master = assigned.classAllergies.find(
               (item) => item.ingredientEntryId === allergy.ingredientEntryId,
@@ -185,6 +243,12 @@ export function createMealAttendanceService(
             throw new HttpError(403, "Chỉ GVCN được chốt suất ăn của lớp");
           const demand = await owned(tx, id, actor);
           if (demand.status === "FINALIZED") return demand;
+          await assertDeclarableDay(tx, {
+            schoolId: actor.schoolId!,
+            classId: demand.classId,
+            date: demand.mealDate,
+            mealType: demand.mealType,
+          });
           return repository.finalizeSubmission(tx, id, actor.id, new Date());
         },
       );

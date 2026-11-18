@@ -25,7 +25,10 @@ import { createKitchenRouter } from "../src/modules/kitchen/kitchen.routes";
 import { validateKitchenFilters } from "../src/modules/kitchen/kitchen.validation";
 import { createRetainedSampleService } from "../src/modules/retained-sample/retained-sample.service";
 import { createRetainedSampleRouter } from "../src/modules/retained-sample/retained-sample.routes";
-import { validateRetainedSampleListQuery } from "../src/modules/retained-sample/retained-sample.validation";
+import {
+  validateFoodSample,
+  validateRetainedSampleListQuery,
+} from "../src/modules/retained-sample/retained-sample.validation";
 import { HttpError } from "../src/utils/http-error";
 import { RequestValidationError } from "../src/utils/request-validation";
 import { testStaff, testAdmin } from "./helpers/authorization";
@@ -62,6 +65,8 @@ function academicCalendarDatabase(configured = true) {
         },
       },
       weeklyMenu: { findMany: () => Promise.resolve([]) },
+      // Hạn chót tuần: chưa có biên bản BGH yêu cầu sửa.
+      menuReviewRecord: { count: () => Promise.resolve(0) },
     },
   };
 }
@@ -857,4 +862,26 @@ void test("kitchen planning stock and detail support received standalone lots wi
     permissions: ["cooking_batch.view"],
   });
   assert.equal(detail.cookingBatchLots[0].ingredientName, "Thịt bò");
+});
+
+void test("mẫu lưu phải đạt lượng tối thiểu theo QĐ 1246 (100 g đặc, 150 ml lỏng)", () => {
+  const base = {
+    storageUnitId: "00000000-0000-4000-8000-0000000000aa",
+    storageLocation: "Ngăn 1",
+    sampledAt: "2026-11-18T05:00:00.000Z",
+  };
+  const fieldErrors = (body: Record<string, unknown>) => {
+    try {
+      validateFoodSample({ ...base, ...body });
+      return [];
+    } catch (error) {
+      assert.ok(error instanceof RequestValidationError);
+      return error.fields.map((issue) => issue.field);
+    }
+  };
+  assert.deepEqual(fieldErrors({ quantity: 99.999, unit: "g" }), ["quantity"]);
+  assert.deepEqual(fieldErrors({ quantity: 149, unit: "ml" }), ["quantity"]);
+  assert.deepEqual(fieldErrors({ quantity: "100", unit: "g" }), []);
+  assert.deepEqual(fieldErrors({ quantity: 150, unit: "ML" }), []);
+  assert.deepEqual(fieldErrors({ quantity: 120, unit: "ml" }), ["quantity"]);
 });

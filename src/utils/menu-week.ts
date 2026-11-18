@@ -49,6 +49,138 @@ export function expandMenuHolidays(
     .map(([date, reason]) => ({ date, reason }));
 }
 
+/** Rejects menu days that fall on a configured school holiday (BE guard; the UI already hides them). */
+export function assertNoHolidayMenuDays(
+  days: { menuDate: Date }[],
+  years: MenuCalendarYear[],
+): void {
+  if (!days.length) return;
+  const dates = days.map((day) => day.menuDate.toISOString().slice(0, 10));
+  const first = dates.reduce((a, b) => (a < b ? a : b));
+  const last = dates.reduce((a, b) => (a > b ? a : b));
+  const holidays = new Map<string, string | null>();
+  for (const year of years) {
+    const start = year.startDate.toISOString().slice(0, 10);
+    const end = year.endDate.toISOString().slice(0, 10);
+    const from = start > first ? start : first;
+    const to = end < last ? end : last;
+    if (from > to) continue;
+    for (const day of expandMenuHolidays(year.holidays, from, to))
+      holidays.set(day.date, day.reason);
+  }
+  const blocked = [...new Set(dates)]
+    .filter((date) => holidays.has(date))
+    .sort();
+  if (!blocked.length) return;
+  const label = (date: string) => {
+    const [y, m, d] = date.split("-");
+    const reason = holidays.get(date);
+    return `${d}/${m}/${y}${reason ? ` (${reason})` : ""}`;
+  };
+  throw new HttpError(
+    422,
+    `Không lập thực đơn vào ngày nghỉ: ${blocked.map(label).join(", ")}`,
+  );
+}
+
+const dmy = (iso: string) => iso.split("-").reverse().join("/");
+
+/**
+ * Days must lie inside a configured academic year. Past days (before `today`,
+ * Vietnam date) may only be resent unchanged: no new past day, no dish change.
+ */
+/**
+ * Weekly menu deadline: a week must be created and submitted by the end of the
+ * Sunday before it (Vietnam date). From Monday on, the week is locked unless the
+ * management board has requested a revision of this menu.
+ */
+export function menuWeekLock(
+  weekStartDate: Date,
+  today: string,
+  revisionRequested: boolean,
+): { deadline: string; locked: boolean; reason: string | null } {
+  const shift = (days: number) =>
+    new Date(weekStartDate.getTime() + days * 86400000)
+      .toISOString()
+      .slice(0, 10);
+  const monday = shift(0);
+  const deadline = shift(-1);
+  const locked = today >= monday && !revisionRequested;
+  return {
+    deadline,
+    locked,
+    reason: locked
+      ? `Đã quá hạn lập và gửi duyệt thực đơn tuần ${dmy(monday)}–${dmy(shift(4))} (hạn chót hết Chủ nhật ${dmy(deadline)})`
+      : null,
+  };
+}
+
+export function assertMenuWeekOpen(
+  weekStartDate: Date,
+  today: string,
+  revisionRequested: boolean,
+): void {
+  const lock = menuWeekLock(weekStartDate, today, revisionRequested);
+  if (lock.reason) throw new HttpError(422, lock.reason);
+}
+
+export function assertMenuDaysEditable(
+  days: {
+    menuDate: Date;
+    meals: { mealType: string; dishes: { dishId?: string | null }[] }[];
+  }[],
+  stored: {
+    menuDate: Date;
+    menuDayDishes: { mealType: string; dishId: string }[];
+  }[],
+  years: MenuCalendarYear[],
+  today: string,
+): void {
+  const iso = (date: Date) => date.toISOString().slice(0, 10);
+  const outside = days
+    .map((day) => iso(day.menuDate))
+    .filter(
+      (date) =>
+        !years.some(
+          (year) => iso(year.startDate) <= date && date <= iso(year.endDate),
+        ),
+    );
+  if (outside.length)
+    throw new HttpError(
+      422,
+      `Ngày nằm ngoài năm học đã cấu hình: ${[...new Set(outside)].sort().map(dmy).join(", ")}`,
+    );
+  const added: string[] = [];
+  const changed: string[] = [];
+  for (const day of days) {
+    const date = iso(day.menuDate);
+    if (date >= today) continue;
+    const before = stored.find((row) => iso(row.menuDate) === date);
+    if (!before) {
+      added.push(date);
+      continue;
+    }
+    const key = (rows: string[]) => [...rows].sort().join("|");
+    const incoming = day.meals.flatMap((meal) =>
+      meal.dishes.map((dish) => `${meal.mealType}:${dish.dishId ?? "new"}`),
+    );
+    const existing = before.menuDayDishes.map(
+      (dish) => `${dish.mealType}:${dish.dishId}`,
+    );
+    if (key(incoming) !== key(existing)) changed.push(date);
+  }
+  if (added.length)
+    throw new HttpError(
+      422,
+      `Không lập thực đơn cho ngày đã qua: ${added.sort().map(dmy).join(", ")}`,
+    );
+  if (changed.length)
+    throw new HttpError(
+      422,
+      `Không sửa thực đơn của ngày đã qua: ${changed.sort().map(dmy).join(", ")}`,
+    );
+}
+
 export function assertCompleteMenuWeek(
   menu: {
     weekStartDate: Date;

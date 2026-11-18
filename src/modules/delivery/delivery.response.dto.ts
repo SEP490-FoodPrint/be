@@ -22,6 +22,11 @@ export interface DeliveryInspectionDTO {
   note: string | null;
   currentRole: string;
   canInspect: boolean;
+  /**
+   * Lý do đợt giao không thể tiếp nhận vào kho (dữ liệu lô/danh mục không khớp),
+   * kiểm tra sớm khi xe đến và trước chữ ký "Đạt" đầu tiên; null nếu hợp lệ.
+   */
+  receiptIssue?: string | null;
   redeliveryRequiredCount: number | null;
   redeliveryLimit: number | null;
   cancellationNotice: string | null;

@@ -117,6 +117,7 @@ void test("multipart photos are attached to decisions and samples, and failed wr
     if (isSample) {
       data.set("quantity", "150");
       data.set("unit", "g");
+      data.set("storageUnitId", "00000000-0000-4000-8000-0000000000aa");
       data.set("storageLocation", "A");
       data.set("sampledAt", new Date().toISOString());
     } else data.set("decision", "APPROVE");

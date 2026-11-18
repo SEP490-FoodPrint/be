@@ -816,8 +816,12 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       const chef = await loadPrincipal(chefAccount.id, db);
       const reviewer = await loadPrincipal(reviewerAccount.id, db);
       const menus = createMenuService(undefined, () => Promise.resolve(db));
-      const batches = createKitchenService(undefined, () =>
-        Promise.resolve(db),
+      // Bếp chỉ nấu bữa của hôm nay: đặt "hôm nay" theo ngày thực đơn đang test.
+      let kitchenToday = "";
+      const batches = createKitchenService(
+        undefined,
+        () => Promise.resolve(db),
+        () => kitchenToday,
       );
       const samples = createRetainedSampleService(undefined, () =>
         Promise.resolve(db),
@@ -1075,6 +1079,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       const sideDish = day.menuDayDishes.find(
         (d) => d.Dish.name === "API side",
       )!;
+      kitchenToday = day.menuDate.toISOString().slice(0, 10);
       const key = {
         menuDayId: day.id,
         dishId: mainDish.dishId,
@@ -1215,11 +1220,20 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         }),
         1,
       );
+      // Mẫu lưu phải gắn với tủ lưu mẫu đang hoạt động của trường.
+      const fridge = await db.sampleStorageUnit.create({
+        data: {
+          schoolId: school.id,
+          code: "FRIDGE-1",
+          name: "Fridge 1",
+          location: "Kitchen",
+        },
+      });
       const sampleInput = validateFoodSample({
         dishId: mainDish.dishId,
         quantity: 150,
         unit: "g",
-        storageLocation: "Fridge 1",
+        storageUnitId: fridge.id,
         sampledAt: new Date().toISOString(),
       });
       const saved = await samples.create(batch.id, sampleInput, chef);
@@ -1353,6 +1367,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         ["2032-01-05", "2032-01-06", "2032-01-07", "2032-01-08", "2032-01-09"],
       );
       const grKey = { menuDayId: grDay.id, mealType: "LUNCH" as const };
+      kitchenToday = grDay.menuDate.toISOString().slice(0, 10);
       const grDefinition = validateMenuPortionGroups({
         groups: [
           {

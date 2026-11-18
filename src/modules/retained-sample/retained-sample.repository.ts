@@ -11,6 +11,8 @@ export const retainedSampleSelect = {
   quantity: true,
   unit: true,
   storageLocation: true,
+  storageUnitId: true,
+  storageUnit: { select: { name: true } },
   photoPublicId: true,
   photoHash: true,
   status: true,
@@ -134,6 +136,7 @@ export function createRetainedSampleRepository(read?: ListReader) {
         dishId: string;
         quantity: string;
         unit: string;
+        storageUnitId: string;
         storageLocation: string;
         sampledAt: Date;
         photoPublicId?: string;
@@ -143,6 +146,25 @@ export function createRetainedSampleRepository(read?: ListReader) {
       return tx.retainedFoodSample.create({
         data: { cookingBatchId, recordedByUserId: actorId, ...input },
         select: retainedSampleSelect,
+      });
+    },
+    /** Khóa tủ trong transaction để hai lần ghi mẫu đồng thời không vượt sức chứa. */
+    async lockStorageUnit(tx: Tx, id: string, schoolId: string) {
+      await tx.$queryRaw`SELECT id FROM foodprint.sample_storage_units WHERE id = ${id}::uuid AND school_id = ${schoolId}::uuid FOR UPDATE`;
+      return tx.sampleStorageUnit.findFirst({
+        where: { id, schoolId },
+        select: {
+          id: true,
+          name: true,
+          status: true,
+          capacity: true,
+          currentUsage: true,
+        },
+      });
+    },
+    countStoredInUnit(tx: Tx, storageUnitId: string) {
+      return tx.retainedFoodSample.count({
+        where: { storageUnitId, status: "STORED" },
       });
     },
     findInSchool(tx: Tx, id: string, schoolId: string) {
