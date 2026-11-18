@@ -167,6 +167,16 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       schoolId: schoolA.id,
     }),
   ]);
+  // Default tiers: kitchen PRIMARY, nutrition + ingredient management REQUIRED,
+  // parents OPTIONAL. Snapshot deliveries complete on the last REQUIRED approval,
+  // so ingredient management signs last to keep four signatures before RECEIVED.
+  const approvalOrder = [
+    inspectorUsers[0],
+    inspectorUsers[1],
+    inspectorUsers[3],
+    inspectorUsers[2],
+  ];
+  const finalApprover = inspectorUsers[2];
   const supplierAdminA = await createAccount(
     "INGREDIENT_SUPPLIER_ADMIN",
     "supa_admin",
@@ -838,7 +848,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     (
       await apiRequest(
         `/api/deliveries/${createdReq.id}/arrival`,
-        inspectorUsers[0].id,
+        inspectorUsers[1].id,
         { method: "POST" },
       )
     ).status,
@@ -1397,7 +1407,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     (
       await apiRequest(
         `/api/deliveries/${standaloneOrder.id}/arrival`,
-        inspectorUsers[0].id,
+        inspectorUsers[1].id,
         { method: "POST" },
       )
     ).status,
@@ -1469,7 +1479,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   // School arrival succeeds + idempotent replay preserves arrivedAt
   const arrivalRes = await apiRequest(
     `/api/deliveries/${standaloneOrder.id}/arrival`,
-    inspectorUsers[0].id,
+    inspectorUsers[1].id,
     { method: "POST" },
   );
   assert.equal(arrivalRes.status, 200);
@@ -1525,7 +1535,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       status: "ACTIVE",
     },
   });
-  for (const user of inspectorUsers.slice(0, 3)) {
+  for (const user of approvalOrder.slice(0, 3)) {
     const approveRes = await apiRequest(
       `/api/deliveries/${standaloneOrder.id}/inspection`,
       user.id,
@@ -1536,7 +1546,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   assert.equal(uploadedPhotos.size, 3);
   const finalApprove = await apiRequest(
     `/api/deliveries/${standaloneOrder.id}/inspection`,
-    inspectorUsers[3].id,
+    finalApprover.id,
     { method: "POST", body: inspectionForm("APPROVE") },
   );
   assert.equal(finalApprove.status, 200, JSON.stringify(finalApprove.body));
@@ -1656,7 +1666,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   // 5. REJECT -> manual STANDALONE creates fresh deliveryNo/QR/approvals and completes independently
   const rejectedReqRes = await apiRequest(
     `/api/deliveries/${createdReq.id}/arrival`,
-    inspectorUsers[0].id,
+    inspectorUsers[1].id,
     { method: "POST" },
   );
   assert.equal(rejectedReqRes.status, 200);
@@ -1725,13 +1735,13 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     (
       await apiRequest(
         `/api/deliveries/${replacement.id}/arrival`,
-        inspectorUsers[0].id,
+        inspectorUsers[1].id,
         { method: "POST" },
       )
     ).status,
     200,
   );
-  for (const user of inspectorUsers) {
+  for (const user of approvalOrder) {
     assert.equal(
       (
         await apiRequest(
@@ -1956,13 +1966,13 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     (
       await apiRequest(
         `/api/deliveries/${multiStandalone.id}/arrival`,
-        inspectorUsers[0].id,
+        inspectorUsers[1].id,
         { method: "POST" },
       )
     ).status,
     200,
   );
-  for (const user of inspectorUsers.slice(0, 3)) {
+  for (const user of approvalOrder.slice(0, 3)) {
     assert.equal(
       (
         await apiRequest(
@@ -1977,7 +1987,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   const [concApprove1, concApprove2] = await Promise.all([
     apiRequest(
       `/api/deliveries/${multiStandalone.id}/inspection`,
-      inspectorUsers[3].id,
+      finalApprover.id,
       {
         method: "POST",
         body: inspectionForm("APPROVE"),
@@ -1985,7 +1995,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     ),
     apiRequest(
       `/api/deliveries/${multiStandalone.id}/inspection`,
-      inspectorUsers[3].id,
+      finalApprover.id,
       {
         method: "POST",
         body: inspectionForm("APPROVE"),
@@ -2100,7 +2110,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     (
       await apiRequest(
         `/api/deliveries/${splitOrder.id}/arrival`,
-        inspectorUsers[0].id,
+        inspectorUsers[1].id,
         { method: "POST" },
       )
     ).status,
@@ -2114,7 +2124,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   const splitDetailBody = unwrap<Record<string, unknown>>(splitDetailRes.body);
   assert.equal("workflowVersion" in splitDetailBody, false);
 
-  for (const user of inspectorUsers.slice(0, 3)) {
+  for (const user of approvalOrder.slice(0, 3)) {
     assert.equal(
       (
         await apiRequest(
@@ -2129,7 +2139,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   const [splitFinal1, splitFinal2] = await Promise.all([
     apiRequest(
       `/api/deliveries/${splitOrder.id}/inspection`,
-      inspectorUsers[3].id,
+      finalApprover.id,
       {
         method: "POST",
         body: inspectionForm("APPROVE"),
@@ -2137,7 +2147,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     ),
     apiRequest(
       `/api/deliveries/${splitOrder.id}/inspection`,
-      inspectorUsers[3].id,
+      finalApprover.id,
       {
         method: "POST",
         body: inspectionForm("APPROVE"),
@@ -2582,13 +2592,13 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     (
       await apiRequest(
         `/api/deliveries/${capReceived.id}/arrival`,
-        inspectorUsers[0].id,
+        inspectorUsers[1].id,
         { method: "POST" },
       )
     ).status,
     200,
   );
-  for (const user of inspectorUsers) {
+  for (const user of approvalOrder) {
     assert.equal(
       (
         await apiRequest(
