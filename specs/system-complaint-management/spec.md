@@ -3,7 +3,7 @@
 **Feature Slug**: `system-complaint-management`  
 **Target Branch**: `feat/system-complaint-management`  
 **Created**: 2026-11-18  
-**Status**: Ready for Implementation  
+**Status**: Ready for Implementation
 
 ---
 
@@ -16,6 +16,7 @@ Tính năng Quản lý Khiếu nại Kỹ thuật Hệ thống (C06) cho phép t
 ## 2. User Stories & Acceptance Criteria
 
 ### US1: Người dùng gửi khiếu nại / báo lỗi kỹ thuật hệ thống (C06)
+
 - **Actor**: Bất kỳ người dùng đã xác thực (mọi role: BGH, Bếp, NCC, GV, ATTP, System Admin).
 - **Mục tiêu**: Báo cáo lỗi màn hình, lỗi API, lỗi dữ liệu hoặc phản ánh đề xuất cải tiến kỹ thuật.
 - **Yêu cầu (AC)**:
@@ -27,6 +28,7 @@ Tính năng Quản lý Khiếu nại Kỹ thuật Hệ thống (C06) cho phép t
   - **AC 1.6**: Trả về HTTP 201 kèm DTO đầy đủ thông tin khiếu nại vừa tạo.
 
 ### US2: Người dùng xem danh sách và chi tiết khiếu nại của chính mình
+
 - **Actor**: Người gửi khiếu nại (bất kỳ role).
 - **Yêu cầu (AC)**:
   - **AC 2.1**: API `GET /api/system-complaints/my` trả về danh sách phân trang các khiếu nại hệ thống do chính user gửi (`sender_user_id = auth.id`), sắp xếp `createdAt DESC`.
@@ -34,6 +36,7 @@ Tính năng Quản lý Khiếu nại Kỹ thuật Hệ thống (C06) cho phép t
   - **AC 2.3**: Nếu user truy cập khiếu nại của người khác mà không có quyền quản trị hệ thống, hệ thống trả về HTTP 404 (Fail-closed isolation).
 
 ### US3: Quản trị viên hệ thống (System Admin) quản lý và phản hồi khiếu nại
+
 - **Actor**: `SYSTEM_ADMIN` (sở hữu quyền xem và phản hồi hệ thống).
 - **Yêu cầu (AC)**:
   - **AC 3.1**: API `GET /api/system-complaints` cho phép xem toàn bộ khiếu nại hệ thống với các bộ lọc `status`, tìm kiếm theo `q` (mã hoặc tiêu đề), phân trang `page`, `limit`.
@@ -54,15 +57,17 @@ Tính năng Quản lý Khiếu nại Kỹ thuật Hệ thống (C06) cho phép t
 ## 3. Data Dictionary & Constraints
 
 ### 3.1 Bảng `system_complaints`
-| Tên cột | Kiểu | Ràng buộc | Mô tả |
-|---|---|---|---|
-| `id` | `uuid` | `PRIMARY KEY` | Khóa chính, khớp với `complaints.id` |
-| `kind` | `complaint_kind` | `NOT NULL DEFAULT 'SYSTEM'` | Phân loại đơn, CHECK `kind = 'SYSTEM'` |
-| FK tổ hợp | `(id, kind)` | `REFERENCES complaints(id, kind) ON DELETE RESTRICT` | Ràng buộc kế thừa bảng cha |
+
+| Tên cột   | Kiểu             | Ràng buộc                                            | Mô tả                                  |
+| --------- | ---------------- | ---------------------------------------------------- | -------------------------------------- |
+| `id`      | `uuid`           | `PRIMARY KEY`                                        | Khóa chính, khớp với `complaints.id`   |
+| `kind`    | `complaint_kind` | `NOT NULL DEFAULT 'SYSTEM'`                          | Phân loại đơn, CHECK `kind = 'SYSTEM'` |
+| FK tổ hợp | `(id, kind)`     | `REFERENCES complaints(id, kind) ON DELETE RESTRICT` | Ràng buộc kế thừa bảng cha             |
 
 ---
 
 ## 4. Security & Compliance
+
 - Tuân thủ Zero Trust & Scope Validation: User thường chỉ được xem khiếu nại do chính mình tạo. System Admin được quyền truy cập toàn diện khiếu nại `kind = 'SYSTEM'`.
 - Chống Race Condition: Mọi thao tác cập nhật phản hồi đều chạy trong transaction `Serializable` với cơ chế khóa lạc quan hoặc Serializable retry.
 - Audit Trail: Lưu trữ bất biến lịch sử phản hồi và lịch sử trạng thái.

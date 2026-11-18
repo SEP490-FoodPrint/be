@@ -1,4 +1,3 @@
-import { ORG_TYPES } from "../../constants/roles";
 import type { AuthPrincipal } from "../../types/auth";
 import {
   authorizationTransaction,
@@ -154,7 +153,9 @@ function mapFeedbackDetail(
     },
     ingredientLot: lot ? { id: lot.id, lotCode: lot.lotCode } : null,
     supplierResponse:
-      status === "RESPONDED" && currentResponse ? currentResponse.content : null,
+      status === "RESPONDED" && currentResponse
+        ? currentResponse.content
+        : null,
     respondedBy:
       status === "RESPONDED" && currentResponse?.respondedByUser
         ? {

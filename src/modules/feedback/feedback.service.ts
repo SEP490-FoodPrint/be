@@ -46,7 +46,11 @@ function toResponse(
   const complaint = row.Complaint;
   const currentResponse = complaint.currentResponseVersion;
   const status: "SUBMITTED" | "IN_REVIEW" | "RESOLVED" =
-    complaint.status === "RESPONDED" ? "RESOLVED" : (complaint.status as any);
+    complaint.status === "RESPONDED"
+      ? "RESOLVED"
+      : complaint.status === "SUBMITTED"
+        ? "SUBMITTED"
+        : "IN_REVIEW";
 
   return {
     id: row.id,
@@ -268,7 +272,7 @@ export function createFeedbackService(
               status: "RESOLVED",
               handledByUserId: actor.id,
               handledByRoleCode: actor.role,
-              fromStatus: row.Complaint.status as "SUBMITTED" | "IN_REVIEW",
+              fromStatus: row.Complaint.status,
               resolution: input.resolution,
               resolvedAt: new Date(),
             }),

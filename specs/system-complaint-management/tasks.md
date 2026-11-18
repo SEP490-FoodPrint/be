@@ -2,11 +2,12 @@
 
 **Feature Branch**: `feat/system-complaint-management`  
 **Created**: 2026-11-18  
-**Status**: Completed  
+**Status**: Completed
 
 ---
 
 ## Phase 1: Spec & Schema Migration
+
 - [x] Soạn thảo `specs/system-complaint-management/spec.md`
 - [x] Soạn thảo `specs/system-complaint-management/plan.md`
 - [x] Soạn thảo `specs/system-complaint-management/tasks.md`
@@ -17,6 +18,7 @@
 ---
 
 ## Phase 2: Backend Implementation
+
 - [x] Tạo file `src/modules/system-complaint/system-complaint.validation.ts` với Zod schemas
 - [x] Tạo file `src/modules/system-complaint/system-complaint.repository.ts` với các truy vấn DB
 - [x] Tạo file `src/modules/system-complaint/system-complaint.service.ts` xử lý logic C06 và versioning phản hồi
@@ -26,6 +28,7 @@
 ---
 
 ## Phase 3: Testing & Verification
+
 - [x] Viết test suite kiểm thử tính năng `system-complaint`
 - [x] Chạy kiểm tra `node tests/spec-gate.test.mjs`
 - [x] Chạy `npm run typecheck`

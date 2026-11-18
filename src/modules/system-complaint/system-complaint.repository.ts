@@ -1,5 +1,4 @@
-import type { Prisma } from "../../generated/prisma/client";
-import { getPrisma } from "../../utils/database";
+import type { ComplaintStatus, Prisma } from "../../generated/prisma/client";
 
 export type SystemComplaintTx = Prisma.TransactionClient;
 
@@ -180,7 +179,7 @@ export function createSystemComplaintRepository(): SystemComplaintRepository {
       const where: Prisma.ComplaintWhereInput = {
         kind: "SYSTEM",
         senderUserId: userId,
-        ...(params.status ? { status: params.status as any } : {}),
+        ...(params.status ? { status: params.status as ComplaintStatus } : {}),
       };
 
       const [items, total] = await Promise.all([
@@ -208,7 +207,7 @@ export function createSystemComplaintRepository(): SystemComplaintRepository {
     ): Promise<{ items: SystemComplaintRecord[]; total: number }> {
       const where: Prisma.ComplaintWhereInput = {
         kind: "SYSTEM",
-        ...(params.status ? { status: params.status as any } : {}),
+        ...(params.status ? { status: params.status as ComplaintStatus } : {}),
         ...(params.search
           ? {
               OR: [
@@ -298,10 +297,7 @@ export function createSystemComplaintRepository(): SystemComplaintRepository {
       return { versionRecord, updatedComplaint };
     },
 
-    async listResponseVersions(
-      tx: SystemComplaintTx,
-      complaintId: string,
-    ) {
+    async listResponseVersions(tx: SystemComplaintTx, complaintId: string) {
       return tx.complaintResponseVersion.findMany({
         where: { complaintId },
         include: {

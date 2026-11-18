@@ -3,7 +3,7 @@
 **Feature Slug**: `system-complaint-management`  
 **Target Branch**: `feat/system-complaint-management`  
 **Created**: 2026-11-18  
-**Status**: Ready for Implementation  
+**Status**: Ready for Implementation
 
 ---
 
@@ -27,6 +27,7 @@ erDiagram
 ## 2. Database Migration
 
 Migration SQL `prisma/migrations/20261124000100_system_complaint/migration.sql`:
+
 1. Tạo bảng `foodprint.system_complaints` với `id`, `kind DEFAULT 'SYSTEM'`, CHECK `kind = 'SYSTEM'`, UNIQUE `(id, kind)`, FK `(id, kind) REFERENCES complaints(id, kind)`.
 2. Tạo index cần thiết phục vụ tìm kiếm.
 
@@ -35,6 +36,7 @@ Migration SQL `prisma/migrations/20261124000100_system_complaint/migration.sql`:
 ## 3. Module Design (`src/modules/system-complaint/`)
 
 ### 3.1 Cấu trúc thư mục
+
 ```
 src/modules/system-complaint/
 ├── system-complaint.repository.ts
@@ -45,6 +47,7 @@ src/modules/system-complaint/
 ```
 
 ### 3.2 Logic Nghiệp vụ
+
 1. **Tạo khiếu nại (`create`)**:
    - Chạy trong `$transaction(isolationLevel: "Serializable")`.
    - Lấy next sequence `foodprint.complaint_code_seq`, format `FP-CP-xxxxx`.
@@ -64,6 +67,7 @@ src/modules/system-complaint/
 ---
 
 ## 4. Verification & Testing Strategy
+
 - Unit test & Module integration test:
   - Test tạo khiếu nại C06 cấp đúng mã sequence.
   - Test cách ly dữ liệu: user thường chỉ thấy đơn của mình.
