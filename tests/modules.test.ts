@@ -18,7 +18,10 @@ import {
   createUserService,
   type UserService,
 } from "../src/modules/user/user.service";
-import { createWarehouseService } from "../src/modules/warehouse/warehouse.service";
+import {
+  createWarehouseService,
+  effectiveLotStatus,
+} from "../src/modules/warehouse/warehouse.service";
 import { createDeliveryService } from "../src/modules/delivery/delivery.service";
 import { createRegistrationService } from "../src/modules/registration/registration.service";
 import { createRegistrationRepository } from "../src/modules/registration/registration.repository";
@@ -1256,84 +1259,112 @@ void test("composite-primary-key lists use both keys for deterministic ordering"
   );
 });
 
+void test("lô còn hàng nhưng quá hạn dùng được trả về trạng thái EXPIRED (không ghi DB)", () => {
+  const today = "2026-11-18";
+  const lot = (status: string, expiry: string | null) => ({
+    status,
+    expiryDate: expiry ? new Date(`${expiry}T00:00:00.000Z`) : null,
+  });
+  assert.equal(
+    effectiveLotStatus(lot("AVAILABLE", "2026-11-17"), today),
+    "EXPIRED",
+  );
+  assert.equal(
+    effectiveLotStatus(lot("AVAILABLE", "2026-11-18"), today),
+    "AVAILABLE",
+  );
+  assert.equal(effectiveLotStatus(lot("AVAILABLE", null), today), "AVAILABLE");
+  // Lô đã dùng hết / bị khóa giữ nguyên trạng thái của nó.
+  assert.equal(
+    effectiveLotStatus(lot("DEPLETED", "2026-11-01"), today),
+    "DEPLETED",
+  );
+  assert.equal(
+    effectiveLotStatus(lot("BLOCKED", "2026-11-01"), today),
+    "BLOCKED",
+  );
+});
+
 void test("warehouse Decimal quantities and dates remain JSON-compatible without rounding", async () => {
-  const service = createWarehouseService(() =>
-    Promise.resolve([
-      {
-        id: "lot-1",
-        deliveryItemId: "delivery-item-1",
-        sourceFacilityId: null,
-        lotCode: "LOT-1",
-        manufactureDate: null,
-        expiryDate: now,
-        receivedQuantity: new Prisma.Decimal("123.456"),
-        availableQuantity: new Prisma.Decimal("23.456"),
-        unit: "kg",
-        status: "AVAILABLE",
-        createdAt: now,
-        updatedAt: now,
-        SourceFacility: null,
-        DeliveryItem: {
-          id: "delivery-item-1",
-          ingredientId: "ing-1",
-          ingredientEntryId: "entry-1",
-          actualQuantity: new Prisma.Decimal("123.456"),
+  const service = createWarehouseService(
+    () =>
+      Promise.resolve([
+        {
+          id: "lot-1",
+          deliveryItemId: "delivery-item-1",
+          sourceFacilityId: null,
+          lotCode: "LOT-1",
+          manufactureDate: null,
+          expiryDate: now,
+          receivedQuantity: new Prisma.Decimal("123.456"),
+          availableQuantity: new Prisma.Decimal("23.456"),
           unit: "kg",
-          Delivery: {
-            id: "delivery-1",
-            deliveryNo: "DEL-001",
-            schoolId: testAdmin.schoolId!,
-            creationMode: "REQUEST" as const,
-            status: "RECEIVED" as const,
-            expectedArrivalAt: now,
-            arrivedAt: now,
-            receivedAt: now,
-          },
-          Ingredient: {
-            id: "ing-1",
-            name: "Gạo",
-            defaultUnit: "kg",
-            description: null,
-            ingredientCategory: null,
-            Supplier: {
-              id: "sup-1",
-              name: "Supplier A",
-              phone: "0987654321",
-            },
-          },
-          IngredientEntry: {
-            id: "entry-1",
-            handlingType: "DRY_STOCK" as const,
-            storageRequirements: null,
-            shelfLifeDays: 30,
-          },
-          SupplyRequestItem: {
-            id: "sri-1",
+          status: "AVAILABLE",
+          createdAt: now,
+          updatedAt: now,
+          SourceFacility: null,
+          DeliveryItem: {
+            id: "delivery-item-1",
+            ingredientId: "ing-1",
             ingredientEntryId: "entry-1",
-            requestedQuantity: new Prisma.Decimal("123.456"),
+            actualQuantity: new Prisma.Decimal("123.456"),
             unit: "kg",
+            Delivery: {
+              id: "delivery-1",
+              deliveryNo: "DEL-001",
+              schoolId: testAdmin.schoolId!,
+              creationMode: "REQUEST" as const,
+              status: "RECEIVED" as const,
+              expectedArrivalAt: now,
+              arrivedAt: now,
+              receivedAt: now,
+            },
+            Ingredient: {
+              id: "ing-1",
+              name: "Gạo",
+              defaultUnit: "kg",
+              description: null,
+              ingredientCategory: null,
+              Supplier: {
+                id: "sup-1",
+                name: "Supplier A",
+                phone: "0987654321",
+              },
+            },
             IngredientEntry: {
               id: "entry-1",
               handlingType: "DRY_STOCK" as const,
               storageRequirements: null,
               shelfLifeDays: 30,
-              Ingredient: {
-                id: "ing-1",
-                name: "Gạo",
-                defaultUnit: "kg",
-                description: null,
-                ingredientCategory: null,
-                Supplier: {
-                  id: "sup-1",
-                  name: "Supplier A",
-                  phone: "0987654321",
+            },
+            SupplyRequestItem: {
+              id: "sri-1",
+              ingredientEntryId: "entry-1",
+              requestedQuantity: new Prisma.Decimal("123.456"),
+              unit: "kg",
+              IngredientEntry: {
+                id: "entry-1",
+                handlingType: "DRY_STOCK" as const,
+                storageRequirements: null,
+                shelfLifeDays: 30,
+                Ingredient: {
+                  id: "ing-1",
+                  name: "Gạo",
+                  defaultUnit: "kg",
+                  description: null,
+                  ingredientCategory: null,
+                  Supplier: {
+                    id: "sup-1",
+                    name: "Supplier A",
+                    phone: "0987654321",
+                  },
                 },
               },
             },
           },
         },
-      },
-    ]),
+      ]),
+    () => now,
   );
   const result = await service.getAll({ page: 1, limit: 20 }, testAdmin);
   const body: unknown = JSON.parse(JSON.stringify(result));
@@ -1417,60 +1448,62 @@ void test("warehouse Decimal quantities and dates remain JSON-compatible without
     pagination: { page: 1, limit: 20, hasNext: false },
   });
 
-  const standaloneWarehouse = createWarehouseService(() =>
-    Promise.resolve([
-      {
-        id: "lot-standalone",
-        deliveryItemId: "di-standalone",
-        sourceFacilityId: null,
-        lotCode: "LOT-STD",
-        manufactureDate: null,
-        expiryDate: null,
-        receivedQuantity: new Prisma.Decimal("5.500"),
-        availableQuantity: new Prisma.Decimal("5.500"),
-        unit: "kg",
-        status: "AVAILABLE",
-        createdAt: now,
-        updatedAt: now,
-        SourceFacility: null,
-        DeliveryItem: {
-          id: "di-standalone",
-          ingredientId: "ing-1",
-          ingredientEntryId: "entry-1",
-          actualQuantity: new Prisma.Decimal("5.500"),
+  const standaloneWarehouse = createWarehouseService(
+    () =>
+      Promise.resolve([
+        {
+          id: "lot-standalone",
+          deliveryItemId: "di-standalone",
+          sourceFacilityId: null,
+          lotCode: "LOT-STD",
+          manufactureDate: null,
+          expiryDate: null,
+          receivedQuantity: new Prisma.Decimal("5.500"),
+          availableQuantity: new Prisma.Decimal("5.500"),
           unit: "kg",
-          Delivery: {
-            id: "del-standalone",
-            deliveryNo: "DG-STD-1",
-            schoolId: testAdmin.schoolId!,
-            creationMode: "STANDALONE" as const,
-            status: "RECEIVED" as const,
-            expectedArrivalAt: null,
-            arrivedAt: now,
-            receivedAt: now,
-          },
-          Ingredient: {
-            id: "ing-1",
-            name: "Gạo",
-            defaultUnit: "kg",
-            description: null,
-            ingredientCategory: null,
-            Supplier: {
-              id: "sup-1",
-              name: "Supplier A",
-              phone: null,
+          status: "AVAILABLE",
+          createdAt: now,
+          updatedAt: now,
+          SourceFacility: null,
+          DeliveryItem: {
+            id: "di-standalone",
+            ingredientId: "ing-1",
+            ingredientEntryId: "entry-1",
+            actualQuantity: new Prisma.Decimal("5.500"),
+            unit: "kg",
+            Delivery: {
+              id: "del-standalone",
+              deliveryNo: "DG-STD-1",
+              schoolId: testAdmin.schoolId!,
+              creationMode: "STANDALONE" as const,
+              status: "RECEIVED" as const,
+              expectedArrivalAt: null,
+              arrivedAt: now,
+              receivedAt: now,
             },
+            Ingredient: {
+              id: "ing-1",
+              name: "Gạo",
+              defaultUnit: "kg",
+              description: null,
+              ingredientCategory: null,
+              Supplier: {
+                id: "sup-1",
+                name: "Supplier A",
+                phone: null,
+              },
+            },
+            IngredientEntry: {
+              id: "entry-1",
+              handlingType: "DRY_STOCK" as const,
+              storageRequirements: null,
+              shelfLifeDays: 30,
+            },
+            SupplyRequestItem: null,
           },
-          IngredientEntry: {
-            id: "entry-1",
-            handlingType: "DRY_STOCK" as const,
-            storageRequirements: null,
-            shelfLifeDays: 30,
-          },
-          SupplyRequestItem: null,
         },
-      },
-    ]),
+      ]),
+    () => now,
   );
   const standaloneResult = await standaloneWarehouse.getAll(
     { page: 1, limit: 20 },
@@ -1817,6 +1850,98 @@ void test("menu standards reject invalid precision, duplicates and kitchen-enter
       seasonings: [],
     }).dishes[0].ingredients[0].quantityPerPortion,
     "99999999999.999",
+  );
+});
+
+void test("supply request school list with include=items returns lines in one query", async (context) => {
+  const principal = { ...testStaff, permissions: ["supply_request.view"] };
+  const row = {
+    id: testAdmin.id,
+    requestNo: "PO-20261118-1",
+    schoolId: testStaff.schoolId,
+    supplierId: testAdmin.id,
+    status: "SENT",
+    acceptedAt: null,
+    createdAt: new Date("2026-11-18T00:00:00Z"),
+    updatedAt: new Date("2026-11-18T00:00:00Z"),
+    requestedDeliveryDate: new Date("2026-11-19T00:00:00Z"),
+    sentAt: new Date("2026-11-18T01:00:00Z"),
+    note: "Giao 05:30",
+    Supplier: { name: "NCC An Nhiên", phone: "0901000000" },
+    supplyRequestItems: [
+      {
+        id: testStaff.id,
+        ingredientEntryId: testAdmin.id,
+        requestedQuantity: new Prisma.Decimal("12.5"),
+        unit: "kg",
+        note: null,
+        IngredientEntry: {
+          handlingType: "DIRECT_USE",
+          Ingredient: { name: "Rau cải" },
+        },
+      },
+    ],
+  };
+  let selected: Prisma.SupplyRequestSelect | undefined;
+  const db = {
+    supplyRequest: {
+      findMany(args: Prisma.SupplyRequestFindManyArgs) {
+        selected = args.select ?? undefined;
+        assert.deepEqual(args.where, { schoolId: principal.schoolId });
+        return Promise.resolve([row]);
+      },
+    },
+  } as unknown as import("../src/generated/prisma/client").PrismaClient;
+  const service = createSupplyOrderService(
+    createSupplyOrderRepository(() => Promise.resolve(db)),
+  );
+  const app = express();
+  app.use(express.json());
+  app.use(
+    "/api/supply-requests",
+    createSupplyOrderRouter(service, (req, _res, next) => {
+      req.auth = principal;
+      next();
+    }),
+  );
+  app.use(globalErrorHandler);
+  const http = await startHttp(app);
+  context.after(() => http.close());
+  const result = await http.request(
+    "/api/supply-requests?include=items&limit=100",
+  );
+  assert.equal(result.status, 200);
+  assert.ok(selected?.supplyRequestItems, "lines are read in the list query");
+  const body = result.body as { data: { items: Record<string, unknown>[] } };
+  assert.deepEqual(body.data.items[0], {
+    id: row.id,
+    requestNo: row.requestNo,
+    schoolId: row.schoolId,
+    supplierId: row.supplierId,
+    status: "SENT",
+    acceptedAt: null,
+    createdAt: "2026-11-18T00:00:00.000Z",
+    updatedAt: "2026-11-18T00:00:00.000Z",
+    requestedDeliveryDate: "2026-11-19",
+    sentAt: "2026-11-18T01:00:00.000Z",
+    note: "Giao 05:30",
+    supplierName: "NCC An Nhiên",
+    supplierPhone: "0901000000",
+    items: [
+      {
+        id: testStaff.id,
+        ingredientEntryId: testAdmin.id,
+        ingredientName: "Rau cải",
+        handlingType: "DIRECT_USE",
+        requestedQuantity: "12.5",
+        unit: "kg",
+        note: null,
+      },
+    ],
+  });
+  assert.equal(
+    (await http.request("/api/supply-requests?include=all")).status,
+    400,
   );
 });
 

@@ -142,25 +142,15 @@ export class SampleStorageService {
   async create(principal: AuthPrincipal, input: SampleStorageWriteInput) {
     const schoolId = this.resolveSchoolId(principal);
 
-    let code = input.code;
-    if (!code) {
-      const existingUnits = await this.repository.list(schoolId);
-      const numbers = existingUnits
-        .map((u) => {
-          const match = u.code.match(/TU-LM-(\d+)/i) || u.code.match(/(\d+)/);
-          return match ? parseInt(match[1], 10) : 0;
-        })
-        .filter((n) => !isNaN(n));
-      const maxNum = numbers.length > 0 ? Math.max(...numbers) : 0;
-      code = `TU-LM-${String(maxNum + 1).padStart(2, "0")}`;
-    } else {
-      const existing = await this.repository.findByCode(schoolId, code);
-      if (existing) {
-        throw new HttpError(
-          409,
-          `Mã tủ lưu mẫu '${code}' đã tồn tại trong trường. Vui lòng chọn mã khác.`,
-        );
-      }
+    const code = input.code;
+    // Không nhập mã: hệ thống cấp mã thống nhất FP-SU-xxxxx (đánh số toàn hệ thống).
+    if (!code) return this.repository.createWithGeneratedCode(schoolId, input);
+    const existing = await this.repository.findByCode(schoolId, code);
+    if (existing) {
+      throw new HttpError(
+        409,
+        `Mã tủ lưu mẫu '${code}' đã tồn tại trong trường. Vui lòng chọn mã khác.`,
+      );
     }
 
     return this.repository.create(schoolId, { ...input, code });

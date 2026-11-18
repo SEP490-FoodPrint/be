@@ -22,6 +22,10 @@ export const supplyOrderListQuerySchema = z
         error: "Trạng thái yêu cầu không hợp lệ",
       })
       .optional(),
+    /** Trường: trả kèm mặt hàng, NCC, ngày giao và ghi chú (cùng dữ liệu của API chi tiết) để không phải gọi chi tiết từng đơn. */
+    include: z
+      .literal("items", { error: "include chỉ nhận giá trị items" })
+      .optional(),
   })
   .refine((value) => (value.page - 1) * value.limit <= 2147483647, {
     path: ["page"],

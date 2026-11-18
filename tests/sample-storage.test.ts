@@ -231,6 +231,33 @@ void test("SampleStorageService.create prevents duplicate codes within school", 
   assert.equal(created.code, "TU-NEW");
 });
 
+void test("SampleStorageService.create cấp mã FP-SU khi không nhập mã", async () => {
+  let generatedFor: string | undefined;
+  const mockRepo: Partial<SampleStorageRepository> = {
+    createWithGeneratedCode: (schoolId, data) => {
+      generatedFor = schoolId;
+      return Promise.resolve(
+        writeUnit(schoolId, { ...data, code: "FP-SU-00007" }),
+      );
+    },
+    create: () => {
+      throw new Error("must not create with a client code");
+    },
+  };
+  const service = new SampleStorageService(mockRepo as SampleStorageRepository);
+  const created = await service.create(kitchenStaff, {
+    code: undefined,
+    name: "Tủ mới",
+    location: "Bếp",
+    temperatureRange: "2°C - 8°C",
+    capacity: 40,
+    compartmentCount: 3,
+    status: "ACTIVE",
+  });
+  assert.equal(generatedFor, kitchenStaff.schoolId);
+  assert.equal(created.code, "FP-SU-00007");
+});
+
 void test("SampleStorageService.delete guards against deleting storage unit containing active samples", async () => {
   const mockRepo: Partial<SampleStorageRepository> = {
     findById: (id, schoolId) =>

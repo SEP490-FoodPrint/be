@@ -155,6 +155,40 @@ export function createSupplyOrderService(
       const scope = listScopes["supply-order"](principal);
       if (query.status !== undefined)
         throw new HttpError(400, "Chỉ hỗ trợ tham số page và limit");
+      if (query.include === "items") {
+        const detailed = await readListPage(
+          () => repository.listWithItems(query, scope),
+          query,
+        );
+        return {
+          items: detailed.items.map((row) => ({
+            id: row.id,
+            requestNo: row.requestNo,
+            schoolId: row.schoolId,
+            supplierId: row.supplierId,
+            status: row.status,
+            acceptedAt: row.acceptedAt?.toISOString() ?? null,
+            createdAt: row.createdAt.toISOString(),
+            updatedAt: row.updatedAt.toISOString(),
+            requestedDeliveryDate:
+              row.requestedDeliveryDate?.toISOString().slice(0, 10) ?? null,
+            sentAt: row.sentAt?.toISOString() ?? null,
+            note: row.note,
+            supplierName: row.Supplier.name,
+            supplierPhone: row.Supplier.phone,
+            items: row.supplyRequestItems.map((item) => ({
+              id: item.id,
+              ingredientEntryId: item.ingredientEntryId,
+              ingredientName: item.IngredientEntry.Ingredient.name,
+              handlingType: item.IngredientEntry.handlingType,
+              requestedQuantity: item.requestedQuantity.toString(),
+              unit: item.unit,
+              note: item.note,
+            })),
+          })),
+          pagination: detailed.pagination,
+        };
+      }
       const page = await readListPage(
         () => repository.list(query, scope),
         query,
@@ -217,6 +251,8 @@ export function createSupplyOrderService(
           ingredientEntryId: item.ingredientEntryId,
           ingredientName:
             item.IngredientEntry?.Ingredient?.name ?? "Nguyên liệu",
+          // Đồ khô (DRY_STOCK) bắt buộc NCC nhập ngày sản xuất và hạn dùng của lô khi tạo chuyến giao.
+          handlingType: item.IngredientEntry?.handlingType ?? null,
           requestedQuantity: item.requestedQuantity.toString(),
           unit: item.unit,
           note: item.note,

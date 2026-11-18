@@ -326,27 +326,48 @@ export function projectAllocationDay(
           !batch.plannedPortions ||
           batch.plannedPortions < 0 ||
           (batch.status === "COMPLETED" && !batch.completedAt) ||
-          batch.dishes.length !== mealDishes.length ||
           !batch.dishes.length ||
           batch.dishes.some(
             (dish) =>
-              dish.plannedPortions !== batch.plannedPortions ||
               !mealDishes.some((required) => required.dishId === dish.dishId),
           )
         )
           issue ??=
             "Có lô thiếu dữ liệu hoặc số suất các món trong lô không khớp.";
       }
-      const planned = mealBatches.reduce(
-        (sum, batch) => sum + (batch.plannedPortions ?? 0),
-        0,
-      );
-      const cooked = mealBatches
-        .filter((batch) => batch.status === "COMPLETED")
-        .reduce((sum, batch) => sum + (batch.plannedPortions ?? 0), 0);
-      const sampled = mealBatches
-        .filter((batch) => batch.status === "COMPLETED" && batch.hasSample)
-        .reduce((sum, batch) => sum + (batch.plannedPortions ?? 0), 0);
+      // Tính suất theo món: mỗi món tính max suất từ các lô chứa món đó,
+      // rồi lấy min trên các món để ra số suất thực tế của bữa.
+      const portionsByDish = new Map<
+        string,
+        { planned: number; cooked: number; sampled: number }
+      >();
+      for (const dish of mealDishes) {
+        portionsByDish.set(dish.dishId, { planned: 0, cooked: 0, sampled: 0 });
+      }
+      for (const batch of mealBatches) {
+        const rawBatch = rawBatches.find((rb) => rb.id === batch.id);
+        if (!rawBatch) continue;
+        for (const dish of rawBatch.dishes) {
+          const acc = portionsByDish.get(dish.dishId);
+          if (!acc) continue;
+          const portions =
+            dish.plannedPortions ?? rawBatch.plannedPortions ?? 0;
+          acc.planned += portions;
+          if (rawBatch.status === "COMPLETED") acc.cooked += portions;
+          if (rawBatch.status === "COMPLETED" && batch.hasSample)
+            acc.sampled += portions;
+        }
+      }
+      const dishStats = [...portionsByDish.values()];
+      const planned = dishStats.length
+        ? Math.min(...dishStats.map((d) => d.planned))
+        : 0;
+      const cooked = dishStats.length
+        ? Math.min(...dishStats.map((d) => d.cooked))
+        : 0;
+      const sampled = dishStats.length
+        ? Math.min(...dishStats.map((d) => d.sampled))
+        : 0;
       if (!finalized) demandPending = true;
       return [{ mealType, finalized, planned, cooked, sampled }];
     });
@@ -452,7 +473,6 @@ export function projectAllocationDay(
   const demandById = new Map(demands.map((demand) => [demand.id, demand]));
   const batchById = new Map(batches.map((batch) => [batch.id, batch]));
   const rawById = new Map(data.batches.map((batch) => [batch.id, batch]));
-  const allocatedByDemand = new Map<string, number>();
   const historyError = () =>
     locked("RECONCILE", "Phân bổ cũ cần đối soát trước khi tiếp tục.", null);
   for (const raw of data.batches)
@@ -464,6 +484,11 @@ export function projectAllocationDay(
       )
     )
       return historyError();
+
+  // Tổng suất phân bổ theo từng món cho mỗi lớp (demand).
+  // Với single-dish batches, mỗi lô chỉ có 1 món, nên cần tổng hợp
+  // theo món rồi lấy min trên các món để ra số suất phân bổ thực tế.
+  const allocatedByDemandDish = new Map<string, number>();
 
   for (const row of data.demands) {
     const demand = demandById.get(row.id);
@@ -480,12 +505,17 @@ export function projectAllocationDay(
     for (const [batchId, rows] of rowsByBatch) {
       const batch = batchById.get(batchId);
       const raw = rawById.get(batchId);
-      const count = rows[0].allocatedPortions;
       if (
         !batch ||
         !raw ||
         !batchAcceptsDemand(data, batchId, demand.id) ||
-        batch.mealType !== demand.mealType ||
+        batch.mealType !== demand.mealType
+      )
+        return historyError();
+      // Mỗi dòng phân bổ phải ứng với 1 món có trong lô, số suất > 0,
+      // và tất cả các món trong lô phải có dòng phân bổ cùng số suất.
+      const count = rows[0].allocatedPortions;
+      if (
         count <= 0 ||
         rows.length !== raw.dishes.length ||
         raw.dishes.some(
@@ -502,22 +532,53 @@ export function projectAllocationDay(
         allocatedPortions: count,
         locked: demand.locked,
       });
-      allocatedByDemand.set(
-        demand.id,
-        (allocatedByDemand.get(demand.id) ?? 0) + count,
-      );
+      // Tích lũy theo (demand, dish) thay vì chỉ theo demand,
+      // để không cộng lặp khi lớp được phân bổ từ nhiều lô đơn món.
+      for (const item of rows) {
+        const key = `${demand.id}:${item.dishId}`;
+        allocatedByDemandDish.set(
+          key,
+          (allocatedByDemandDish.get(key) ?? 0) + item.allocatedPortions,
+        );
+      }
+    }
+    // Chặn lịch sử thiếu món: nếu lớp đã được phân bổ thì tất cả các món trong thực đơn của bữa phải có cùng số suất
+    const rawDemand = data.demands.find((d) => d.id === demand.id);
+    if (rawDemand) {
+      const menu = data.menus.find((m) => menuAcceptsDemand(m, rawDemand));
+      const menuDishes =
+        menu?.menuDayDishes.filter((d) => d.mealType === demand.mealType) ?? [];
+      if (menuDishes.length > 0) {
+        const counts = menuDishes.map(
+          (dish) =>
+            allocatedByDemandDish.get(`${demand.id}:${dish.dishId}`) ?? 0,
+        );
+        if (counts.some((c) => c > 0) && counts.some((c) => c !== counts[0])) {
+          return historyError();
+        }
+      }
     }
   }
+  // Kiểm tra dung lượng lô và nhu cầu lớp.
+  // Với suất theo lớp: lấy min trên các món (mỗi món phải đủ suất).
   if (
     batches.some(
       (batch) =>
         batch.entries.reduce((sum, row) => sum + row.allocatedPortions, 0) >
         batch.plannedPortions!,
     ) ||
-    demands.some(
-      (demand) =>
-        (allocatedByDemand.get(demand.id) ?? 0) > demand.totalPortions,
-    )
+    demands.some((demand) => {
+      const rawDemand = data.demands.find((d) => d.id === demand.id);
+      if (!rawDemand) return false;
+      const menu = data.menus.find((m) => menuAcceptsDemand(m, rawDemand));
+      const menuDishes =
+        menu?.menuDayDishes.filter((d) => d.mealType === demand.mealType) ?? [];
+      if (!menuDishes.length) return false;
+      return menuDishes.some((dish) => {
+        const key = `${demand.id}:${dish.dishId}`;
+        return (allocatedByDemandDish.get(key) ?? 0) > demand.totalPortions;
+      });
+    })
   )
     return historyError();
 
@@ -694,7 +755,7 @@ function buildGradeAllocationGroups(
   return groups;
 }
 
-function prepareChanges(
+export function prepareChanges(
   data: AllocationDay,
   view: AllocationDayResponse,
   input: ApplyAllocationRequest,
@@ -834,29 +895,28 @@ function prepareChanges(
       }
     }
 
-    // Tự động bảo lưu các món autoAssigned nếu người dùng không gửi trong request
+    // Tự động bảo lưu các lô/món không gửi trong request (gồm món autoAssigned và các lô đã phân bổ trước đó)
     if (view.grades) {
       for (const grade of view.grades) {
         for (const dish of grade.dishes) {
-          if (dish.autoAssigned && dish.batches.length === 1) {
-            const autoSlot = dish.batches[0];
+          for (const batchSlot of dish.batches) {
             const hasInputForPair = input.batches.some(
               (b) =>
-                b.cookingBatchId === autoSlot.cookingBatchId &&
+                b.cookingBatchId === batchSlot.cookingBatchId &&
                 (!b.dishId || b.dishId === dish.dishId),
             );
             if (!hasInputForPair) {
-              for (const entry of autoSlot.entries) {
+              for (const entry of batchSlot.entries) {
                 const rows = rowsByDemand.get(entry.dailyMealPortionId) ?? [];
                 if (
                   !rows.some(
                     (r) =>
-                      r.cookingBatchId === autoSlot.cookingBatchId &&
+                      r.cookingBatchId === batchSlot.cookingBatchId &&
                       r.dishId === dish.dishId,
                   )
                 ) {
                   rows.push({
-                    cookingBatchId: autoSlot.cookingBatchId,
+                    cookingBatchId: batchSlot.cookingBatchId,
                     dishId: dish.dishId,
                     allocatedPortions: entry.allocatedPortions,
                   });

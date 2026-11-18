@@ -207,6 +207,7 @@ const detailSelect = {
               schoolId: true,
               ingredientId: true,
               status: true,
+              handlingType: true,
               Ingredient: {
                 select: {
                   name: true,
