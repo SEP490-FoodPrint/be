@@ -266,8 +266,8 @@ export async function authorizationTransaction<T>(
       try {
         return await client.$transaction(operation, {
           isolationLevel: "Serializable",
-          maxWait: 10000,
-          timeout: 20000,
+          maxWait: 20000,
+          timeout: 60000,
         });
       } catch (error) {
         if (attempt < 2 && transactionConflict(error)) {

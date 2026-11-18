@@ -195,21 +195,24 @@ function fixture(
       classId: id(11),
       affectedCount: 2,
       Class: { name: "1A" },
-      IngredientEntry: { ingredientId: id(7) },
+      IngredientEntry: { ingredientId: id(7), Ingredient: { name: "Peanut" } },
     },
     {
       ingredientEntryId: id(8),
       classId: id(11),
       affectedCount: 1,
       Class: { name: "1A" },
-      IngredientEntry: { ingredientId: id(9) },
+      IngredientEntry: {
+        ingredientId: id(9),
+        Ingredient: { name: "Soy sauce" },
+      },
     },
     {
       ingredientEntryId: id(10),
       classId: id(12),
       affectedCount: 3,
       Class: { name: "2B" },
-      IngredientEntry: { ingredientId: id(7) },
+      IngredientEntry: { ingredientId: id(7), Ingredient: { name: "Peanut" } },
     },
   ];
   let committedWrites = 0,
@@ -224,7 +227,7 @@ function fixture(
       findMany: (args: {
         where: {
           Class: { schoolId: string; status: string };
-          IngredientEntry: { schoolId: string; ingredientId: { in: string[] } };
+          IngredientEntry: { schoolId: string; Ingredient: unknown };
           affectedCount: { gt: number };
         };
       }) => {
@@ -233,15 +236,14 @@ function fixture(
         assert.equal(args.where.Class.status, "ACTIVE");
         assert.equal(args.where.IngredientEntry.schoolId, id(3));
         assert.equal(args.where.affectedCount.gt, 0);
-        assert.deepEqual(
-          new Set(args.where.IngredientEntry.ingredientId.in),
-          new Set([
-            ...menu.menuDays[0].menuDayDishes.flatMap((dish) =>
-              dish.ingredients.map((line) => line.ingredientId),
-            ),
-            id(9),
-          ]),
-        );
+        // Dị ứng chỉ lấy từ nguyên liệu của NCC đang liên kết; so với thực đơn theo tên ở service.
+        assert.deepEqual(args.where.IngredientEntry.Ingredient, {
+          Supplier: {
+            schoolSupplierRelationships: {
+              some: { schoolId: id(3), status: "ACTIVE" },
+            },
+          },
+        });
         return failRead
           ? Promise.reject(new Error("test read failure"))
           : Promise.resolve(allergyRows);
@@ -1108,7 +1110,10 @@ void test("combined submission keeps every grade in draft when only one grade ha
               classId: id(11),
               affectedCount: 2,
               Class: { name: "1A" },
-              IngredientEntry: { ingredientId: id(7) },
+              IngredientEntry: {
+                ingredientId: id(7),
+                Ingredient: { name: "Peanut" },
+              },
             },
           ]
         : [],

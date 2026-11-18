@@ -1,3 +1,4 @@
+import { allergenMatches, avoidanceCovers } from "../../utils/allergy-match";
 import { kitchenRepository } from "../kitchen/kitchen.repository";
 import { Prisma, type PrismaClient } from "../../generated/prisma/client";
 import { readDatabaseMealRecipe } from "../dish/dish.service";
@@ -68,6 +69,21 @@ import type {
 
 type Tx = Prisma.TransactionClient;
 
+export { avoidanceCovers };
+
+/** Cặp (dị ứng của lớp, nguyên liệu của bữa) khớp nhau theo tên (không cần trùng 100%). */
+export function matchClassAllergies<
+  T extends { IngredientEntry: { Ingredient: { name: string } } },
+>(rows: T[], ingredients: { id: string; name: string }[]) {
+  return rows.flatMap((row) =>
+    ingredients
+      .filter((ingredient) =>
+        allergenMatches(row.IngredientEntry.Ingredient.name, ingredient.name),
+      )
+      .map((ingredient) => ({ row, ingredient })),
+  );
+}
+
 export async function reviewMenuAllergies(
   tx: Tx,
   days: ReturnType<typeof menuCategoryDto>["menuDays"],
@@ -89,26 +105,38 @@ export async function reviewMenuAllergies(
           line.ingredientEntry.ingredientId,
           line.ingredientEntry.Ingredient.name,
         );
-      const rows = await repository.classAllergies(
-        tx,
-        [...names.keys()],
-        schoolId,
-        day.id,
+      const pairs = matchClassAllergies(
+        await repository.classAllergies(tx, schoolId, day.id),
+        [...names].map(([id, name]) => ({ id, name })),
       );
+      // Một xung đột = một dị ứng (theo nguyên liệu khai báo) gặp một nguyên liệu của bữa.
       const conflicts = [
-        ...new Set(rows.map((row) => row.ingredientEntryId)),
-      ].map((entryId) => {
-        const matches = rows.filter((row) => row.ingredientEntryId === entryId);
-        const ingredientId = matches[0].IngredientEntry.ingredientId;
+        ...new Set(
+          pairs.map((p) => `${p.row.ingredientEntryId}|${p.ingredient.id}`),
+        ),
+      ].map((key) => {
+        const matched = pairs.filter(
+          (p) => `${p.row.ingredientEntryId}|${p.ingredient.id}` === key,
+        );
+        const matches = matched.map((p) => p.row);
+        const entryId = matches[0].ingredientEntryId;
+        const ingredient = matched[0].ingredient;
         return {
-          ingredientId,
+          ingredientId: ingredient.id,
           ingredientEntryId: entryId,
-          ingredientName: names.get(ingredientId) ?? "Nguyên liệu",
+          ingredientName: ingredient.name,
           coveredBySeparateGroup: day.portionGroups.some(
             (group) =>
               group.mealType === mealType &&
               !group.isDefault &&
-              group.avoidances.some((a) => a.ingredientEntryId === entryId),
+              avoidanceCovers(
+                group.avoidances,
+                {
+                  ingredientEntryId: entryId,
+                  allergenName: matches[0].IngredientEntry.Ingredient.name,
+                },
+                ingredient.name,
+              ),
           ),
           affectedClasses: matches.map((row) => ({
             classId: row.classId,
@@ -192,8 +220,22 @@ async function validateIngredientSources(
     schoolId,
   );
 
-  if (entries.length !== input.seasonings.length)
-    throw new HttpError(422, "Gia vị phải thuộc danh mục kho khô của trường");
+  const validIds = new Set(entries.map((entry) => entry.id));
+  const invalid = [
+    ...new Set(
+      input.seasonings
+        .map((row) => row.ingredientEntryId)
+        .filter((entryId) => !validIds.has(entryId)),
+    ),
+  ];
+  if (invalid.length) {
+    // Ghi rõ tên để biết sửa công thức món nào (vd. hàng tươi bị khai là gia vị).
+    const names = await repository.ingredientEntryNames(tx, invalid, schoolId);
+    throw new HttpError(
+      422,
+      `Gia vị phải thuộc danh mục kho khô của trường${names.length ? `: ${names.join(", ")} không phải đồ khô đang dùng` : ""}`,
+    );
+  }
 
   for (const dish of input.dishes)
     for (const row of dish.ingredients)
@@ -382,19 +424,20 @@ function createIngredientOperations(
               "Nguyên liệu phải thuộc Supplier đang liên kết với trường",
             );
 
-          const allergies = await repository.classAllergies(
-            tx,
-            ingredientIds,
-            schoolId,
-            undefined,
-            gradeIds,
+          // Chỉ giữ dị ứng khớp TÊN với ít nhất một nguyên liệu đang kiểm tra.
+          const allergies = (
+            await repository.classAllergies(tx, schoolId, undefined, gradeIds)
+          ).filter((a) =>
+            ingredients.some((i) =>
+              allergenMatches(a.IngredientEntry.Ingredient.name, i.name),
+            ),
           );
 
           const conflicts = ingredients
 
             .map((i) => {
-              const rows = allergies.filter(
-                (a) => a.IngredientEntry.ingredientId === i.id,
+              const rows = allergies.filter((a) =>
+                allergenMatches(a.IngredientEntry.Ingredient.name, i.name),
               );
 
               return {
@@ -1622,30 +1665,39 @@ function createMenuOperations(
 
           schoolId,
         );
-        const ingredientIds = [
-          ...new Set([
-            ...day.menuDayDishes
-              .filter((d) => d.mealType === mealType)
-              .flatMap((d) => d.ingredients.map((i) => i.ingredientId)),
-            ...day.mealSeasonings
-              .filter((s) => s.mealType === mealType)
-              .map((s) => s.ingredientEntry.ingredientId),
-          ]),
+        const mealIngredients = [
+          ...day.menuDayDishes
+            .filter((d) => d.mealType === mealType)
+            .flatMap((d) =>
+              d.ingredients.map((i) => ({
+                id: i.ingredientId,
+                name: i.ingredient.name,
+              })),
+            ),
+          ...day.mealSeasonings
+            .filter((s) => s.mealType === mealType)
+            .map((s) => ({
+              id: s.ingredientEntry.ingredientId,
+              name: s.ingredientEntry.Ingredient.name,
+            })),
         ];
-        const conflicts = await repository.classAllergies(
-          tx,
-          ingredientIds,
-          schoolId,
-          day.id,
+        const conflicts = matchClassAllergies(
+          await repository.classAllergies(tx, schoolId, day.id),
+          mealIngredients,
         );
         if (
           conflicts.some(
-            (c) =>
+            ({ row, ingredient }) =>
               !groups.some(
                 (g) =>
                   !g.isDefault &&
-                  g.avoidances.some(
-                    (a) => a.ingredientEntryId === c.ingredientEntryId,
+                  avoidanceCovers(
+                    g.avoidances,
+                    {
+                      ingredientEntryId: row.ingredientEntryId,
+                      allergenName: row.IngredientEntry.Ingredient.name,
+                    },
+                    ingredient.name,
                   ),
               ),
           )

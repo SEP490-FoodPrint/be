@@ -146,6 +146,48 @@ export const deliveryInspectionRoles = [
   "INGREDIENT_MANAGEMENT_DEPARTMENT",
   "PARENTS_COMMITTEE",
 ] as const;
+type DeliveryInspectionRole = (typeof deliveryInspectionRoles)[number];
+
+/**
+ * Bộ phận phải ký nhận một chuyến giao. Xe của NCC đồ khô (supplierIsDry) hoặc xe chỉ gồm đồ khô
+ * (DRY_STOCK) chỉ cần Ban quản lý nguyên liệu kiểm tra; còn lại cần đủ 4 bộ phận.
+ */
+export function requiredInspectionRoles(row: {
+  supplierIsDry?: boolean;
+  deliveryItems: {
+    IngredientEntry: { handlingType: string } | null;
+    SupplyRequestItem: {
+      IngredientEntry: { handlingType: string } | null;
+    } | null;
+  }[];
+}): readonly DeliveryInspectionRole[] {
+  const items = row.deliveryItems ?? [];
+  const dryOnly =
+    row.supplierIsDry === true ||
+    (items.length > 0 &&
+      items.every(
+        (item) =>
+          (item.IngredientEntry?.handlingType ??
+            item.SupplyRequestItem?.IngredientEntry?.handlingType) ===
+          "DRY_STOCK",
+      ));
+  return dryOnly
+    ? ["INGREDIENT_MANAGEMENT_DEPARTMENT"]
+    : deliveryInspectionRoles;
+}
+
+/** Bộ phận này có bị ẩn xe đồ khô không (chỉ Ban quản lý nguyên liệu thấy xe đồ khô). */
+const hidesDryOnly = (principal: AuthPrincipal) =>
+  principal.role !== "INGREDIENT_MANAGEMENT_DEPARTMENT";
+
+/** Xe không thuộc phạm vi của bộ phận (xe đồ khô với bộ phận khác) coi như không tồn tại. */
+function assertVisibleTo(
+  row: Parameters<typeof requiredInspectionRoles>[0],
+  principal: AuthPrincipal,
+) {
+  if (!requiredInspectionRoles(row).some((role) => role === principal.role))
+    throw new HttpError(404, "Không tìm thấy đợt giao trong trường");
+}
 
 function inspectionScope(principal: AuthPrincipal) {
   assertPermission(principal, "delivery.view");
@@ -189,6 +231,7 @@ function inspectionDTO(
     currentRole: principal.role,
     canInspect:
       principal.permissions.includes("delivery.inspect") &&
+      requiredInspectionRoles(row).some((role) => role === principal.role) &&
       (!source || (rejectedCount <= 2 && source.status !== "CANCELLED")) &&
       ["ARRIVED", "PENDING_APPROVAL"].includes(row.status) &&
       !row.deliveryApprovals.some(
@@ -200,7 +243,7 @@ function inspectionDTO(
       source && (source.status === "CANCELLED" || rejectedCount > 2)
         ? `Đơn ${source.requestNo}${source.status === "CANCELLED" ? " đã hủy phần chưa nhận" : " bị chặn nhận tiếp"}${rejectedCount > 2 ? " do tổng số lần phải giao lại vượt quá 2" : ""}. Không tiếp nhận thêm nguyên liệu của đơn này.`
         : null,
-    requiredRoles: deliveryInspectionRoles.map((code) => ({
+    requiredRoles: requiredInspectionRoles(row).map((code) => ({
       code,
       name: ROLE_LABELS[code],
     })),
@@ -635,6 +678,7 @@ export function createDeliveryInspectionService(
           const row = await inspections.detail(tx, schoolId, id);
           if (!row)
             throw new HttpError(404, "Không tìm thấy đợt giao trong trường");
+          assertVisibleTo(row, actor);
           if (row.traceabilityVersion !== 1) {
             throw new HttpError(
               409,
@@ -749,6 +793,12 @@ export function createDeliveryInspectionService(
               409,
               "Đợt giao không còn được phép kiểm tra/tiếp nhận",
             );
+          const requiredRoles = requiredInspectionRoles(row);
+          if (!requiredRoles.some((role) => role === actor.role))
+            throw new HttpError(
+              403,
+              "Chuyến giao đồ khô: chỉ Ban quản lý nguyên liệu kiểm tra và ký nhận",
+            );
           if (input.decision === "APPROVE") {
             // Chặn ngay chữ ký "Đạt" khi dữ liệu không thể tiếp nhận, không đợi bộ phận thứ 4.
             const issue = await receiptIssue(tx, row, schoolId, now());
@@ -759,9 +809,7 @@ export function createDeliveryInspectionService(
                 .map((approval) => approval.Role.code),
             );
             approvedRoles.add(actor.role);
-            if (
-              deliveryInspectionRoles.every((role) => approvedRoles.has(role))
-            ) {
+            if (requiredRoles.every((role) => approvedRoles.has(role))) {
               const lots = row.deliveryItems.flatMap(
                 (item) => item.ingredientLots,
               );
@@ -869,8 +917,14 @@ export function createDeliveryInspectionService(
         const db = await connect();
         const range = inspectionDateRange(query.period, now(), query.date);
         const [rows, counts] = await Promise.all([
-          inspections.list(db, schoolId, query, range),
-          inspections.counts(db, schoolId, query, range),
+          inspections.list(db, schoolId, query, range, hidesDryOnly(principal)),
+          inspections.counts(
+            db,
+            schoolId,
+            query,
+            range,
+            hidesDryOnly(principal),
+          ),
         ]);
         const statuses = Object.fromEntries(
           counts.map((row) => [row.status, row._count._all]),
@@ -910,6 +964,7 @@ export function createDeliveryInspectionService(
           await connect(),
           schoolId,
           code,
+          hidesDryOnly(principal),
         );
         if (!row)
           throw new HttpError(
@@ -929,6 +984,7 @@ export function createDeliveryInspectionService(
         const row = await inspections.detail(db, schoolId, id);
         if (!row)
           throw new HttpError(404, "Không tìm thấy đợt giao trong trường");
+        assertVisibleTo(row, principal);
         return inspectionDetailDTO(
           row,
           principal,
