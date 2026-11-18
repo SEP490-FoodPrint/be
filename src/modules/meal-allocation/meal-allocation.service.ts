@@ -755,7 +755,7 @@ function buildGradeAllocationGroups(
   return groups;
 }
 
-function prepareChanges(
+export function prepareChanges(
   data: AllocationDay,
   view: AllocationDayResponse,
   input: ApplyAllocationRequest,
@@ -895,29 +895,28 @@ function prepareChanges(
       }
     }
 
-    // Tự động bảo lưu các món autoAssigned nếu người dùng không gửi trong request
+    // Tự động bảo lưu các lô/món không gửi trong request (gồm món autoAssigned và các lô đã phân bổ trước đó)
     if (view.grades) {
       for (const grade of view.grades) {
         for (const dish of grade.dishes) {
-          if (dish.autoAssigned && dish.batches.length === 1) {
-            const autoSlot = dish.batches[0];
+          for (const batchSlot of dish.batches) {
             const hasInputForPair = input.batches.some(
               (b) =>
-                b.cookingBatchId === autoSlot.cookingBatchId &&
+                b.cookingBatchId === batchSlot.cookingBatchId &&
                 (!b.dishId || b.dishId === dish.dishId),
             );
             if (!hasInputForPair) {
-              for (const entry of autoSlot.entries) {
+              for (const entry of batchSlot.entries) {
                 const rows = rowsByDemand.get(entry.dailyMealPortionId) ?? [];
                 if (
                   !rows.some(
                     (r) =>
-                      r.cookingBatchId === autoSlot.cookingBatchId &&
+                      r.cookingBatchId === batchSlot.cookingBatchId &&
                       r.dishId === dish.dishId,
                   )
                 ) {
                   rows.push({
-                    cookingBatchId: autoSlot.cookingBatchId,
+                    cookingBatchId: batchSlot.cookingBatchId,
                     dishId: dish.dishId,
                     allocatedPortions: entry.allocatedPortions,
                   });
