@@ -9644,7 +9644,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         );
 
         // 2. Manual replacement via STANDALONE: two-stage creation -> dispatch -> fresh deliveryNo, fresh qrUrl, fresh approvals;
-        //    4th signature rolls back on missing IngredientEntry, then succeeds once attached.
+        //    missing IngredientEntry is reported on arrival and blocks the first APPROVE (FR-014), then succeeds once attached.
         const standaloneRes = await http.request("/api/deliveries/management", {
           method: "POST",
           headers: {
@@ -9696,41 +9696,42 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         );
         assert.notEqual(standaloneQrUrl, reqQrUrl);
 
+        const missingEntryIssue =
+          "Chưa cấu hình danh mục nguyên liệu đang hoạt động của trường để tiếp nhận lô";
+        const standaloneArrival = await http.request(
+          `/api/deliveries/${standaloneId}/arrival`,
+          {
+            method: "POST",
+            headers: headers(deptUser.id),
+          },
+        );
+        assert.equal(standaloneArrival.status, 200);
+        // FR-014: the receipt problem is reported as soon as the vehicle arrives.
         assert.equal(
-          (
-            await http.request(`/api/deliveries/${standaloneId}/arrival`, {
-              method: "POST",
-              headers: headers(deptUser.id),
-            })
-          ).status,
-          200,
+          record(record(standaloneArrival.body).data).receiptIssue,
+          missingEntryIssue,
         );
 
-        for (const reviewer of [kitchenUser, nutritionUser, parentUser]) {
-          const ok = await inspect(standaloneId, reviewer.id, "APPROVE");
-          assert.equal(ok.status, 200, JSON.stringify(ok.body));
-        }
-        assert.equal(
-          (await db.delivery.findUniqueOrThrow({ where: { id: standaloneId } }))
-            .status,
-          "PENDING_APPROVAL",
-        );
-
-        // Missing IngredientEntry on 4th APPROVE -> 409 rollback (count stays 3, zero warehouse writes)
+        // Missing IngredientEntry blocks the FIRST APPROVE -> 409 rollback (no decision, zero warehouse writes)
         const uploadsBeforeRollback = uploadedFiles.size;
-        const rollbackRes = await inspect(standaloneId, deptUser.id, "APPROVE");
+        const rollbackRes = await inspect(
+          standaloneId,
+          kitchenUser.id,
+          "APPROVE",
+        );
         assert.equal(rollbackRes.status, 409);
+        assert.equal(record(rollbackRes.body).message, missingEntryIssue);
         assert.equal(uploadedFiles.size, uploadsBeforeRollback);
         assert.equal(
           await db.deliveryApproval.count({
             where: { deliveryId: standaloneId },
           }),
-          3,
+          0,
         );
         assert.equal(
           (await db.delivery.findUniqueOrThrow({ where: { id: standaloneId } }))
             .status,
-          "PENDING_APPROVAL",
+          "ARRIVED",
         );
         const plannedLotBeforeEntry = await db.ingredientLot.findFirstOrThrow({
           where: {
@@ -9758,6 +9759,15 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             status: "ACTIVE",
           },
         });
+        for (const reviewer of [kitchenUser, nutritionUser, parentUser]) {
+          const ok = await inspect(standaloneId, reviewer.id, "APPROVE");
+          assert.equal(ok.status, 200, JSON.stringify(ok.body));
+        }
+        assert.equal(
+          (await db.delivery.findUniqueOrThrow({ where: { id: standaloneId } }))
+            .status,
+          "PENDING_APPROVAL",
+        );
         const receiveRes = await inspect(standaloneId, deptUser.id, "APPROVE");
         assert.equal(receiveRes.status, 200, JSON.stringify(receiveRes.body));
         const receivedDelivery = await db.delivery.findUniqueOrThrow({

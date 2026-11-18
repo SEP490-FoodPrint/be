@@ -1345,7 +1345,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     prepMultiLabels.items.map((i) => i.traceUrl),
   );
 
-  // 4. STANDALONE workflow2 full HTTP flow: create PREPARING -> pre-dispatch arrival/inspection 409 -> dispatch IN_TRANSIT -> HTTP arrival -> missing entry rollback -> entry created -> 4th APPROVE -> RECEIVED -> snapshot preserved -> public trace -> labels
+  // 4. STANDALONE workflow2 full HTTP flow: create PREPARING -> pre-dispatch arrival/inspection 409 -> dispatch IN_TRANSIT -> HTTP arrival reports missing entry -> first APPROVE rollback (FR-014) -> entry created -> 4 APPROVE -> RECEIVED -> snapshot preserved -> public trace -> labels
   const standaloneRes = await apiRequest(
     "/api/deliveries/management",
     supplierStaffA.id,
@@ -1471,10 +1471,16 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     { method: "POST" },
   );
   assert.equal(arrivalRes.status, 200);
-  const arrivedBody = unwrap<{ status: string; arrivedAt: string }>(
-    arrivalRes.body,
-  );
+  const arrivedBody = unwrap<{
+    status: string;
+    arrivedAt: string;
+    receiptIssue: string | null;
+  }>(arrivalRes.body);
   assert.equal(arrivedBody.status, "ARRIVED");
+  const missingEntryIssue =
+    "Chưa cấu hình danh mục nguyên liệu đang hoạt động của trường để tiếp nhận lô";
+  // FR-014: the missing school ingredient entry is reported on arrival.
+  assert.equal(arrivedBody.receiptIssue, missingEntryIssue);
   const arrivalReplay = await apiRequest(
     `/api/deliveries/${standaloneOrder.id}/arrival`,
     inspectorUsers[1].id,
@@ -1494,27 +1500,19 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   assert.equal(createdLot.status, "BLOCKED");
   assert.equal(createdLot.sourceFacilityId, facilityA2.id);
 
-  for (const user of inspectorUsers.slice(0, 3)) {
-    const approveRes = await apiRequest(
-      `/api/deliveries/${standaloneOrder.id}/inspection`,
-      user.id,
-      { method: "POST", body: inspectionForm("APPROVE") },
-    );
-    assert.equal(approveRes.status, 200, JSON.stringify(approveRes.body));
-  }
-  assert.equal(uploadedPhotos.size, 3);
+  // The FIRST APPROVE is blocked (no decision, uploaded photo removed), not the 4th.
   const missingEntryApprove = await apiRequest(
     `/api/deliveries/${standaloneOrder.id}/inspection`,
-    inspectorUsers[3].id,
+    inspectorUsers[0].id,
     { method: "POST", body: inspectionForm("APPROVE") },
   );
   assert.equal(missingEntryApprove.status, 409);
-  assert.equal(uploadedPhotos.size, 3);
+  assert.equal(uploadedPhotos.size, 0);
   assert.equal(
     await db.deliveryApproval.count({
       where: { deliveryId: standaloneOrder.id },
     }),
-    3,
+    0,
   );
 
   const chickenEntry = await db.ingredientEntry.create({
@@ -1525,6 +1523,15 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       status: "ACTIVE",
     },
   });
+  for (const user of inspectorUsers.slice(0, 3)) {
+    const approveRes = await apiRequest(
+      `/api/deliveries/${standaloneOrder.id}/inspection`,
+      user.id,
+      { method: "POST", body: inspectionForm("APPROVE") },
+    );
+    assert.equal(approveRes.status, 200, JSON.stringify(approveRes.body));
+  }
+  assert.equal(uploadedPhotos.size, 3);
   const finalApprove = await apiRequest(
     `/api/deliveries/${standaloneOrder.id}/inspection`,
     inspectorUsers[3].id,
@@ -2313,15 +2320,18 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       },
       include: { deliveryItems: { include: { ingredientLots: true } } },
     });
+    return created;
+  };
+  // FR-014: invalid receipt data is rejected at the first APPROVE, so only valid deliveries collect three approvals first.
+  const approveFirstThree = async (deliveryId: string) => {
     for (const user of inspectorUsers.slice(0, 3)) {
       const approval = await apiRequest(
-        `/api/deliveries/${created.id}/inspection`,
+        `/api/deliveries/${deliveryId}/inspection`,
         user.id,
         { method: "POST", body: inspectionForm("APPROVE") },
       );
       assert.equal(approval.status, 200, JSON.stringify(approval.body));
     }
-    return created;
   };
 
   const over66Req = await createNegReq();
@@ -2432,7 +2442,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   for (const negCase of negCases) {
     const blocked = await apiRequest(
       `/api/deliveries/${negCase.id}/inspection`,
-      inspectorUsers[3].id,
+      inspectorUsers[0].id,
       { method: "POST", body: inspectionForm("APPROVE") },
     );
     assert.equal(blocked.status, 409);
@@ -2440,10 +2450,10 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       where: { id: negCase.id },
       include: { deliveryItems: { include: { ingredientLots: true } } },
     });
-    assert.equal(reloaded.status, "PENDING_APPROVAL");
+    assert.equal(reloaded.status, "ARRIVED");
     assert.equal(
       await db.deliveryApproval.count({ where: { deliveryId: negCase.id } }),
-      3,
+      0,
     );
     assert.equal(
       await db.inventoryTransaction.count({
@@ -2480,6 +2490,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     null,
     null,
   );
+  await approveFirstThree(legacyPartial.id);
   const legacyApprove = await apiRequest(
     `/api/deliveries/${legacyPartial.id}/inspection`,
     inspectorUsers[3].id,
