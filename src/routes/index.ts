@@ -49,6 +49,7 @@ import { createSchoolAcademicYearRouter } from "../modules/school-academic-year/
 import { createSampleStorageRouter } from "../modules/sample-storage/sample-storage.routes";
 import { createDeliveryTraceRouter } from "../modules/delivery-trace/delivery-trace.routes";
 import { createMealTraceabilityRouter } from "../modules/meal-traceability/meal-traceability.routes";
+import { createSystemComplaintRouter } from "../modules/system-complaint/system-complaint.routes";
 import type { DeliveryTraceService } from "../modules/delivery-trace/delivery-trace.service";
 
 export type ApiRouterServices = {
@@ -179,6 +180,10 @@ export function createApiRouter(
   router.use(
     "/ingredient-quality-feedback",
     createIngredientQualityFeedbackRouter(undefined, authHandler),
+  );
+  router.use(
+    "/system-complaints",
+    createSystemComplaintRouter(undefined, authHandler),
   );
   router.use(
     "/food-safety-reports",
