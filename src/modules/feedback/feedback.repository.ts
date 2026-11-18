@@ -51,9 +51,7 @@ export function createFeedbackRepository() {
         throw new Error("Không thể cấp mã khiếu nại từ sequence.");
       }
       const seq =
-        typeof row.value === "bigint"
-          ? row.value
-          : BigInt(String(row.value));
+        typeof row.value === "bigint" ? row.value : BigInt(String(row.value));
       return formatComplaintCode(seq);
     },
     list(
@@ -71,9 +69,7 @@ export function createFeedbackRepository() {
           : { Complaint: { status: query.status } }
         : {};
       const dateFilter: Prisma.MealComplaintWhereInput =
-        from || to
-          ? { Complaint: { createdAt: { gte: from, lte: to } } }
-          : {};
+        from || to ? { Complaint: { createdAt: { gte: from, lte: to } } } : {};
       const where: Prisma.MealComplaintWhereInput = {
         AND: [
           scope,
@@ -94,7 +90,10 @@ export function createFeedbackRepository() {
                   {
                     Complaint: {
                       senderUser: {
-                        fullName: { contains: query.search, mode: "insensitive" },
+                        fullName: {
+                          contains: query.search,
+                          mode: "insensitive",
+                        },
                       },
                     },
                   },

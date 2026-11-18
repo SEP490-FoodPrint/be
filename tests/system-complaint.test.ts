@@ -3,10 +3,7 @@ import { test } from "node:test";
 import type { Prisma, PrismaClient } from "../src/generated/prisma/client";
 import type { AuthPrincipal } from "../src/types/auth";
 import { HttpError } from "../src/utils/http-error";
-import {
-  createSystemComplaintService,
-  type SystemComplaintService,
-} from "../src/modules/system-complaint/system-complaint.service";
+import { createSystemComplaintService } from "../src/modules/system-complaint/system-complaint.service";
 import type {
   SystemComplaintRepository,
   SystemComplaintRecord,
@@ -51,18 +48,34 @@ const systemAdmin: AuthPrincipal = {
   permissions: ["system_complaint.view", "system_complaint.respond"],
 };
 
+type StoredVersion = {
+  id: string;
+  complaintId: string;
+  version: number;
+  previousVersionId: string | null;
+  content: string;
+  changeReason: string | null;
+  respondedByUserId: string | null;
+  respondedRoleCode: string | null;
+  createdAt: Date;
+  respondedByUser: {
+    id: string;
+    fullName: string;
+  } | null;
+};
+
 void test("System Complaint Module - Full Workflow & Isolation", async (t) => {
-  const complaintsStore = new Map<string, any>();
-  const versionsStore = new Map<string, any[]>();
+  const complaintsStore = new Map<string, SystemComplaintRecord>();
+  const versionsStore = new Map<string, StoredVersion[]>();
   let currentSeq = 100n;
 
   const mockRepo: SystemComplaintRepository = {
-    async nextComplaintCodeSequence() {
+    nextComplaintCodeSequence() {
       currentSeq++;
-      return currentSeq;
+      return Promise.resolve(currentSeq);
     },
 
-    async create(_tx, input) {
+    create(_tx, input) {
       const id = "c6-" + input.complaintCode;
       const record: SystemComplaintRecord = {
         id,
@@ -89,45 +102,45 @@ void test("System Complaint Module - Full Workflow & Isolation", async (t) => {
         currentResponseVersion: null,
       };
       complaintsStore.set(id, record);
-      return record;
+      return Promise.resolve(record);
     },
 
-    async findById(_tx, id) {
-      return complaintsStore.get(id) ?? null;
+    findById(_tx, id) {
+      return Promise.resolve(complaintsStore.get(id) ?? null);
     },
 
-    async listOwn(_tx, userId, params) {
+    listOwn(_tx, userId, params) {
       const all = Array.from(complaintsStore.values()).filter(
         (c) => c.senderUserId === userId,
       );
-      return {
+      return Promise.resolve({
         items: all.slice(
           (params.page - 1) * params.limit,
           params.page * params.limit,
         ),
         total: all.length,
-      };
+      });
     },
 
-    async listAll(_tx, params) {
+    listAll(_tx, params) {
       let all = Array.from(complaintsStore.values());
       if (params.status) {
         all = all.filter((c) => c.status === params.status);
       }
-      return {
+      return Promise.resolve({
         items: all.slice(
           (params.page - 1) * params.limit,
           params.page * params.limit,
         ),
         total: all.length,
-      };
+      });
     },
 
-    async createResponseVersion(_tx, input) {
+    createResponseVersion(_tx, input) {
       const complaint = complaintsStore.get(input.complaintId);
-      if (!complaint) throw new Error("Not found");
+      if (!complaint) return Promise.reject(new Error("Not found"));
 
-      const versionRecord: any = {
+      const versionRecord: StoredVersion = {
         id: `v-${input.version}-${complaint.id}`,
         complaintId: input.complaintId,
         version: input.version,
@@ -151,20 +164,22 @@ void test("System Complaint Module - Full Workflow & Isolation", async (t) => {
       complaint.currentResponseVersionId = versionRecord.id;
       complaint.currentResponseVersion = versionRecord;
 
-      return {
+      return Promise.resolve({
         versionRecord,
         updatedComplaint: complaint,
-      };
+      });
     },
 
-    async listResponseVersions(_tx, complaintId) {
-      return versionsStore.get(complaintId) ?? [];
+    listResponseVersions(_tx, complaintId) {
+      return Promise.resolve(versionsStore.get(complaintId) ?? []);
     },
   };
 
   const fakeDb = {
-    async $transaction(fn: any) {
-      return fn({} as any);
+    $transaction<T>(
+      fn: (tx: Prisma.TransactionClient) => Promise<T>,
+    ): Promise<T> {
+      return fn({} as Prisma.TransactionClient);
     },
   } as unknown as PrismaClient;
 
@@ -190,15 +205,18 @@ void test("System Complaint Module - Full Workflow & Isolation", async (t) => {
     complaintAId = res.id;
   });
 
-  await t.test("US2: Isolation - User B không xem được đơn của User A", async () => {
-    await assert.rejects(
-      () => service.getDetail(complaintAId, userB),
-      (err: unknown) =>
-        err instanceof HttpError &&
-        err.statusCode === 404 &&
-        err.message.includes("Không tìm thấy"),
-    );
-  });
+  await t.test(
+    "US2: Isolation - User B không xem được đơn của User A",
+    async () => {
+      await assert.rejects(
+        () => service.getDetail(complaintAId, userB),
+        (err: unknown) =>
+          err instanceof HttpError &&
+          err.statusCode === 404 &&
+          err.message.includes("Không tìm thấy"),
+      );
+    },
+  );
 
   await t.test("US2: User A xem được đơn của chính mình", async () => {
     const detail = await service.getDetail(complaintAId, userA);
@@ -210,65 +228,74 @@ void test("System Complaint Module - Full Workflow & Isolation", async (t) => {
     assert.equal(ownList.items[0].id, complaintAId);
   });
 
-  await t.test("US3: System Admin xem chi tiết và phản hồi lần đầu (v1)", async () => {
-    const detail = await service.getDetail(complaintAId, systemAdmin);
-    assert.equal(detail.id, complaintAId);
+  await t.test(
+    "US3: System Admin xem chi tiết và phản hồi lần đầu (v1)",
+    async () => {
+      const detail = await service.getDetail(complaintAId, systemAdmin);
+      assert.equal(detail.id, complaintAId);
 
-    const responded = await service.respond(
-      complaintAId,
-      {
-        content:
-          "Bộ phận kỹ thuật đã tiếp nhận và đang tiến hành sửa lỗi trong bản cập nhật chiều nay.",
-      },
-      systemAdmin,
-    );
+      const responded = await service.respond(
+        complaintAId,
+        {
+          content:
+            "Bộ phận kỹ thuật đã tiếp nhận và đang tiến hành sửa lỗi trong bản cập nhật chiều nay.",
+        },
+        systemAdmin,
+      );
 
-    assert.equal(responded.status, "RESPONDED");
-    assert(responded.currentResponse !== null);
-    assert.equal(responded.currentResponse.version, 1);
-    assert.equal(responded.currentResponse.changeReason, null);
-    assert.equal(
-      responded.currentResponse.respondedBy?.fullName,
-      systemAdmin.fullName,
-    );
-  });
+      assert.equal(responded.status, "RESPONDED");
+      assert(responded.currentResponse !== null);
+      assert.equal(responded.currentResponse.version, 1);
+      assert.equal(responded.currentResponse.changeReason, null);
+      assert.equal(
+        responded.currentResponse.respondedBy?.fullName,
+        systemAdmin.fullName,
+      );
+    },
+  );
 
-  await t.test("US3: Sửa phản hồi lần 2 bắt buộc phải có changeReason", async () => {
-    await assert.rejects(
-      () =>
-        service.respond(
-          complaintAId,
-          {
-            content: "Nội dung cập nhật mới",
-            changeReason: "",
-          },
-          systemAdmin,
-        ),
-      (err: unknown) =>
-        err instanceof HttpError &&
-        err.statusCode === 400 &&
-        err.message.includes("changeReason"),
-    );
-  });
+  await t.test(
+    "US3: Sửa phản hồi lần 2 bắt buộc phải có changeReason",
+    async () => {
+      await assert.rejects(
+        () =>
+          service.respond(
+            complaintAId,
+            {
+              content: "Nội dung cập nhật mới",
+              changeReason: "",
+            },
+            systemAdmin,
+          ),
+        (err: unknown) =>
+          err instanceof HttpError &&
+          err.statusCode === 400 &&
+          err.message.includes("changeReason"),
+      );
+    },
+  );
 
-  await t.test("US3: Sửa phản hồi lần 2 có changeReason tạo version 2", async () => {
-    const updatedV2 = await service.respond(
-      complaintAId,
-      {
-        content: "Lỗi đã được khắc phục hoàn toàn trên production v1.2.3.",
-        changeReason: "Cập nhật kết quả sau khi deploy hotfix",
-      },
-      systemAdmin,
-    );
+  await t.test(
+    "US3: Sửa phản hồi lần 2 có changeReason tạo version 2",
+    async () => {
+      const updatedV2 = await service.respond(
+        complaintAId,
+        {
+          content: "Lỗi đã được khắc phục hoàn toàn trên production v1.2.3.",
+          changeReason: "Cập nhật kết quả sau khi deploy hotfix",
+        },
+        systemAdmin,
+      );
 
-    assert.equal(updatedV2.status, "RESPONDED");
-    assert(updatedV2.currentResponse !== null);
-    assert.equal(updatedV2.currentResponse.version, 2);
-    assert.equal(
-      updatedV2.currentResponse.changeReason,
-      "Cập nhật kết quả sau khi deploy hotfix",
-    );
-  });
+      assert.equal(updatedV2.status, "RESPONDED");
+      assert(updatedV2.currentResponse !== null);
+      assert.equal(updatedV2.currentResponse.version, 2);
+      assert.equal(
+        updatedV2.currentResponse.changeReason,
+        "Cập nhật kết quả sau khi deploy hotfix",
+      );
+    },
+  );
 
   await t.test("US3: Xem lịch sử các phiên bản phản hồi", async () => {
     const { versions } = await service.listVersions(complaintAId, userA);

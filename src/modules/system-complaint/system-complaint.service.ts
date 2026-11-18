@@ -189,10 +189,7 @@ export function createSystemComplaintService(
       return mapToResponseDto(record);
     },
 
-    async listOwn(
-      query: SystemComplaintListQuery,
-      principal: AuthPrincipal,
-    ) {
+    async listOwn(query: SystemComplaintListQuery, principal: AuthPrincipal) {
       const db = await prismaProvider();
       const { items, total } = await repository.listOwn(db, principal.id, {
         page: query.page,
@@ -208,10 +205,7 @@ export function createSystemComplaintService(
       };
     },
 
-    async listAdmin(
-      query: SystemComplaintListQuery,
-      principal: AuthPrincipal,
-    ) {
+    async listAdmin(query: SystemComplaintListQuery, principal: AuthPrincipal) {
       const canViewAll = isSystemAdminOrHasPerm(
         principal,
         "system_complaint.view",
@@ -277,8 +271,9 @@ export function createSystemComplaintService(
             previousVersionId = complaint.currentResponseVersion.id;
           }
 
-          const { updatedComplaint } =
-            await repository.createResponseVersion(tx, {
+          const { updatedComplaint } = await repository.createResponseVersion(
+            tx,
+            {
               complaintId: id,
               version: nextVersion,
               previousVersionId,
@@ -286,7 +281,8 @@ export function createSystemComplaintService(
               changeReason: input.changeReason,
               respondedByUserId: principal.id,
               respondedRoleCode: principal.role,
-            });
+            },
+          );
 
           return mapToResponseDto(updatedComplaint);
         },
@@ -294,10 +290,7 @@ export function createSystemComplaintService(
       );
     },
 
-    async listVersions(
-      id: string,
-      principal: AuthPrincipal,
-    ) {
+    async listVersions(id: string, principal: AuthPrincipal) {
       const db = await prismaProvider();
       const record = await repository.findById(db, id);
       if (!record) {
