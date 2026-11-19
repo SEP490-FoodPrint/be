@@ -64,6 +64,13 @@ export function createMenuRouter(
     requirePermission("menu.view"),
     controller.getWeekSchedule,
   );
+  // Đặt trước "/:menuId" để "approval-week" không bị hiểu là menuId
+  router.get(
+    "/approval-week",
+    authHandler,
+    requirePermission("menu.view"),
+    approvalController.getWeek,
+  );
   router.get(
     "/ingredient-options/:kind",
     authHandler,

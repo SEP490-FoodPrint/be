@@ -8,6 +8,7 @@ import {
 import {
   validateMenuApprovalDecision,
   validateMenuApprovalParams,
+  validateMenuApprovalWeekQuery,
 } from "./menu-approval.validation";
 
 export function createMenuApprovalController(
@@ -17,6 +18,11 @@ export function createMenuApprovalController(
     getDetail: asyncHandler(async (req, res) => {
       const { menuId } = validateMenuApprovalParams(req.params);
       sendSuccess(res, await service.getDetail(menuId, requirePrincipal(req)));
+    }),
+
+    getWeek: asyncHandler(async (req, res) => {
+      const query = validateMenuApprovalWeekQuery(req.query);
+      sendSuccess(res, await service.getWeek(query, requirePrincipal(req)));
     }),
 
     decide: asyncHandler(async (req, res) => {
