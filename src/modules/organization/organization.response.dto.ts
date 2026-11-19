@@ -88,15 +88,37 @@ export interface PublicLocationDTO {
   parentId: string | null;
 }
 
+export interface PublicDishIngredientDTO {
+  id: string;
+  name: string;
+  /** Định lượng cho 1 suất */
+  quantity: number;
+  unit: string;
+  /** Chuỗi hiển thị, vd. "50 g" */
+  portion: string;
+  role: "MAIN" | "SEASONING" | null;
+  note: string | null;
+  category: string | null;
+  supplierName: string | null;
+}
+
+/** Nguồn định lượng: riêng theo khối, đã chốt trong thực đơn, hoặc định lượng chuẩn của món */
+export type PublicRecipeSource = "GRADE" | "MENU" | "STANDARD" | null;
+
 export interface DishItemDTO {
   id: string;
   name: string;
+  /** Định lượng / suất; chuỗi rỗng khi chưa có dữ liệu */
   portion: string;
   portionSize: number | null;
   portionUnit: string | null;
   order: number | null;
   mealType: "LUNCH" | "AFTERNOON";
   description: string | null;
+  category?: string | null;
+  recipeSource?: PublicRecipeSource;
+  ingredients?: PublicDishIngredientDTO[];
+  alternativeDish?: (DishItemDTO & { allergyGroup: string }) | null;
 }
 
 export interface SnackItemDTO {
@@ -104,12 +126,6 @@ export interface SnackItemDTO {
   name: string;
   desc: string;
   icon: "cake" | "coffee";
-}
-
-export interface PortionGroupDTO {
-  id: string;
-  name: string;
-  isDefault: boolean;
 }
 
 export interface WeeklyMenuDayDTO {
@@ -159,6 +175,12 @@ export interface AvailableWeekSummaryDTO {
   status?: string | null;
 }
 
+export interface PublicSchoolGradeDTO {
+  id: string;
+  name: string;
+  hasMenu: boolean;
+}
+
 export interface PublicWeeklyMenuDTO {
   id: string | null;
   title: string;
@@ -168,8 +190,6 @@ export interface PublicWeeklyMenuDTO {
   weekRange: string;
   isCurrentWeek: boolean;
   status: string | null;
-  portionGroups: PortionGroupDTO[];
-  gradeGroups: Array<{ key: string; label: string }>;
   days: WeeklyMenuDayDTO[];
   availableWeeks: AvailableWeekSummaryDTO[];
 }

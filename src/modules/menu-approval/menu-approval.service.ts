@@ -5,11 +5,21 @@ import {
   withSchoolTransaction,
 } from "../../utils/authorization";
 import { HttpError } from "../../utils/http-error";
+import { listScopes } from "../../utils/resource-access";
+import {
+  calculateAcademicWeekNumber,
+  getSchoolMonday,
+} from "../../utils/date-time";
 import { assertCompleteMenuWeek } from "../../utils/menu-week";
-import type { MenuApprovalDecisionRequestDTO } from "./menu-approval.request.dto";
+import type {
+  MenuApprovalDecisionRequestDTO,
+  MenuApprovalWeekQueryRequestDTO,
+} from "./menu-approval.request.dto";
 import type {
   MenuApprovalDecisionResponseDTO,
   MenuApprovalDetailResponseDTO,
+  MenuApprovalWeekOptionDTO,
+  MenuApprovalWeekResponseDTO,
 } from "./menu-approval.response.dto";
 import {
   menuApprovalRepository,
@@ -17,6 +27,7 @@ import {
   type ApprovalDetailRow,
   type FinalizedPortionRow,
   type MenuApprovalRepository,
+  type SubmittedWeekRow,
 } from "./menu-approval.repository";
 
 const dayLabels = [
@@ -129,6 +140,11 @@ function mapDetail(
   return {
     id: menu.id,
     title: menu.title,
+    isSchoolWide: menu.isSchoolWide,
+    grades: (menu.grades ?? []).map((grade) => ({
+      id: grade.gradeId,
+      name: grade.grade.name,
+    })),
     status: menu.status,
     canDecide: menu.status === "PENDING_APPROVAL",
     submittedAt: formatDateTime(menu.submittedAt),
@@ -168,6 +184,44 @@ function mapDetail(
   };
 }
 
+const DAY_MS = 86400000;
+const isoDate = (value: Date) => value.toISOString().slice(0, 10);
+const fridayOf = (monday: Date) => new Date(monday.getTime() + 4 * DAY_MS);
+
+/** Gom số thực đơn đã gửi theo tuần, mới nhất trước. */
+function weekOptions(rows: SubmittedWeekRow[]): MenuApprovalWeekOptionDTO[] {
+  const byWeek = new Map<string, MenuApprovalWeekOptionDTO>();
+  for (const row of rows) {
+    const key = isoDate(row.weekStartDate);
+    const option = byWeek.get(key) ?? {
+      weekStartDate: key,
+      weekEndDate: isoDate(fridayOf(row.weekStartDate)),
+      total: 0,
+      pending: 0,
+    };
+    option.total += row.count;
+    if (row.status === "PENDING_APPROVAL") option.pending += row.count;
+    byWeek.set(key, option);
+  }
+  return [...byWeek.values()].sort((a, b) =>
+    b.weekStartDate.localeCompare(a.weekStartDate),
+  );
+}
+
+/** Mặc định: tuần còn chờ duyệt mới nhất, nếu không có thì tuần mới nhất. */
+function defaultWeek(weeks: MenuApprovalWeekOptionDTO[]): string | null {
+  return (
+    weeks.find((week) => week.pending > 0)?.weekStartDate ??
+    weeks[0]?.weekStartDate ??
+    null
+  );
+}
+
+const gradeCollator = new Intl.Collator("vi", { numeric: true });
+// Thực đơn toàn trường đứng đầu, sau đó theo tên khối (Khối 1, Khối 2, ...)
+const menuSortKey = (menu: MenuApprovalDetailResponseDTO) =>
+  menu.isSchoolWide ? "" : menu.grades.map((grade) => grade.name).join(", ");
+
 function assertReady(menu: ApprovalDecisionRow): void {
   if (!menu.menuDays.length) {
     throw new HttpError(422, "Thực đơn chưa có ngày ăn");
@@ -205,6 +259,65 @@ export function createMenuApprovalService(
         menu.grades?.map((grade) => grade.gradeId) ?? [],
       );
       return mapDetail(menu, portions);
+    },
+
+    /** Chi tiết mọi thực đơn đã gửi của một tuần trong một lần gọi. */
+    async getWeek(
+      query: MenuApprovalWeekQueryRequestDTO,
+      principal: AuthPrincipal,
+    ): Promise<MenuApprovalWeekResponseDTO> {
+      const schoolId = requireBoardSchool(principal);
+      // Phạm vi danh sách theo ma trận phân quyền: menu.view + lọc theo trường
+      const scope = listScopes.menu(principal);
+      const weeks = weekOptions(await repository.listSubmittedWeeks(scope));
+      const selected = query.date
+        ? isoDate(getSchoolMonday(query.date))
+        : defaultWeek(weeks);
+      if (!selected) {
+        return {
+          weekStartDate: null,
+          weekEndDate: null,
+          weekNumber: null,
+          weeks,
+          menus: [],
+        };
+      }
+      const monday = new Date(selected + "T00:00:00.000Z");
+      const database = await repository.connect();
+      const [rows, years] = await Promise.all([
+        repository.findWeekDetails(scope, monday),
+        repository.academicYears(database, schoolId),
+      ]);
+      const menus = await Promise.all(
+        rows.map(async (row) =>
+          mapDetail(
+            row,
+            await repository.findFinalizedPortions(
+              row.menuDays.map((day) => day.menuDate),
+              schoolId,
+              row.grades?.map((grade) => grade.gradeId) ?? [],
+            ),
+          ),
+        ),
+      );
+      menus.sort((a, b) =>
+        gradeCollator.compare(menuSortKey(a), menuSortKey(b)),
+      );
+      const year = years.find(
+        (item) =>
+          getSchoolMonday(item.startDate) <= monday &&
+          monday.getTime() <
+            getSchoolMonday(item.endDate).getTime() + 7 * DAY_MS,
+      );
+      return {
+        weekStartDate: selected,
+        weekEndDate: isoDate(fridayOf(monday)),
+        weekNumber: year
+          ? calculateAcademicWeekNumber(monday, year.startDate)
+          : null,
+        weeks,
+        menus,
+      };
     },
 
     async decide(

@@ -11,6 +11,7 @@
 | GET `/days/:menuDayId/meals/:mealType/ingredients`  | `menu.view`, SCHOOL sở hữu thực đơn; định mức và các lô gia vị đã giữ/tiêu hao                            |
 | PUT cùng đường dẫn trên                             | `menu.update`, SCHOOL; xác minh lại actor trong transaction, chỉ sửa nháp/được yêu cầu sửa và chưa lập mẻ |
 | GET `/days/:menuDayId/meals/:mealType/requirements` | `menu.view`, SCHOOL; nhu cầu theo số suất FINALIZED, tồn khả dụng và thiếu hụt, không tạo reservation     |
+| GET `/approval-week`                                | `menu.view`, chỉ Ban Giám hiệu của SCHOOL; phạm vi `listScopes.menu` (trường hiện tại), bỏ thực đơn DRAFT |
 
 PUT thay thế toàn bộ định mức của bữa trong một transaction:
 
