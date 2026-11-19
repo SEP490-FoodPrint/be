@@ -559,6 +559,8 @@ model FoodSafetyIncidentAllocation {
 /// Food-safety incident header at School level. Affected class meals are linked through food_safety_incident_allocations for traceability to Class, CookingBatch and IngredientLot.
 model FoodSafetyIncident {
   id                            String                         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Mã nghiệp vụ FP-IC-NNNNN (hậu tố Feistel). Tạm nullable tới khi backfill bản ghi cũ xong; CHECK định dạng nằm trong SQL migration.
+  code                          String?                        @unique(map: "food_safety_incidents_code_key") @db.VarChar(20)
   schoolId                      String                         @map("school_id") @db.Uuid
   reportedByUserId              String?                        @map("reported_by_user_id") @db.Uuid
   title                         String                         @db.VarChar(255)
@@ -832,6 +834,8 @@ model MealAllocation {
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
 model MealComplaint {
   id                 String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Mã nghiệp vụ FP-MC-NNNNN (hậu tố Feistel). Tạm nullable tới khi backfill bản ghi cũ xong; CHECK định dạng nằm trong SQL migration.
+  code               String?           @unique(map: "meal_complaints_code_key") @db.VarChar(20)
   dailyMealPortionId String            @map("daily_meal_portion_id") @db.Uuid
   submittedByUserId  String            @map("submitted_by_user_id") @db.Uuid
   complaintType      MealComplaintType @map("complaint_type")
@@ -921,6 +925,8 @@ model MenuReviewRecord {
 model RegistrationRequest {
   registrationNumber  BigInt                    @unique(map: "registration_requests_registration_number_key") @default(autoincrement()) @map("registration_number") @db.BigInt
   id                  String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Mã hồ sơ: FP-REG-… (mã tuần tự cũ giữ nguyên) hoặc FP-RG-NNNNN (hậu tố Feistel); CHECK định dạng nằm trong SQL migration.
+  code                String                    @unique(map: "registration_requests_code_key") @db.VarChar(26)
   applicantUserId     String                    @map("applicant_user_id") @db.Uuid
   requestType         RegistrationRequestType   @map("request_type")
   status              RegistrationRequestStatus @default(PENDING)
@@ -938,6 +944,17 @@ model RegistrationRequest {
 
   @@unique([applicantUserId])
   @@map("registration_requests")
+  @@schema("foodprint")
+}
+
+/// Bộ đếm số thứ tự theo loại mã nghiệp vụ FP-XX-NNNNN; dòng được tạo bởi upsert khi cấp mã lần đầu, không seed.
+/// CHECK code_type/last_sequence nằm trong SQL migration.
+model BusinessCodeCounter {
+  codeType     String   @id @map("code_type") @db.VarChar(2)
+  lastSequence Int      @map("last_sequence")
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("business_code_counters")
   @@schema("foodprint")
 }
 

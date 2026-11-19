@@ -20,6 +20,8 @@ import { createProfileService } from "../src/modules/auth/profile.service";
 import { createAuthSessions } from "../src/utils/auth-sessions";
 import { memorySessions } from "./helpers/auth-sessions";
 import type { DocumentStorage } from "../src/utils/onboarding-documents";
+import { allocateBusinessCode } from "../src/utils/business-code";
+import "./helpers/authorization";
 
 const execute = promisify(execFile);
 void test("registration numbers are unique across concurrent real submissions and remain stable through review", async (context) => {
@@ -134,28 +136,37 @@ void test("registration numbers are unique across concurrent real submissions an
       assert.equal(results.length, 100);
       assert.equal(new Set(results.map((row) => row.registrationID)).size, 100);
       for (const row of results) {
-        assert.match(row.registrationID, /^FP-REG-[0-9]{5,}$/);
+        // Hồ sơ mới: hậu tố Feistel 5 chữ số, không phải số thứ tự thô.
+        assert.match(row.registrationID, /^FP-RG-[0-9]{5}$/);
         assert(!JSON.stringify(row).includes("registrationNumber"));
       }
       assert.equal(await db.registrationRequest.count(), 100);
     },
   );
   await context.test(
-    "a rolled back insert consumes its number and never leaves a successful incomplete application",
+    "a rolled back insert returns its code sequence and never leaves a successful incomplete application",
     async () => {
       const user = users[100];
-      let consumed = 0n;
+      let rolledBackCode = "";
       const marker = new Error("rollback test only");
+      const exists = (codes: readonly string[]) =>
+        db.registrationRequest
+          .findMany({
+            where: { code: { in: [...codes] } },
+            select: { code: true },
+          })
+          .then((rows) => new Set(rows.map((row) => row.code)));
       await assert.rejects(
         db.$transaction(async (tx) => {
-          const row = await tx.registrationRequest.create({
+          rolledBackCode = await allocateBusinessCode(tx, "RG", exists);
+          await tx.registrationRequest.create({
             data: {
               applicantUserId: user.id,
+              code: rolledBackCode,
               requestType: "SCHOOL",
               profileData: { name: "Rollback" },
             },
           });
-          consumed = row.registrationNumber;
           throw marker;
         }),
         (error: unknown) => error === marker,
@@ -173,23 +184,26 @@ void test("registration numbers are unique across concurrent real submissions an
       const stored = await db.registrationRequest.findUniqueOrThrow({
         where: { id: result.id },
       });
-      assert(stored.registrationNumber > consumed);
+      // Bộ đếm rollback cùng transaction nên số thứ tự (và mã) được cấp lại, không sinh trùng.
+      assert.equal(stored.code, rolledBackCode);
+      assert.equal(
+        await db.registrationRequest.count({ where: { code: stored.code } }),
+        1,
+      );
     },
   );
   await context.test(
-    "numbers expand at 100000 and an old writer omitting the new field still gets a code",
+    "legacy FP-REG codes stay readable and new submissions use Feistel FP-RG codes",
     async () => {
-      await sql.query(
-        "SELECT setval('foodprint.registration_requests_registration_number_seq',99999,true)",
-      );
       const row = await db.registrationRequest.create({
         data: {
           applicantUserId: users[101].id,
+          code: "FP-REG-100000",
           requestType: "SUPPLIER",
           profileData: { name: "Legacy writer" },
         },
       });
-      assert.equal(row.registrationNumber, 100000n);
+      assert.equal(row.code, "FP-REG-100000");
       assert.equal(
         (await service.own(principals[101]))?.registrationID,
         "FP-REG-100000",
@@ -198,7 +212,7 @@ void test("registration numbers are unique across concurrent real submissions an
         principals[102],
         validateSubmission({ name: "After boundary" }, "SCHOOL"),
       );
-      assert.equal(after.registrationID, "FP-REG-100001");
+      assert.match(after.registrationID, /^FP-RG-[0-9]{5}$/);
     },
   );
   await context.test(

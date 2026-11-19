@@ -45,6 +45,8 @@ function toResponse(
   const portion = row.DailyMealPortion;
   return {
     id: row.id,
+    // Khiếu nại cũ chưa backfill có thể chưa có mã.
+    code: row.code ?? null,
     complaintType: row.complaintType,
     description: row.description,
     status: row.status,
@@ -196,9 +198,11 @@ export function createFeedbackService(
             );
           if (!meal.canComplain)
             throw new HttpError(409, "Bữa ăn chưa được xác nhận giao");
+          const code = await repository.allocateMealComplaintCode(tx);
           return toResponse(
             await repository.create(tx, {
               ...input,
+              code,
               submittedByUserId: actor.id,
             }),
             actor,

@@ -5,6 +5,7 @@ import {
   principalFromIdentity,
 } from "../../utils/authorization";
 import { getPrisma } from "../../utils/database";
+import { allocateBusinessCode } from "../../utils/business-code";
 import type {
   IngredientQualityFeedbackDetailScope,
   IngredientQualityFeedbackReadScope,
@@ -161,21 +162,18 @@ export type FeedbackLotRow = Prisma.IngredientLotGetPayload<{
 
 export function createIngredientQualityFeedbackRepository(connect = getPrisma) {
   return {
-    async nextComplaintCodeSequence(
-      tx: IngredientQualityFeedbackTx,
-    ): Promise<bigint> {
-      const rows = await tx.$queryRaw<{ value: bigint | string | number }[]>`
-        SELECT nextval('foodprint.ingredient_quality_feedback_complaint_code_seq'::regclass) AS value
-      `;
-      const row = rows[0];
-      if (!row) {
-        throw new Error("Không thể cấp mã khiếu nại từ sequence.");
-      }
-      if (typeof row.value === "bigint") return row.value;
-      if (typeof row.value === "string" && /^[1-9]\d*$/.test(row.value)) {
-        return BigInt(row.value);
-      }
-      throw new Error("Giá trị sequence mã khiếu nại không hợp lệ.");
+    /**
+     * Cấp mã khiếu nại mới FP-CP-NNNNN (hậu tố Feistel) cho producer tạo khiếu nại, trong cùng transaction tạo.
+     * Mã tuần tự cũ đã cấp được giữ nguyên; mã mới không trùng với bất kỳ mã nào đã có.
+     */
+    allocateComplaintCode(tx: IngredientQualityFeedbackTx): Promise<string> {
+      return allocateBusinessCode(tx, "CP", async (codes) => {
+        const rows = await tx.ingredientQualityFeedback.findMany({
+          where: { complaintCode: { in: [...codes] } },
+          select: { complaintCode: true },
+        });
+        return new Set(rows.map((row) => row.complaintCode));
+      });
     },
     async listLegacy(
       scope: LegacyFeedbackScope,

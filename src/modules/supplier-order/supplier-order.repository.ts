@@ -1,4 +1,5 @@
 import { reserveFpCodes } from "../../utils/fp-code";
+import { allocateBusinessCode } from "../../utils/business-code";
 import {
   Prisma,
   type DeliveryCreationMode,
@@ -286,14 +287,8 @@ export interface SupplierOrderRepository {
     db: SupplierOrderDb,
     supplyRequestId: string,
   ): Promise<boolean>;
-  lockSupplierForDeliveryNumber(
-    db: SupplierOrderDb,
-    supplierId: string,
-  ): Promise<void>;
-  findHighestCanonicalDeliverySequence(
-    db: SupplierOrderDb,
-    supplierId: string,
-  ): Promise<bigint>;
+  /** Cấp mã chuyến giao mới FP-DE-NNNNN (hậu tố Feistel) trong transaction tạo chuyến giao. */
+  allocateDeliveryNo(db: Prisma.TransactionClient): Promise<string>;
   lockSourceFacilities(
     db: SupplierOrderDb,
     supplierId: string,
@@ -383,21 +378,16 @@ export const supplierOrderRepository: SupplierOrderRepository = {
     return existing !== null;
   },
 
-  async lockSupplierForDeliveryNumber(db, supplierId) {
-    await db.$queryRaw`SELECT id FROM foodprint.suppliers WHERE id = ${supplierId}::uuid FOR UPDATE`;
-  },
-
-  async findHighestCanonicalDeliverySequence(db, supplierId) {
-    // Regex predicate must run before ::numeric cast so legacy non-numeric codes never abort the query.
-    const rows = await db.$queryRaw<{ maxSeq: string | null }[]>`
-      SELECT MAX(substring(delivery_no FROM 7)::numeric)::text AS "maxSeq"
-      FROM foodprint.deliveries
-      WHERE supplier_id = ${supplierId}::uuid
-        AND delivery_no ~ '^FP-DE-([0-9]{5}|[1-9][0-9]{5,73})$'
-        AND delivery_no <> 'FP-DE-00000'
-    `;
-    const rawMax = rows[0]?.maxSeq;
-    return rawMax ? BigInt(rawMax) : 0n;
+  allocateDeliveryNo(db) {
+    // Kiểm tra trùng trên toàn bảng (mọi nhà cung cấp): mã tuần tự cũ trùng giữa các supplier được giữ nguyên,
+    // mã mới phải khác mọi mã đã có.
+    return allocateBusinessCode(db, "DE", async (codes) => {
+      const rows = await db.delivery.findMany({
+        where: { deliveryNo: { in: [...codes] } },
+        select: { deliveryNo: true },
+      });
+      return new Set(rows.map((row) => row.deliveryNo));
+    });
   },
 
   async lockSourceFacilities(db, supplierId, sourceFacilityIds) {

@@ -8,7 +8,6 @@ import {
 } from "../blockchain-proof/blockchain-proof.service";
 import type { AuthPrincipal } from "../../types/auth";
 import { databaseOperation, loadPrincipal } from "../../utils/authorization";
-import { formatDeliveryCode } from "../../utils/delivery-code";
 import {
   getDeliveryStatusLabel,
   resolveSupplierDeliveryNextAction,
@@ -530,16 +529,10 @@ export function createSupplierOrderService(
     return facilityById;
   }
 
-  async function reserveNextDeliveryNo(
+  function reserveNextDeliveryNo(
     tx: Prisma.TransactionClient,
-    supplierId: string,
   ): Promise<string> {
-    await repository.lockSupplierForDeliveryNumber(tx, supplierId);
-    const highestSeq = await repository.findHighestCanonicalDeliverySequence(
-      tx,
-      supplierId,
-    );
-    return formatDeliveryCode(highestSeq + 1n);
+    return repository.allocateDeliveryNo(tx);
   }
 
   async function createFromRequest(
@@ -665,7 +658,7 @@ export function createSupplierOrderService(
       liveScope.supplierId,
       sourceFacilityIds,
     );
-    const deliveryNo = await reserveNextDeliveryNo(tx, liveScope.supplierId);
+    const deliveryNo = await reserveNextDeliveryNo(tx);
 
     const created = await repository.createDeliveryWithItems(tx, {
       deliveryNo,
@@ -807,7 +800,7 @@ export function createSupplierOrderService(
         expiryDate: item.expiryDate,
       })),
     );
-    const deliveryNo = await reserveNextDeliveryNo(tx, liveScope.supplierId);
+    const deliveryNo = await reserveNextDeliveryNo(tx);
 
     const created = await repository.createDeliveryWithItems(tx, {
       deliveryNo,

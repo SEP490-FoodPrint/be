@@ -12,7 +12,7 @@ export const registrationApplicantSelect = {
 } as const satisfies Prisma.UserSelect;
 
 export const registrationListSelect = {
-  registrationNumber: true,
+  code: true,
   id: true,
   applicantUserId: true,
   applicantUser: { select: registrationApplicantSelect },

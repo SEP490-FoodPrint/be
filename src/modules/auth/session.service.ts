@@ -9,7 +9,6 @@ import {
 import { loadSessionUser } from "../../utils/session-identity";
 import { HttpError } from "../../utils/http-error";
 import { authSessions, type AuthSessions } from "../../utils/auth-sessions";
-import { formatRegistrationID } from "../../utils/registration-id";
 import { sessionRepository } from "./session.repository";
 import type { LoginRequestDTO } from "./auth.request.dto";
 import type { SessionUserResponseDTO } from "./auth.response.dto";
@@ -33,7 +32,7 @@ export function toSessionUserResponseDTO(
     registrationRequest: row
       ? {
           id: row.id,
-          registrationID: formatRegistrationID(row.registrationNumber),
+          registrationID: row.code,
           status: row.status,
           submittedAt: row.submittedAt.toISOString(),
           rejectionReason: row.rejectionReason,

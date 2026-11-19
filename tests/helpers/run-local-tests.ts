@@ -167,6 +167,10 @@ async function main() {
       MIGRATION_TEST_DATABASE_URL: target,
       REDIS_URL: config.redisUrl,
       LOCAL_TEST_DATABASE_MANIFEST: manifest,
+      // Khóa Feistel chỉ dùng cho test (giống CI) khi .env.test.local để trống.
+      BUSINESS_CODE_KEY:
+        process.env.BUSINESS_CODE_KEY ||
+        "0f1e2d3c4b5a69788796a5b4c3d2e1f00112233445566778899aabbccddeeff0",
     };
     const suites: Suite[] =
       mode === "all"

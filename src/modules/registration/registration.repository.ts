@@ -3,7 +3,7 @@ import type { AuthPrincipal } from "../../types/auth";
 import { getPrisma } from "../../utils/database";
 import { listWindow, type ListQuery } from "../../utils/list-query";
 import { listScopes } from "../../utils/resource-access";
-import { parseRegistrationID } from "../../utils/registration-id";
+import { normalizeSearchCode } from "../../utils/business-code";
 import { registrationListSelect } from "./registration.select";
 
 export type RegistrationListRow = Prisma.RegistrationRequestGetPayload<{
@@ -49,11 +49,10 @@ export function createRegistrationRepository(
             },
           },
         };
-        const number = parseRegistrationID(query.search);
+        // Mã hồ sơ cũ FP-REG-… hoặc mới FP-RG-NNNNN, không phân biệt hoa thường; chuỗi khác tìm theo tên.
+        const code = normalizeSearchCode(query.search);
         const searchFilter =
-          number === undefined
-            ? nameFilter
-            : { OR: [{ registrationNumber: number }, nameFilter] };
+          code === null ? nameFilter : { OR: [{ code }, nameFilter] };
         where = { AND: [where, searchFilter] };
       }
       return read({

@@ -1,10 +1,11 @@
 <!--
 Sync Impact Report
-- Version: 1.0.0 → 2.0.0
-- Nguyên tắc sửa: VI — bỏ yêu cầu số tuần tự trên nhánh/thư mục spec; giữ kiểm tra spec bắt buộc và tương thích tên cũ.
-- Đồng bộ: AGENTS.md, contribute.md, docs/SPEC_KIT_GUIDE.md, PR template, Spec gate/tests và skill speckit-specify.
-- Template upstream .specify/templates/: không sửa; tên feature được quyết định bởi skill local, các placeholder có số chỉ là ví dụ tương thích.
-- Việc còn lại: không.
+- Version: 2.1.0 → 2.1.1 (PATCH: làm rõ VII — danh mục chữ viết tắt nằm ở `src/utils/business-code.ts`; hậu tố 5 chữ số là Feistel(số thứ tự − 1)). Trước đó 2.0.0 → 2.1.0:
+- Nguyên tắc thêm: VII — mã nghiệp vụ `FP-<XX>-<NNNNN>` lưu riêng cạnh `id` cho các bảng danh sách nghiệp vụ, 5 chữ số mã hóa số thứ tự bằng Feistel permutation có khóa.
+- Mục sửa: Quy trình phát triển — Constitution Check đối chiếu nguyên tắc I–VII.
+- Đồng bộ: AGENTS.md (Coding Style & Architecture), CLAUDE.md.
+- Template upstream .specify/templates/: không sửa.
+- Việc còn lại: `src/utils/fp-code.ts` (`reserveFpCodes`) vẫn sinh số tuần tự; áp Feistel cho bộ sinh và các loại mã hiện có cần spec và migration riêng.
 -->
 
 # Hiến chương FoodPrint Backend
@@ -55,6 +56,13 @@ Hiến chương này tóm tắt các nguyên tắc **không được vi phạm**
 - Chỉ triển khai yêu cầu đã được xác nhận trong spec. Mọi điểm chưa rõ được đánh dấu `[NEEDS CLARIFICATION: ...]` và phải được giải quyết (ví dụ bằng `$speckit-clarify`) trước khi merge.
 - Khi yêu cầu thay đổi, cập nhật spec/plan/tasks trong cùng PR với code; không để code và spec lệch nhau.
 
+### VII. Mã định danh nghiệp vụ
+
+- Các bảng danh sách nghiệp vụ — hồ sơ đăng ký, đơn giao nguyên liệu, khiếu nại, yêu cầu hỗ trợ, đơn xử lý sự cố và các danh sách tương tự thêm sau — phải có cột `code` lưu riêng bên cạnh khóa chính `id`. `id` vẫn dùng cho quan hệ và thao tác unique; `code` chỉ để hiển thị/tra cứu, có ràng buộc UNIQUE riêng, gán một lần khi tạo, không sửa và không tái sử dụng.
+- Cú pháp `FP-<XX>-<NNNNN>`: tiền tố `FP`, chữ viết tắt 2 chữ in hoa của tính năng và đúng 5 chữ số, theo quy ước tiền tố `FP-XX-` sẵn có. Mỗi chữ viết tắt đăng ký một lần trong danh mục dùng chung `src/utils/business-code.ts` và ghi trong spec của tính năng (`src/utils/fp-code.ts` chỉ còn phục vụ các mã lô tuần tự ngoài phạm vi nguyên tắc này); không dùng trùng giữa các tính năng hay tự đặt ngoài spec đã duyệt.
+- 5 chữ số không được lộ số thứ tự thô: cấp số thứ tự kế tiếp theo từng loại mã trong transaction tạo bản ghi (dưới khóa advisory theo loại mã), rồi lấy hậu tố 5 chữ số = Feistel permutation có khóa của (số thứ tự − 1) trên miền 0–99999 (cycle-walking để luôn nằm trong miền), bảo đảm duy nhất, không tuần tự và chỉ đảo ngược được khi có khóa.
+- Khóa Feistel nằm trong cấu hình, không nằm trong source, và không được đổi sau khi đã phát hành mã. Khi hết 100.000 mã của một tính năng phải báo lỗi tường minh, không quay vòng hay tự nới định dạng.
+
 ## Ràng buộc kỹ thuật
 
 - Stack: Node.js theo `.nvmrc`, TypeScript strict, Express, PostgreSQL, Prisma (client `cjs` sinh vào `src/generated/prisma/`), Redis.
@@ -66,7 +74,7 @@ Hiến chương này tóm tắt các nguyên tắc **không được vi phạm**
 - Branch tạo từ `dev`, PR vào `dev`; `dev` được promote sang `main` qua PR. Commit theo Conventional Commits; khuyến nghị commit `docs(spec): ...` trước các commit code.
 - Thay đổi backend phải qua `npm run validate` (lint, format, typecheck, build) và `npm run test:unit`; thay đổi kết nối PostgreSQL/Redis chạy thêm `db:check`/`redis:check` khi có hạ tầng local.
 - Check bắt buộc **Backend quality** gồm code quality, migration/authorization trên PostgreSQL tạm và spec gate.
-- Plan phải có mục "Constitution Check" đối chiếu với các nguyên tắc I–VI; mọi vi phạm phải được ghi rõ lý do trong bảng Complexity Tracking và được reviewer chấp thuận.
+- Plan phải có mục "Constitution Check" đối chiếu với các nguyên tắc I–VII; mọi vi phạm phải được ghi rõ lý do trong bảng Complexity Tracking và được reviewer chấp thuận.
 
 ## Governance
 
@@ -74,4 +82,4 @@ Hiến chương này tóm tắt các nguyên tắc **không được vi phạm**
 - Sửa hiến chương qua PR riêng (`docs(constitution): ...`), cập nhật Sync Impact Report và version theo semver: MAJOR khi bỏ/định nghĩa lại nguyên tắc, MINOR khi thêm nguyên tắc/mục, PATCH khi làm rõ câu chữ.
 - Reviewer kiểm tra PR tuân thủ hiến chương; spec gate trong CI chỉ kiểm tra cấu trúc, không thay thế review nội dung.
 
-**Version**: 2.0.0 | **Ratified**: 2026-11-06 | **Last Amended**: 2026-11-14
+**Version**: 2.1.1 | **Ratified**: 2026-11-06 | **Last Amended**: 2026-11-19

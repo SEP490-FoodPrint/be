@@ -755,11 +755,16 @@ void test("registration search trims codes and names and rejects invalid types o
   );
 });
 
-void test("registration search filters the stored number exactly before pagination without losing bigint precision", async () => {
-  const numbers = [1n, 100000n, 9007199254740992n, 9007199254740993n];
-  const rows = numbers.map((registrationNumber, index) => ({
+void test("registration search filters the stored legacy and Feistel codes exactly before pagination", async () => {
+  const codes = [
+    "FP-REG-00001",
+    "FP-REG-100000",
+    "FP-REG-9007199254740993",
+    "FP-RG-58213",
+  ];
+  const rows = codes.map((code, index) => ({
     id: `00000000-0000-4000-8000-00000000000${index + 1}`,
-    registrationNumber,
+    code,
     applicantUserId: testAdmin.id,
     applicantUser: {
       id: testAdmin.id,
@@ -776,7 +781,7 @@ void test("registration search filters the stored number exactly before paginati
     reviewedAt: null,
     updatedAt: now,
   }));
-  let expectedNumber: bigint | undefined;
+  let expectedCode: string | undefined;
   let expectedSearch: string | undefined;
   let calls = 0;
   const service = createRegistrationService(
@@ -784,14 +789,14 @@ void test("registration search filters the stored number exactly before paginati
       calls++;
       assert.deepEqual(
         args.where,
-        expectedNumber === undefined
+        expectedCode === undefined
           ? {}
           : {
               AND: [
                 {},
                 {
                   OR: [
-                    { registrationNumber: expectedNumber },
+                    { code: expectedCode },
                     {
                       applicantUser: {
                         fullName: {
@@ -807,18 +812,21 @@ void test("registration search filters the stored number exactly before paginati
       );
       assert.deepEqual(args.orderBy, [{ id: "asc" }]);
       const filtered = rows.filter(
-        (row) =>
-          expectedNumber === undefined ||
-          row.registrationNumber === expectedNumber,
+        (row) => expectedCode === undefined || row.code === expectedCode,
       );
       const skip = args.skip ?? 0;
       return Promise.resolve(filtered.slice(skip, skip + (args.take ?? 0)));
     }),
   );
   const principal = { ...testAdmin, permissions: ["registration.view"] };
-  for (const number of [1n, 100000n, 9007199254740993n, 2n]) {
-    expectedNumber = number;
-    const search = `FP-REG-${number.toString().padStart(5, "0")}`;
+  for (const search of [
+    "FP-REG-00001",
+    "FP-REG-100000",
+    "FP-REG-9007199254740993",
+    "fp-rg-58213",
+    "FP-RG-00002",
+  ]) {
+    expectedCode = search.toUpperCase();
     expectedSearch = search;
     const result = await service.getAll(
       validateRegistrationListQuery({ search, limit: "1" }),
@@ -826,7 +834,7 @@ void test("registration search filters the stored number exactly before paginati
     );
     assert.deepEqual(
       result.items.map((row) => row.registrationID),
-      number === 2n ? [] : [search],
+      search === "FP-RG-00002" ? [] : [expectedCode],
     );
     assert.deepEqual(result.pagination, {
       page: 1,
@@ -835,7 +843,7 @@ void test("registration search filters the stored number exactly before paginati
     });
     assert(!JSON.stringify(result).includes("registrationNumber"));
   }
-  expectedNumber = 1n;
+  expectedCode = "FP-REG-00001";
   expectedSearch = "FP-REG-00001";
   const laterPage = await service.getAll(
     validateRegistrationListQuery({
@@ -849,7 +857,7 @@ void test("registration search filters the stored number exactly before paginati
     items: [],
     pagination: { page: 2, limit: 1, hasNext: false },
   });
-  expectedNumber = undefined;
+  expectedCode = undefined;
   const unfiltered = await service.getAll(
     validateRegistrationListQuery({ search: "  ", limit: "1" }),
     principal,
@@ -859,14 +867,14 @@ void test("registration search filters the stored number exactly before paginati
     limit: 1,
     hasNext: true,
   });
-  assert.equal(calls, 6);
+  assert.equal(calls, 7);
 });
 
 void test("registration name search uses a literal case-insensitive substring before pagination", async () => {
   const names = ["Nguyễn Văn An", "NGUYỄN Thị Bình"];
   const rows = names.map((fullName, index) => ({
     id: `00000000-0000-4000-8000-00000000000${index + 1}`,
-    registrationNumber: BigInt(index + 1),
+    code: `FP-REG-0000${index + 1}`,
     applicantUserId: testAdmin.id,
     applicantUser: {
       id: testAdmin.id,
@@ -965,7 +973,7 @@ void test("registration list returns safe applicant contacts with stable paginat
   };
   const row = {
     id: "request-1",
-    registrationNumber: 1n,
+    code: "FP-REG-00001",
     applicantUserId: applicantUser.id,
     applicantUser,
     requestType: "SCHOOL" as const,
@@ -977,7 +985,7 @@ void test("registration list returns safe applicant contacts with stable paginat
   const nullable = {
     ...row,
     id: "request-2",
-    registrationNumber: 2n,
+    code: "FP-RG-58213",
     applicantUser: { ...applicantUser, phone: null, emailVerifiedAt: null },
   };
   const repository = createRegistrationRepository((args) => {
@@ -1022,11 +1030,13 @@ void test("registration list returns safe applicant contacts with stable paginat
     ["request-1", "request-2"],
   );
   assert.equal(result.items[0].registrationID, "FP-REG-00001");
+  assert.equal(result.items[1].registrationID, "FP-RG-58213");
   assert(!JSON.stringify(result).includes("registrationNumber"));
-  const { registrationNumber: _number, ...publicRow } = row;
-  const { registrationNumber: _nullableNumber, ...publicNullable } = nullable;
-  void _number;
-  void _nullableNumber;
+  assert(!JSON.stringify(result).includes('"code"'));
+  const { code: _code, ...publicRow } = row;
+  const { code: _nullableCode, ...publicNullable } = nullable;
+  void _code;
+  void _nullableCode;
   const json: unknown = JSON.parse(JSON.stringify(result));
   assert.deepEqual(json, {
     items: [
@@ -1039,7 +1049,7 @@ void test("registration list returns safe applicant contacts with stable paginat
       },
       {
         ...publicNullable,
-        registrationID: "FP-REG-00002",
+        registrationID: "FP-RG-58213",
         submittedAt: now.toISOString(),
         updatedAt: now.toISOString(),
       },
@@ -1172,7 +1182,7 @@ void test("registration HTTP preserves envelopes and reports field errors before
       {},
       {
         OR: [
-          { registrationNumber: 1n },
+          { code: "FP-REG-00001" },
           {
             applicantUser: {
               fullName: { contains: "fp-reg-00001", mode: "insensitive" },

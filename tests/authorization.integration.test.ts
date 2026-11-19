@@ -107,7 +107,6 @@ import {
 import { createIngredientQualityFeedbackRepository } from "../src/modules/ingredient-quality-feedback/ingredient-quality-feedback.repository";
 import { createIngredientQualityFeedbackService } from "../src/modules/ingredient-quality-feedback/ingredient-quality-feedback.service";
 import { createPermissionService } from "../src/modules/permission/permission.service";
-import { formatComplaintCode } from "../src/utils/complaint-code";
 import {
   validateFoodSample,
   validateSampleDisposal,
@@ -6344,7 +6343,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
     );
     assert.equal(response.status, 200);
     const detail = record(record(response.body).data);
-    assert.match(String(detail.registrationID), /^FP-REG-[0-9]{5,}$/);
+    assert.match(String(detail.registrationID), /^FP-RG-[0-9]{5}$/);
     if (applicationCodes.has(id))
       assert.equal(detail.registrationID, applicationCodes.get(id));
     assert(!JSON.stringify(response.body).includes("registrationNumber"));
@@ -7172,7 +7171,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         assert.equal(data.accountStatus, "UNVERIFIED");
         const id = String(data.id);
         applicationIds.set(type, id);
-        assert.match(String(data.registrationID), /^FP-REG-[0-9]{5,}$/);
+        assert.match(String(data.registrationID), /^FP-RG-[0-9]{5}$/);
         applicationCodes.set(id, String(data.registrationID));
         const userAfter = await db.user.findUniqueOrThrow({
           where: { id: account.id },
@@ -10373,10 +10372,9 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       });
       const mkFeedback = async (title: string) =>
         db.$transaction(async (tx) => {
-          const seq = await iqfRepo.nextComplaintCodeSequence(tx);
           return tx.ingredientQualityFeedback.create({
             data: {
-              complaintCode: formatComplaintCode(seq),
+              complaintCode: await iqfRepo.allocateComplaintCode(tx),
               deliveryId: del1.id,
               submittedByUserId: raceSubmitter.id,
               title,
@@ -10859,10 +10857,9 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         });
         const mkFb = async (title: string) =>
           db.$transaction(async (tx) => {
-            const seq = await iqfRepo.nextComplaintCodeSequence(tx);
             return tx.ingredientQualityFeedback.create({
               data: {
-                complaintCode: formatComplaintCode(seq),
+                complaintCode: await iqfRepo.allocateComplaintCode(tx),
                 deliveryId: del1.id,
                 submittedByUserId: schoolSubmitter.id,
                 title,
