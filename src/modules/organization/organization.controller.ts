@@ -16,6 +16,7 @@ import {
   validatePublicDailyMenuQuery,
   validatePublicSchoolQuery,
   validatePublicWeeklyMenuQuery,
+  validatePublicSchoolGradesQuery,
   validateSchoolCode,
   validateSchoolId,
 } from "./organization.validation";
@@ -117,6 +118,13 @@ export function createOrganizationController(
     getPublicLocations: asyncHandler(async (_req, res) => {
       const locations = await service.getPublicLocations();
       sendSuccess(res, locations, "Lấy danh mục địa điểm thành công");
+    }),
+
+    getPublicSchoolGrades: asyncHandler(async (req, res) => {
+      const schoolCode = validateSchoolCode(req.params.schoolCode);
+      const query = validatePublicSchoolGradesQuery(req.query);
+      const grades = await service.getPublicSchoolGrades(schoolCode, query);
+      sendSuccess(res, grades, "Lấy danh sách khối thành công");
     }),
 
     getPublicDailyMenu: asyncHandler(async (req, res) => {

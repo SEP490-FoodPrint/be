@@ -19,3 +19,13 @@
 - IV. Transaction: Pass (các truy vấn đọc dữ liệu tuân thủ chuẩn read transaction).
 - V. DTO tương thích: Pass.
 - VI. Spec đi cùng PR: Pass.
+
+## Bổ sung 2026-11-19: Tách danh sách khối
+
+- `organization.routes.ts`/`controller`/`validation`/`service`/`repository`: thêm `GET /public/:schoolCode/grades` (findSchoolGrades).
+- `organization.service.ts`: bỏ khối `dynamicGroups` trong getPublicWeeklyMenu; `organization.repository.ts`: bỏ findWeekGrades, findPortionGroupsRaw, RawPortionGroup.
+- `organization.response.dto.ts`: bỏ `PortionGroupDTO`, `portionGroups`, `gradeGroups` khỏi PublicWeeklyMenuDTO.
+- `tests/organization.test.ts`: bỏ stub đã gỡ.
+- Constitution: không DDL/migration; API công khai chỉ đọc, scope theo mã trường. Thay đổi phá vỡ hợp đồng có chủ đích: client duy nhất (FoodPrintFE public pages) được cập nhật cùng lúc.
+- `/grades?week=`: thêm `publicSchoolGradesQuerySchema`, `findWeekMenuCoverage` (thực đơn APPROVED/PENDING_APPROVAL có ngày đã duyệt), `PublicSchoolGradeDTO { id, name, hasMenu }`.
+- Thực đơn ngày: `publicMenuDayInclude` lấy thêm `WeeklyMenu.isSchoolWide`, danh mục món, định lượng chuẩn, định lượng theo khối, nguyên liệu đã chốt và nhóm suất ăn; service chọn nguồn định lượng theo khối, tính định lượng/suất, ghép món thay thế (`buildPublicMealDishes`). DTO: `PublicDishIngredientDTO`, `PublicRecipeSource`, trường tùy chọn mới trong `DishItemDTO`.
