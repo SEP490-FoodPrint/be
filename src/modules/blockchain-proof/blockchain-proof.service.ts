@@ -1000,9 +1000,14 @@ export function createBlockchainProofService(
       });
       return publicView(chain);
     },
+    /**
+     * `showOperational` keeps vehicle plates, slip and batch codes: the class
+     * meal traceability page is allowed to show them. Send errors stay hidden.
+     */
     async publicMealAllocationChain(
       mealAllocationId: string,
       verify = false,
+      options: { showOperational?: boolean } = {},
     ): Promise<BlockchainProofChainResponseDTO> {
       if (verify) requireEnabled();
       const db = await connect();
@@ -1011,7 +1016,12 @@ export function createBlockchainProofService(
         verify,
         persist: false,
       });
-      return publicView(chain);
+      return options.showOperational
+        ? {
+            ...chain,
+            nodes: chain.nodes.map((node) => ({ ...node, lastError: null })),
+          }
+        : publicView(chain);
     },
     async chain(
       params: BlockchainProofChainParamsDTO,

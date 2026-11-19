@@ -7,6 +7,7 @@ export const mealAllocationTraceInclude = {
       Class: {
         include: {
           School: true,
+          grade: { select: { id: true, name: true } },
         },
       },
     },
@@ -15,6 +16,7 @@ export const mealAllocationTraceInclude = {
     include: {
       CookingBatch: {
         include: {
+          completedByUser: { select: { fullName: true } },
           dishes: {
             include: {
               Dish: {
@@ -22,7 +24,18 @@ export const mealAllocationTraceInclude = {
                   schoolCategory: true,
                 },
               },
-              retainedFoodSamples: true,
+              retainedFoodSamples: {
+                include: {
+                  storageUnit: {
+                    select: {
+                      code: true,
+                      name: true,
+                      location: true,
+                      temperatureRange: true,
+                    },
+                  },
+                },
+              },
             },
           },
           cookingBatchLots: {
@@ -32,22 +45,23 @@ export const mealAllocationTraceInclude = {
                   SourceFacility: true,
                   DeliveryItem: {
                     include: {
+                      Ingredient: { select: { name: true } },
+                      SourceFacility: true,
                       Delivery: {
                         include: {
                           Supplier: {
                             include: {
-                              supplierCertifications: true,
+                              supplierCertifications: {
+                                where: { status: "ACTIVE" },
+                                orderBy: { certificationType: "asc" },
+                              },
                             },
                           },
-                          deliveryApprovals: true,
-                        },
-                      },
-                      SupplyRequestItem: {
-                        include: {
-                          IngredientEntry: {
+                          deliveryApprovals: {
                             include: {
-                              Ingredient: true,
+                              Role: { select: { code: true, name: true } },
                             },
+                            orderBy: { decidedAt: "asc" },
                           },
                         },
                       },
@@ -72,37 +86,79 @@ export interface FindAllocationParams {
   classId?: string;
   date?: string;
   mealType?: "LUNCH" | "AFTERNOON";
+  schoolCode?: string;
 }
 
 export const mealTraceabilityRepository = {
+  /**
+   * Đúng một suất ăn: theo id, hoặc theo khóa duy nhất (lớp, ngày, bữa) của
+   * DailyMealPortion. Bỏ qua phân bổ đã huỷ và giới hạn theo trường nếu có mã.
+   */
   async findAllocationRecord(
     params: FindAllocationParams,
   ): Promise<MealAllocationTraceRecord | null> {
     const prisma = await getPrisma();
+    const school = params.schoolCode
+      ? {
+          Class: {
+            School: {
+              code: {
+                equals: params.schoolCode.trim(),
+                mode: "insensitive" as const,
+              },
+            },
+          },
+        }
+      : {};
 
     if (params.mealAllocationId) {
-      return prisma.mealAllocation.findUnique({
-        where: { id: params.mealAllocationId },
+      return prisma.mealAllocation.findFirst({
+        where: {
+          id: params.mealAllocationId,
+          status: { not: "CANCELLED" },
+          DailyMealPortion: { is: school },
+        },
         include: mealAllocationTraceInclude,
       });
     }
 
-    const where: Prisma.MealAllocationWhereInput = {};
-
-    if (params.classId || params.date || params.mealType) {
-      where.DailyMealPortion = {
-        is: {
-          ...(params.classId ? { classId: params.classId } : {}),
-          ...(params.date ? { mealDate: new Date(params.date) } : {}),
-          ...(params.mealType ? { mealType: params.mealType } : {}),
-        },
-      };
-    }
+    if (!params.classId || !params.date || !params.mealType) return null;
 
     return prisma.mealAllocation.findFirst({
-      where,
-      orderBy: { createdAt: "desc" },
+      where: {
+        status: { not: "CANCELLED" },
+        DailyMealPortion: {
+          is: {
+            classId: params.classId,
+            mealDate: new Date(`${params.date}T00:00:00.000Z`),
+            mealType: params.mealType,
+            ...school,
+          },
+        },
+      },
       include: mealAllocationTraceInclude,
+    });
+  },
+
+  /** Lớp đang hoạt động của một trường đang hoạt động, cho trang công khai. */
+  async listPublicSchoolClasses(schoolCode: string) {
+    const prisma = await getPrisma();
+    const school = await prisma.school.findFirst({
+      where: {
+        code: { equals: schoolCode.trim(), mode: "insensitive" },
+        status: "ACTIVE",
+      },
+      select: { id: true },
+    });
+    if (!school) return null;
+    return prisma.class.findMany({
+      where: { schoolId: school.id, status: "ACTIVE" },
+      select: {
+        id: true,
+        name: true,
+        gradeId: true,
+        grade: { select: { name: true } },
+      },
     });
   },
 };

@@ -53,4 +53,26 @@ void describe("getMealTraceabilitySchema validation", () => {
     const result = getMealTraceabilitySchema.safeParse(invalid);
     assert.equal(result.success, false);
   });
+  void it("rejects a query without a full class/date/meal key", () => {
+    for (const partial of [
+      {},
+      { classId: "123e4567-e89b-12d3-a456-426614174000" },
+      { classId: "123e4567-e89b-12d3-a456-426614174000", date: "2026-11-16" },
+    ]) {
+      const result = getMealTraceabilitySchema.safeParse(partial);
+      assert.equal(result.success, false);
+    }
+  });
+
+  void it("accepts an optional schoolCode and verify flag", () => {
+    const result = getMealTraceabilitySchema.safeParse({
+      classId: "123e4567-e89b-12d3-a456-426614174000",
+      date: "2026-11-16",
+      mealType: "AFTERNOON",
+      schoolCode: "TH-001",
+      verify: "true",
+    });
+    assert.equal(result.success, true);
+    assert.equal(result.success && result.data.verify, true);
+  });
 });

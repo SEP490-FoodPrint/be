@@ -46,6 +46,7 @@
     "db:studio": "prisma studio",
     "auth:bootstrap": "tsx src/scripts/bootstrap-authorization.ts",
     "seed:seasonings": "tsx src/scripts/seed-dish-ingredients-and-seasonings.ts",
+    "seed:week": "tsx src/scripts/seed-week.ts",
     "fixture:meal-allocation": "tsx tests/helpers/seed-meal-allocation-fixture.ts",
     "test:authorization": "tsx --test tests/authorization.integration.test.ts",
     "test:account-lifecycle:integration": "tsx --test tests/account-lifecycle.integration.test.ts",
