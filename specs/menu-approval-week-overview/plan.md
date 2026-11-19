@@ -23,7 +23,7 @@ Không có migration. Bảng dùng: `weekly_menus`, `weekly_menu_grades`, `schoo
 | III. An toàn cơ sở dữ liệu         | Đạt: chỉ đọc, không đổi schema, không migration.                                                                                                                                                            |
 | IV. Transaction, cache, rate limit | Đạt: chỉ đọc nên không cần transaction; không dùng cache; giữ rate limiter chung.                                                                                                                           |
 | V. Hợp đồng HTTP                   | Đạt: envelope `sendSuccess`; ngày trả dạng `YYYY-MM-DD`/chuỗi định dạng, map allowlist trong service.                                                                                                       |
-| VI. Spec-Driven                    | Đạt: spec/plan/tasks trong `specs/menu-approval-week-overview/`, nhánh `feat/menu-approval-week-overview`; không có `NEEDS CLARIFICATION`.                                                                  |
+| VI. Spec-Driven                    | Đạt: spec/plan/tasks trong `specs/menu-approval-week-overview/`, nhánh `feat/menu-approval-week-overview`; đầy đủ, không còn điểm chưa làm rõ.                                                              |
 
 ## Complexity Tracking
 
