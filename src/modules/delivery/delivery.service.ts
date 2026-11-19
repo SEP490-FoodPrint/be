@@ -820,7 +820,10 @@ export function createDeliveryInspectionService(
             )
           ) {
             const isDryOnly = isDryDelivery(row);
-            const defaultDryTiers: Record<DeliveryInspectionRoleCode, DeliveryInspectionTierCode> = {
+            const defaultDryTiers: Record<
+              DeliveryInspectionRoleCode,
+              DeliveryInspectionTierCode
+            > = {
               SCHOOL_KITCHEN_STAFF: "OPTIONAL",
               INGREDIENT_MANAGEMENT_DEPARTMENT: "PRIMARY",
               SCHOOL_NUTRITION_OFFICER: "OPTIONAL",
@@ -887,7 +890,10 @@ export function createDeliveryInspectionService(
             ...roleCodes,
           ]);
           const roleIdByCode = new Map(roleRows.map((r) => [r.code, r.id]));
-          const effectiveTiers: Record<DeliveryInspectionRoleCode, DeliveryInspectionTierCode> = isDryOnly
+          const effectiveTiers: Record<
+            DeliveryInspectionRoleCode,
+            DeliveryInspectionTierCode
+          > = isDryOnly
             ? {
                 SCHOOL_KITCHEN_STAFF: "OPTIONAL",
                 INGREDIENT_MANAGEMENT_DEPARTMENT: "PRIMARY",
@@ -950,7 +956,10 @@ export function createDeliveryInspectionService(
           );
           const schoolTiers = resolveSchoolTiers(schoolTiersRows);
           const isDryOnly = isDryDelivery(row);
-          const defaultDryTiers: Record<DeliveryInspectionRoleCode, DeliveryInspectionTierCode> = {
+          const defaultDryTiers: Record<
+            DeliveryInspectionRoleCode,
+            DeliveryInspectionTierCode
+          > = {
             SCHOOL_KITCHEN_STAFF: "OPTIONAL",
             INGREDIENT_MANAGEMENT_DEPARTMENT: "PRIMARY",
             SCHOOL_NUTRITION_OFFICER: "OPTIONAL",
