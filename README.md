@@ -28,6 +28,7 @@ if [ ! -e .env ]; then cp .env.example .env; fi
 | `CLIENT_URL`                             | Origin frontend local, mặc định `http://localhost:3001`                                           |
 | `PUBLIC_TRACE_ORIGIN`                    | Origin HTTP/HTTPS cố định sinh URL tem QR; giữ ổn định hostname đã in, không lấy từ header `Host` |
 | `JWT_SECRET`                             | Secret ngẫu nhiên riêng để ký JWT; thay placeholder trong mẫu                                     |
+| `BUSINESS_CODE_KEY`                      | 64 ký tự hex (32 byte) làm khóa Feistel cho hậu tố mã `FP-XX-NNNNN`; không đổi sau khi đã cấp mã  |
 | `AUTH_ACCESS_TTL_SECONDS`                | Access token: mặc định 900 giây, cho phép 60–3600 giây                                            |
 | `AUTH_REFRESH_TTL_SECONDS`               | Phiên refresh: mặc định 604800 giây, tối đa 30 ngày và phải dài hơn access token                  |
 | `RESEND_API_KEY`, `RESEND_FROM`          | API key Resend và sender thuộc domain đã verify để gửi mã xác minh email và khôi phục mật khẩu    |
@@ -286,6 +287,7 @@ npm ci
 export DATABASE_URL='postgresql://ci_validation@127.0.0.1:1/foodprint_ci?schema=foodprint'
 export NODE_ENV=test
 export JWT_SECRET=foodprint-ci-test-only-secret-not-for-runtime
+export BUSINESS_CODE_KEY=0f1e2d3c4b5a69788796a5b4c3d2e1f00112233445566778899aabbccddeeff0
 npm run prisma:validate
 npm run prisma:generate
 npm run validate

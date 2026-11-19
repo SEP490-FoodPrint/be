@@ -32,3 +32,6 @@ blockchain/*.json
 
 # Local active feature pointer
 .specify/feature.json
+
+CLAUDE.md
+.claude/

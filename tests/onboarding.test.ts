@@ -22,6 +22,7 @@ import { onboardingUpload } from "../src/middlewares/onboarding-upload.middlewar
 import { globalErrorHandler } from "../src/middlewares/error.middleware";
 import { createCsrfProtection } from "../src/middlewares/csrf.middleware";
 import { startHttp } from "./helpers/http";
+import "./helpers/authorization";
 
 const invalid = (error: unknown) =>
   error instanceof HttpError && error.statusCode === 400;
@@ -405,7 +406,7 @@ function editFixture(
   };
   const row = {
     id: requestId,
-    registrationNumber: 1n,
+    code: "FP-REG-00001",
     applicantUserId: userId,
     requestType: "SUPPLIER",
     status: status ?? "PENDING",
@@ -483,8 +484,15 @@ function editFixture(
       return "https://example.test/download";
     },
   };
+  let codeSequence = 0;
   const tx = {
-    $queryRaw: () => Promise.resolve([]),
+    // Bộ đếm mã nghiệp vụ trả số thứ tự tăng dần; các truy vấn raw khác (khóa) trả rỗng.
+    $queryRaw: (sql: TemplateStringsArray) =>
+      Promise.resolve(
+        sql.join("").includes("business_code_counters")
+          ? [{ lastSequence: ++codeSequence }]
+          : [],
+      ),
     user: {
       findUnique: () =>
         Promise.resolve({
@@ -495,6 +503,7 @@ function editFixture(
     },
     registrationRequest: {
       findUnique: () => Promise.resolve(status ? structuredClone(row) : null),
+      findMany: () => Promise.resolve([]),
       create({ data }: { data: Record<string, unknown> }) {
         writes++;
         lastWrite = data;
@@ -503,6 +512,7 @@ function editFixture(
       update({ data }: { data: Record<string, unknown> }) {
         assert(!("registrationNumber" in data));
         assert(!("registrationID" in data));
+        assert(!("code" in data), "nộp lại/sửa hồ sơ không được đổi mã");
         writes++;
         lastWrite = data;
         return Promise.resolve({ ...row, ...data, updatedAt: new Date() });
@@ -615,7 +625,12 @@ void test("first submission queues one email to the freshly loaded account rathe
   assert.equal(result.status, "PENDING");
   assert.equal(fixture.notifications.length, 1);
   assert.equal(fixture.notifications[0]?.recipientEmail, fixture.user.email);
-  assert.match(fixture.notifications[0]?.text ?? "", /FP-REG-00001/);
+  assert.match(result.registrationID, /^FP-RG-[0-9]{5}$/);
+  assert.notEqual(result.registrationID, "FP-RG-00001");
+  assert.match(
+    fixture.notifications[0]?.text ?? "",
+    new RegExp(result.registrationID),
+  );
 });
 
 void test("submission outbox failure rejects the transaction and cleans only newly uploaded files", async () => {

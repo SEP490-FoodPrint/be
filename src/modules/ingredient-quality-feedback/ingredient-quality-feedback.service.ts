@@ -4,7 +4,7 @@ import {
   authorizationTransaction,
   databaseOperation,
 } from "../../utils/authorization";
-import { parseCanonicalComplaintCode } from "../../utils/complaint-code";
+import { isStoredBusinessCode } from "../../utils/business-code";
 import { getPrisma } from "../../utils/database";
 import { HttpError } from "../../utils/http-error";
 import { listWindow, readListPage } from "../../utils/list-query";
@@ -49,7 +49,8 @@ function toFeedbackStatus(status: string): IngredientQualityFeedbackStatusDto {
 }
 
 function assertStoredComplaintCode(complaintCode: string): string {
-  if (parseCanonicalComplaintCode(complaintCode) === null) {
+  // Chấp nhận mã cũ tuần tự FP-CP-… đã phát hành và mã Feistel FP-CP-NNNNN mới.
+  if (!isStoredBusinessCode("CP", complaintCode)) {
     throw new HttpError(503, CORRUPT_DATA_MESSAGE);
   }
   return complaintCode;

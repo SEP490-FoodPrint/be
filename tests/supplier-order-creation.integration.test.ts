@@ -18,6 +18,14 @@ import {
   type OnboardingDocument,
 } from "../src/utils/onboarding-documents";
 import { createLifecycleTestDatabase } from "./helpers/account-lifecycle-database";
+import "./helpers/authorization";
+import { readBusinessCodeKey } from "../src/config/env";
+import {
+  businessCodeSuffix,
+  formatBusinessCode,
+} from "../src/utils/business-code";
+import { feistelDecrypt } from "../src/utils/feistel";
+import { supplierOrderRepository } from "../src/modules/supplier-order/supplier-order.repository";
 
 async function startHttp(app: Express) {
   const server = app.listen(0, "127.0.0.1");
@@ -687,22 +695,22 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   const committedB = resConcB.filter((r) => r.status === 201);
   assert.equal(committedA.length, 20);
   assert.equal(committedB.length, 20);
-  const expectedSeq = Array.from(
-    { length: 20 },
-    (_, i) => `FP-DE-${String(i + 1).padStart(5, "0")}`,
+  // Mã mới dùng bộ đếm DE toàn hệ thống với hậu tố Feistel: 40 lần tạo đồng thời của 2 nhà cung cấp
+  // cho 40 mã khác nhau, không phải FP-DE-00001..00020 lặp lại theo từng supplier.
+  const businessKey = readBusinessCodeKey();
+  const concurrentCodes = [...committedA, ...committedB].map(
+    (r) => unwrap<{ deliveryNo: string }>(r.body).deliveryNo,
   );
-  assert.deepEqual(
-    committedA
-      .map((r) => unwrap<{ deliveryNo: string }>(r.body).deliveryNo)
-      .sort(),
-    expectedSeq,
-  );
-  assert.deepEqual(
-    committedB
-      .map((r) => unwrap<{ deliveryNo: string }>(r.body).deliveryNo)
-      .sort(),
-    expectedSeq,
-  );
+  assert.equal(new Set(concurrentCodes).size, 40);
+  for (const code of concurrentCodes) {
+    assert.match(code, /^FP-DE-[0-9]{5}$/);
+    assert.notEqual(code, "FP-DE-00000");
+  }
+  const decodedSequences = concurrentCodes
+    .map((code) => feistelDecrypt(Number(code.slice(-5)), businessKey) + 1)
+    .sort((a, b) => a - b);
+  assert.equal(new Set(decodedSequences).size, 40);
+  assert(decodedSequences.every((sequence) => sequence >= 1 && sequence <= 41));
   const dbConcurrentItems = await db.deliveryItem.findMany({
     where: {
       Delivery: {
@@ -718,7 +726,18 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   assert.equal(dbConcurrentItems.length, 40);
   assert.equal(new Set(dbConcurrentItems.map((row) => row.qrToken)).size, 40);
 
-  // Legacy + FP-DE-99999 -> FP-DE-100000 boundary on Supplier B
+  // Mã cũ (tuần tự / định dạng khác) được giữ nguyên; mã mới trùng mã cũ bị bỏ qua.
+  const counterRow = await db.businessCodeCounter.findUniqueOrThrow({
+    where: { codeType: "DE" },
+  });
+  let collidingSequence = counterRow.lastSequence + 1;
+  while (businessCodeSuffix(collidingSequence, businessKey) === 0) {
+    collidingSequence++;
+  }
+  const collidingCode = formatBusinessCode(
+    "DE",
+    businessCodeSuffix(collidingSequence, businessKey),
+  );
   await db.delivery.create({
     data: {
       schoolId: schoolA.id,
@@ -734,13 +753,14 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   await db.delivery.create({
     data: {
       schoolId: schoolA.id,
-      supplierId: supplierB.id,
+      supplierId: supplierA.id,
       creationMode: "STANDALONE",
       creationKey: randomUUID(),
       creationFingerprint: "1".repeat(64),
-      deliveryNo: "FP-DE-99999",
+      // Mã cũ của nhà cung cấp A trùng đúng mã kế tiếp: nhà cung cấp B vẫn không được nhận mã này.
+      deliveryNo: collidingCode,
       status: "IN_TRANSIT",
-      createdByUserId: supplierAdminB.id,
+      createdByUserId: supplierAdminA.id,
     },
   });
   const boundaryRes = await apiRequest(
@@ -764,9 +784,38 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     },
   );
   assert.equal(boundaryRes.status, 201);
+  const skippedCode = unwrap<{ deliveryNo: string }>(
+    boundaryRes.body,
+  ).deliveryNo;
+  assert.match(skippedCode, /^FP-DE-[0-9]{5}$/);
+  assert.notEqual(skippedCode, collidingCode);
+  assert(
+    feistelDecrypt(Number(skippedCode.slice(-5)), businessKey) + 1 >
+      collidingSequence,
+  );
+
+  // Rollback sau khi đã cấp mã: bộ đếm rollback cùng transaction, lần cấp sau nhận lại đúng mã đó.
+  const rollbackMarker = new Error("delivery code rollback test");
+  let rolledBackCode = "";
+  await assert.rejects(
+    db.$transaction(async (tx) => {
+      rolledBackCode = await supplierOrderRepository.allocateDeliveryNo(tx);
+      throw rollbackMarker;
+    }),
+    (error: unknown) => error === rollbackMarker,
+  );
+  let reissuedCode = "";
+  await assert.rejects(
+    db.$transaction(async (tx) => {
+      reissuedCode = await supplierOrderRepository.allocateDeliveryNo(tx);
+      throw rollbackMarker;
+    }),
+    (error: unknown) => error === rollbackMarker,
+  );
+  assert.equal(reissuedCode, rolledBackCode);
   assert.equal(
-    unwrap<{ deliveryNo: string }>(boundaryRes.body).deliveryNo,
-    "FP-DE-100000",
+    await db.delivery.count({ where: { deliveryNo: rolledBackCode } }),
+    0,
   );
 
   // 3. REQUEST v1 creation moves ACCEPTED -> IN_PROGRESS + canonical replay/conflict + render 503 retry + 2-actor race
@@ -825,7 +874,8 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   assert.equal(createdReq.nextAction, "ENTER_SHIPPING");
   assert.equal(createdReq.expectedArrivalAt, null);
   assert.equal(createdReq.vehiclePlate, null);
-  assert.equal(createdReq.deliveryNo, "FP-DE-00021");
+  assert.match(createdReq.deliveryNo, /^FP-DE-[0-9]{5}$/);
+  assert(![...concurrentCodes, skippedCode].includes(createdReq.deliveryNo));
   assert.equal(createdReq.items[0].ingredientEntryId, riceEntry.id);
   assert.equal(createdReq.items[0].actualQuantity, "15.5");
   assert.deepEqual(createdReq.items[0].sourceFacility, {

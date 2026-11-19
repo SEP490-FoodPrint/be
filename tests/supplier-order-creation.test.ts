@@ -32,6 +32,11 @@ import { HttpError } from "../src/utils/http-error";
 import { RequestValidationError } from "../src/utils/request-validation";
 import { startHttp } from "./helpers/http";
 import { testAdmin, testStaff } from "./helpers/authorization";
+import {
+  businessCodeSuffix,
+  formatBusinessCode,
+} from "../src/utils/business-code";
+import { readBusinessCodeKey } from "../src/config/env";
 
 const uid = (n: number) =>
   `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -126,7 +131,7 @@ function setupUs1Harness(options?: {
   priorDelivery?: boolean;
   updateInProgressCount?: number;
   guardError?: Error;
-  highestSequence?: bigint;
+  deliveryNo?: string;
   sourceFacilities?: Array<{
     id: string;
     supplierId: string;
@@ -146,7 +151,7 @@ function setupUs1Harness(options?: {
       ? options.supplyRequest
       : makeSupplyRequestRecord("ACCEPTED");
   let hasPrior = options?.priorDelivery ?? false;
-  const highestSequence = options?.highestSequence ?? 0n;
+  const nextDeliveryNo = options?.deliveryNo ?? "FP-DE-00001";
   const facilities = options?.sourceFacilities ?? [
     {
       id: sourceFacilityId,
@@ -173,9 +178,7 @@ function setupUs1Harness(options?: {
       ),
     findSupplyRequestForCreation: () => Promise.resolve(requestState ?? null),
     hasDeliveryForRequest: () => Promise.resolve(hasPrior),
-    lockSupplierForDeliveryNumber: () => Promise.resolve(),
-    findHighestCanonicalDeliverySequence: () =>
-      Promise.resolve(highestSequence),
+    allocateDeliveryNo: () => Promise.resolve(nextDeliveryNo),
     lockSourceFacilities: (_db, _supId, ids) => {
       lockedSourceIds.push(...ids);
       return Promise.resolve();
@@ -760,7 +763,7 @@ void test("US1 creates REQUEST delivery for both supplier roles from ACCEPTED or
 
   const inProgressHarness = setupUs1Harness({
     supplyRequest: makeSupplyRequestRecord("IN_PROGRESS", true, 2),
-    highestSequence: 99999n,
+    deliveryNo: "FP-DE-58213",
   });
   const body = validateCreateSupplierOrderBody({
     sourceType: "REQUEST",
@@ -785,7 +788,7 @@ void test("US1 creates REQUEST delivery for both supplier roles from ACCEPTED or
   assert.equal(inProgressResult.created, true);
   assert.equal(inProgressResult.workflowVersion, 2);
   assert.equal(inProgressResult.status, "PREPARING");
-  assert.equal(inProgressResult.deliveryNo, "FP-DE-100000");
+  assert.equal(inProgressResult.deliveryNo, "FP-DE-58213");
   assert.equal(inProgressResult.items.length, 2);
   assert.notEqual(
     inProgressResult.items[0].traceUrl,
@@ -946,12 +949,16 @@ void test("US1 repository queries enforce supplier scope, ordering, locks, FP-LO
       const sql = (strings as TemplateStringsArray).join("?");
       rawQueries.push(sql);
       if (sql.includes("pg_advisory_xact_lock")) {
-        assert.equal(values[0], "foodprint:fp-code:LO");
+        assert.ok(
+          ["foodprint:fp-code:LO", "foodprint:business-code:DE"].includes(
+            values[0] as string,
+          ),
+        );
         return Promise.resolve([{ locked: 1 }]);
       }
-      if (sql.includes("MAX(substring")) {
-        assert.equal(values[0], supplierId);
-        return Promise.resolve([{ maxSeq: "99999" }]);
+      if (sql.includes("business_code_counters")) {
+        assert.equal(values[0], "DE");
+        return Promise.resolve([{ lastSequence: 1 }]);
       }
       return Promise.resolve([{ id: supplierId }]);
     },
@@ -959,6 +966,12 @@ void test("US1 repository queries enforce supplier scope, ordering, locks, FP-LO
       findFirst: ({ where }: { where: Record<string, unknown> }) => {
         assert.deepEqual(where, { supplyRequestId });
         return Promise.resolve(null);
+      },
+      findMany: ({ where }: { where: { deliveryNo: { in: string[] } } }) => {
+        // Mã mới được kiểm tra trùng trên toàn bảng, không lọc theo nhà cung cấp.
+        assert.deepEqual(Object.keys(where), ["deliveryNo"]);
+        assert.equal(where.deliveryNo.in.length, 1);
+        return Promise.resolve([]);
       },
       create: ({ data }: { data: unknown }) => {
         seenCreateData = data;
@@ -977,12 +990,12 @@ void test("US1 repository queries enforce supplier scope, ordering, locks, FP-LO
     SupplierOrderRepository["findSupplyRequestForCreation"]
   >[0];
 
+  const allocatedDeliveryNo =
+    await supplierOrderRepository.allocateDeliveryNo(mockDb);
+  // Số thứ tự 1 → hậu tố Feistel(0) với khóa test, không phải 00001 thô.
   assert.equal(
-    await supplierOrderRepository.findHighestCanonicalDeliverySequence(
-      mockDb,
-      supplierId,
-    ),
-    99999n,
+    allocatedDeliveryNo,
+    formatBusinessCode("DE", businessCodeSuffix(1, readBusinessCodeKey())),
   );
   await supplierOrderRepository.lockSourceFacilities(mockDb, supplierId, [
     sourceFacilityIdNullCode,
@@ -1182,8 +1195,7 @@ void test("T111 REQUEST multi-source allocation supports 6A+4B split, prevents c
       Promise.resolve(stored.get(`${supId}:${userId}:${key}`) ?? null),
     findSupplyRequestForCreation: () => Promise.resolve(requestState),
     hasDeliveryForRequest: () => Promise.resolve(hasPrior),
-    lockSupplierForDeliveryNumber: () => Promise.resolve(),
-    findHighestCanonicalDeliverySequence: () => Promise.resolve(0n),
+    allocateDeliveryNo: () => Promise.resolve("FP-DE-00001"),
     lockSourceFacilities: () => Promise.resolve(),
     findSourceFacilitiesByIds: (_db, ids) =>
       Promise.resolve(
@@ -2069,13 +2081,11 @@ void test("US2 creates STANDALONE delivery for both supplier roles, links only e
         return Promise.resolve(null);
       },
       hasDeliveryForRequest: () => Promise.resolve(false),
-      lockSupplierForDeliveryNumber: (_db, supId) => {
-        lockCalls.push(`supplier:${supId}`);
-        return Promise.resolve();
-      },
-      findHighestCanonicalDeliverySequence: () => {
-        lockCalls.push("sequence");
-        return Promise.resolve(BigInt(createdPayloads.length));
+      allocateDeliveryNo: () => {
+        lockCalls.push("deliveryNo");
+        return Promise.resolve(
+          `FP-DE-${String(createdPayloads.length + 1).padStart(5, "0")}`,
+        );
       },
       lockSourceFacilities: (_db, _supId, ids) => {
         lockCalls.push(`sourceFacilities:${ids.join(",")}`);
@@ -2304,8 +2314,7 @@ void test("US2 creates STANDALONE delivery for both supplier roles, links only e
     assert.deepEqual(h.lockCalls, [
       `sourceFacilities:${sourceFacilityId},${sourceFacilityIdNullCode}`,
       `findSourceFacilities:${sourceFacilityId},${sourceFacilityIdNullCode}`,
-      `supplier:${supplierId}`,
-      "sequence",
+      "deliveryNo",
     ]);
   }
 
@@ -3276,8 +3285,7 @@ void test("US3 idempotent replay returns 200 without re-creating, checks live ac
     findSupplyRequestForCreation: () =>
       Promise.resolve(makeSupplyRequestRecord("ACCEPTED")),
     hasDeliveryForRequest: () => Promise.resolve(false),
-    lockSupplierForDeliveryNumber: () => Promise.resolve(),
-    findHighestCanonicalDeliverySequence: () => Promise.resolve(0n),
+    allocateDeliveryNo: () => Promise.resolve("FP-DE-00001"),
     lockSourceFacilities: () => Promise.resolve(),
     findSourceFacilitiesByIds: (_db, ids) =>
       Promise.resolve(
@@ -3610,8 +3618,7 @@ void test("US3 lists, filters legacy+standalone deliveries, returns detail and e
     connect: () => Promise.resolve(mockDb as never),
     findByCreationKey: (_db, supId, userId, key) =>
       Promise.resolve(persisted.get(`${supId}:${userId}:${key}`) ?? null),
-    lockSupplierForDeliveryNumber: () => Promise.resolve(),
-    findHighestCanonicalDeliverySequence: () => Promise.resolve(0n),
+    allocateDeliveryNo: () => Promise.resolve("FP-DE-00001"),
     lockSourceFacilities: () => Promise.resolve(),
     findSourceFacilitiesByIds: (_db, ids) =>
       Promise.resolve(
@@ -4160,8 +4167,8 @@ void test("US3 canonical v2 equivalence, field-level conflict matrix, legacy bas
     findSupplyRequestForCreation: () =>
       Promise.resolve(makeSupplyRequestRecord("ACCEPTED", true, 2)),
     hasDeliveryForRequest: () => Promise.resolve(false),
-    lockSupplierForDeliveryNumber: () => Promise.resolve(),
-    findHighestCanonicalDeliverySequence: () => Promise.resolve(seq),
+    allocateDeliveryNo: () =>
+      Promise.resolve(`FP-DE-${String(seq + 1n).padStart(5, "0")}`),
     lockSourceFacilities: () => Promise.resolve(),
     findSourceFacilitiesByIds: (_db, ids) =>
       Promise.resolve(

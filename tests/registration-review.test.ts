@@ -12,7 +12,7 @@ import {
 } from "../src/modules/auth/registration-review-email";
 
 const row = {
-  registrationNumber: 1n,
+  code: "FP-REG-00001",
   id: randomUUID(),
   applicantUserId: randomUUID(),
   requestType: "SCHOOL",
@@ -101,11 +101,23 @@ void test("submission email confirms pending status with the public registration
   assert.ok(!mail.html.includes("<đăng ký>"));
 });
 
-void test("registration numbering leaves the prior review hash unchanged and never serializes bigint", () => {
+void test("registration code leaves the prior review hash unchanged", () => {
   const before = reviewVersion(row);
-  assert.equal(reviewVersion({ ...row, registrationNumber: 1n }), before);
+  assert.equal(reviewVersion({ ...row, code: "FP-RG-58213" }), before);
   assert.equal(
-    reviewVersion({ ...row, registrationNumber: 9007199254740993n }),
+    reviewVersion({ ...row, code: "FP-REG-9007199254740993" }),
     before,
+  );
+});
+
+void test("registration emails show the stored new-format code", () => {
+  const mail = submissionEmail(
+    { ...row, code: "FP-RG-58213" },
+    { fullName: "Người nộp", email: "applicant@example.test" },
+  );
+  assert.match(mail.text, /FP-RG-58213/);
+  assert.match(
+    reviewEmail({ ...row, code: "FP-RG-58213" }).text,
+    /FP-RG-58213/,
   );
 });

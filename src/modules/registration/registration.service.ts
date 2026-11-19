@@ -1,4 +1,3 @@
-import { formatRegistrationID } from "../../utils/registration-id";
 import type { AuthPrincipal } from "../../types/auth";
 import { listScopes } from "../../utils/resource-access";
 import { readListPage, type ListPage } from "../../utils/list-query";
@@ -16,7 +15,7 @@ function toRegistrationListResponseDTO(
   return {
     items: page.items.map((row) => ({
       id: row.id,
-      registrationID: formatRegistrationID(row.registrationNumber),
+      registrationID: row.code,
       applicantUserId: row.applicantUserId,
       applicantUser: {
         id: row.applicantUser.id,

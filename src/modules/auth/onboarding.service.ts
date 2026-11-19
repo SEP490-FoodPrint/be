@@ -29,7 +29,7 @@ import {
   type Application,
   type ReviewRow,
 } from "./onboarding.repository";
-import { formatRegistrationID } from "../../utils/registration-id";
+import { allocateBusinessCode } from "../../utils/business-code";
 import {
   blockchainProofService,
   type BlockchainProofService,
@@ -66,7 +66,7 @@ function applicant(user: SessionUser): "SCHOOL" | "SUPPLIER" {
 function view(row: Application): OnboardingResponseDTO {
   return {
     id: row.id,
-    registrationID: formatRegistrationID(row.registrationNumber),
+    registrationID: row.code,
     applicantUserId: row.applicantUserId,
     requestType: row.requestType,
     status: row.status,
@@ -273,6 +273,10 @@ export function createOnboardingService(
             : await onboardingRepository.createSubmission(
                 tx,
                 user.id,
+                // Mã hồ sơ cấp một lần khi tạo; nộp lại/sửa hồ sơ giữ nguyên mã.
+                await allocateBusinessCode(tx, "RG", (codes) =>
+                  onboardingRepository.findExistingRegistrationCodes(tx, codes),
+                ),
                 submission,
               );
           if (!current || current.status === "REJECTED") {

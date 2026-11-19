@@ -1,5 +1,6 @@
 import dotenv from "dotenv";
 import path from "node:path";
+import { HttpError } from "../utils/http-error";
 
 dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 
@@ -84,6 +85,30 @@ export function readPublicTraceOrigin(
   throw new Error(
     "PUBLIC_TRACE_ORIGIN chi cho phep HTTPS hoac HTTP loopback trong moi truong dev",
   );
+}
+
+const BUSINESS_CODE_KEY_PATTERN = /^[0-9a-f]{64}$/i;
+export const BUSINESS_CODE_UNAVAILABLE_MESSAGE =
+  "Không thể cấp mã nghiệp vụ. Vui lòng thử lại sau.";
+
+/**
+ * Khóa Feistel cho mã nghiệp vụ FP-XX-NNNNN (32 byte, 64 ký tự hex).
+ * Đọc tại thời điểm cấp mã; thiếu hoặc sai định dạng thì từ chối cấp mã, không dùng khóa mặc định.
+ * Không bao giờ log hoặc trả giá trị khóa.
+ */
+export function readBusinessCodeKey(
+  source: NodeJS.ProcessEnv = process.env,
+): Buffer {
+  const raw = source.BUSINESS_CODE_KEY?.trim();
+  if (!raw || !BUSINESS_CODE_KEY_PATTERN.test(raw)) {
+    console.error(
+      raw
+        ? "BUSINESS_CODE_KEY sai định dạng: cần đúng 64 ký tự hex."
+        : "Thiếu BUSINESS_CODE_KEY: không thể cấp mã nghiệp vụ.",
+    );
+    throw new HttpError(503, BUSINESS_CODE_UNAVAILABLE_MESSAGE);
+  }
+  return Buffer.from(raw, "hex");
 }
 
 export function requireRedisUrl(): string {

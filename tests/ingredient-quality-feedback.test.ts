@@ -566,9 +566,9 @@ void test("T019 US1 supplier GET list returns exact allowlist with UUID + stored
   ];
 
   const { service } = createIngredientQualityFeedbackHarness({
-    nextComplaintCodeSequence: async () => {
+    allocateComplaintCode: async () => {
       allocatorCalls++;
-      return Promise.resolve(999n);
+      return Promise.resolve("FP-CP-58213");
     },
     listSupplier: async (scope, skip, take) => {
       repoCalls.push({ scope, skip, take });
@@ -696,9 +696,9 @@ void test("T019 US1 supplier GET list returns exact allowlist with UUID + stored
   // Invalid / missing stored complaintCode returns safe 503 without UUID fallback or allocator call.
   for (const badCode of ["", "FP-CP-00000", "invalid", "fp-cp-00001"]) {
     const { service: badService } = createIngredientQualityFeedbackHarness({
-      nextComplaintCodeSequence: async () => {
+      allocateComplaintCode: async () => {
         allocatorCalls++;
-        return Promise.resolve(1n);
+        return Promise.resolve("FP-CP-58213");
       },
       listSupplier: async () =>
         Promise.resolve([
@@ -778,9 +778,9 @@ void test("T025 US2 GET detail returns exact FeedbackDetail in one RepeatableRea
   const observedDetailScopes: unknown[] = [];
   const { service, txHarness } = createIngredientQualityFeedbackHarness(
     (tx) => ({
-      nextComplaintCodeSequence: async () => {
+      allocateComplaintCode: async () => {
         allocatorCalls++;
-        return Promise.resolve(1n);
+        return Promise.resolve("FP-CP-58213");
       },
       findDetail: async (clientTx, feedbackId, scope) => {
         tx.assertInTx(clientTx);
@@ -974,9 +974,9 @@ void test("T025 US2 GET detail returns exact FeedbackDetail in one RepeatableRea
     { ...baseRespondedRow, complaintCode: "FP-CP-00000" },
   ]) {
     const { service: corruptService } = createIngredientQualityFeedbackHarness({
-      nextComplaintCodeSequence: async () => {
+      allocateComplaintCode: async () => {
         allocatorCalls++;
-        return Promise.resolve(1n);
+        return Promise.resolve("FP-CP-58213");
       },
       findDetail: async () => Promise.resolve(corruptRow),
       findLotInDelivery: async () =>
@@ -1061,9 +1061,9 @@ void test("T031 US3 supplier POST response enforces AND permissions, Serializabl
 
     const repo: IngredientQualityFeedbackRepository = {
       ...createIngredientQualityFeedbackRepository(),
-      nextComplaintCodeSequence: async () => {
+      allocateComplaintCode: async () => {
         allocatorCalls++;
-        return Promise.resolve(1n);
+        return Promise.resolve("FP-CP-58213");
       },
       readActor: async (tx, userId) => {
         assert.equal(tx, currentTx);
@@ -1489,9 +1489,9 @@ void test("T031 US3 supplier POST response enforces AND permissions, Serializabl
     const retrySvc = createIngredientQualityFeedbackService(
       {
         ...createIngredientQualityFeedbackRepository(),
-        nextComplaintCodeSequence: async () => {
+        allocateComplaintCode: async () => {
           allocatorCalls++;
-          return Promise.resolve(1n);
+          return Promise.resolve("FP-CP-58213");
         },
         findResponseMetadata: async () =>
           Promise.resolve({

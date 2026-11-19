@@ -30,10 +30,6 @@ import { createIngredientQualityFeedbackRepository } from "../src/modules/ingred
 import { createIngredientQualityFeedbackService } from "../src/modules/ingredient-quality-feedback/ingredient-quality-feedback.service";
 import { loadPrincipal } from "../src/utils/authorization";
 import { HttpError } from "../src/utils/http-error";
-import {
-  formatComplaintCode,
-  parseCanonicalComplaintCode,
-} from "../src/utils/complaint-code";
 
 function record(value: unknown): Record<string, unknown> {
   assert(value && typeof value === "object" && !Array.isArray(value));
@@ -2182,8 +2178,7 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
     updatedAt?: Date;
   }) {
     return db.$transaction(async (tx) => {
-      const sequence = await feedbackRepoFixture.nextComplaintCodeSequence(tx);
-      const complaintCode = formatComplaintCode(sequence);
+      const complaintCode = await feedbackRepoFixture.allocateComplaintCode(tx);
       return tx.ingredientQualityFeedback.create({
         data: {
           ...(input.id ? { id: input.id } : {}),
@@ -2303,21 +2298,21 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
       ]);
       assert.equal(new Set(created.map((c) => c.id)).size, 2);
       assert.equal(new Set(created.map((c) => c.complaintCode)).size, 2);
-      const seqs = created.map((c) => {
-        const parsed = parseCanonicalComplaintCode(c.complaintCode);
-        assert(parsed !== null && parsed > 0n);
-        return parsed;
-      });
+      for (const c of created) {
+        assert.match(c.complaintCode, /^FP-CP-[0-9]{5}$/);
+        assert.notEqual(c.complaintCode, "FP-CP-00000");
+      }
 
-      // Rolled-back transaction must not persist the complaint row, while a sequence gap is permitted.
+      // Rolled-back transaction must not persist the complaint row; the counter rolls back with it.
       const rolledBackId = randomUUID();
+      let rolledBackCode = "";
       await assert.rejects(
         db.$transaction(async (tx) => {
-          const seq = await feedbackRepoFixture.nextComplaintCodeSequence(tx);
+          rolledBackCode = await feedbackRepoFixture.allocateComplaintCode(tx);
           await tx.ingredientQualityFeedback.create({
             data: {
               id: rolledBackId,
-              complaintCode: formatComplaintCode(seq),
+              complaintCode: rolledBackCode,
               deliveryId: del1.id,
               submittedByUserId: schActor1.id,
               title: "Rolled back complaint",
@@ -2341,8 +2336,11 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
         title: "After rollback",
         description: "Consumes next global sequence leaving gap",
       });
-      const afterSeq = parseCanonicalComplaintCode(afterRollback.complaintCode);
-      assert(afterSeq !== null && afterSeq > seqs[0] && afterSeq > seqs[1]);
+      // Bộ đếm rollback cùng transaction nên mã của lần thất bại được cấp lại, không trùng mã đã có.
+      assert.equal(afterRollback.complaintCode, rolledBackCode);
+      assert(
+        !created.some((c) => c.complaintCode === afterRollback.complaintCode),
+      );
       const reloaded = await db.ingredientQualityFeedback.findUniqueOrThrow({
         where: { id: afterRollback.id },
       });
@@ -2623,8 +2621,8 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
       const supBCookie = await login(supAdminUserB.email);
 
       const seqBefore = await db.$queryRaw<
-        { last_value: bigint; is_called: boolean }[]
-      >`SELECT last_value, is_called FROM foodprint.ingredient_quality_feedback_complaint_code_seq`;
+        { code_type: string; last_sequence: number }[]
+      >`SELECT code_type, last_sequence FROM foodprint.business_code_counters WHERE code_type = 'CP'`;
 
       for (const cookie of [supACookie, supAStaffCookie]) {
         const collected: Record<string, unknown>[] = [];
@@ -2695,8 +2693,8 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
       });
 
       const seqAfter = await db.$queryRaw<
-        { last_value: bigint; is_called: boolean }[]
-      >`SELECT last_value, is_called FROM foodprint.ingredient_quality_feedback_complaint_code_seq`;
+        { code_type: string; last_sequence: number }[]
+      >`SELECT code_type, last_sequence FROM foodprint.business_code_counters WHERE code_type = 'CP'`;
       assert.deepEqual(seqAfter, seqBefore);
     },
   );
@@ -2944,8 +2942,8 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
       const sch2Cookie = await login(sch2Kitchen.email);
 
       const beforeSeq = await db.$queryRaw<
-        { last_value: bigint; is_called: boolean }[]
-      >`SELECT last_value, is_called FROM foodprint.ingredient_quality_feedback_complaint_code_seq`;
+        { code_type: string; last_sequence: number }[]
+      >`SELECT code_type, last_sequence FROM foodprint.business_code_counters WHERE code_type = 'CP'`;
       const beforeRow = await db.ingredientQualityFeedback.findUniqueOrThrow({
         where: { id: respondedFeedback.id },
       });
@@ -3022,8 +3020,8 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
       );
       assert.deepEqual(
         await db.$queryRaw<
-          { last_value: bigint; is_called: boolean }[]
-        >`SELECT last_value, is_called FROM foodprint.ingredient_quality_feedback_complaint_code_seq`,
+          { code_type: string; last_sequence: number }[]
+        >`SELECT code_type, last_sequence FROM foodprint.business_code_counters WHERE code_type = 'CP'`,
         beforeSeq,
       );
     },
@@ -3255,8 +3253,8 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
           where: { id: supStaff1.id },
         }),
         seq: await db.$queryRaw<
-          { last_value: bigint; is_called: boolean }[]
-        >`SELECT last_value, is_called FROM foodprint.ingredient_quality_feedback_complaint_code_seq`,
+          { code_type: string; last_sequence: number }[]
+        >`SELECT code_type, last_sequence FROM foodprint.business_code_counters WHERE code_type = 'CP'`,
       });
       const before = await snapshotExternal();
 
