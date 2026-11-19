@@ -74,6 +74,18 @@ export function createOrganizationRouter(
     controller.updateMealTimes,
   );
   router.get(
+    "/me/delivery-inspection-roles",
+    authHandler,
+    requirePermission("school_delivery_inspection.manage"),
+    controller.getDeliveryInspectionRoles,
+  );
+  router.put(
+    "/me/delivery-inspection-roles",
+    authHandler,
+    requirePermission("school_delivery_inspection.manage"),
+    controller.updateDeliveryInspectionRoles,
+  );
+  router.get(
     "/summary",
     authHandler,
     requireResource("organization"),

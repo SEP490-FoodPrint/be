@@ -2,6 +2,7 @@ import type { z } from "zod";
 import type {
   cookingModeBodySchema,
   mealTimesBodySchema,
+  deliveryInspectionRolesBodySchema,
   organizationSummaryQuerySchema,
   organizationDetailParamsSchema,
   organizationListQuerySchema,
@@ -12,6 +13,9 @@ import type {
 
 export type CookingModeRequestDTO = z.infer<typeof cookingModeBodySchema>;
 export type MealTimesRequestDTO = z.infer<typeof mealTimesBodySchema>;
+export type DeliveryInspectionRolesRequestDTO = z.infer<
+  typeof deliveryInspectionRolesBodySchema
+>;
 
 export type OrganizationListRequestDTO = z.infer<
   typeof organizationListQuerySchema

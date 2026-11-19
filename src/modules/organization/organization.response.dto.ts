@@ -9,6 +9,20 @@ export interface MealTimesResponseDTO {
   afternoonMealTime: string | null;
 }
 
+export interface DeliveryInspectionRoleConfigDTO {
+  roleCode: string;
+  roleName: string;
+  tier: "PRIMARY" | "REQUIRED" | "OPTIONAL";
+  tierLabel: string;
+  editable: boolean;
+}
+
+export interface DeliveryInspectionRolesResponseDTO {
+  configured: boolean;
+  roles: DeliveryInspectionRoleConfigDTO[];
+  updatedAt: string | null;
+}
+
 export interface OrganizationListItemResponseDTO {
   id: string;
   name: string;

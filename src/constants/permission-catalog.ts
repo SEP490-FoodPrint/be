@@ -105,6 +105,14 @@ export const INITIAL_PERMISSIONS = [
     description: "Xem và cấu hình giờ phục vụ bữa trưa, bữa phụ của trường.",
   },
   {
+    code: "school_delivery_inspection.manage",
+    name: "Cấu hình nhóm duyệt nguyên liệu",
+    module: "school_delivery_inspection",
+    action: "manage",
+    description:
+      "Ban Giám Hiệu phân nhóm duyệt chính / bắt buộc / tùy chọn cho các bộ phận kiểm tra nguyên liệu đầu vào của trường.",
+  },
+  {
     code: "school_academic_year.view",
     name: "Xem cấu hình niên khóa",
     module: "school_academic_year",
@@ -359,7 +367,7 @@ export const INITIAL_PERMISSIONS = [
     module: "delivery",
     action: "inspect",
     description:
-      "Ghi quyết định bất biến của bộ phận trên từng Delivery; chỉ tiếp nhận khi đủ bốn bộ phận đồng ý.",
+      "Ghi quyết định bất biến của bộ phận trên từng Delivery; tiếp nhận khi người duyệt chính và mọi bộ phận bắt buộc của trường đồng ý.",
   },
   {
     code: "delivery.receive",
@@ -664,6 +672,7 @@ export const INITIAL_ROLE_PERMISSIONS = [
   ["SCHOOL_MANAGEMENT_BOARD", "class.manage"],
   ["SCHOOL_MANAGEMENT_BOARD", "school_cooking_mode.manage"],
   ["SCHOOL_MANAGEMENT_BOARD", "school_meal_times.manage"],
+  ["SCHOOL_MANAGEMENT_BOARD", "school_delivery_inspection.manage"],
   ["SCHOOL_MANAGEMENT_BOARD", "school_academic_year.view"],
   ["SCHOOL_MANAGEMENT_BOARD", "school_academic_year.manage"],
   ["SCHOOL_KITCHEN_STAFF", "dashboard.view"],
