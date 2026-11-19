@@ -10,6 +10,7 @@ export interface DeliveryInspectionDTO {
   schoolId: string;
   sourceType: "REQUEST" | "STANDALONE";
   traceabilityVersion: number | null;
+  isDryOnly?: boolean;
   supplyRequestId: string | null;
   requestNo: string | null;
   supplierName: string;

@@ -360,6 +360,11 @@ function inspectionWhere(
                   receivedAt: null,
                   createdAt: range,
                 },
+                {
+                  SupplyRequest: {
+                    requestedDeliveryDate: range,
+                  },
+                },
               ],
             },
           ]

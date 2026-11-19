@@ -12,3 +12,4 @@
 - [x] T010 Bảo toàn projection 8 trường trong `listSelect` và mapper `getAll` tại `src/modules/supply-order/` để giữ tương thích ngược cho danh sách đơn legacy.
 - [x] T011 Thêm phương thức `findDetailForSchool` và mở quyền xem chi tiết đơn hàng cho vai trò School trong `src/modules/supply-order/supply-order.service.ts`.
 - [x] T012 Bổ sung `gradeId` và `gradeName` vào DTO và mapper `summary` tại `src/modules/meal-attendance/` phục vụ phân bổ suất ăn theo khối lớp.
+- [x] T013 Hỗ trợ duyệt đợt giao đồ khô cho Ban quản lý nguyên liệu (PRIMARY) và cấu hình phân nhóm kiểm tra tại `src/modules/delivery/`.
