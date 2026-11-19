@@ -490,7 +490,18 @@ function decisionFixture(
     school: { findUnique: () => Promise.resolve({ status: "ACTIVE" }) },
     $queryRaw: () => Promise.resolve([]),
     ingredientEntry: { findMany: () => Promise.resolve([]) },
+    schoolDeliveryInspectionRole: { findMany: () => Promise.resolve([]) },
+    deliveryInspectionRole: { createMany: () => Promise.resolve({ count: 4 }) },
+    blockchainProof: {
+      count: () => Promise.resolve(0),
+      findFirst: () => Promise.resolve(null),
+      create: () => Promise.resolve({ id: uid(99) }),
+    },
     delivery: {
+      findUnique: ({ where }: { where: { id: string } }) => {
+        const found = data.deliveries.find((d) => d.id === where.id);
+        return Promise.resolve(found ? snapshot(found) : null);
+      },
       findFirst: ({
         where,
         select,
@@ -1152,7 +1163,13 @@ void test("standalone deliveries list, inspect, attach IngredientEntry on final 
       school: {
         findUnique: () => Promise.resolve({ status: "ACTIVE" }),
       },
+      blockchainProof: {
+        count: () => Promise.resolve(0),
+        findFirst: () => Promise.resolve(null),
+        create: () => Promise.resolve({ id: uid(99) }),
+      },
       delivery: {
+        findUnique: () => Promise.resolve(null),
         findFirst: ({
           where,
           select,
@@ -2087,7 +2104,16 @@ function v1InspectionFixture() {
         throw new Error("DeliveryItem not found");
       },
     },
+    blockchainProof: {
+      count: () => Promise.resolve(0),
+      findFirst: () => Promise.resolve(null),
+      create: () => Promise.resolve({ id: uid(99, 1) }),
+    },
     delivery: {
+      findUnique: ({ where }: { where: { id: string } }) => {
+        const found = state.deliveries.find((d) => d.id === where.id);
+        return Promise.resolve(found ? buildSnapshot(found) : null);
+      },
       findFirst: ({
         where,
         select,
@@ -2435,7 +2461,7 @@ void test("v1 arrival validation, RBAC scope, replay, and pre-arrival protection
   assert.equal((await postArrival()).status, 404);
 
   // Pre-arrival IN_TRANSIT cannot be inspected
-  currentPrincipal = f.actors[0];
+  currentPrincipal = f.actors[1];
   const inspectionForm = new FormData();
   inspectionForm.set("decision", "APPROVE");
   inspectionForm.set(
@@ -2535,18 +2561,18 @@ void test("v1 arrival validation, RBAC scope, replay, and pre-arrival protection
   // Live permission revocation inside tx rejects before arrival mutation
   const revokedDelivery = f.makeDelivery(20);
   f.state.deliveries.push(revokedDelivery);
-  f.identities[0].Role.rolePermissions =
-    f.identities[0].Role.rolePermissions.filter(
+  f.identities[1].Role.rolePermissions =
+    f.identities[1].Role.rolePermissions.filter(
       (p) => p.permission.code !== "delivery.inspect",
     );
   await assert.rejects(
-    () => f.service.arrive(revokedDelivery.id, {}, {}, f.actors[0]),
+    () => f.service.arrive(revokedDelivery.id, {}, {}, f.actors[1]),
     {
       statusCode: 403,
     },
   );
   assert.equal(revokedDelivery.status, "IN_TRANSIT");
-  f.identities[0].Role.rolePermissions.push({
+  f.identities[1].Role.rolePermissions.push({
     permission: { code: "delivery.inspect", isActive: true },
   });
 
@@ -2564,7 +2590,7 @@ void test("v1 arrival validation, RBAC scope, replay, and pre-arrival protection
   f.state.deliveries.push(legacyInTransit, legacyArrived);
   for (const legacy of [legacyInTransit, legacyArrived]) {
     await assert.rejects(
-      () => f.service.arrive(legacy.id, {}, {}, f.actors[0]),
+      () => f.service.arrive(legacy.id, {}, {}, f.actors[1]),
       {
         statusCode: 409,
       },
@@ -2578,13 +2604,13 @@ void test("v1 arrival validation, RBAC scope, replay, and pre-arrival protection
   });
   f.state.deliveries.push(cancelledDelivery, cancelledMealDelivery);
   await assert.rejects(
-    () => f.service.arrive(cancelledDelivery.id, {}, {}, f.actors[0]),
+    () => f.service.arrive(cancelledDelivery.id, {}, {}, f.actors[1]),
     {
       statusCode: 409,
     },
   );
   await assert.rejects(
-    () => f.service.arrive(cancelledMealDelivery.id, {}, {}, f.actors[0]),
+    () => f.service.arrive(cancelledMealDelivery.id, {}, {}, f.actors[1]),
     { statusCode: 409 },
   );
   const cancelledParentTarget = f.makeDelivery(25, {
@@ -2594,7 +2620,7 @@ void test("v1 arrival validation, RBAC scope, replay, and pre-arrival protection
   f.state.deliveries.push(cancelledParentTarget);
   f.state.requestStatus = "CANCELLED";
   await assert.rejects(
-    () => f.service.arrive(cancelledParentTarget.id, {}, {}, f.actors[0]),
+    () => f.service.arrive(cancelledParentTarget.id, {}, {}, f.actors[1]),
     { statusCode: 409 },
   );
 });
@@ -2604,7 +2630,7 @@ void test("v1 receipt requires 4 signatures, enforces v1 lot source match withou
   const f = v1InspectionFixture();
   const d1 = f.state.deliveries[0];
   f.state.facilities[f.ids.sourceAId].status = "INACTIVE";
-  await f.service.arrive(d1.id, {}, {}, f.actors[0]);
+  await f.service.arrive(d1.id, {}, {}, f.actors[1]);
 
   for (const actor of f.actors.slice(0, 3)) {
     const step = await f.service.decide(d1.id, approve(), actor);
@@ -2644,7 +2670,7 @@ void test("v1 receipt requires 4 signatures, enforces v1 lot source match withou
       scenario === "missing-entry" || scenario === "inactive-entry"
         ? sub.state.deliveries[4] // standalone delivery
         : sub.state.deliveries[0];
-    await sub.service.arrive(target.id, {}, {}, sub.actors[0]);
+    await sub.service.arrive(target.id, {}, {}, sub.actors[1]);
     for (const actor of sub.actors.slice(0, 3)) {
       await sub.service.decide(target.id, approve(), actor);
     }
@@ -2738,7 +2764,7 @@ void test("v1 reject immutability, photoHash replay, request cap3 preservation, 
 
   // Arrive all deliveries first
   for (const delivery of f.state.deliveries) {
-    await f.service.arrive(delivery.id, {}, {}, f.actors[0]);
+    await f.service.arrive(delivery.id, {}, {}, f.actors[1]);
   }
 
   // Receive reqD4 first so later cap3 cancellation must keep RECEIVED delivery & its receipt intact
@@ -2842,7 +2868,7 @@ void test("PREPARING blocks arrival/inspect 409 and dispatched v2 6+4 REQUEST + 
   });
   f.state.deliveries.push(preparingOrder);
   await assert.rejects(
-    () => f.service.arrive(preparingOrder.id, {}, {}, f.actors[0]),
+    () => f.service.arrive(preparingOrder.id, {}, {}, f.actors[1]),
     { statusCode: 409 },
   );
   await assert.rejects(
@@ -2912,7 +2938,7 @@ void test("PREPARING blocks arrival/inspect 409 and dispatched v2 6+4 REQUEST + 
   ];
   f.state.deliveries.push(v2Split);
 
-  const arrivedDto = await f.service.arrive(v2Split.id, {}, {}, f.actors[0]);
+  const arrivedDto = await f.service.arrive(v2Split.id, {}, {}, f.actors[1]);
   assert.equal(arrivedDto.status, "ARRIVED");
   assert.equal("workflowVersion" in arrivedDto, false);
   // Deactivate facility B after creation/dispatch -> receipt MUST still succeed cleanly
@@ -3152,7 +3178,7 @@ void test("v2 grouped/identity/unit/budget violations rollback cleanly while leg
       delivery.id,
       {},
       {},
-      sub.actors[0],
+      sub.actors[1],
     );
     if (scenario !== "final-write-error-rollback") {
       // Lỗi dữ liệu được báo ngay khi xe đến và chặn từ chữ ký "Đạt" đầu tiên.
@@ -3236,7 +3262,7 @@ void test("v2 grouped/identity/unit/budget violations rollback cleanly while leg
   currentLegacy.items[0].lots[0].quantity = "3000.000";
   currentLegacy.items[0].lots[0].unit = "g";
   legacyFix.state.deliveries.push(prevLegacy, currentLegacy);
-  await legacyFix.service.arrive(currentLegacy.id, {}, {}, legacyFix.actors[0]);
+  await legacyFix.service.arrive(currentLegacy.id, {}, {}, legacyFix.actors[1]);
   for (const actor of legacyFix.actors) {
     await legacyFix.service.decide(currentLegacy.id, approve(), actor);
   }
@@ -3266,12 +3292,12 @@ void test("v2 grouped/identity/unit/budget violations rollback cleanly while leg
     vehiclePlate: "29C-55555",
   });
   capFix.state.deliveries.push(receivedKeep, preparingCancel, transitCancel);
-  await capFix.service.arrive(receivedKeep.id, {}, {}, capFix.actors[0]);
+  await capFix.service.arrive(receivedKeep.id, {}, {}, capFix.actors[1]);
   for (const actor of capFix.actors) {
     await capFix.service.decide(receivedKeep.id, approve(), actor);
   }
   for (const d of [d1, d2, d3]) {
-    await capFix.service.arrive(d.id, {}, {}, capFix.actors[0]);
+    await capFix.service.arrive(d.id, {}, {}, capFix.actors[1]);
   }
   await capFix.service.decide(d1.id, reject(), capFix.actors[0]);
   await capFix.service.decide(d2.id, reject(), capFix.actors[1]);

@@ -296,6 +296,7 @@ model Delivery {
   createdByUser             User?                       @relation("deliveries_created_by_user_id__users", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   receivedByUser            User?                       @relation("deliveries_received_by_user_id__users", fields: [receivedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   deliveryApprovals         DeliveryApproval[]          @relation("delivery_approvals_delivery_id__deliveries")
+  inspectionRoles           DeliveryInspectionRole[]    @relation("delivery_inspection_roles_delivery_id__deliveries")
   deliveryItems             DeliveryItem[]              @relation("delivery_items_delivery_id__deliveries")
   ingredientQualityFeedback IngredientQualityFeedback[] @relation("ingredient_quality_feedback_delivery_id__deliveries")
   blockchainProofs          BlockchainProof[]           @relation("blockchain_proofs_delivery_id__deliveries")
@@ -331,6 +332,40 @@ model DeliveryApproval {
   @@unique([deliveryId, roleId])
   @@index([deliveryId], map: "idx_delivery_approvals_delivery")
   @@map("delivery_approvals")
+  @@schema("foodprint")
+}
+
+/// Cấu hình nhóm duyệt theo trường do Ban Giám Hiệu thiết lập. Không có dòng nào => dùng mặc định D1.
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model SchoolDeliveryInspectionRole {
+  schoolId        String                 @map("school_id") @db.Uuid
+  roleId          String                 @map("role_id") @db.Uuid
+  tier            DeliveryInspectionTier
+  updatedByUserId String                 @map("updated_by_user_id") @db.Uuid
+  createdAt       DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime               @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  School          School                 @relation("school_delivery_inspection_roles_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  Role            Role                   @relation("school_delivery_inspection_roles_role_id__roles", fields: [roleId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  updatedByUser   User                   @relation("school_delivery_inspection_roles_updated_by__users", fields: [updatedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([schoolId, roleId])
+  @@unique([schoolId], map: "uq_school_delivery_inspection_primary", where: raw("(tier = 'PRIMARY'::delivery_inspection_tier)"))
+  @@map("school_delivery_inspection_roles")
+  @@schema("foodprint")
+}
+
+/// Snapshot nhóm duyệt của từng đợt giao, chép từ cấu hình trường tại thời điểm xác nhận xe đến. Bất biến.
+model DeliveryInspectionRole {
+  deliveryId String                 @map("delivery_id") @db.Uuid
+  roleId     String                 @map("role_id") @db.Uuid
+  tier       DeliveryInspectionTier
+  createdAt  DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  Delivery   Delivery               @relation("delivery_inspection_roles_delivery_id__deliveries", fields: [deliveryId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  Role       Role                   @relation("delivery_inspection_roles_role_id__roles", fields: [roleId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([deliveryId, roleId])
+  @@unique([deliveryId], map: "uq_delivery_inspection_primary", where: raw("(tier = 'PRIMARY'::delivery_inspection_tier)"))
+  @@map("delivery_inspection_roles")
   @@schema("foodprint")
 }
 
@@ -970,8 +1005,10 @@ model Role {
   description       String?            @db.Text
   createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
   users             User[]             @relation("users_role_id__roles")
-  deliveryApprovals DeliveryApproval[] @relation("delivery_approvals_role_id__roles")
-  rolePermissions   RolePermission[]   @relation("role_permissions_role_id__roles")
+  deliveryApprovals             DeliveryApproval[]             @relation("delivery_approvals_role_id__roles")
+  schoolDeliveryInspectionRoles SchoolDeliveryInspectionRole[] @relation("school_delivery_inspection_roles_role_id__roles")
+  deliveryInspectionRoles       DeliveryInspectionRole[]       @relation("delivery_inspection_roles_role_id__roles")
+  rolePermissions               RolePermission[]               @relation("role_permissions_role_id__roles")
 
   @@unique([code])
   @@unique([id, code], map: "uq_roles_id_code")
@@ -1074,6 +1111,7 @@ model School {
   ingredientEntries           IngredientEntry[]            @relation("ingredient_entries_school_id__schools")
   supplyRequests              SupplyRequest[]              @relation("supply_requests_school_id__schools")
   deliveries                  Delivery[]                   @relation("deliveries_school_id__schools")
+  deliveryInspectionRoles     SchoolDeliveryInspectionRole[] @relation("school_delivery_inspection_roles_school_id__schools")
   weeklyMenus                 WeeklyMenu[]                 @relation("weekly_menus_school_id__schools")
   dishes                      Dish[]                       @relation("dishes_school_id__schools")
   dishCategories              SchoolDishCategory[]
@@ -1334,7 +1372,8 @@ model User {
   homeroomAssignmentsAssigned                  ClassHomeroomAssignment[]    @relation("class_homeroom_assignments_assigned_by")
   homeroomAssignmentsEnded                     ClassHomeroomAssignment[]    @relation("class_homeroom_assignments_ended_by")
 
-  receivedFoodSafetyReports FoodSafetyReportForwarding[] @relation("food_safety_forwarding_recipient_user")
+  receivedFoodSafetyReports                    FoodSafetyReportForwarding[] @relation("food_safety_forwarding_recipient_user")
+  updatedSchoolDeliveryInspectionRoles         SchoolDeliveryInspectionRole[] @relation("school_delivery_inspection_roles_updated_by__users")
 
   @@unique([username], map: "uq_users_non_staff_username", where: raw("((role_code)::text <> 'INGREDIENT_SUPPLIER_STAFF'::text)"))
   @@unique([supplierId, username], map: "uq_users_supplier_username", where: raw("supplier_id IS NOT NULL"))
@@ -1602,6 +1641,16 @@ enum DeliveryCreationMode {
   STANDALONE
 
   @@map("delivery_creation_mode")
+  @@schema("foodprint")
+}
+
+/// Nhóm duyệt của một bộ phận khi kiểm tra nguyên liệu đầu vào.
+enum DeliveryInspectionTier {
+  PRIMARY
+  REQUIRED
+  OPTIONAL
+
+  @@map("delivery_inspection_tier")
   @@schema("foodprint")
 }
 
