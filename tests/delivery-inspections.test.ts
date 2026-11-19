@@ -214,43 +214,43 @@ void test("xe chỉ có đồ khô: bộ phận khác không xem được, Ban q
   );
 });
 
-void test("xe của NCC đồ khô (nhiều nguyên liệu khô hơn tươi) chỉ Ban quản lý nguyên liệu thấy, kể cả khi chở hàng tươi", async () => {
-  const drySupplier = "33333333-3333-4333-8333-333333333333";
-  const freshRow = {
+void test("xe có ít nhất 1 đồ tươi là xe đồ tươi, kể cả NCC có nhiều nguyên liệu khô trong danh mục", async () => {
+  const supplierId = "33333333-3333-4333-8333-333333333333";
+  const item = (handlingType: string, name: string) => ({
+    id,
+    ingredientId: id,
+    ingredientEntryId: id,
+    actualQuantity: "5",
+    unit: "kg",
+    Ingredient: { name, ingredientCategory: null },
+    IngredientEntry: {
+      id,
+      schoolId: testStaff.schoolId,
+      ingredientId: id,
+      status: "ACTIVE",
+      handlingType,
+    },
+    SupplyRequestItem: null,
+    ingredientLots: [],
+  });
+  const mixedRow = {
     ...row(id),
-    supplierId: drySupplier,
+    supplierId,
     deliveryItems: [
-      {
-        id,
-        ingredientId: id,
-        ingredientEntryId: id,
-        actualQuantity: "5",
-        unit: "hộp",
-        Ingredient: { name: "Sữa chua", ingredientCategory: null },
-        IngredientEntry: {
-          id,
-          schoolId: testStaff.schoolId,
-          ingredientId: id,
-          status: "ACTIVE",
-          handlingType: "DIRECT_USE",
-        },
-        SupplyRequestItem: null,
-        ingredientLots: [],
-      },
+      item("DRY_STOCK", "Gạo"),
+      item("DRY_STOCK", "Muối"),
+      item("DIRECT_USE", "Sữa chua"),
     ],
   };
-  // Danh mục trường: NCC này có 2 nguyên liệu khô, 1 tươi -> NCC đồ khô.
+  // Danh mục trường: NCC này có nhiều nguyên liệu khô hơn tươi; không còn ảnh hưởng phân loại xe.
   const entries = ["DRY_STOCK", "DRY_STOCK", "DIRECT_USE"].map(
-    (handlingType) => ({
-      handlingType,
-      Ingredient: { supplierId: drySupplier },
-    }),
+    (handlingType) => ({ handlingType, Ingredient: { supplierId } }),
   );
   let listWhere: unknown;
   const service = createDeliveryInspectionService(() =>
     Promise.resolve({
       delivery: {
-        findFirst: () => Promise.resolve(freshRow),
+        findFirst: () => Promise.resolve(mixedRow),
         findMany: ({ where }: { where: unknown }) => {
           listWhere = where;
           return Promise.resolve([]);
@@ -266,18 +266,13 @@ void test("xe của NCC đồ khô (nhiều nguyên liệu khô hơn tươi) ch�
     role: "SCHOOL_KITCHEN_STAFF",
     permissions: ["delivery.view"],
   };
-  await assert.rejects(() => service.detail(id, kitchen), { statusCode: 404 });
-  await service.list(validateDeliveryInspectionQuery({}), kitchen);
-  assert(JSON.stringify(listWhere).includes(drySupplier));
-  const seen = await service.detail(id, {
-    ...testStaff,
-    role: "INGREDIENT_MANAGEMENT_DEPARTMENT",
-    permissions: ["delivery.view"],
-  });
+  const seen = await service.detail(id, kitchen);
   assert.deepEqual(
-    seen.requiredRoles.map((r) => r.code),
-    ["INGREDIENT_MANAGEMENT_DEPARTMENT"],
+    seen.requiredRoles.map((r) => r.code).sort(),
+    [...deliveryInspectionRoles].sort(),
   );
+  await service.list(validateDeliveryInspectionQuery({}), kitchen);
+  assert(!JSON.stringify(listWhere).includes(supplierId));
 });
 
 void test("inspection rejects foreign organizations, wrong roles and missing permissions before database access", async () => {

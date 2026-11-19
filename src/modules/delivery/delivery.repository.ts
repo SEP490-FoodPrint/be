@@ -258,7 +258,10 @@ const detailSelect = {
   },
 } as const satisfies Prisma.DeliverySelect;
 
-/** Xe chỉ gồm đồ khô (mọi dòng hàng là DRY_STOCK), cùng tiêu chí với requiredInspectionRoles. */
+/**
+ * Xe đồ khô: mọi dòng hàng là DRY_STOCK. Chỉ cần 1 dòng đồ tươi là xe đồ tươi.
+ * Cùng tiêu chí với requiredInspectionRoles; không suy luận theo nhà cung cấp.
+ */
 export const dryOnlyDeliveryWhere = {
   deliveryItems: {
     some: {},
@@ -274,55 +277,18 @@ export const dryOnlyDeliveryWhere = {
   },
 } satisfies Prisma.DeliveryWhereInput;
 
-/**
- * NCC đồ khô của trường: NCC có số nguyên liệu DRY_STOCK nhiều hơn DIRECT_USE trong danh mục
- * (ingredient entries ACTIVE) của trường. Mọi xe của NCC này chỉ Ban quản lý nguyên liệu kiểm tra.
- */
-async function drySupplierIds(tx: Tx, schoolId: string): Promise<string[]> {
-  const entries = await tx.ingredientEntry.findMany({
-    where: { schoolId, status: "ACTIVE" },
-    select: {
-      handlingType: true,
-      Ingredient: { select: { supplierId: true } },
-    },
-  });
-  const balance = new Map<string, number>();
-  for (const entry of entries) {
-    const id = entry.Ingredient.supplierId;
-    balance.set(
-      id,
-      (balance.get(id) ?? 0) + (entry.handlingType === "DRY_STOCK" ? 1 : -1),
-    );
-  }
-  return [...balance].filter(([, n]) => n > 0).map(([id]) => id);
-}
-
-/** Xe chỉ Ban quản lý nguyên liệu được thấy: xe của NCC đồ khô hoặc xe chỉ gồm đồ khô. */
-const dryDeliveryWhere = (
-  drySuppliers: string[],
-): Prisma.DeliveryWhereInput => ({
-  OR: [dryOnlyDeliveryWhere, { supplierId: { in: drySuppliers } }],
-});
-
-const markDrySupplier = <T extends { supplierId: string }>(
-  row: T,
-  drySuppliers: string[],
-) => ({ ...row, supplierIsDry: drySuppliers.includes(row.supplierId) });
-
 function inspectionWhere(
   schoolId: string,
   query: DeliveryInspectionQueryFilter,
   range?: { gte: Date; lt: Date },
-  hiddenDrySuppliers?: string[],
+  hideDryOnly = false,
 ): Prisma.DeliveryWhereInput {
   return {
     schoolId,
     ...(query.status ? { status: query.status } : {}),
     AND: [
       // Xe đồ khô chỉ hiện cho Ban quản lý nguyên liệu.
-      ...(hiddenDrySuppliers
-        ? [{ NOT: dryDeliveryWhere(hiddenDrySuppliers) }]
-        : []),
+      ...(hideDryOnly ? [{ NOT: dryOnlyDeliveryWhere }] : []),
       ...(query.search
         ? [
             {
@@ -629,20 +595,13 @@ export const deliveryInspectionRepository = {
     range?: { gte: Date; lt: Date },
     hideDryOnly = false,
   ) {
-    const dry = await drySupplierIds(tx, schoolId);
-    const rows = await tx.delivery.findMany({
-      where: inspectionWhere(
-        schoolId,
-        query,
-        range,
-        hideDryOnly ? dry : undefined,
-      ),
+    return tx.delivery.findMany({
+      where: inspectionWhere(schoolId, query, range, hideDryOnly),
       select: summarySelect,
       orderBy: [{ createdAt: "desc" }, { id: "asc" }],
       skip: (query.page - 1) * query.limit,
       take: query.limit,
     });
-    return rows.map((row) => markDrySupplier(row, dry));
   },
   async counts(
     tx: Tx,
@@ -651,19 +610,17 @@ export const deliveryInspectionRepository = {
     range?: { gte: Date; lt: Date },
     hideDryOnly = false,
   ) {
-    const dry = hideDryOnly ? await drySupplierIds(tx, schoolId) : undefined;
     return tx.delivery.groupBy({
       by: ["status"],
-      where: inspectionWhere(schoolId, query, range, dry),
+      where: inspectionWhere(schoolId, query, range, hideDryOnly),
       _count: { _all: true },
     });
   },
   async detail(tx: Tx, schoolId: string, id: string) {
-    const row = await tx.delivery.findFirst({
+    return tx.delivery.findFirst({
       where: { id, schoolId },
       select: detailSelect,
     });
-    return row && markDrySupplier(row, await drySupplierIds(tx, schoolId));
   },
   /** Tìm đợt giao của trường theo mã QR dòng hàng, mã QR lô hoặc mã đợt giao. */
   async findByScanCode(
@@ -672,11 +629,10 @@ export const deliveryInspectionRepository = {
     code: string,
     hideDryOnly = false,
   ) {
-    const dry = hideDryOnly ? await drySupplierIds(tx, schoolId) : undefined;
     return tx.delivery.findFirst({
       where: {
         schoolId,
-        ...(dry ? { NOT: dryDeliveryWhere(dry) } : {}),
+        ...(hideDryOnly ? { NOT: dryOnlyDeliveryWhere } : {}),
         OR: [
           { deliveryNo: code },
           { deliveryItems: { some: { qrToken: code } } },
@@ -694,7 +650,7 @@ export const deliveryInspectionRepository = {
 };
 export type DeliveryInspectionRow = Prisma.DeliveryGetPayload<{
   select: typeof summarySelect;
-}> & { supplierIsDry?: boolean };
+}>;
 export type DeliveryInspectionDetailRow = Prisma.DeliveryGetPayload<{
   select: typeof detailSelect;
-}> & { supplierIsDry?: boolean };
+}>;

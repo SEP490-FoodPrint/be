@@ -160,11 +160,11 @@ export const deliveryInspectionRoles = [
 type DeliveryInspectionRole = (typeof deliveryInspectionRoles)[number];
 
 /**
- * Bộ phận phải ký nhận một chuyến giao. Xe của NCC đồ khô (supplierIsDry) hoặc xe chỉ gồm đồ khô
- * (DRY_STOCK) chỉ cần Ban quản lý nguyên liệu kiểm tra; còn lại cần đủ 4 bộ phận.
+ * Xe đồ khô khi mọi dòng hàng là DRY_STOCK: chỉ Ban quản lý nguyên liệu kiểm tra.
+ * Chỉ cần 1 dòng đồ tươi là xe đồ tươi, theo cấu hình phân nhóm duyệt của trường.
+ * Không suy luận theo nhà cung cấp.
  */
 export function isDryDelivery(row: {
-  supplierIsDry?: boolean;
   deliveryItems?: {
     IngredientEntry: { handlingType: string } | null;
     SupplyRequestItem: {
@@ -174,19 +174,17 @@ export function isDryDelivery(row: {
 }): boolean {
   const items = row.deliveryItems ?? [];
   return (
-    row.supplierIsDry === true ||
-    (items.length > 0 &&
-      items.every(
-        (item) =>
-          (item.IngredientEntry?.handlingType ??
-            item.SupplyRequestItem?.IngredientEntry?.handlingType) ===
-          "DRY_STOCK",
-      ))
+    items.length > 0 &&
+    items.every(
+      (item) =>
+        (item.IngredientEntry?.handlingType ??
+          item.SupplyRequestItem?.IngredientEntry?.handlingType) ===
+        "DRY_STOCK",
+    )
   );
 }
 
 export function requiredInspectionRoles(row: {
-  supplierIsDry?: boolean;
   deliveryItems?: {
     IngredientEntry: { handlingType: string } | null;
     SupplyRequestItem: {
