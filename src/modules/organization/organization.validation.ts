@@ -194,6 +194,11 @@ export const publicDailyMenuQuerySchema = z.strictObject(
       )
       .transform((val) => (val === "" ? undefined : val))
       .optional(),
+    grade: z
+      .string({ error: "Mã khối/nhóm không hợp lệ" })
+      .transform((val) => val.trim())
+      .transform((val) => (val === "" ? undefined : val))
+      .optional(),
   },
   {
     error: (issue) =>
@@ -201,6 +206,26 @@ export const publicDailyMenuQuerySchema = z.strictObject(
         ? "Tham số thực đơn ngày không hợp lệ"
         : "Tham số thực đơn ngày không hợp lệ",
   },
+);
+
+export const publicSchoolGradesQuerySchema = z.strictObject(
+  {
+    week: z
+      .string({ error: "Ngày tuần không đúng định dạng (yêu cầu YYYY-MM-DD)" })
+      .transform((val) => val.trim())
+      .refine(
+        (val) => {
+          if (val === "") return true;
+          if (!DATE_REGEX.test(val)) return false;
+          const parsed = new Date(`${val}T00:00:00.000Z`);
+          return !Number.isNaN(parsed.getTime());
+        },
+        { error: "Ngày tuần không đúng định dạng (yêu cầu YYYY-MM-DD)" },
+      )
+      .transform((val) => (val === "" ? undefined : val))
+      .optional(),
+  },
+  { error: () => "Tham số danh sách khối không hợp lệ" },
 );
 
 export const publicWeeklyMenuQuerySchema = z.strictObject(
@@ -239,7 +264,11 @@ export const publicWeeklyMenuQuerySchema = z.strictObject(
 );
 
 export function validateOrganizationListQuery(value: unknown) {
-  return parse(organizationListQuerySchema, value);
+  const result = organizationListQuerySchema.safeParse(value);
+  if (!result.success) {
+    throw new OrganizationValidationError(mapZodIssues(result.error.issues));
+  }
+  return result.data;
 }
 
 export function validateCookingMode(value: unknown) {
@@ -290,6 +319,14 @@ export function validateSchoolId(value: unknown): string {
 
 export function validatePublicDailyMenuQuery(value: unknown) {
   const result = publicDailyMenuQuerySchema.safeParse(value);
+  if (!result.success) {
+    throw new OrganizationValidationError(mapZodIssues(result.error.issues));
+  }
+  return result.data;
+}
+
+export function validatePublicSchoolGradesQuery(value: unknown) {
+  const result = publicSchoolGradesQuerySchema.safeParse(value);
   if (!result.success) {
     throw new OrganizationValidationError(mapZodIssues(result.error.issues));
   }

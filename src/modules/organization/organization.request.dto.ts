@@ -9,6 +9,7 @@ import type {
   publicSchoolListQuerySchema,
   publicDailyMenuQuerySchema,
   publicWeeklyMenuQuerySchema,
+  publicSchoolGradesQuerySchema,
 } from "./organization.validation";
 
 export type CookingModeRequestDTO = z.infer<typeof cookingModeBodySchema>;
@@ -27,6 +28,10 @@ export type PublicSchoolListRequestDTO = z.infer<
 
 export type PublicDailyMenuRequestDTO = z.infer<
   typeof publicDailyMenuQuerySchema
+>;
+
+export type PublicSchoolGradesRequestDTO = z.infer<
+  typeof publicSchoolGradesQuerySchema
 >;
 
 export type PublicWeeklyMenuRequestDTO = z.infer<

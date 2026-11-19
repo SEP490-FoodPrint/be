@@ -7,7 +7,8 @@ import {
   type DeliveryInspectionRoleCode,
   type DeliveryInspectionTierCode,
 } from "../../constants/delivery-inspection";
-import type { PrismaClient } from "../../generated/prisma/client";
+import type { Prisma, PrismaClient } from "../../generated/prisma/client";
+import { convertQuantity } from "../kitchen/kitchen.service";
 import {
   assertPermission,
   withSchoolTransaction,
@@ -36,6 +37,7 @@ import type {
   PublicSchoolListRequestDTO,
   PublicDailyMenuRequestDTO,
   PublicWeeklyMenuRequestDTO,
+  PublicSchoolGradesRequestDTO,
 } from "./organization.request.dto";
 import type {
   OrganizationListResponseDTO,
@@ -51,13 +53,16 @@ import type {
   MealTimesResponseDTO,
   DeliveryInspectionRolesResponseDTO,
   DishItemDTO,
+  PublicDishIngredientDTO,
+  PublicRecipeSource,
   SnackItemDTO,
-  PortionGroupDTO,
   WeeklyMenuDayDTO,
+  PublicSchoolGradeDTO,
 } from "./organization.response.dto";
 import {
   createOrganizationRepository,
   type OrganizationRepository,
+  type PublicMenuDayDbRow,
   type PublicSchoolDbRow,
   type SchoolDirectoryRow,
 } from "./organization.repository";
@@ -421,6 +426,37 @@ export function createOrganizationService(
       return data.findPublicLocations();
     },
 
+    async getPublicSchoolGrades(
+      schoolCode: string,
+      query: PublicSchoolGradesRequestDTO = {},
+    ): Promise<PublicSchoolGradeDTO[]> {
+      const school = await data.findSchoolForMenu(schoolCode);
+      if (!school) {
+        throw new HttpError(
+          404,
+          `Không tìm thấy trường học với mã: ${schoolCode}`,
+        );
+      }
+      if (!data.findSchoolGrades) return [];
+      const grades = await data.findSchoolGrades(school.id);
+
+      // Đánh dấu khối có thực đơn trong tuần: thực đơn toàn trường áp dụng
+      // cho mọi khối, thực đơn riêng chỉ áp dụng cho khối được gán.
+      const weekMonday = getSchoolMonday(
+        query.week ? new Date(`${query.week}T00:00:00.000Z`) : new Date(),
+      );
+      const coverage = data.findWeekMenuCoverage
+        ? await data.findWeekMenuCoverage(school.id, weekMonday)
+        : { hasSchoolWideMenu: false, gradeIds: [] };
+      const gradeIdsWithMenu = new Set(coverage.gradeIds);
+
+      return grades.map((g) => ({
+        id: g.id,
+        name: g.name,
+        hasMenu: coverage.hasSchoolWideMenu || gradeIdsWithMenu.has(g.id),
+      }));
+    },
+
     async getPublicDailyMenu(
       schoolCode: string,
       query: PublicDailyMenuRequestDTO,
@@ -446,10 +482,17 @@ export function createOrganizationService(
         targetDate = new Date(`${yyyy}-${mm}-${dd}T00:00:00.000Z`);
       }
 
-      let menuDay = await data.findMenuDayForDailyMenu(school.id, targetDate);
+      const gradeId =
+        query.grade && query.grade !== "all" ? query.grade : undefined;
+
+      let menuDay = await data.findMenuDayForDailyMenu(
+        school.id,
+        targetDate,
+        gradeId,
+      );
 
       if (!menuDay && !query.date) {
-        menuDay = await data.findLatestApprovedMenuDay(school.id);
+        menuDay = await data.findLatestApprovedMenuDay(school.id, gradeId);
       }
 
       if (!menuDay || menuDay.menuDayDishes.length === 0) {
@@ -467,45 +510,22 @@ export function createOrganizationService(
         ? formatTimeString(school.afternoonMealTime)?.slice(0, 5)
         : "14:30";
 
-      const lunchDishes: DishItemDTO[] = [];
-      const snackDishes: DishItemDTO[] = [];
-      const snackItems: SnackItemDTO[] = [];
-
-      for (const mdd of menuDay.menuDayDishes) {
-        const portionStr =
-          mdd.portionSize && mdd.portionUnit
-            ? `${mdd.portionSize.toString()} ${mdd.portionUnit}`
-            : mdd.portionSize
-              ? `${mdd.portionSize.toString()} suất`
-              : "1 suất";
-
-        const item: DishItemDTO = {
-          id: mdd.dishId,
-          name: mdd.Dish?.name || "Món ăn",
-          portion: portionStr,
-          portionSize: mdd.portionSize ? Number(mdd.portionSize) : null,
-          portionUnit: mdd.portionUnit || null,
-          order: mdd.displayOrder,
-          mealType: mdd.mealType,
-          description: mdd.Dish?.description || null,
+      // Định lượng và nguyên liệu theo khối đang xem; món thay thế theo nhóm dị ứng
+      const lunchDishes = buildPublicMealDishes(menuDay, "LUNCH", gradeId);
+      const snackDishes = buildPublicMealDishes(menuDay, "AFTERNOON", gradeId);
+      const snackItems: SnackItemDTO[] = snackDishes.map((item) => {
+        const lower = item.name.toLowerCase();
+        const isDrink =
+          lower.includes("sữa") ||
+          lower.includes("nước") ||
+          lower.includes("chè");
+        return {
+          id: item.id,
+          name: item.name,
+          desc: item.portion,
+          icon: isDrink ? "coffee" : "cake",
         };
-
-        if (mdd.mealType === "LUNCH") {
-          lunchDishes.push(item);
-        } else {
-          snackDishes.push(item);
-          const isDrink =
-            item.name.toLowerCase().includes("sữa") ||
-            item.name.toLowerCase().includes("nước") ||
-            item.name.toLowerCase().includes("chè");
-          snackItems.push({
-            id: mdd.dishId,
-            name: item.name,
-            desc: item.portion,
-            icon: isDrink ? "coffee" : "cake",
-          });
-        }
-      }
+      });
 
       const defaultLunchImage =
         school.coverImageUrl ||
@@ -643,36 +663,8 @@ export function createOrganizationService(
         },
       );
 
-      // Lấy các khối lớp có thực đơn cho tuần đang tra cứu
-      const weekGrades = await data.findWeekGrades(school.id, targetWeekMonday);
-
-      let dynamicGroups: PortionGroupDTO[] = [];
-      if (weekGrades.length > 0) {
-        dynamicGroups = weekGrades.map((g, idx) => ({
-          id: g.id,
-          name: g.name,
-          isDefault: idx === 0,
-        }));
-      } else if (weeklyMenu && weeklyMenu.menuDays.length > 0) {
-        const dayIds = weeklyMenu.menuDays.map((d) => d.id);
-        const rawGroups = await data.findPortionGroupsRaw(dayIds);
-        dynamicGroups = rawGroups.map((g) => ({
-          id: g.id,
-          name: g.name,
-          isDefault: g.is_default,
-        }));
-      }
-
-      if (dynamicGroups.length === 0) {
-        dynamicGroups = [
-          {
-            id: "all",
-            name: "Toàn trường",
-            isDefault: true,
-          },
-        ];
-      }
-
+      // Danh sách khối được lấy riêng qua GET /public/:schoolCode/grades,
+      // không suy ra từ thực đơn (tránh lẫn nhóm suất ăn Tiêu chuẩn/Dị ứng).
       const weekSchedule = getSchoolWeekSchedule(targetWeekMonday);
       const weekNumber = academicYear
         ? calculateAcademicWeekNumber(targetWeekMonday, academicYear.startDate)
@@ -693,8 +685,6 @@ export function createOrganizationService(
           weekRange,
           isCurrentWeek,
           status: null,
-          portionGroups: dynamicGroups,
-          gradeGroups: dynamicGroups.map((g) => ({ key: g.id, label: g.name })),
           days: [],
           availableWeeks,
         };
@@ -777,8 +767,6 @@ export function createOrganizationService(
         weekRange,
         isCurrentWeek,
         status: weeklyMenu.status,
-        portionGroups: dynamicGroups,
-        gradeGroups: dynamicGroups.map((g) => ({ key: g.id, label: g.name })),
         days,
         availableWeeks,
       };
@@ -788,3 +776,199 @@ export function createOrganizationService(
 
 export const organizationService = createOrganizationService();
 export type OrganizationService = ReturnType<typeof createOrganizationService>;
+
+// ---------------------------------------------------------------------------
+// Thực đơn ngày công khai: định lượng / suất theo khối và nguyên liệu từng món
+// ---------------------------------------------------------------------------
+
+type PublicMenuDish = PublicMenuDayDbRow["menuDayDishes"][number];
+type PublicIngredientRow = PublicMenuDish["ingredients"][number]["ingredient"];
+type PublicRecipeLine = {
+  ingredientRole: string | null;
+  requiredQuantity: Prisma.Decimal;
+  unit: string;
+  ingredient: PublicIngredientRow;
+};
+
+const DISH_CATEGORY_LABELS: Record<string, string> = {
+  RICE_STARCH: "Cơm / Tinh bột",
+  MAIN_DISH: "Món mặn",
+  VEGETABLE: "Rau",
+  SOUP: "Canh",
+  DESSERT: "Tráng miệng",
+};
+
+function formatPublicQuantity(value: Prisma.Decimal | number): string {
+  const num = Number(value.toString());
+  return String(Number.isFinite(num) ? Number(num.toFixed(3)) : value);
+}
+
+function toPublicIngredient(line: PublicRecipeLine): PublicDishIngredientDTO {
+  const role =
+    line.ingredientRole === "MAIN" || line.ingredientRole === "SEASONING"
+      ? line.ingredientRole
+      : null;
+  const quantity = formatPublicQuantity(line.requiredQuantity);
+  return {
+    id: line.ingredient.id,
+    name: line.ingredient.name,
+    quantity: Number(quantity),
+    unit: line.unit,
+    portion: `${quantity} ${line.unit}`,
+    role,
+    note: role === "SEASONING" ? "Gia vị" : null,
+    category: line.ingredient.ingredientCategory?.categoryName ?? null,
+    supplierName: line.ingredient.Supplier?.name ?? null,
+  };
+}
+
+/**
+ * Chọn nguồn định lượng cho một món ở khối đang xem:
+ * 1. Thực đơn riêng của khối: dùng nguyên liệu đã chốt trong thực đơn (MENU).
+ * 2. Thực đơn toàn trường: ưu tiên định lượng riêng của khối (GRADE),
+ *    sau đó nguyên liệu đã chốt trong thực đơn (MENU), cuối cùng là định lượng chuẩn (STANDARD).
+ */
+function resolvePublicDishRecipe(
+  mdd: PublicMenuDish,
+  gradeId: string | undefined,
+  isSchoolWide: boolean,
+): { source: PublicRecipeSource; lines: PublicRecipeLine[] } {
+  const menuLines: PublicRecipeLine[] = mdd.ingredients.map((row) => ({
+    ingredientRole: "MAIN",
+    requiredQuantity: row.quantityPerPortion,
+    unit: row.unit,
+    ingredient: row.ingredient,
+  }));
+  const gradeRecipe = gradeId
+    ? mdd.Dish.gradeRecipes.find((recipe) => recipe.gradeId === gradeId)
+    : undefined;
+  const gradeLines: PublicRecipeLine[] = (gradeRecipe?.lines ?? []).map(
+    (line) => ({
+      ingredientRole: line.ingredientRole,
+      requiredQuantity: line.requiredQuantity,
+      unit: line.unit,
+      ingredient: line.entry.Ingredient,
+    }),
+  );
+  const standardLines: PublicRecipeLine[] = mdd.Dish.dishIngredientEntries.map(
+    (line) => ({
+      ingredientRole: line.ingredientRole,
+      requiredQuantity: line.requiredQuantity,
+      unit: line.unit,
+      ingredient: line.IngredientEntry.Ingredient,
+    }),
+  );
+
+  if (!isSchoolWide && menuLines.length)
+    return { source: "MENU", lines: menuLines };
+  if (gradeLines.length) return { source: "GRADE", lines: gradeLines };
+  if (menuLines.length) return { source: "MENU", lines: menuLines };
+  if (standardLines.length) return { source: "STANDARD", lines: standardLines };
+  return { source: null, lines: [] };
+}
+
+/** Tổng khối lượng nguyên liệu chính (g) khi tất cả quy đổi được sang gam. */
+function totalMainWeight(lines: PublicRecipeLine[]): string | null {
+  const mains = lines.filter((line) => line.ingredientRole !== "SEASONING");
+  if (!mains.length) return null;
+  let total = 0;
+  for (const line of mains) {
+    try {
+      total += Number(
+        convertQuantity(line.requiredQuantity, line.unit, "g").toString(),
+      );
+    } catch {
+      return null;
+    }
+  }
+  return `${formatPublicQuantity(total)} g`;
+}
+
+function toPublicDishItem(
+  mdd: PublicMenuDish,
+  gradeId: string | undefined,
+  isSchoolWide: boolean,
+): DishItemDTO {
+  const recipe = resolvePublicDishRecipe(mdd, gradeId, isSchoolWide);
+  const ingredients = recipe.lines
+    .map(toPublicIngredient)
+    .sort(
+      (a, b) =>
+        Number(a.role === "SEASONING") - Number(b.role === "SEASONING") ||
+        a.name.localeCompare(b.name, "vi"),
+    );
+  // portionSize là kích thước suất trình bày đã khai báo; nếu không có,
+  // dùng tổng khối lượng nguyên liệu chính của 1 suất.
+  const portion = mdd.portionSize
+    ? `${formatPublicQuantity(mdd.portionSize)} ${mdd.portionUnit || "suất"}`
+    : (totalMainWeight(recipe.lines) ?? "");
+
+  return {
+    id: mdd.dishId,
+    name: mdd.Dish.name,
+    portion,
+    portionSize: mdd.portionSize ? Number(mdd.portionSize) : null,
+    portionUnit: mdd.portionUnit || null,
+    order: mdd.displayOrder,
+    mealType: mdd.mealType,
+    description: mdd.Dish.description || null,
+    category:
+      mdd.Dish.schoolCategory?.name ??
+      (mdd.Dish.category ? DISH_CATEGORY_LABELS[mdd.Dish.category] : null) ??
+      null,
+    recipeSource: recipe.source,
+    ingredients,
+    alternativeDish: null,
+  };
+}
+
+/**
+ * Món của một bữa. Nhóm suất ăn mặc định là món tiêu chuẩn; mỗi nhóm dị ứng
+ * thay các món tiêu chuẩn không có trong nhóm bằng các món chỉ nhóm đó có
+ * (ghép theo thứ tự hiển thị). Món chỉ dành cho nhóm dị ứng không hiện ở cột chính.
+ */
+function buildPublicMealDishes(
+  menuDay: PublicMenuDayDbRow,
+  mealType: "LUNCH" | "AFTERNOON",
+  gradeId: string | undefined,
+): DishItemDTO[] {
+  const isSchoolWide = menuDay.WeeklyMenu.isSchoolWide;
+  const rows = menuDay.menuDayDishes.filter((d) => d.mealType === mealType);
+  const items = new Map(
+    rows.map((row) => [
+      row.dishId,
+      toPublicDishItem(row, gradeId, isSchoolWide),
+    ]),
+  );
+
+  const groups = menuDay.portionGroups.filter((g) => g.mealType === mealType);
+  const defaultGroup = groups.find((g) => g.isDefault);
+  const substituteOnly = new Set<string>();
+
+  if (defaultGroup) {
+    const defaultIds = new Set(defaultGroup.dishes.map((d) => d.dishId));
+    for (const group of groups.filter((g) => !g.isDefault)) {
+      const groupIds = new Set(group.dishes.map((d) => d.dishId));
+      const replaced = rows.filter(
+        (r) => defaultIds.has(r.dishId) && !groupIds.has(r.dishId),
+      );
+      const substitutes = rows.filter(
+        (r) => groupIds.has(r.dishId) && !defaultIds.has(r.dishId),
+      );
+      substitutes.forEach((sub) => substituteOnly.add(sub.dishId));
+      replaced.forEach((main, index) => {
+        const mainItem = items.get(main.dishId);
+        const sub = substitutes[index];
+        if (!mainItem || !sub || mainItem.alternativeDish) return;
+        const subItem = items.get(sub.dishId);
+        if (subItem)
+          mainItem.alternativeDish = { ...subItem, allergyGroup: group.name };
+      });
+    }
+  }
+
+  return rows
+    .filter((row) => !substituteOnly.has(row.dishId))
+    .map((row) => items.get(row.dishId)!)
+    .filter(Boolean);
+}
