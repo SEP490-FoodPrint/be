@@ -16,7 +16,7 @@ function harness(rows: Record<BackfillType, FakeRow[]>) {
   let transactions = 0;
   const lockCalls: Array<{ type: BackfillType; take: number }> = [];
   const allocateCalls: Array<{ type: BackfillType; count: number }> = [];
-  const counters: Record<BackfillType, number> = { MC: 0, IC: 0 };
+  const counters: Record<BackfillType, number> = { IC: 0 };
   const tx = {} as never;
   const repository: BusinessCodeBackfillRepository = {
     transaction: async (operation) => {
@@ -77,16 +77,16 @@ const makeRows = (prefix: string, count: number, coded: number[] = []) =>
   }));
 
 void test("backfill chỉ gán mã cho dòng code IS NULL, theo lô, mỗi lô một transaction", async () => {
-  const rows = { MC: makeRows("MC", 5, [1]), IC: makeRows("IC", 2) };
-  const keep = rows.MC[1].code;
+  const rows = { IC: makeRows("IC", 5, [1]) };
+  const keep = rows.IC[1].code;
   const h = harness(rows);
   const result = await backfillBusinessCodes(h.repository, {
     batchSize: 2,
     allocate: h.allocate,
   });
-  assert.deepEqual(result, { MC: 4, IC: 2 });
-  assert.equal(rows.MC[1].code, keep);
-  for (const type of ["MC", "IC"] as const) {
+  assert.deepEqual(result, { IC: 4 });
+  assert.equal(rows.IC[1].code, keep);
+  for (const type of ["IC"] as const) {
     for (const row of rows[type])
       assert.match(row.code ?? "", new RegExp(`^FP-${type}-[0-9]{5}$`));
     assert.equal(
@@ -94,38 +94,37 @@ void test("backfill chỉ gán mã cho dòng code IS NULL, theo lô, mỗi lô m
       rows[type].length,
     );
   }
-  // MC: 4 dòng thiếu mã với lô 2 → 2 lô đầy + 1 lô rỗng; IC: 1 lô đầy + 1 lô rỗng.
+  // IC: 4 dòng thiếu mã với lô 2 → 2 lô đầy + 1 lô rỗng. Khiếu nại không còn backfill (mã NOT NULL ở bảng cha).
   assert.deepEqual(h.allocateCalls, [
-    { type: "MC", count: 2 },
-    { type: "MC", count: 2 },
+    { type: "IC", count: 2 },
     { type: "IC", count: 2 },
   ]);
-  assert.equal(h.transactions(), 5);
+  assert.equal(h.transactions(), 3);
   assert(h.lockCalls.every((call) => call.take === 2));
 });
 
 void test("backfill idempotent: chạy lần hai gán 0 dòng và không cấp mã", async () => {
-  const rows = { MC: makeRows("MC", 3), IC: makeRows("IC", 0) };
+  const rows = { IC: makeRows("IC", 3) };
   const h = harness(rows);
   assert.deepEqual(
     await backfillBusinessCodes(h.repository, { allocate: h.allocate }),
-    { MC: 3, IC: 0 },
+    { IC: 3 },
   );
-  const snapshot = rows.MC.map((row) => row.code);
+  const snapshot = rows.IC.map((row) => row.code);
   const allocationsAfterFirst = h.allocateCalls.length;
   assert.deepEqual(
     await backfillBusinessCodes(h.repository, { allocate: h.allocate }),
-    { MC: 0, IC: 0 },
+    { IC: 0 },
   );
   assert.deepEqual(
-    rows.MC.map((row) => row.code),
+    rows.IC.map((row) => row.code),
     snapshot,
   );
   assert.equal(h.allocateCalls.length, allocationsAfterFirst);
 });
 
 void test("backfill từ chối kích thước lô không hợp lệ", async () => {
-  const h = harness({ MC: [], IC: [] });
+  const h = harness({ IC: [] });
   for (const batchSize of [0, -1, 1.5]) {
     await assert.rejects(
       backfillBusinessCodes(h.repository, { batchSize, allocate: h.allocate }),

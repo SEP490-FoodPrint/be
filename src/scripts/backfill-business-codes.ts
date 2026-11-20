@@ -13,7 +13,7 @@ import {
 } from "../utils/business-code-backfill";
 
 /**
- * Thao tác vận hành: gán mã FP-MC/FP-IC cho khiếu nại bữa ăn và sự cố ATTP cũ chưa có mã.
+ * Thao tác vận hành: gán mã FP-IC cho sự cố ATTP cũ chưa có mã (khiếu nại đã có mã NOT NULL ở bảng cha).
  * Mặc định chỉ chạy trên PostgreSQL local; `--azure` là thao tác cần cho phép tường minh. CD không chạy script này.
  */
 async function main(): Promise<void> {
@@ -37,7 +37,7 @@ async function main(): Promise<void> {
       createBusinessCodeBackfillRepository(db),
     );
     console.log(
-      `Backfill mã nghiệp vụ hoàn tất: ${result.MC} khiếu nại bữa ăn (FP-MC), ${result.IC} sự cố an toàn thực phẩm (FP-IC).`,
+      `Backfill mã nghiệp vụ hoàn tất: ${result.IC} sự cố an toàn thực phẩm (FP-IC).`,
     );
   } finally {
     await db.$disconnect();

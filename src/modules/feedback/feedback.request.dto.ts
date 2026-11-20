@@ -1,16 +1,17 @@
 import type { z } from "zod";
 import type {
+  complaintListQuerySchema,
   createComplaintSchema,
-  respondComplaintSchema,
+  ticketCommentBodySchema,
+  ticketReopenBodySchema,
+  ticketResolveBodySchema,
 } from "./feedback.validation";
 export type CreateComplaintRequestDTO = z.infer<typeof createComplaintSchema>;
-export type RespondComplaintRequestDTO = z.infer<typeof respondComplaintSchema>;
-export interface ComplaintListQueryDTO {
-  page: number;
-  limit: number;
-  status?: "SUBMITTED" | "IN_REVIEW" | "RESOLVED" | "CLOSED";
-  complaintType?: "MEAL_QUALITY" | "FOOD_HYGIENE" | "HEALTH_ISSUE" | "OTHER";
-  from?: string;
-  to?: string;
-  search?: string;
-}
+export type ComplaintListQueryDTO = z.infer<typeof complaintListQuerySchema>;
+export type ComplaintCommentRequestDTO = z.infer<
+  typeof ticketCommentBodySchema
+>;
+export type ComplaintResolveRequestDTO = z.infer<
+  typeof ticketResolveBodySchema
+>;
+export type ComplaintReopenRequestDTO = z.infer<typeof ticketReopenBodySchema>;

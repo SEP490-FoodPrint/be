@@ -3,6 +3,7 @@ import type { AuthPrincipal } from "../../types/auth";
 import {
   authorizationTransaction,
   databaseOperation,
+  withSchoolTransaction,
 } from "../../utils/authorization";
 import { isStoredBusinessCode } from "../../utils/business-code";
 import { getPrisma } from "../../utils/database";
@@ -14,152 +15,125 @@ import {
   ingredientQualityFeedbackResponseScope,
   type IngredientQualityFeedbackResponseScope,
 } from "../../utils/resource-access";
+import {
+  assertTicketAction,
+  feedbackWindowStart,
+  ticketConflictMessage,
+  toTicketStatus,
+  TICKET_TRANSITIONS,
+  type TicketAction,
+  type TicketViewer,
+} from "../complaint-ticket/complaint-ticket.lifecycle";
+import {
+  complaintTicketRepository,
+  type ComplaintTicketRepository,
+  type TicketActor,
+} from "../complaint-ticket/complaint-ticket.repository";
+import {
+  mapTicketComment,
+  mapTicketFields,
+} from "../complaint-ticket/complaint-ticket.service";
 import type {
+  FeedbackCommentBodyRequest,
+  FeedbackReopenBodyRequest,
+  FeedbackResolveBodyRequest,
   IngredientQualityFeedbackListQueryRequest,
   IngredientQualityFeedbackParamsRequest,
-  IngredientQualityFeedbackResponseBodyRequest,
 } from "./ingredient-quality-feedback.request.dto";
 import type {
   FeedbackDetail,
-  IngredientQualityFeedbackStatusDto,
-  LegacyFeedbackList,
-  LegacyFeedbackListItem,
-  SupplierFeedbackList,
-  SupplierFeedbackListItem,
+  FeedbackList,
+  FeedbackListItem,
 } from "./ingredient-quality-feedback.response.dto";
 import {
   ingredientQualityFeedbackRepository,
   type FeedbackDetailRow,
   type FeedbackDetailScope,
+  type FeedbackListRow,
   type FeedbackLotRow,
+  type FeedbackTicketTargetRow,
   type IngredientQualityFeedbackRepository,
   type IngredientQualityFeedbackTx,
-  type LegacyFeedbackRow,
-  type SupplierFeedbackListRow,
 } from "./ingredient-quality-feedback.repository";
 
 const NOT_FOUND_MESSAGE = "Không tìm thấy khiếu nại trong phạm vi được phép";
-const ALREADY_RESPONDED_MESSAGE = "Khiếu nại đã được phản hồi";
 const SCOPE_CHANGED_MESSAGE = "Phạm vi tài khoản đã thay đổi";
 const CORRUPT_DATA_MESSAGE = "Không thể tải dữ liệu. Vui lòng thử lại sau.";
+const REQUESTER_PERMISSION = "ingredient_quality_feedback.submit";
 
-function toFeedbackStatus(status: string): IngredientQualityFeedbackStatusDto {
-  if (status === "SUBMITTED" || status === "RESPONDED") return status;
-  throw new HttpError(503, CORRUPT_DATA_MESSAGE);
-}
+type Side = Exclude<TicketViewer, "OBSERVER">;
 
-function assertStoredComplaintCode(complaintCode: string): string {
+function assertStoredComplaintCode(code: string): string {
   // Chấp nhận mã cũ tuần tự FP-CP-… đã phát hành và mã Feistel FP-CP-NNNNN mới.
-  if (!isStoredBusinessCode("CP", complaintCode)) {
+  if (!isStoredBusinessCode("CP", code)) {
     throw new HttpError(503, CORRUPT_DATA_MESSAGE);
   }
-  return complaintCode;
+  return code;
 }
 
-function toIsoTimestamp(value: Date): string {
-  return value.toISOString();
+function viewerOf(
+  row: { senderUserId: string },
+  principal: AuthPrincipal,
+): TicketViewer {
+  if (row.senderUserId === principal.id) return "REQUESTER";
+  if (
+    principal.orgType === ORG_TYPES.SUPPLIER &&
+    principal.permissions.includes("ingredient_quality_feedback.respond")
+  )
+    return "HANDLER";
+  return "OBSERVER";
 }
 
-function toNullableIsoTimestamp(value: Date | null): string | null {
-  return value ? value.toISOString() : null;
-}
-
-function mapLegacyFeedbackItem(row: LegacyFeedbackRow): LegacyFeedbackListItem {
+function mapListItem(
+  row: FeedbackListRow | FeedbackDetailRow,
+  principal: AuthPrincipal,
+  now: Date,
+  latestCommentSide: "REQUESTER" | "HANDLER" | null,
+): FeedbackListItem {
+  const child = row.ingredientQualityFeedback;
+  if (!child) throw new HttpError(503, CORRUPT_DATA_MESSAGE);
   return {
     id: row.id,
-    deliveryId: row.deliveryId,
-    ingredientLotId: row.ingredientLotId ?? null,
-    submittedByUserId: row.submittedByUserId,
-    title: row.title,
-    description: row.description,
-    status: toFeedbackStatus(row.status),
-    respondedAt: toNullableIsoTimestamp(row.respondedAt),
-    createdAt: toIsoTimestamp(row.createdAt),
-    updatedAt: toIsoTimestamp(row.updatedAt),
-  };
-}
-
-function mapSupplierListItem(
-  row: SupplierFeedbackListRow,
-): SupplierFeedbackListItem {
-  return {
-    id: row.id,
-    complaintCode: assertStoredComplaintCode(row.complaintCode),
+    code: assertStoredComplaintCode(row.code),
     title: row.title,
     school: {
-      id: row.Delivery.School.id,
-      name: row.Delivery.School.name,
-      code: row.Delivery.School.code ?? null,
+      id: child.Delivery.School.id,
+      name: child.Delivery.School.name,
+      code: child.Delivery.School.code ?? null,
     },
     delivery: {
-      id: row.Delivery.id,
-      deliveryNo: row.Delivery.deliveryNo,
+      id: child.Delivery.id,
+      deliveryNo: child.Delivery.deliveryNo,
     },
-    status: toFeedbackStatus(row.status),
-    createdAt: toIsoTimestamp(row.createdAt),
-    respondedAt: toNullableIsoTimestamp(row.respondedAt),
+    submittedAt: row.submittedAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+    ...mapTicketFields(viewerOf(row, principal), row, latestCommentSide, now),
   };
 }
 
 function mapFeedbackDetail(
   row: FeedbackDetailRow,
   lot: FeedbackLotRow | null,
+  principal: AuthPrincipal,
+  now: Date,
 ): FeedbackDetail {
-  const status = toFeedbackStatus(row.status);
-  const complaintCode = assertStoredComplaintCode(row.complaintCode);
-  if (
-    status === "SUBMITTED" &&
-    (row.supplierResponse !== null ||
-      row.respondedByUser !== null ||
-      row.respondedAt !== null)
-  ) {
-    throw new HttpError(503, CORRUPT_DATA_MESSAGE);
-  }
-  if (
-    status === "RESPONDED" &&
-    (row.supplierResponse === null ||
-      row.respondedByUser === null ||
-      row.respondedAt === null)
-  ) {
-    throw new HttpError(503, CORRUPT_DATA_MESSAGE);
-  }
-  if (row.ingredientLotId !== null && lot === null) {
+  if (row.ingredientQualityFeedback?.ingredientLotId && lot === null) {
     throw new HttpError(503, CORRUPT_DATA_MESSAGE);
   }
   return {
-    id: row.id,
-    complaintCode,
-    title: row.title,
-    school: {
-      id: row.Delivery.School.id,
-      name: row.Delivery.School.name,
-      code: row.Delivery.School.code ?? null,
-    },
-    delivery: {
-      id: row.Delivery.id,
-      deliveryNo: row.Delivery.deliveryNo,
-    },
-    status,
-    createdAt: toIsoTimestamp(row.createdAt),
-    respondedAt:
-      status === "RESPONDED" && row.respondedAt
-        ? toIsoTimestamp(row.respondedAt)
-        : null,
+    ...mapListItem(
+      row,
+      principal,
+      now,
+      row.comments.at(-1)?.authorSide ?? null,
+    ),
     description: row.description,
-    updatedAt: toIsoTimestamp(row.updatedAt),
     submittedBy: {
-      id: row.submittedByUser.id,
-      fullName: row.submittedByUser.fullName,
+      id: row.senderUser.id,
+      fullName: row.senderUser.fullName,
     },
     ingredientLot: lot ? { id: lot.id, lotCode: lot.lotCode } : null,
-    supplierResponse: status === "RESPONDED" ? row.supplierResponse : null,
-    respondedBy:
-      status === "RESPONDED" && row.respondedByUser
-        ? {
-            id: row.respondedByUser.id,
-            fullName: row.respondedByUser.fullName,
-          }
-        : null,
+    comments: row.comments.map(mapTicketComment),
   };
 }
 
@@ -182,55 +156,189 @@ function assertActorMatchesOriginal(
   }
 }
 
+type TicketRun = (
+  tx: IngredientQualityFeedbackTx,
+  target: FeedbackTicketTargetRow,
+  actor: TicketActor,
+  at: Date,
+) => Promise<void>;
+
 export function createIngredientQualityFeedbackService(
   repository: IngredientQualityFeedbackRepository = ingredientQualityFeedbackRepository,
   connect = getPrisma,
+  now = () => new Date(),
+  tickets: ComplaintTicketRepository = complaintTicketRepository,
 ) {
   async function readAndMapDetail(
     tx: IngredientQualityFeedbackTx,
     feedbackId: string,
     scope: FeedbackDetailScope,
+    principal: AuthPrincipal,
+    at: Date,
   ): Promise<FeedbackDetail> {
     const row = await repository.findDetail(tx, feedbackId, scope);
-    if (!row) throw new HttpError(404, NOT_FOUND_MESSAGE);
+    if (!row?.ingredientQualityFeedback)
+      throw new HttpError(404, NOT_FOUND_MESSAGE);
+    const { ingredientLotId, deliveryId } = row.ingredientQualityFeedback;
     const lot =
-      row.ingredientLotId !== null
+      ingredientLotId !== null
         ? await repository.findLotInDelivery(
             tx,
-            row.ingredientLotId,
-            row.deliveryId,
+            ingredientLotId,
+            deliveryId,
             scope,
           )
         : null;
-    if (row.ingredientLotId !== null && !lot) {
-      throw new HttpError(503, CORRUPT_DATA_MESSAGE);
-    }
-    return mapFeedbackDetail(row, lot);
+    return mapFeedbackDetail(row, lot, principal, at);
+  }
+
+  async function transition(
+    tx: IngredientQualityFeedbackTx,
+    target: FeedbackTicketTargetRow,
+    actor: TicketActor,
+    at: Date,
+    action: Exclude<TicketAction, "COMMENT">,
+  ): Promise<void> {
+    const rule = TICKET_TRANSITIONS[action];
+    const ok = await tickets.transition(tx, {
+      complaintId: target.id,
+      kind: "INGREDIENT",
+      fromStatus: toTicketStatus(target.status),
+      toStatus: rule.to,
+      actor,
+      now: at,
+      markResolved: action === "RESOLVE",
+      ...("closeReason" in rule ? { closeReason: rule.closeReason } : {}),
+      ...(action === "SATISFY" || action === "REOPEN"
+        ? { resolvedAfter: feedbackWindowStart(at) }
+        : {}),
+    });
+    if (!ok) throw new HttpError(409, ticketConflictMessage(action));
+  }
+
+  function assertState(
+    side: Side,
+    target: FeedbackTicketTargetRow,
+    action: TicketAction,
+    at: Date,
+  ): void {
+    assertTicketAction(
+      side,
+      {
+        status: toTicketStatus(target.status),
+        lastResolvedAt: target.lastResolvedAt,
+      },
+      action,
+      at,
+    );
+  }
+
+  /** Bên xử lý là NCC của chuyến giao: giữ thứ tự khóa và kiểm tra lại actor trước/sau khóa. */
+  async function supplierAct(
+    params: IngredientQualityFeedbackParamsRequest,
+    principal: AuthPrincipal,
+    action: TicketAction,
+    run: TicketRun,
+  ): Promise<FeedbackDetail> {
+    const originalScope = ingredientQualityFeedbackResponseScope(principal);
+    const db = await databaseOperation(() => connect());
+    return authorizationTransaction(db, async (tx) => {
+      const initialActor = await repository.readActor(tx, principal.id);
+      assertActorMatchesOriginal(initialActor, principal, originalScope);
+
+      const metadata = await repository.findResponseMetadata(
+        tx,
+        params.feedbackId,
+        originalScope,
+      );
+      await repository.lockResponseContext(tx, originalScope, {
+        feedbackId: params.feedbackId,
+        actorUserId: principal.id,
+        actorRoleId: principal.roleId,
+        schoolId: metadata?.schoolId,
+        deliveryId: metadata?.deliveryId,
+      });
+
+      const currentActor = await repository.readActor(tx, principal.id);
+      assertActorMatchesOriginal(currentActor, principal, originalScope);
+
+      if (!metadata) throw new HttpError(404, NOT_FOUND_MESSAGE);
+
+      const target = await repository.findSupplierTarget(
+        tx,
+        params.feedbackId,
+        originalScope,
+      );
+      if (!target) throw new HttpError(404, NOT_FOUND_MESSAGE);
+      if (
+        target.deliveryId !== metadata.deliveryId ||
+        target.schoolId !== metadata.schoolId
+      ) {
+        throw new HttpError(503, CORRUPT_DATA_MESSAGE);
+      }
+      const at = now();
+      assertState("HANDLER", target, action, at);
+      await run(
+        tx,
+        target,
+        { userId: currentActor.id, roleCode: currentActor.role },
+        at,
+      );
+      return readAndMapDetail(
+        tx,
+        params.feedbackId,
+        { kind: "SUPPLIER", supplierId: originalScope.supplierId },
+        currentActor,
+        at,
+      );
+    });
+  }
+
+  /** Người gửi là tài khoản trường đã gửi đơn: nạp lại actor + khóa trường trong transaction. */
+  async function requesterAct(
+    params: IngredientQualityFeedbackParamsRequest,
+    principal: AuthPrincipal,
+    action: TicketAction,
+    run: TicketRun,
+  ): Promise<FeedbackDetail> {
+    if (principal.orgType !== ORG_TYPES.SCHOOL)
+      throw new HttpError(403, "Chỉ người gửi đơn được thực hiện thao tác này");
+    return withSchoolTransaction(
+      await databaseOperation(() => connect()),
+      principal,
+      REQUESTER_PERMISSION,
+      async (tx, actor, schoolId) => {
+        const readScope = ingredientQualityFeedbackReadScope(actor, "detail");
+        const target = await repository.findRequesterTarget(
+          tx,
+          params.feedbackId,
+          { schoolId, senderUserId: actor.id },
+        );
+        if (!target) throw new HttpError(404, NOT_FOUND_MESSAGE);
+        const at = now();
+        assertState("REQUESTER", target, action, at);
+        await run(tx, target, { userId: actor.id, roleCode: actor.role }, at);
+        return readAndMapDetail(tx, params.feedbackId, readScope, actor, at);
+      },
+    );
   }
 
   return {
     async getAll(
       query: IngredientQualityFeedbackListQueryRequest,
       principal: AuthPrincipal,
-    ): Promise<SupplierFeedbackList | LegacyFeedbackList> {
+    ): Promise<FeedbackList> {
       const scope = ingredientQualityFeedbackReadScope(principal, "list");
       const { skip, take } = listWindow(query);
-      if (scope.kind === "SUPPLIER") {
-        const page = await readListPage(
-          () => repository.listSupplier(scope, skip, take),
-          query,
-        );
-        return {
-          items: page.items.map(mapSupplierListItem),
-          pagination: page.pagination,
-        };
-      }
       const page = await readListPage(
-        () => repository.listLegacy(scope, skip, take),
+        () => repository.list(scope, skip, take),
         query,
       );
+      const at = now();
       return {
-        items: page.items.map(mapLegacyFeedbackItem),
+        items: page.items.map((row) =>
+          mapListItem(row, principal, at, row.comments[0]?.authorSide ?? null),
+        ),
         pagination: page.pagination,
       };
     },
@@ -240,74 +348,92 @@ export function createIngredientQualityFeedbackService(
     ): Promise<FeedbackDetail> {
       const scope = ingredientQualityFeedbackReadScope(principal, "detail");
       return withReadTransaction(
-        (tx) => readAndMapDetail(tx, params.feedbackId, scope),
+        (tx) =>
+          readAndMapDetail(tx, params.feedbackId, scope, principal, now()),
         connect,
       );
     },
-    async respond(
+    accept(
       params: IngredientQualityFeedbackParamsRequest,
-      body: IngredientQualityFeedbackResponseBodyRequest,
       principal: AuthPrincipal,
     ): Promise<FeedbackDetail> {
-      const originalScope = ingredientQualityFeedbackResponseScope(principal);
-      const db = await databaseOperation(() => connect());
-      return authorizationTransaction(db, async (tx) => {
-        const initialActor = await repository.readActor(tx, principal.id);
-        assertActorMatchesOriginal(initialActor, principal, originalScope);
-
-        const metadata = await repository.findResponseMetadata(
-          tx,
-          params.feedbackId,
-          originalScope,
-        );
-        await repository.lockResponseContext(tx, originalScope, {
-          feedbackId: params.feedbackId,
-          actorUserId: principal.id,
-          actorRoleId: principal.roleId,
-          schoolId: metadata?.schoolId,
-          deliveryId: metadata?.deliveryId,
+      return supplierAct(params, principal, "ACCEPT", (tx, target, actor, at) =>
+        transition(tx, target, actor, at, "ACCEPT"),
+      );
+    },
+    resolve(
+      params: IngredientQualityFeedbackParamsRequest,
+      body: FeedbackResolveBodyRequest,
+      principal: AuthPrincipal,
+    ): Promise<FeedbackDetail> {
+      return supplierAct(
+        params,
+        principal,
+        "RESOLVE",
+        async (tx, target, actor, at) => {
+          await transition(tx, target, actor, at, "RESOLVE");
+          await tickets.addComment(tx, {
+            complaintId: target.id,
+            actor,
+            side: "HANDLER",
+            type: "RESOLUTION",
+            content: body.content,
+          });
+        },
+      );
+    },
+    comment(
+      params: IngredientQualityFeedbackParamsRequest,
+      body: FeedbackCommentBodyRequest,
+      principal: AuthPrincipal,
+    ): Promise<FeedbackDetail> {
+      const side: Side =
+        principal.orgType === ORG_TYPES.SUPPLIER ? "HANDLER" : "REQUESTER";
+      const run: TicketRun = async (tx, target, actor) => {
+        await tickets.addComment(tx, {
+          complaintId: target.id,
+          actor,
+          side,
+          type: "MESSAGE",
+          content: body.content,
         });
-
-        const currentActor = await repository.readActor(tx, principal.id);
-        assertActorMatchesOriginal(currentActor, principal, originalScope);
-
-        if (!metadata) throw new HttpError(404, NOT_FOUND_MESSAGE);
-
-        const target = await repository.findResponseTarget(
-          tx,
-          params.feedbackId,
-          originalScope,
-        );
-        if (!target) throw new HttpError(404, NOT_FOUND_MESSAGE);
-        if (
-          target.deliveryId !== metadata.deliveryId ||
-          target.schoolId !== metadata.schoolId
-        ) {
-          throw new HttpError(503, CORRUPT_DATA_MESSAGE);
-        }
-        if (target.status === "RESPONDED") {
-          throw new HttpError(409, ALREADY_RESPONDED_MESSAGE);
-        }
-        if (target.status !== "SUBMITTED") {
-          throw new HttpError(503, CORRUPT_DATA_MESSAGE);
-        }
-
-        const updatedCount = await repository.respondIfSubmitted(tx, {
-          feedbackId: params.feedbackId,
-          supplierId: originalScope.supplierId,
-          supplierResponse: body.supplierResponse,
-          respondedByUserId: currentActor.id,
-          respondedAt: new Date(),
-        });
-        if (updatedCount === 0) {
-          throw new HttpError(409, ALREADY_RESPONDED_MESSAGE);
-        }
-
-        return readAndMapDetail(tx, params.feedbackId, {
-          kind: "SUPPLIER",
-          supplierId: originalScope.supplierId,
-        });
-      });
+      };
+      return side === "HANDLER"
+        ? supplierAct(params, principal, "COMMENT", run)
+        : requesterAct(params, principal, "COMMENT", run);
+    },
+    satisfy(
+      params: IngredientQualityFeedbackParamsRequest,
+      principal: AuthPrincipal,
+    ): Promise<FeedbackDetail> {
+      return requesterAct(
+        params,
+        principal,
+        "SATISFY",
+        (tx, target, actor, at) => transition(tx, target, actor, at, "SATISFY"),
+      );
+    },
+    reopen(
+      params: IngredientQualityFeedbackParamsRequest,
+      body: FeedbackReopenBodyRequest,
+      principal: AuthPrincipal,
+    ): Promise<FeedbackDetail> {
+      return requesterAct(
+        params,
+        principal,
+        "REOPEN",
+        async (tx, target, actor, at) => {
+          await transition(tx, target, actor, at, "REOPEN");
+          if (body.reason)
+            await tickets.addComment(tx, {
+              complaintId: target.id,
+              actor,
+              side: "REQUESTER",
+              type: "REOPEN_NOTE",
+              content: body.reason,
+            });
+        },
+      );
     },
   };
 }

@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  validateComplaintComment,
+  validateComplaintReopen,
+  validateComplaintResolve,
   validateCreateComplaint,
   validateFeedbackListQuery,
-  validateRespondComplaint,
 } from "../src/modules/feedback/feedback.validation";
 import { createFeedbackRepository } from "../src/modules/feedback/feedback.repository";
 import { createFeedbackService } from "../src/modules/feedback/feedback.service";
@@ -23,134 +25,113 @@ const principal = (overrides: Partial<AuthPrincipal> = {}): AuthPrincipal => ({
   permissions: ["meal_complaint.submit", "meal_complaint.view"],
   ...overrides,
 });
+const board = (overrides: Partial<AuthPrincipal> = {}) =>
+  principal({
+    id: "10000000-0000-4000-8000-000000000009",
+    role: "SCHOOL_MANAGEMENT_BOARD",
+    permissions: ["meal_complaint.view", "meal_complaint.respond"],
+    ...overrides,
+  });
 
-void test("GVCN list scope is own complaints in own school", () => {
+void test("GVCN list scope is own MEAL complaints in own school", () => {
   const actor = principal();
   assert.deepEqual(listScopes.feedback(actor), {
-    DailyMealPortion: { Class: { schoolId: actor.schoolId } },
-    submittedByUserId: actor.id,
+    kind: "MEAL",
+    mealComplaint: { is: { schoolId: actor.schoolId } },
+    senderUserId: actor.id,
   });
 });
 void test("đại diện phụ huynh chỉ đọc đơn của mình", () => {
   const actor = principal({ role: "PARENTS_COMMITTEE" });
   assert.deepEqual(listScopes.feedback(actor), {
-    DailyMealPortion: { Class: { schoolId: actor.schoolId } },
-    submittedByUserId: actor.id,
+    kind: "MEAL",
+    mealComplaint: { is: { schoolId: actor.schoolId } },
+    senderUserId: actor.id,
   });
   assert.throws(() => listScopes.feedback({ ...actor, permissions: [] }), {
     statusCode: 403,
   });
 });
 void test("BGH list scope is school-wide", () => {
-  const actor = principal({
-    role: "SCHOOL_MANAGEMENT_BOARD",
-    permissions: ["meal_complaint.view", "meal_complaint.respond"],
-  });
+  const actor = board();
   assert.deepEqual(listScopes.feedback(actor), {
-    DailyMealPortion: { Class: { schoolId: actor.schoolId } },
+    kind: "MEAL",
+    mealComplaint: { is: { schoolId: actor.schoolId } },
   });
 });
-void test("create rejects server-owned fields", () => {
+void test("create rejects server-owned fields and HEALTH_ISSUE (Q21)", () => {
   const valid = {
     dailyMealPortionId: "10000000-0000-4000-8000-000000000020",
     complaintType: "MEAL_QUALITY",
     description: "Suất ăn có mùi bất thường.",
   };
   assert.deepEqual(validateCreateComplaint(valid), valid);
-  assert.throws(() =>
-    validateCreateComplaint({ ...valid, submittedByUserId: principal().id }),
-  );
-  assert.throws(() =>
-    validateCreateComplaint({ ...valid, status: "RESOLVED" }),
-  );
-});
-void test("response action validation enforces lifecycle input", () => {
-  assert.throws(() => validateRespondComplaint({ action: "RESOLVE" }));
-  assert.throws(() =>
-    validateRespondComplaint({
-      action: "START_REVIEW",
-      resolution: "Không hợp lệ",
-    }),
-  );
-  assert.deepEqual(
-    validateRespondComplaint({
-      action: "RESOLVE",
-      resolution: "Đã thay đổi nhà cung cấp suất ăn.",
-    }),
-    { action: "RESOLVE", resolution: "Đã thay đổi nhà cung cấp suất ăn." },
+  for (const extra of [
+    { senderUserId: principal().id },
+    { status: "RESOLVED" },
+    { title: "Tự đặt tiêu đề" },
+  ])
+    assert.throws(() => validateCreateComplaint({ ...valid, ...extra }), {
+      statusCode: 400,
+    });
+  assert.throws(
+    () => validateCreateComplaint({ ...valid, complaintType: "HEALTH_ISSUE" }),
+    { statusCode: 400 },
   );
 });
-void test("list filters validate enums and range", () => {
+void test("ticket bodies trim content, require resolution text, reason optional", () => {
+  assert.deepEqual(validateComplaintComment({ content: "  Xin chào  " }), {
+    content: "Xin chào",
+  });
+  assert.throws(() => validateComplaintComment({ content: "   " }), {
+    statusCode: 400,
+  });
+  assert.throws(() => validateComplaintResolve({}), { statusCode: 400 });
+  assert.throws(() => validateComplaintResolve({ content: "x".repeat(5001) }), {
+    statusCode: 400,
+  });
+  assert.deepEqual(validateComplaintReopen(undefined), {});
+  assert.deepEqual(validateComplaintReopen({ reason: " Chưa ổn " }), {
+    reason: "Chưa ổn",
+  });
+  assert.throws(() => validateComplaintReopen({ reason: "" }), {
+    statusCode: 400,
+  });
+});
+void test("list filters validate ticket statuses and range", () => {
   assert.deepEqual(
-    validateFeedbackListQuery({ page: "2", limit: "10", status: "IN_REVIEW" }),
-    { page: 2, limit: 10, status: "IN_REVIEW" },
+    validateFeedbackListQuery({
+      page: "2",
+      limit: "10",
+      status: "IN_PROGRESS",
+    }),
+    { page: 2, limit: 10, status: "IN_PROGRESS" },
   );
   assert.throws(() =>
     validateFeedbackListQuery({ from: "2026-11-10", to: "2026-11-01" }),
   );
-  assert.throws(() => validateFeedbackListQuery({ status: "REJECTED" }));
+  for (const status of ["REJECTED", "SUBMITTED", "IN_REVIEW"])
+    assert.throws(() => validateFeedbackListQuery({ status }));
 });
 
-process.env.BUSINESS_CODE_KEY ||=
-  "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
-
-void test("tạo khiếu nại cấp mã FP-MC Feistel trong cùng transaction và lưu vào cột code", async () => {
-  const calls: string[] = [];
-  let createdData: Record<string, unknown> | undefined;
-  const tx = {
-    $queryRaw: (strings: TemplateStringsArray, ...values: unknown[]) => {
-      const sql = strings.join("?");
-      if (sql.includes("pg_advisory_xact_lock")) {
-        calls.push(`lock:${String(values[0])}`);
-        return Promise.resolve([{ locked: 1 }]);
-      }
-      calls.push(`counter:${String(values[0])}`);
-      return Promise.resolve([{ lastSequence: 1 }]);
-    },
-    mealComplaint: {
-      findMany: () => {
-        calls.push("exists");
-        return Promise.resolve([]);
-      },
-      create: ({ data }: { data: Record<string, unknown> }) => {
-        createdData = data;
-        return Promise.resolve({ id: "c1", ...data });
-      },
-    },
-  };
-  const repository = createFeedbackRepository();
-  const code = await repository.allocateMealComplaintCode(tx as never);
-  assert.match(code, /^FP-MC-[0-9]{5}$/);
-  assert.notEqual(code, "FP-MC-00001");
-  assert.deepEqual(calls, [
-    "lock:foodprint:business-code:MC",
-    "counter:MC",
-    "exists",
-  ]);
-  await repository.create(tx as never, {
-    code,
-    dailyMealPortionId: "20000000-0000-4000-8000-000000000001",
-    submittedByUserId: "10000000-0000-4000-8000-000000000001",
+const NOW = new Date("2026-11-20T03:00:00.000Z");
+const row = (overrides: Record<string, unknown> = {}) => ({
+  id: "c1",
+  code: "FP-MC-58213",
+  title: "Khiếu nại suất ăn lớp 5A - Bữa trưa ngày 19/11/2026",
+  description: "Mô tả",
+  status: "IN_PROGRESS",
+  senderUserId: principal().id,
+  lastResolvedAt: null,
+  resolvedCount: 0,
+  closeReason: null,
+  closedAt: null,
+  submittedAt: new Date("2026-11-19T01:00:00Z"),
+  updatedAt: new Date("2026-11-19T01:00:00Z"),
+  senderUser: { id: principal().id, fullName: "GV" },
+  mealComplaint: {
+    schoolId: principal().schoolId,
     complaintType: "OTHER",
-    description: "Cơm nguội",
-  });
-  assert.equal(createdData?.code, code);
-  assert.equal(createdData?.status, "SUBMITTED");
-});
-
-void test("danh sách và chi tiết khiếu nại trả code, null với bản ghi cũ", async () => {
-  const row = (id: string, code: string | null) => ({
-    id,
-    code,
-    complaintType: "OTHER",
-    description: "Mô tả",
-    status: "SUBMITTED",
-    submittedAt: new Date("2026-11-19T01:00:00Z"),
-    updatedAt: new Date("2026-11-19T01:00:00Z"),
-    resolvedAt: null,
-    resolution: null,
-    submittedByUser: { id: "u1", fullName: "GV" },
-    handledByUser: null,
     DailyMealPortion: {
       id: "p1",
       mealDate: new Date("2026-11-19T00:00:00Z"),
@@ -158,22 +139,67 @@ void test("danh sách và chi tiết khiếu nại trả code, null với bản 
       Class: { id: "k1", name: "5A", academicYear: "2026-2027" },
       MealAllocation: null,
     },
-  });
-  const rows = [row("a", "FP-MC-58213"), row("b", null)];
+  },
+  comments: [{ authorSide: "REQUESTER" }],
+  ...overrides,
+});
+
+void test("hai lớp trạng thái: người gửi thấy Đang xử lý, BGH thấy nhãn tin nhắn mới", async () => {
   const service = createFeedbackService(
     {
       ...createFeedbackRepository(),
-      list: () => Promise.resolve(rows),
-      findOne: () => Promise.resolve(rows[1]),
+      list: () => Promise.resolve([row()]),
     } as never,
     () => Promise.resolve({} as never),
+    () => NOW,
   );
-  const viewer = principal({ role: "SCHOOL_MANAGEMENT_BOARD" });
-  const list = await service.getAll({ page: 1, limit: 20 }, viewer);
-  assert.deepEqual(
-    list.items.map((item) => item.code),
-    ["FP-MC-58213", null],
+  const [forBoard] = (await service.getAll({ page: 1, limit: 20 }, board()))
+    .items;
+  assert.equal(forBoard.status, "IN_PROGRESS");
+  assert.equal(forBoard.displayStatus, "IN_PROGRESS");
+  assert.equal(forBoard.hasNewMessage, true);
+  assert.deepEqual(forBoard.allowedActions, ["COMMENT", "RESOLVE"]);
+  assert.equal(forBoard.code, "FP-MC-58213");
+
+  const [forSender] = (
+    await service.getAll({ page: 1, limit: 20 }, principal())
+  ).items;
+  assert.equal(forSender.hasNewMessage, false);
+  assert.deepEqual(forSender.allowedActions, ["COMMENT"]);
+});
+
+void test("RESOLVED: người gửi có 48h để Hài lòng / Yêu cầu xử lý lại", async () => {
+  const resolvedAt = new Date(NOW.getTime() - 47 * 3600 * 1000);
+  const make = (lastResolvedAt: Date) =>
+    createFeedbackService(
+      {
+        ...createFeedbackRepository(),
+        findOne: () =>
+          Promise.resolve(
+            row({
+              status: "RESOLVED",
+              lastResolvedAt,
+              resolvedCount: 1,
+              comments: [],
+            }),
+          ),
+      } as never,
+      () => Promise.resolve({} as never),
+      () => NOW,
+    );
+  const open = await make(resolvedAt).getOne("c1", principal());
+  assert.equal(open.displayStatus, "RESOLVED");
+  assert.deepEqual(open.allowedActions, ["SATISFY", "REOPEN"]);
+  assert.equal(
+    open.feedbackDeadlineAt,
+    new Date(resolvedAt.getTime() + 48 * 3600 * 1000).toISOString(),
   );
-  assert.equal(Object.keys(list.items[0])[1], "code");
-  assert.equal((await service.getOne("b", viewer)).code, null);
+  assert.deepEqual(open.comments, []);
+  const expired = await make(new Date(NOW.getTime() - 48 * 3600 * 1000)).getOne(
+    "c1",
+    principal(),
+  );
+  assert.deepEqual(expired.allowedActions, []);
+  const handlerView = await make(resolvedAt).getOne("c1", board());
+  assert.deepEqual(handlerView.allowedActions, []);
 });

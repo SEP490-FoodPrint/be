@@ -1,10 +1,14 @@
 import type { Prisma, PrismaClient } from "../../generated/prisma/client";
-import { allocateBusinessCode } from "../../utils/business-code";
+import {
+  latestCommentSideSelect,
+  ticketCommentsArgs,
+} from "../complaint-ticket/complaint-ticket.repository";
+import type { ComplaintListQueryDTO } from "./feedback.request.dto";
 type Db = PrismaClient | Prisma.TransactionClient;
 
-export const complaintInclude = {
-  submittedByUser: { select: { id: true, fullName: true } },
-  handledByUser: { select: { id: true, fullName: true } },
+const mealSelect = {
+  schoolId: true,
+  complaintType: true,
   DailyMealPortion: {
     select: {
       id: true,
@@ -14,68 +18,125 @@ export const complaintInclude = {
       MealAllocation: { select: { id: true, status: true } },
     },
   },
-} as const satisfies Prisma.MealComplaintInclude;
-export type ComplaintRow = Prisma.MealComplaintGetPayload<{
-  include: typeof complaintInclude;
+} as const satisfies Prisma.MealComplaintSelect;
+
+export const complaintSelect = {
+  id: true,
+  code: true,
+  title: true,
+  description: true,
+  status: true,
+  senderUserId: true,
+  lastResolvedAt: true,
+  resolvedCount: true,
+  closeReason: true,
+  closedAt: true,
+  submittedAt: true,
+  updatedAt: true,
+  senderUser: { select: { id: true, fullName: true } },
+  mealComplaint: { select: mealSelect },
+  comments: latestCommentSideSelect,
+} as const satisfies Prisma.ComplaintSelect;
+export type ComplaintRow = Prisma.ComplaintGetPayload<{
+  select: typeof complaintSelect;
 }>;
+
+const complaintDetailSelect = {
+  ...complaintSelect,
+  comments: ticketCommentsArgs,
+} as const satisfies Prisma.ComplaintSelect;
+export type ComplaintDetailRow = Prisma.ComplaintGetPayload<{
+  select: typeof complaintDetailSelect;
+}>;
+
+/** Trạng thái hiện tại để kiểm tra thao tác ticket trong transaction. */
+const ticketTargetSelect = {
+  id: true,
+  status: true,
+  senderUserId: true,
+  lastResolvedAt: true,
+} as const satisfies Prisma.ComplaintSelect;
+export type ComplaintTicketTarget = Prisma.ComplaintGetPayload<{
+  select: typeof ticketTargetSelect;
+}>;
+
+function scoped(
+  scope: Prisma.ComplaintWhereInput,
+  ...filters: Prisma.ComplaintWhereInput[]
+): Prisma.ComplaintWhereInput {
+  return { AND: [scope, { kind: "MEAL" }, ...filters] };
+}
 
 export function createFeedbackRepository() {
   return {
     list(
       db: Db,
-      scope: Prisma.MealComplaintWhereInput,
-      query: import("./feedback.request.dto").ComplaintListQueryDTO,
+      scope: Prisma.ComplaintWhereInput,
+      query: ComplaintListQueryDTO,
     ) {
       const from = query.from
         ? new Date(`${query.from}T00:00:00.000Z`)
         : undefined;
       const to = query.to ? new Date(`${query.to}T23:59:59.999Z`) : undefined;
-      const where: Prisma.MealComplaintWhereInput = {
-        AND: [
-          scope,
-          query.status ? { status: query.status } : {},
-          query.complaintType ? { complaintType: query.complaintType } : {},
-          from || to ? { submittedAt: { gte: from, lte: to } } : {},
-          query.search
-            ? {
-                OR: [
-                  {
-                    description: {
-                      contains: query.search,
-                      mode: "insensitive",
-                    },
+      const where = scoped(
+        scope,
+        query.status ? { status: query.status } : {},
+        query.complaintType
+          ? { mealComplaint: { is: { complaintType: query.complaintType } } }
+          : {},
+        from || to ? { submittedAt: { gte: from, lte: to } } : {},
+        query.search
+          ? {
+              OR: [
+                { code: { contains: query.search, mode: "insensitive" } },
+                {
+                  description: { contains: query.search, mode: "insensitive" },
+                },
+                {
+                  senderUser: {
+                    fullName: { contains: query.search, mode: "insensitive" },
                   },
-                  {
-                    submittedByUser: {
-                      fullName: { contains: query.search, mode: "insensitive" },
-                    },
-                  },
-                  {
-                    DailyMealPortion: {
-                      Class: {
-                        name: { contains: query.search, mode: "insensitive" },
+                },
+                {
+                  mealComplaint: {
+                    is: {
+                      DailyMealPortion: {
+                        Class: {
+                          name: {
+                            contains: query.search,
+                            mode: "insensitive",
+                          },
+                        },
                       },
                     },
                   },
-                ],
-              }
-            : {},
-        ],
-      };
-      const skip = (query.page - 1) * query.limit;
-      const take = query.limit + 1;
-      return db.mealComplaint.findMany({
+                },
+              ],
+            }
+          : {},
+      );
+      return db.complaint.findMany({
         where,
-        skip,
-        take,
-        include: complaintInclude,
+        skip: (query.page - 1) * query.limit,
+        take: query.limit + 1,
+        select: complaintSelect,
         orderBy: [{ submittedAt: "desc" }, { id: "desc" }],
       });
     },
-    findOne(db: Db, scope: Prisma.MealComplaintWhereInput, id: string) {
-      return db.mealComplaint.findFirst({
-        where: { AND: [scope, { id }] },
-        include: complaintInclude,
+    findOne(db: Db, scope: Prisma.ComplaintWhereInput, id: string) {
+      return db.complaint.findFirst({
+        where: scoped(scope, { id }),
+        select: complaintDetailSelect,
+      });
+    },
+    findTicketTarget(
+      tx: Prisma.TransactionClient,
+      scope: Prisma.ComplaintWhereInput,
+      id: string,
+    ): Promise<ComplaintTicketTarget | null> {
+      return tx.complaint.findFirst({
+        where: scoped(scope, { id }),
+        select: ticketTargetSelect,
       });
     },
     findMealOptions(
@@ -115,51 +176,42 @@ export function createFeedbackRepository() {
         },
       });
     },
-    /** Cấp mã FP-MC-NNNNN (hậu tố Feistel) trong transaction tạo khiếu nại; không trùng mã đã có. */
-    allocateMealComplaintCode(tx: Prisma.TransactionClient) {
-      return allocateBusinessCode(tx, "MC", async (codes) => {
-        const rows = await tx.mealComplaint.findMany({
-          where: { code: { in: [...codes] } },
-          select: { code: true },
-        });
-        return new Set(
-          rows.flatMap((row) => (row.code === null ? [] : [row.code])),
-        );
-      });
-    },
+    /** Tạo bản ghi cha `complaints` + bản ghi con `meal_complaints` trong cùng lệnh. */
     create(
-      db: Db,
+      tx: Prisma.TransactionClient,
       data: {
         code: string;
-        dailyMealPortionId: string;
-        submittedByUserId: string;
-        complaintType: CreateDataType;
+        title: string;
         description: string;
+        senderUserId: string;
+        senderRoleCode: string;
+        schoolId: string;
+        dailyMealPortionId: string;
+        complaintType: MealComplaintTypeValue;
       },
     ) {
-      return db.mealComplaint.create({
-        data: { ...data, status: "SUBMITTED" },
-        include: complaintInclude,
-      });
-    },
-    updateStatus(
-      db: Db,
-      id: string,
-      data: {
-        status: "IN_REVIEW" | "RESOLVED";
-        handledByUserId: string;
-        resolution?: string;
-        resolvedAt?: Date;
-      },
-    ) {
-      return db.mealComplaint.update({
-        where: { id },
-        data,
-        include: complaintInclude,
+      return tx.complaint.create({
+        data: {
+          kind: "MEAL",
+          code: data.code,
+          title: data.title,
+          description: data.description,
+          senderUserId: data.senderUserId,
+          senderRoleCode: data.senderRoleCode,
+          senderSchoolId: data.schoolId,
+          status: "NEW",
+          mealComplaint: {
+            create: {
+              schoolId: data.schoolId,
+              dailyMealPortionId: data.dailyMealPortionId,
+              complaintType: data.complaintType,
+            },
+          },
+        },
+        select: { id: true },
       });
     },
   };
 }
-type CreateDataType =
-  "MEAL_QUALITY" | "FOOD_HYGIENE" | "HEALTH_ISSUE" | "OTHER";
+type MealComplaintTypeValue = "MEAL_QUALITY" | "FOOD_HYGIENE" | "OTHER";
 export type FeedbackRepository = ReturnType<typeof createFeedbackRepository>;

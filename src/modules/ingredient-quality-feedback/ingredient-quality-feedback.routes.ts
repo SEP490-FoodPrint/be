@@ -1,6 +1,9 @@
 import { Router, type RequestHandler } from "express";
 import { authenticate } from "../../middlewares/auth.middleware";
-import { requireResource } from "../../middlewares/permission.middleware";
+import {
+  requirePermission,
+  requireResource,
+} from "../../middlewares/permission.middleware";
 import { requirePrincipal } from "../../utils/authorization";
 import {
   ingredientQualityFeedbackReadScope,
@@ -21,10 +24,27 @@ const requireDetailScope: RequestHandler = (req, _res, next) => {
   }
 };
 
+/** Bên xử lý: admin/nhân viên NCC có quyền xem chi tiết + xử lý. */
 const requireResponseScope: RequestHandler = (req, _res, next) => {
   try {
     ingredientQualityFeedbackResponseScope(requirePrincipal(req));
     next();
+  } catch (error) {
+    next(error);
+  }
+};
+
+/** Người gửi: tài khoản trường có quyền gửi phản ánh. */
+const requireRequester = requirePermission(
+  "ingredient_quality_feedback.submit",
+);
+
+/** Bình luận hai chiều: NCC theo phạm vi xử lý, trường theo quyền gửi. */
+const requireCommenter: RequestHandler = (req, res, next) => {
+  try {
+    if (requirePrincipal(req).orgType === "SUPPLIER")
+      requireResponseScope(req, res, next);
+    else requireRequester(req, res, next);
   } catch (error) {
     next(error);
   }
@@ -49,10 +69,34 @@ export function createIngredientQualityFeedbackRouter(
     controller.getDetail,
   );
   router.post(
-    "/:feedbackId/response",
+    "/:feedbackId/accept",
     authHandler,
     requireResponseScope,
-    controller.respond,
+    controller.accept,
+  );
+  router.post(
+    "/:feedbackId/comments",
+    authHandler,
+    requireCommenter,
+    controller.comment,
+  );
+  router.post(
+    "/:feedbackId/resolve",
+    authHandler,
+    requireResponseScope,
+    controller.resolve,
+  );
+  router.post(
+    "/:feedbackId/satisfy",
+    authHandler,
+    requireRequester,
+    controller.satisfy,
+  );
+  router.post(
+    "/:feedbackId/reopen",
+    authHandler,
+    requireRequester,
+    controller.reopen,
   );
   return router;
 }
