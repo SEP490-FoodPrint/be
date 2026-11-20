@@ -16,6 +16,7 @@ const row = {
     Ingredient: {
       name: "Peanut",
       ingredientCategory: { categoryName: "Nuts" },
+      Supplier: { name: "Nut Supplier" },
     },
   },
 };
@@ -36,6 +37,7 @@ void test("allergy catalogue sends trusted school scope and bounded pagination a
     ingredientId: "ingredient-a",
     ingredientName: "Peanut",
     category: "Nuts",
+    supplierName: "Nut Supplier",
     affectedCount: 2,
     updatedAt: "2026-11-13T00:00:00.000Z",
   });

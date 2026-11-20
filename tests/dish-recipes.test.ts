@@ -121,6 +121,30 @@ void test("plan common and separate batches using ml recipes with lots measured 
   );
 });
 
+void test("combined kitchen plan identifies the ingredient and shortage", () => {
+  assert.throws(
+    () =>
+      planCookingBatches(
+        617,
+        "COMBINE_LOTS",
+        [
+          {
+            ingredientEntryId: "water-spinach",
+            ingredientName: "Rau muống sạch",
+            quantityPerPortion: "80",
+            unit: "g",
+          },
+        ],
+        [],
+      ),
+    (error: unknown) =>
+      error instanceof Error &&
+      "statusCode" in error &&
+      error.statusCode === 409 &&
+      error.message.includes("Rau muống sạch thiếu 49360 g"),
+  );
+});
+
 void test("grade recipes with equivalent lít and ml quantities can share a menu", () => {
   const line = (quantity: string, unit: string) => ({
     ingredientEntryId: "oil",

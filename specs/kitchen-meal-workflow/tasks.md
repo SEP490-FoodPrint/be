@@ -27,3 +27,6 @@
 - [x] Round-2 request guard on finalized attendance (supplier-onboarding intake) and disabled round-2 button in the order screen.
 - [x] Automatic portion-group split on homeroom finalise (`autoSplitPortionGroups`, `splitPortionsIntoGroups`); seasoning error names invalid entries.
 - [ ] Run PostgreSQL integration tests for cooking batches on a disposable local instance.
+- [x] FR-026: set a bounded 20-second timeout on the kitchen list and stats read transactions, verify their transaction options in the existing list test, and run focused tests, lint, format, and typecheck.
+- [x] FR-028: show the missing ingredient and amount in the kitchen stock-shortage error; add a unit test and run focused backend checks.
+- [x] FR-029: require a declared free compartment on retained-sample create inside the unit lock; disable occupied compartments and remove custom input in both sample forms; cover duplicate, invalid and released compartments in focused tests, then typecheck/build.

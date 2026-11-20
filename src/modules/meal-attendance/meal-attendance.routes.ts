@@ -25,6 +25,18 @@ export function createMealAttendanceRouter(
       requirePermission("daily_meal_portion.view"),
       controller.getMyClass,
     );
+    router.get(
+      "/my-class/allergy-options",
+      authHandler,
+      requirePermission("daily_meal_portion.view"),
+      controller.getClassAllergyOptions,
+    );
+    router.put(
+      "/my-class/allergies",
+      authHandler,
+      requirePermission("daily_meal_portion.update"),
+      controller.saveClassAllergies,
+    );
     router.post(
       "/",
       authHandler,

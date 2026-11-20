@@ -58,8 +58,10 @@ export const foodSampleSchema = z
       }),
     /** Tủ lưu mẫu của trường (bắt buộc); hệ thống kiểm tra trạng thái và sức chứa. */
     storageUnitId: requestUuidSchema,
-    /** Ngăn/vị trí trong tủ (không bắt buộc). */
-    storageLocation: requiredText(255).optional(),
+    /** Ngăn đã khai báo của tủ; số ngăn tối đa được kiểm tra theo tủ trong service. */
+    storageLocation: requiredText(255).regex(/^Ngăn [1-9]\d*$/, {
+      error: "Vui lòng chọn ngăn trong tủ lưu mẫu",
+    }),
     sampledAt: timestampSchema,
   })
   .superRefine((sample, context) => {

@@ -83,6 +83,8 @@ export interface DishItemDTO {
   order: number | null;
   mealType: "LUNCH" | "AFTERNOON";
   description: string | null;
+  /** Có giá trị khi đây là món thay thế dị ứng cho món gốc này (chỉ trong thực đơn tuần công khai). */
+  substituteForDishId?: string | null;
 }
 
 export interface SnackItemDTO {

@@ -982,6 +982,7 @@ void test("kitchen and nutrition wire contracts use real scoped PostgreSQL data"
         quantity: "125.375",
         unit: "g",
         storageUnitId: wireFridge.id,
+        storageLocation: "Ngăn 1",
         sampledAt: new Date(Date.now() - 30_000).toISOString(),
       };
       assert.equal(
@@ -1026,7 +1027,7 @@ void test("kitchen and nutrition wire contracts use real scoped PostgreSQL data"
       });
       assert.equal(stored.quantity?.toString(), "125.375");
       assert.equal(stored.storageUnitId, wireFridge.id);
-      assert.equal(stored.storageLocation, "Wire created fridge");
+      assert.equal(stored.storageLocation, "Wire created fridge – Ngăn 1");
       const reloaded = await request(
         `/api/v1/kitchen/${emptyBatch.id}/food-samples`,
         chefA.id,

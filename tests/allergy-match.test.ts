@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   allergenMatches,
   allergyCountsFromGroups,
+  expectedSpecialGroupCounts,
   normalizeAllergenName,
   splitPortionsIntoGroups,
 } from "../src/utils/allergy-match";
@@ -160,5 +161,71 @@ void test("splitPortionsIntoGroups: suất dị ứng khai lúc điểm danh và
       },
     ]),
     null,
+  );
+});
+
+void test("danh sách dị ứng chung: số học sinh dị ứng chỉ tính một lần dù dị ứng nhiều nguyên liệu", () => {
+  const groups = [
+    { id: "default", isDefault: true, avoidances: [] },
+    {
+      id: "kieng-tom",
+      isDefault: false,
+      avoidances: [
+        {
+          ingredientEntryId: "e-tom",
+          ingredientEntry: { Ingredient: { name: "Tôm nõn" } },
+        },
+      ],
+    },
+    {
+      id: "kieng-dau-xanh",
+      isDefault: false,
+      avoidances: [
+        {
+          ingredientEntryId: "e-dau-xanh",
+          ingredientEntry: { Ingredient: { name: "Đậu xanh" } },
+        },
+      ],
+    },
+  ];
+  // Em A dị ứng cả đậu xanh và đậu xanh hạt: lớp khai 1 học sinh chung cho cả danh sách.
+  const oneStudent = [
+    {
+      ingredientEntryId: "e-dau-xanh",
+      allergenName: "Đậu xanh",
+      portionCount: 1,
+    },
+    {
+      ingredientEntryId: "e-dau-xanh-hat",
+      allergenName: "Đậu xanh hạt",
+      portionCount: 1,
+    },
+  ];
+  assert.deepEqual(
+    [...expectedSpecialGroupCounts(groups, oneStudent)],
+    [
+      ["kieng-tom", 0],
+      ["kieng-dau-xanh", 1],
+    ],
+  );
+  const split = splitPortionsIntoGroups(groups, 30, oneStudent);
+  assert.equal(split?.get("kieng-dau-xanh"), 1);
+  assert.equal(split?.get("default"), 29);
+
+  // Bữa không có nhóm riêng nào tránh nguyên liệu dị ứng của lớp: không có suất riêng.
+  const noMatch = splitPortionsIntoGroups(groups.slice(0, 2), 30, oneStudent);
+  assert.equal(noMatch?.get("kieng-tom"), 0);
+  assert.equal(noMatch?.get("default"), 30);
+
+  // Không khai suất dị ứng hôm đó.
+  assert.equal(
+    expectedSpecialGroupCounts(groups, [
+      {
+        ingredientEntryId: "e-dau-xanh",
+        allergenName: "Đậu xanh",
+        portionCount: 0,
+      },
+    ]).get("kieng-dau-xanh"),
+    0,
   );
 });

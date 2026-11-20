@@ -70,9 +70,14 @@ function mapDirectory(
 }
 function mapSchoolToDTO(school: PublicSchoolDbRow): PublicSchoolDTO {
   const district = school.location?.name || null;
-  const city = school.location?.parent?.name || "Hà Nội";
-  const addressParts = [school.address, district, city].filter(Boolean);
-  const fullAddress = addressParts.join(", ");
+  const city = school.location?.parent?.name || "Thành phố Hà Nội";
+  let fullAddress = school.address || "";
+  if (district && !fullAddress.includes(district)) {
+    fullAddress = fullAddress ? `${fullAddress}, ${district}` : district;
+  }
+  if (city && !fullAddress.includes(city)) {
+    fullAddress = fullAddress ? `${fullAddress}, ${city}` : city;
+  }
 
   let boardingScale = school.boardingScale || "Đang cập nhật";
   if (school.classes && school.classes.length > 0) {
@@ -575,7 +580,7 @@ export function createOrganizationService(
       if (!weeklyMenu || weeklyMenu.menuDays.length === 0) {
         return {
           id: null,
-          title: `Thực đơn Tuần ${weekNumber}`,
+          title: `Thực đơn dinh dưỡng tuần ${weekNumber}`,
           weekNumber,
           weekStartDate: weekSchedule.weekStartDate,
           weekEndDate: weekSchedule.weekEndDate,
@@ -611,6 +616,22 @@ export function createOrganizationService(
         const snackDishes: string[] = [];
         const allDishes: DishItemDTO[] = [];
 
+        // Món thay thế: nhóm suất riêng bỏ đúng 1 món của nhóm mặc định và thêm đúng 1 món mới.
+        const substituteFor = new Map<string, string>();
+        for (const group of day.portionGroups) {
+          if (group.isDefault) continue;
+          const regular = day.portionGroups.find(
+            (row) => row.isDefault && row.mealType === group.mealType,
+          );
+          if (!regular) continue;
+          const regularIds = new Set(regular.dishes.map((row) => row.dishId));
+          const groupIds = new Set(group.dishes.map((row) => row.dishId));
+          const removed = [...regularIds].filter((id) => !groupIds.has(id));
+          const added = [...groupIds].filter((id) => !regularIds.has(id));
+          if (removed.length === 1 && added.length === 1)
+            substituteFor.set(`${group.mealType}:${added[0]}`, removed[0]);
+        }
+
         for (const mdd of day.menuDayDishes) {
           const portionStr =
             mdd.portionSize && mdd.portionUnit
@@ -628,9 +649,13 @@ export function createOrganizationService(
             order: mdd.displayOrder,
             mealType: mdd.mealType,
             description: mdd.Dish?.description || null,
+            substituteForDishId:
+              substituteFor.get(`${mdd.mealType}:${mdd.dishId}`) ?? null,
           };
 
           allDishes.push(dishItem);
+          // Món thay thế không tính vào danh sách món chung của bữa
+          if (dishItem.substituteForDishId) continue;
           if (mdd.mealType === "LUNCH") {
             lunchDishes.push(dishItem.name);
           } else {
@@ -659,7 +684,7 @@ export function createOrganizationService(
 
       return {
         id: weeklyMenu.id,
-        title: weeklyMenu.title || `Thực đơn Tuần ${weekNumber}`,
+        title: weeklyMenu.title || `Thực đơn dinh dưỡng tuần ${weekNumber}`,
         weekNumber,
         weekStartDate: weekSchedule.weekStartDate,
         weekEndDate: weekSchedule.weekEndDate,

@@ -158,6 +158,7 @@ export function createRetainedSampleRepository(read?: ListReader) {
           name: true,
           status: true,
           capacity: true,
+          compartmentCount: true,
           currentUsage: true,
         },
       });
@@ -165,6 +166,23 @@ export function createRetainedSampleRepository(read?: ListReader) {
     countStoredInUnit(tx: Tx, storageUnitId: string) {
       return tx.retainedFoodSample.count({
         where: { storageUnitId, status: "STORED" },
+      });
+    },
+    findStoredInCompartment(
+      tx: Tx,
+      storageUnitId: string,
+      compartment: string,
+    ) {
+      return tx.retainedFoodSample.findFirst({
+        where: {
+          storageUnitId,
+          status: "STORED",
+          OR: [
+            { storageLocation: { endsWith: ` – ${compartment}` } },
+            { storageLocation: compartment },
+          ],
+        },
+        select: { id: true },
       });
     },
     findInSchool(tx: Tx, id: string, schoolId: string) {

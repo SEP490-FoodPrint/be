@@ -1,4 +1,7 @@
-import { allergyCountsFromGroups } from "../../utils/allergy-match";
+import {
+  allergyCountsFromGroups,
+  expectedSpecialGroupCounts,
+} from "../../utils/allergy-match";
 import { reserveFpCodes } from "../../utils/fp-code";
 import { classScopeForMenuDay } from "../menu/menu.repository";
 import { createHash } from "node:crypto";
@@ -47,10 +50,12 @@ import {
   kitchenDetailSelect as detailSelect,
   kitchenSummarySelect as select,
 } from "./kitchen.repository";
+import { recordPhotoUrl } from "../../utils/record-photo";
 
 const Decimal = Prisma.Decimal;
 export interface RecipeLine {
   ingredientEntryId: string;
+  ingredientName?: string;
   quantityPerPortion: string;
   unit: string;
 }
@@ -193,7 +198,7 @@ export function planCookingBatches(
       if (!needed.isZero())
         throw new HttpError(
           409,
-          "Không đủ nguyên liệu khả dụng cho nhu cầu đã chốt",
+          `Không đủ nguyên liệu khả dụng cho nhu cầu đã chốt${ingredient.ingredientName ? `: ${ingredient.ingredientName} thiếu ${needed.toString()} ${ingredient.unit}` : ""}`,
         );
     }
     return [plan];
@@ -582,20 +587,17 @@ export async function readMealPortionDemand(
         dishPortions.set(dish.dishId, dishPortions.get(dish.dishId)! + count);
     }
     // Nhóm suất riêng quy về dị ứng khai báo của lớp theo mã hoặc tên (vd. tránh "Tôm nõn tươi" = dị ứng "Tôm nõn").
-    const { byAllergy, uncovered, relevant } = allergyCountsFromGroups(
-      groups,
-      countOf,
-      demand.dailyAllergyPortions.map((a) => ({
-        ingredientEntryId: a.ingredientEntryId,
-        allergenName: a.ClassAllergy.IngredientEntry.Ingredient.name,
-      })),
-    );
+    const declared = demand.dailyAllergyPortions.map((a) => ({
+      ingredientEntryId: a.ingredientEntryId,
+      allergenName: a.ClassAllergy.IngredientEntry.Ingredient.name,
+      portionCount: a.portionCount,
+    }));
+    const { uncovered } = allergyCountsFromGroups(groups, countOf, declared);
+    // Mỗi nhóm riêng phải bằng tổng suất dị ứng khai vào nhóm đó (không tính trùng khi một nhóm tránh nhiều dị ứng).
+    const expected = expectedSpecialGroupCounts(groups, declared);
     if (
-      demand.dailyAllergyPortions.some(
-        (a) =>
-          relevant.has(a.ingredientEntryId) &&
-          (byAllergy.get(a.ingredientEntryId) ?? 0) !== a.portionCount,
-      )
+      !uncovered &&
+      [...expected].some(([groupId, count]) => countOf(groupId) !== count)
     )
       throw new HttpError(
         409,
@@ -1002,6 +1004,18 @@ function dto(batch: Detail): CookingBatchDetailDTO {
       cookingBatchLots: lots.filter((l) => l.dishId === d.dishId),
     })),
     cookingBatchLots: lots,
+    retainedFoodSamples:
+      batch.RetainedFoodSample?.map((sample) => ({
+        id: sample.id,
+        dishId: sample.dishId,
+        status: sample.status,
+        sampledAt: sample.sampledAt.toISOString(),
+        disposedAt: sample.disposedAt?.toISOString() ?? null,
+        quantity: sample.quantity?.toString() ?? null,
+        unit: sample.unit,
+        storageLocation: sample.storageLocation,
+        photoUrl: recordPhotoUrl(sample.photoPublicId),
+      })) ?? [],
   };
 }
 function groupDtos(batches: Detail[]): CookingBatchGroupResponseDTO[] {
@@ -1324,6 +1338,7 @@ export function createKitchenLifecycle(
                 );
               return {
                 ingredientEntryId: entries[0].id,
+                ingredientName: row.ingredient.name,
                 quantityPerPortion: row.quantityPerPortion.toString(),
                 unit: row.unit,
               };
@@ -1770,6 +1785,8 @@ export function createKitchenLifecycle(
   };
 }
 
+const KITCHEN_READ_TIMEOUT_MS = 20_000;
+
 export function createKitchenService(
   read: KitchenListReader = readFromDatabase,
   connect: () => Promise<PrismaClient> = getPrisma,
@@ -1805,6 +1822,10 @@ export function createKitchenService(
                 status: sample.status,
                 sampledAt: sample.sampledAt.toISOString(),
                 disposedAt: sample.disposedAt?.toISOString() ?? null,
+                quantity: sample.quantity?.toString() ?? null,
+                unit: sample.unit,
+                storageLocation: sample.storageLocation,
+                photoUrl: recordPhotoUrl(sample.photoPublicId),
               })),
             })),
             pagination: {
@@ -1814,7 +1835,10 @@ export function createKitchenService(
             },
           };
         },
-        { isolationLevel: "RepeatableRead" },
+        {
+          isolationLevel: "RepeatableRead",
+          timeout: KITCHEN_READ_TIMEOUT_MS,
+        },
       );
     },
     async stats(
@@ -1845,7 +1869,10 @@ export function createKitchenService(
             pendingSamples,
           };
         },
-        { isolationLevel: "RepeatableRead" },
+        {
+          isolationLevel: "RepeatableRead",
+          timeout: KITCHEN_READ_TIMEOUT_MS,
+        },
       );
     },
 

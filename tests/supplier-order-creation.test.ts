@@ -355,6 +355,52 @@ void test("đồ khô bắt buộc nhập ngày sản xuất và hạn dùng c�
       err.fields.some((f) => f.field === "sources.0.expiryDate"),
   );
 
+  // Ngày tính theo giờ Việt Nam, tương đối với hôm nay.
+  const vnDay = (offsetDays: number) =>
+    new Date(Date.now() + 7 * 3600000 + offsetDays * 86400000)
+      .toISOString()
+      .slice(0, 10);
+
+  // Hạn sử dụng trước hôm nay: 422.
+  const expired = setupUs1Harness({ supplyRequest: dryRequest() });
+  await assert.rejects(
+    () =>
+      expired.service.create(
+        {
+          idempotencyKey: idemKey1,
+          body: bodyWith({
+            manufactureDate: vnDay(-30),
+            expiryDate: vnDay(-1),
+          }),
+        },
+        makeSupplierActor(),
+      ),
+    {
+      statusCode: 422,
+      message: "Hạn sử dụng không được trước hôm nay: Gạo ST25",
+    },
+  );
+  assert.equal(expired.createdPayloads.length, 0);
+
+  // Đồ khô còn hạn dưới 7 ngày: 422.
+  const shortShelf = setupUs1Harness({ supplyRequest: dryRequest() });
+  await assert.rejects(
+    () =>
+      shortShelf.service.create(
+        {
+          idempotencyKey: idemKey1,
+          body: bodyWith({ manufactureDate: vnDay(-30), expiryDate: vnDay(6) }),
+        },
+        makeSupplierActor(),
+      ),
+    {
+      statusCode: 422,
+      message:
+        "Đồ khô cần còn hạn sử dụng ít nhất 7 ngày kể từ hôm nay: Gạo ST25",
+    },
+  );
+  assert.equal(shortShelf.createdPayloads.length, 0);
+
   // Đủ ngày: lô được tạo với đúng ngày sản xuất và hạn dùng.
   const ok = setupUs1Harness({ supplyRequest: dryRequest() });
   await ok.service.create(

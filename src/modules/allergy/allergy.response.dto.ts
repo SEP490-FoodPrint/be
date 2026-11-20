@@ -6,6 +6,8 @@ export interface AllergyCatalogRowDTO {
   ingredientId: string;
   ingredientName: string;
   category: string | null;
+  /** Nhà cung cấp của nguyên liệu dị ứng. */
+  supplierName: string | null;
   affectedCount: number;
   updatedAt: string;
 }

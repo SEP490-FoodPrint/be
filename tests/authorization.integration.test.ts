@@ -1234,6 +1234,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         quantity: 150,
         unit: "g",
         storageUnitId: fridge.id,
+        storageLocation: "Ngăn 1",
         sampledAt: new Date().toISOString(),
       });
       const saved = await samples.create(batch.id, sampleInput, chef);

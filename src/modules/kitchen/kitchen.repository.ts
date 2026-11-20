@@ -77,10 +77,6 @@ export const kitchenDetailSelect = {
     },
     orderBy: { ingredientLotId: "asc" },
   },
-} as const satisfies Prisma.CookingBatchSelect;
-
-export const kitchenListSelect = {
-  ...kitchenDetailSelect,
   RetainedFoodSample: {
     select: {
       id: true,
@@ -88,8 +84,16 @@ export const kitchenListSelect = {
       status: true,
       sampledAt: true,
       disposedAt: true,
+      quantity: true,
+      unit: true,
+      storageLocation: true,
+      photoPublicId: true,
     },
   },
+} as const satisfies Prisma.CookingBatchSelect;
+
+export const kitchenListSelect = {
+  ...kitchenDetailSelect,
 } as const satisfies Prisma.CookingBatchSelect;
 
 export const kitchenSummarySelect = {
@@ -322,6 +326,7 @@ export const kitchenRepository = {
               include: {
                 ingredient: {
                   select: {
+                    name: true,
                     ingredientEntries: {
                       where: { schoolId },
                       select: { id: true },

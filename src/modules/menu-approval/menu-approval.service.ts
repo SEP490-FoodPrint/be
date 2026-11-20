@@ -1,4 +1,5 @@
 import { ROLES } from "../../constants/roles";
+import { notifyMenuDecision } from "../menu-notification/menu-notification.service";
 import type { AuthPrincipal } from "../../types/auth";
 import {
   assertPermission,
@@ -185,8 +186,14 @@ function assertReady(menu: ApprovalDecisionRow): void {
   }
 }
 
+export type MenuDecisionNotifier = typeof notifyMenuDecision;
+
 export function createMenuApprovalService(
   repository: MenuApprovalRepository = menuApprovalRepository,
+  // Chỉ gửi email khi chạy với repository thật (test dùng repository giả sẽ không gửi mail).
+  notifier: MenuDecisionNotifier | null = repository === menuApprovalRepository
+    ? notifyMenuDecision
+    : null,
 ) {
   return {
     async getDetail(
@@ -215,62 +222,74 @@ export function createMenuApprovalService(
       const permission =
         input.decision === "APPROVED" ? "menu.approve" : "menu.review";
       const database = await repository.connect();
-      return withSchoolTransaction(
-        database,
-        principal,
-        permission,
-        async (tx, actor, schoolId) => {
-          requireBoardSchool(actor);
-          const menu = await repository.findForDecision(tx, id, schoolId);
-          if (!menu) {
-            throw new HttpError(404, "Không tìm thấy thực đơn của trường");
-          }
-          if (menu.status !== "PENDING_APPROVAL") {
-            throw new HttpError(409, "Thực đơn chưa chờ duyệt");
-          }
-          if (
-            input.submissionVersion &&
-            input.submissionVersion !== menu.submittedAt?.toISOString()
-          ) {
-            throw new HttpError(
-              409,
-              "Thực đơn đã được chỉnh sửa và gửi lại. Vui lòng tải lại trước khi duyệt.",
-            );
-          }
-          if (input.decision === "APPROVED") {
-            assertCompleteMenuWeek(
-              menu,
-              await repository.academicYears(tx, schoolId),
-            );
-            assertReady(menu);
-          }
+      const result: MenuApprovalDecisionResponseDTO =
+        await withSchoolTransaction(
+          database,
+          principal,
+          permission,
+          async (tx, actor, schoolId) => {
+            requireBoardSchool(actor);
+            const menu = await repository.findForDecision(tx, id, schoolId);
+            if (!menu) {
+              throw new HttpError(404, "Không tìm thấy thực đơn của trường");
+            }
+            if (menu.status !== "PENDING_APPROVAL") {
+              throw new HttpError(409, "Thực đơn chưa chờ duyệt");
+            }
+            if (
+              input.submissionVersion &&
+              input.submissionVersion !== menu.submittedAt?.toISOString()
+            ) {
+              throw new HttpError(
+                409,
+                "Thực đơn đã được chỉnh sửa và gửi lại. Vui lòng tải lại trước khi duyệt.",
+              );
+            }
+            if (input.decision === "APPROVED") {
+              assertCompleteMenuWeek(
+                menu,
+                await repository.academicYears(tx, schoolId),
+              );
+              assertReady(menu);
+            }
 
-          const status =
-            input.decision === "APPROVED" ? "APPROVED" : "REVISION_REQUIRED";
-          const review = await repository.createReview(tx, {
-            weeklyMenuId: id,
-            reviewerUserId: actor.id,
-            decision: input.decision,
-            feedback: input.feedback,
-          });
-          await repository.updateAllDays(tx, id, status);
-          await repository.updateWeek(
-            tx,
-            id,
-            status,
-            status === "APPROVED" ? review.reviewedAt : null,
-          );
-          return {
-            weeklyMenuId: id,
-            weeklyStatus: status,
-            reviewedAt: review.reviewedAt.toISOString(),
-            reviewer: {
-              id: review.User.id,
-              fullName: review.User.fullName,
-            },
-          };
-        },
-      );
+            const status =
+              input.decision === "APPROVED" ? "APPROVED" : "REVISION_REQUIRED";
+            const review = await repository.createReview(tx, {
+              weeklyMenuId: id,
+              reviewerUserId: actor.id,
+              decision: input.decision,
+              feedback: input.feedback,
+            });
+            await repository.updateAllDays(tx, id, status);
+            await repository.updateWeek(
+              tx,
+              id,
+              status,
+              status === "APPROVED" ? review.reviewedAt : null,
+            );
+            return {
+              weeklyMenuId: id,
+              weeklyStatus: status,
+              reviewedAt: review.reviewedAt.toISOString(),
+              reviewer: {
+                id: review.User.id,
+                fullName: review.User.fullName,
+              },
+            };
+          },
+        );
+      // Email báo cho nhân viên dinh dưỡng sau khi quyết định đã lưu; không chờ, không làm hỏng phản hồi.
+      if (notifier)
+        void notifier(id, {
+          status: result.weeklyStatus,
+          feedback: input.feedback,
+          reviewerName: result.reviewer.fullName,
+          reviewedAt: new Date(result.reviewedAt),
+        }).catch(() =>
+          console.warn("Chưa gửi được email thông báo duyệt thực đơn."),
+        );
+      return result;
     },
   };
 }

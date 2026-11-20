@@ -19,6 +19,9 @@
 - FR-019 writes the existing `ingredient_lots.manufacture_date`/`expiry_date` columns; handling type comes from the school ingredient entry. No schema change.
 - FR-020 derives the status at read time instead of a scheduled write, so no background job is needed and stored history stays unchanged.
 - FR-021 needs no migration: codes are computed from existing columns (`lot_code`, `batch_code`, `code`) with `pg_advisory_xact_lock(hashtext('foodprint:fp-code:<type>'))`; regex filtering precedes the numeric cast so legacy codes never break the query.
+- FR-026 keeps the kitchen list and stats `RepeatableRead` transactions, and sets their Prisma interactive transaction timeout to 20 seconds. This exceeds the existing 15-second PostgreSQL statement timeout without changing the list queries, tenant scope, or response DTOs.
+- FR-028 selects the ingredient name alongside each menu-day recipe line and carries it only to the kitchen planning error. The plan allocations and `planVersion` hash remain unchanged. A focused unit test covers the named shortage.
+- FR-029 makes the compartment request mandatory and canonical. After locking the unit row and checking for an idempotent replay, the retained-sample service checks the unit's compartment count and queries only `STORED` samples in the chosen compartment. Match by compartment suffix so renaming a unit does not free an occupied compartment. The existing unit-detail response supplies occupied locations to both frontend forms; no database migration or additional endpoint is needed.
 
 ## Approach
 

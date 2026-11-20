@@ -514,6 +514,7 @@ void test("menu search, status and dates combine with school scope for both page
 
 void test("kitchen date ranges are inclusive, override single date, and remain identical in list and KPI queries", async () => {
   const calls: { operation: string; args: Record<string, unknown> }[] = [];
+  const transactionOptions: Record<string, unknown>[] = [];
   const capture = (operation: string) => (args: Record<string, unknown>) => {
     calls.push({ operation, args });
     return Promise.resolve([]);
@@ -530,8 +531,13 @@ void test("kitchen date ranges are inclusive, override single date, and remain i
     retainedFoodSample: { groupBy: capture("samples") },
   };
   const db = {
-    $transaction: async (operation: (client: typeof tx) => Promise<unknown>) =>
-      operation(tx),
+    $transaction: async (
+      operation: (client: typeof tx) => Promise<unknown>,
+      options: Record<string, unknown>,
+    ) => {
+      transactionOptions.push(options);
+      return operation(tx);
+    },
   };
   const service = createKitchenService(undefined, () =>
     Promise.resolve(db as never),
@@ -546,6 +552,10 @@ void test("kitchen date ranges are inclusive, override single date, and remain i
   });
   await service.list(query, principal);
   await service.stats(query, principal);
+  assert.deepEqual(transactionOptions, [
+    { isolationLevel: "RepeatableRead", timeout: 20_000 },
+    { isolationLevel: "RepeatableRead", timeout: 20_000 },
+  ]);
   const list = calls.find((call) => call.operation === "list")!.args;
   const where = list.where as {
     AND: [unknown, { MenuDay: unknown; OR: unknown[] }];

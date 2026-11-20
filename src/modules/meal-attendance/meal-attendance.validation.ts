@@ -50,6 +50,16 @@ export function validateDailyMealPortion(value: unknown) {
     allergies.length
   )
     throw new HttpError(400, "Trùng nguyên liệu dị ứng");
+  // Nguyên liệu GVCN bỏ khỏi danh sách hôm nay (em dị ứng nghỉ) gửi 0 suất; các nguyên liệu còn lại dùng chung một số.
+  if (
+    new Set(
+      allergies.map((row) => row.portionCount).filter((count) => count > 0),
+    ).size > 1
+  )
+    throw new HttpError(
+      400,
+      "Số suất dị ứng là một con số chung cho cả danh sách nguyên liệu dị ứng của lớp",
+    );
   let allergyNotes: string | null = null;
   if (body.allergyNotes !== undefined && body.allergyNotes !== null) {
     if (
@@ -97,4 +107,34 @@ export function validateDailyPortionGroups(value: unknown) {
 }
 export type DailyPortionGroupsInput = ReturnType<
   typeof validateDailyPortionGroups
+>;
+
+/**
+ * Hồ sơ dị ứng của lớp do GVCN khai theo MỘT danh sách chung: các nguyên liệu dị ứng (kho trường)
+ * + một số học sinh dị ứng chung (một em dị ứng nhiều nguyên liệu vẫn chỉ tính 1).
+ */
+export function validateClassAllergyProfile(value: unknown) {
+  const body = objectBody(value, ["ingredientEntryIds", "affectedCount"]);
+  if (
+    !Array.isArray(body.ingredientEntryIds) ||
+    body.ingredientEntryIds.length > 100
+  )
+    throw new HttpError(400, "Danh sách nguyên liệu dị ứng không hợp lệ");
+  const ingredientEntryIds = body.ingredientEntryIds.map((id: unknown) =>
+    uuid(id),
+  );
+  if (new Set(ingredientEntryIds).size !== ingredientEntryIds.length)
+    throw new HttpError(400, "Trùng nguyên liệu dị ứng");
+  const count = body.affectedCount;
+  if (ingredientEntryIds.length === 0) {
+    if (count !== undefined && count !== null && count !== 0)
+      throw new HttpError(400, "Chưa chọn nguyên liệu dị ứng");
+    return { ingredientEntryIds, affectedCount: 0 };
+  }
+  if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 1)
+    throw new HttpError(400, "Số học sinh dị ứng phải là số nguyên từ 1");
+  return { ingredientEntryIds, affectedCount: count };
+}
+export type ClassAllergyProfileInput = ReturnType<
+  typeof validateClassAllergyProfile
 >;

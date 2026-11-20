@@ -11,6 +11,8 @@ interface RegistrationState {
 interface PersonalContact {
   email: string;
   phone: string | null;
+  /** Tên đơn vị của tài khoản (trường / nhà cung cấp / đơn vị ATTP xã), lấy từ dữ liệu đăng ký. */
+  organizationName?: string | null;
 }
 
 export type SessionUser = PersonalContact &
