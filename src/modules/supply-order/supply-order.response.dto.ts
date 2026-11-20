@@ -2,6 +2,7 @@ import type {
   DeliveryStatus,
   SupplyRequestStatus,
 } from "../../generated/prisma/client";
+export type OrderTypeValue = "DIRECT_USE" | "DRY_STOCK";
 export interface SupplyOrderListResponseDTO {
   items: {
     id: string;
@@ -9,6 +10,10 @@ export interface SupplyOrderListResponseDTO {
     schoolId: string;
     supplierId: string;
     status: SupplyRequestStatus;
+    orderType: OrderTypeValue | null;
+    orderTypeLabel: string | null;
+    batchNo: number | null;
+    batchLabel: string | null;
     acceptedAt: string | null;
     createdAt: string;
     updatedAt: string;
@@ -58,6 +63,10 @@ export interface SupplierOrderListItemResponseDTO {
   supplierId: string;
   schoolName: string;
   status: SupplyRequestStatus;
+  orderType: OrderTypeValue | null;
+  orderTypeLabel: string | null;
+  batchNo: number | null;
+  batchLabel: string | null;
   orderProgress: SupplyOrderProgressResponseDTO | null;
   requestedDeliveryDate: string | null;
   sentAt: string | null;

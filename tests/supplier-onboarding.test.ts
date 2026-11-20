@@ -100,6 +100,7 @@ void test("school pause blocks draft creation and sending while SENT retries rem
   const body = orderPayload({
     supplierId: id,
     requestNo: "PAUSED-DRAFT",
+    orderType: "DRY_STOCK",
     requestedDeliveryDate: tomorrow.toISOString().slice(0, 10),
     items: [{ ingredientEntryId: id, quantity: 1 }],
   });
@@ -331,6 +332,7 @@ void test("order validation preserves trimming, decimal quantities and calendar 
   const result = orderPayload({
     supplierId: id.toUpperCase(),
     requestNo: "  FP-01  ",
+    orderType: "DRY_STOCK",
     requestedDeliveryDate: "2026-11-14",
     items: [{ ingredientEntryId: id, quantity: 1.125 }],
   });
@@ -343,6 +345,7 @@ void test("order validation preserves trimming, decimal quantities and calendar 
       orderPayload({
         supplierId: id,
         requestNo: "FP-02",
+        orderType: "DRY_STOCK",
         requestedDeliveryDate: "2026-02-30",
         items: [{ ingredientEntryId: id, quantity: 1 }],
       }),
@@ -353,6 +356,7 @@ void test("order validation preserves trimming, decimal quantities and calendar 
       orderPayload({
         supplierId: id,
         requestNo: "FP-03",
+        orderType: "DRY_STOCK",
         requestedDeliveryDate: "2026-11-14",
         items: [
           { ingredientEntryId: id, quantity: 1 },
@@ -361,4 +365,123 @@ void test("order validation preserves trimming, decimal quantities and calendar 
       }),
     RequestValidationError,
   );
+});
+
+const baseOrder = {
+  supplierId: id,
+  requestNo: "PN-20261121-000001-D1",
+  requestedDeliveryDate: "2026-11-21",
+  items: [{ ingredientEntryId: id, quantity: 1 }],
+};
+const fieldsOf = (value: unknown) => {
+  try {
+    orderPayload(value);
+  } catch (error) {
+    if (error instanceof RequestValidationError)
+      return error.fields.map((item) => item.field);
+  }
+  return [] as string[];
+};
+
+void test("T1: order type and batch validation", () => {
+  assert(
+    fieldsOf({ ...baseOrder, orderType: "DIRECT_USE" }).includes("batchNo"),
+  );
+  assert(
+    fieldsOf({ ...baseOrder, orderType: "DRY_STOCK", batchNo: 1 }).includes(
+      "batchNo",
+    ),
+  );
+  assert(fieldsOf({ ...baseOrder, orderType: "FROZEN" }).includes("orderType"));
+  assert(fieldsOf({ ...baseOrder }).includes("orderType"));
+  assert(
+    fieldsOf({ ...baseOrder, orderType: "DRY_STOCK", extra: 1 }).includes(
+      "extra",
+    ),
+  );
+  assert.equal(
+    orderPayload({ ...baseOrder, orderType: "DRY_STOCK", batchNo: null })
+      .batchNo,
+    null,
+  );
+  assert.equal(
+    orderPayload({ ...baseOrder, orderType: "DIRECT_USE", batchNo: 2 }).batchNo,
+    2,
+  );
+});
+
+function draftService(
+  handlingType: "DRY_STOCK" | "DIRECT_USE",
+  notFinalized: { name: string }[],
+) {
+  const schoolActor = { ...testStaff, permissions: ["supply_request.create"] };
+  const tx = {
+    class: { findMany: () => Promise.resolve(notFinalized) },
+  } as unknown as Prisma.TransactionClient;
+  let created: Record<string, unknown> | undefined;
+  const service = createOrderIntakeService({
+    write: (_p, _s, operation) =>
+      operation(tx, schoolActor, schoolActor.schoolId!),
+    guard: { assertAccess: () => Promise.resolve(schoolActor) },
+    repository: {
+      ...supplierOrderRepository,
+      findEntries: () =>
+        Promise.resolve([
+          { id, handlingType, Ingredient: { defaultUnit: "kg", name: "Cá" } },
+        ] as never),
+      createDraft: (_tx, input) => {
+        created = input;
+        return Promise.resolve({
+          id,
+          status: "DRAFT",
+          requestNo: input.requestNo,
+          orderType: input.orderType,
+          batchNo: input.batchNo,
+        } as never);
+      },
+    },
+  });
+  return { service, created: () => created };
+}
+
+void test("T2: mismatched ingredient handling type is rejected", async () => {
+  const { service } = draftService("DRY_STOCK", []);
+  await assert.rejects(
+    () =>
+      service.createOrderDraft(
+        { ...testStaff, permissions: ["supply_request.create"] },
+        orderPayload({ ...baseOrder, orderType: "DIRECT_USE", batchNo: 1 }),
+      ),
+    { statusCode: 400 },
+  );
+});
+
+void test("T3/T4: batch 2 rule follows batchNo, never requestNo", async () => {
+  const principal = { ...testStaff, permissions: ["supply_request.create"] };
+  const blocked = draftService("DIRECT_USE", [{ name: "1A" }]);
+  await assert.rejects(
+    () =>
+      blocked.service.createOrderDraft(
+        principal,
+        orderPayload({
+          ...baseOrder,
+          requestNo: "PN-NOSUFFIX",
+          orderType: "DIRECT_USE",
+          batchNo: 2,
+        }),
+      ),
+    { statusCode: 409 },
+  );
+  const free = draftService("DIRECT_USE", [{ name: "1A" }]);
+  const result = await free.service.createOrderDraft(
+    principal,
+    orderPayload({
+      ...baseOrder,
+      requestNo: "PN-X-D2",
+      orderType: "DIRECT_USE",
+      batchNo: 1,
+    }),
+  );
+  assert.equal(result.batchNo, 1);
+  assert.equal(result.orderType, "DIRECT_USE");
 });

@@ -213,6 +213,8 @@ function setupUs1Harness(options?: {
           ? {
               status: requestState?.status ?? "IN_PROGRESS",
               requestNo: "SR-2026-001",
+              orderType: null,
+              batchNo: null,
             }
           : null,
         deliveryItems: input.items.map((item, idx) => ({
@@ -1242,6 +1244,8 @@ void test("T111 REQUEST multi-source allocation supports 6A+4B split, prevents c
         SupplyRequest: {
           status: requestState.status,
           requestNo: requestState.requestNo,
+          orderType: null,
+          batchNo: null,
         },
         deliveryItems: input.items.map((item, idx) => ({
           id: item.id ?? uid(5500 + idx),
@@ -3522,7 +3526,12 @@ void test("US3 lists, filters legacy+standalone deliveries, returns detail and e
     createdAt: now,
     updatedAt: now,
     School: { name: "Tiểu học Hoa Mai" },
-    SupplyRequest: { status: "IN_PROGRESS" as const, requestNo: "SR-2026-001" },
+    SupplyRequest: {
+      status: "IN_PROGRESS" as const,
+      requestNo: "SR-2026-001",
+      orderType: null,
+      batchNo: null,
+    },
   };
   const standaloneRecord: SupplierOrderDetailRecord = {
     id: uid(199),
@@ -3858,7 +3867,12 @@ void test("US3 read matrix covers supplier roles with view-or-manage permission,
       createdAt: createdOlder,
       updatedAt: createdOlder,
       School: { name: "Tiểu học Hoa Mai" },
-      SupplyRequest: { status: "COMPLETED", requestNo: "SR-LEGACY-01" },
+      SupplyRequest: {
+        status: "COMPLETED",
+        requestNo: "SR-LEGACY-01",
+        orderType: null,
+        batchNo: null,
+      },
       deliveryItems: [
         {
           id: uid(9911),
@@ -4260,7 +4274,12 @@ void test("US3 canonical v2 equivalence, field-level conflict matrix, legacy bas
         updatedAt: now,
         School: { name: "Tiểu học Hoa Mai" },
         SupplyRequest: input.supplyRequestId
-          ? { status: "IN_PROGRESS", requestNo: "SR-2026-001" }
+          ? {
+              status: "IN_PROGRESS",
+              requestNo: "SR-2026-001",
+              orderType: null,
+              batchNo: null,
+            }
           : null,
         deliveryItems: input.items.map((item, idx) => ({
           id: uid(9970 + idx + Number(seq) * 10),
@@ -5072,7 +5091,12 @@ void test("US6 dispatch service handles continuation policy, all-state replay/40
     createdAt: new Date("2026-11-15T01:00:00.000Z"),
     updatedAt: initialUpdatedAt,
     School: { name: "Tiểu học Hòa Bình" },
-    SupplyRequest: { status: "IN_PROGRESS", requestNo: "YC-7803" },
+    SupplyRequest: {
+      status: "IN_PROGRESS",
+      requestNo: "YC-7803",
+      orderType: null,
+      batchNo: null,
+    },
     deliveryItems: [
       {
         id: uid(7804),
@@ -5232,6 +5256,8 @@ void test("US6 dispatch service handles continuation policy, all-state replay/40
       SupplyRequest: {
         status: replayStatus === "CANCELLED" ? "CANCELLED" : "IN_PROGRESS",
         requestNo: "YC-7803",
+        orderType: null,
+        batchNo: null,
       },
     });
     let dispatchWrites = 0;
@@ -5745,6 +5771,8 @@ void test("US3 management list/detail enforce PREPARING filter, nextAction read/
     )
       ? {
           requestNo: "SR-901",
+          orderType: null,
+          batchNo: null,
           status: overrides.requestStatus ?? "IN_PROGRESS",
         }
       : null,

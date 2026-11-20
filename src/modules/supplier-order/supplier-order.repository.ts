@@ -30,7 +30,9 @@ export const supplierOrderSummarySelect = {
   createdAt: true,
   updatedAt: true,
   School: { select: { name: true } },
-  SupplyRequest: { select: { requestNo: true, status: true } },
+  SupplyRequest: {
+    select: { requestNo: true, status: true, orderType: true, batchNo: true },
+  },
 } satisfies Prisma.DeliverySelect;
 
 export const supplierOrderDetailSelect = {

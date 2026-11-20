@@ -99,6 +99,7 @@ export function createDeliveryService(
           supplyRequestId: row.supplyRequestId,
           orderNo: row.SupplyRequest?.requestNo ?? null,
           requestNo: row.SupplyRequest?.requestNo ?? null,
+          ...deliveryOrderTypeBatch(row),
           supplierId: row.supplierId,
           supplierName: row.Supplier?.name ?? null,
           supplierPhone: row.Supplier?.phone ?? null,
@@ -165,6 +166,7 @@ type DeliveryInspectionRole = (typeof deliveryInspectionRoles)[number];
  * Không suy luận theo nhà cung cấp.
  */
 export function isDryDelivery(row: {
+  SupplyRequest?: { orderType?: string | null } | null;
   deliveryItems?: {
     IngredientEntry: { handlingType: string } | null;
     SupplyRequestItem: {
@@ -172,6 +174,9 @@ export function isDryDelivery(row: {
     } | null;
   }[];
 }): boolean {
+  // Đơn có orderType là nguồn sự thật; chỉ xe STANDALONE (hoặc đơn cũ chưa backfill) suy từ dòng hàng.
+  const orderType = row.SupplyRequest?.orderType;
+  if (orderType) return orderType === "DRY_STOCK";
   const items = row.deliveryItems ?? [];
   return (
     items.length > 0 &&
@@ -184,7 +189,27 @@ export function isDryDelivery(row: {
   );
 }
 
+/** orderType/batchNo của xe: lấy từ SupplyRequest; xe STANDALONE suy loại từ dòng hàng, không có đợt. */
+export function deliveryOrderTypeBatch(
+  row: Parameters<typeof isDryDelivery>[0] & {
+    SupplyRequest?: {
+      orderType?: string | null;
+      batchNo?: number | null;
+    } | null;
+  },
+): { orderType: "DIRECT_USE" | "DRY_STOCK" | null; batchNo: number | null } {
+  const orderType = row.SupplyRequest?.orderType;
+  if (orderType === "DRY_STOCK" || orderType === "DIRECT_USE")
+    return { orderType, batchNo: row.SupplyRequest?.batchNo ?? null };
+  if (!row.deliveryItems?.length) return { orderType: null, batchNo: null };
+  return {
+    orderType: isDryDelivery(row) ? "DRY_STOCK" : "DIRECT_USE",
+    batchNo: null,
+  };
+}
+
 export function requiredInspectionRoles(row: {
+  SupplyRequest?: { orderType?: string | null } | null;
   deliveryItems?: {
     IngredientEntry: { handlingType: string } | null;
     SupplyRequestItem: {
@@ -339,6 +364,7 @@ function inspectionDTO(
     isDryOnly,
     supplyRequestId: row.supplyRequestId,
     requestNo: source?.requestNo ?? null,
+    ...deliveryOrderTypeBatch(row),
     supplierName: row.Supplier.name,
     status: row.status,
     statusLabel: getDeliveryStatusLabel(row.status),

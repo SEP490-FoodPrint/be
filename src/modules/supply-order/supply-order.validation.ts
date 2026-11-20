@@ -22,6 +22,14 @@ export const supplyOrderListQuerySchema = z
         error: "Trạng thái yêu cầu không hợp lệ",
       })
       .optional(),
+    orderType: z
+      .enum(["DIRECT_USE", "DRY_STOCK"], { error: "Loại đơn không hợp lệ" })
+      .optional(),
+    batchNo: z
+      .string({ error: "Đợt giao phải là 1 hoặc 2" })
+      .regex(/^[12]$/, { error: "Đợt giao phải là 1 hoặc 2" })
+      .transform(Number)
+      .optional(),
     /** Trường: trả kèm mặt hàng, NCC, ngày giao và ghi chú (cùng dữ liệu của API chi tiết) để không phải gọi chi tiết từng đơn. */
     include: z
       .literal("items", { error: "include chỉ nhận giá trị items" })

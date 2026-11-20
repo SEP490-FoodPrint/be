@@ -44,6 +44,8 @@ type DraftInput = {
   createdByUserId: string;
   requestNo: string;
   deliveryDate: Date;
+  orderType: "DIRECT_USE" | "DRY_STOCK";
+  batchNo: 1 | 2 | null;
   note?: string;
   items: { ingredientEntryId: string; quantity: number; unit: string }[];
 };
@@ -69,7 +71,9 @@ export const supplierOrderRepository = {
         status: "ACTIVE",
         Ingredient: { supplierId, status: "ACTIVE" },
       },
-      include: { Ingredient: { select: { defaultUnit: true } } },
+      include: {
+        Ingredient: { select: { defaultUnit: true, name: true } },
+      },
     });
   },
   async createDraft(tx: Prisma.TransactionClient, input: DraftInput) {
@@ -81,6 +85,8 @@ export const supplierOrderRepository = {
         requestNo: input.requestNo,
         requestedDeliveryDate: input.deliveryDate,
         note: input.note,
+        orderType: input.orderType,
+        batchNo: input.batchNo,
         supplyRequestItems: {
           create: input.items.map((item) => ({
             ingredientEntryId: item.ingredientEntryId,
@@ -89,7 +95,13 @@ export const supplierOrderRepository = {
           })),
         },
       },
-      select: { id: true, status: true, requestNo: true },
+      select: {
+        id: true,
+        status: true,
+        requestNo: true,
+        orderType: true,
+        batchNo: true,
+      },
     });
   },
   async findOrderForSend(

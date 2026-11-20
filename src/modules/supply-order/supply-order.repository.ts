@@ -11,10 +11,25 @@ const listSelect = {
   schoolId: true,
   supplierId: true,
   status: true,
+  orderType: true,
+  batchNo: true,
   acceptedAt: true,
   createdAt: true,
   updatedAt: true,
 } as const satisfies Prisma.SupplyRequestSelect;
+type TypeBatchFilter = {
+  orderType?: "DIRECT_USE" | "DRY_STOCK";
+  batchNo?: number;
+};
+function withTypeBatch(
+  scope: Prisma.SupplyRequestWhereInput,
+  query: TypeBatchFilter,
+): Prisma.SupplyRequestWhereInput {
+  const extra: Prisma.SupplyRequestWhereInput[] = [];
+  if (query.orderType) extra.push({ orderType: query.orderType });
+  if (query.batchNo !== undefined) extra.push({ batchNo: query.batchNo });
+  return extra.length ? { AND: [scope, ...extra] } : scope;
+}
 /** Danh sách của trường kèm dữ liệu chi tiết (?include=items); chỉ gồm trường mà API chi tiết đã trả cho trường. */
 const schoolListWithItemsSelect = {
   ...listSelect,
@@ -46,9 +61,10 @@ const supplierOrderStatuses = [
   "COMPLETED",
   "CANCELLED",
 ] satisfies SupplyRequestStatus[];
-type SupplierOrderListQuery = ListQuery & {
-  status?: Exclude<SupplyRequestStatus, "DRAFT">;
-};
+type SupplierOrderListQuery = ListQuery &
+  TypeBatchFilter & {
+    status?: Exclude<SupplyRequestStatus, "DRAFT">;
+  };
 const supplierListSelect = {
   ...listSelect,
   requestedDeliveryDate: true,
@@ -104,23 +120,26 @@ export type AcceptedOrderRow = Prisma.SupplyRequestGetPayload<{
 export function createSupplyOrderRepository(connect = getPrisma) {
   return {
     connect,
-    async list(query: ListQuery, scope: Prisma.SupplyRequestWhereInput) {
-      const db = await connect();
-      return db.supplyRequest.findMany({
-        ...listWindow(query),
-        where: scope,
-        select: listSelect,
-        orderBy: [{ id: "asc" }],
-      });
-    },
-    async listWithItems(
-      query: ListQuery,
+    async list(
+      query: ListQuery & TypeBatchFilter,
       scope: Prisma.SupplyRequestWhereInput,
     ) {
       const db = await connect();
       return db.supplyRequest.findMany({
         ...listWindow(query),
-        where: scope,
+        where: withTypeBatch(scope, query),
+        select: listSelect,
+        orderBy: [{ id: "asc" }],
+      });
+    },
+    async listWithItems(
+      query: ListQuery & TypeBatchFilter,
+      scope: Prisma.SupplyRequestWhereInput,
+    ) {
+      const db = await connect();
+      return db.supplyRequest.findMany({
+        ...listWindow(query),
+        where: withTypeBatch(scope, query),
         select: schoolListWithItemsSelect,
         orderBy: [{ id: "asc" }],
       });
@@ -134,7 +153,7 @@ export function createSupplyOrderRepository(connect = getPrisma) {
         ...listWindow(query),
         where: {
           AND: [
-            scope,
+            withTypeBatch(scope, query),
             { status: { in: supplierOrderStatuses } },
             ...(query.status ? [{ status: query.status }] : []),
           ],

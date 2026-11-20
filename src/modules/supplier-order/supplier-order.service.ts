@@ -154,6 +154,8 @@ function mapSupplierOrderSummary(
     supplierId: row.supplierId,
     supplyRequestId: row.supplyRequestId,
     requestNo: row.SupplyRequest?.requestNo ?? null,
+    orderType: row.SupplyRequest?.orderType ?? null,
+    batchNo: row.SupplyRequest?.batchNo ?? null,
     status: row.status,
     statusLabel: getDeliveryStatusLabel(row.status),
     expectedArrivalAt: row.expectedArrivalAt?.toISOString() ?? null,
