@@ -1,3 +1,6 @@
+import { verifyStoredMaterialAllocations } from "./material-allocation";
+import { projectMaterialHistory } from "./material-allocation-history";
+import { Prisma } from "../../generated/prisma/client";
 import { createHash } from "node:crypto";
 import { ROLES } from "../../constants/roles";
 import {
@@ -15,9 +18,13 @@ import {
 } from "../blockchain-proof/blockchain-proof.service";
 import type {
   ApplyAllocationRequest,
+  AllocationQueryRequest,
   ConfirmDistributionRequest,
 } from "./meal-allocation.request.dto";
-import type { AllocationDayResponse } from "./meal-allocation.response.dto";
+import type {
+  AllocationDayResponse,
+  DecimalPortionFields,
+} from "./meal-allocation.response.dto";
 import {
   confirmAllocationDistribution,
   readAllocationDay,
@@ -25,6 +32,14 @@ import {
   type AllocationDay,
 } from "./meal-allocation.repository";
 
+const addPortions = (left: number, right: number) =>
+  new Prisma.Decimal(left).add(right).toNumber();
+const hasMaterials = (data: AllocationDay, batchId: string) =>
+  data.demands.some((d) =>
+    d.MealAllocation?.mealAllocationBatches.some(
+      (row) => row.cookingBatchId === batchId && row.allocationVersion === 2,
+    ),
+  );
 const mealTypes = ["LUNCH", "AFTERNOON"] as const;
 const dateFormatter = new Intl.DateTimeFormat("sv-SE", {
   timeZone: "Asia/Ho_Chi_Minh",
@@ -70,7 +85,7 @@ function projectDistribution(
 ): AllocationDayResponse["distribution"] {
   const batchesById = new Map(data.batches.map((batch) => [batch.id, batch]));
   const totalsByBatch = new Map<string, number>();
-  let invalid = false;
+  let invalid = !verifyStoredMaterialAllocations(data);
   const demands = data.demands.map((demand) => {
     const allocation = demand.MealAllocation;
     const byBatch = new Map<
@@ -102,7 +117,7 @@ function projectDistribution(
 
       for (const row of rows) {
         if (
-          row.allocatedPortions <= 0 ||
+          (row.allocatedPortions <= 0 && row.allocationVersion !== 2) ||
           !batch.dishes.some((d) => d.dishId === row.dishId)
         ) {
           invalid = true;
@@ -110,7 +125,10 @@ function projectDistribution(
         }
         allocatedByDish.set(
           row.dishId,
-          (allocatedByDish.get(row.dishId) ?? 0) + row.allocatedPortions,
+          addPortions(
+            allocatedByDish.get(row.dishId) ?? 0,
+            row.allocatedPortions,
+          ),
         );
       }
 
@@ -119,7 +137,7 @@ function projectDistribution(
       );
       totalsByBatch.set(
         batchId,
-        (totalsByBatch.get(batchId) ?? 0) + allocatedPortions,
+        addPortions(totalsByBatch.get(batchId) ?? 0, allocatedPortions),
       );
       return [
         {
@@ -144,7 +162,10 @@ function projectDistribution(
         ? Math.min(
             ...menuDishes.map((dish) => allocatedByDish.get(dish.dishId) ?? 0),
           )
-        : batches.reduce((sum, batch) => sum + batch.allocatedPortions, 0);
+        : batches.reduce(
+            (sum, batch) => addPortions(sum, batch.allocatedPortions),
+            0,
+          );
 
     return {
       id: demand.id,
@@ -165,7 +186,7 @@ function projectDistribution(
           {
             mealType,
             allocatedPortions: rows.reduce(
-              (sum, row) => sum + row.allocatedPortions,
+              (sum, row) => addPortions(sum, row.allocatedPortions),
               0,
             ),
           },
@@ -184,6 +205,7 @@ function projectDistribution(
     invalid ||
     data.batches.some(
       (batch) =>
+        !hasMaterials(data, batch.id) &&
         (totalsByBatch.get(batch.id) ?? 0) > (batch.plannedPortions ?? 0),
     ) ||
     demands.some((demand) => demand.allocatedPortions > demand.requiredPortions)
@@ -222,7 +244,16 @@ function projectDistribution(
 export function projectAllocationDay(
   data: AllocationDay,
   date: string,
+  mealType?: "LUNCH" | "AFTERNOON",
 ): AllocationDayResponse {
+  if (
+    data.demands.some((d) =>
+      d.MealAllocation?.mealAllocationBatches.some(
+        (row) => row.allocationVersion === 2,
+      ),
+    )
+  )
+    return projectMaterialHistory(data, date, mealType);
   const batches: AllocationDayResponse["batches"] = data.batches.map(
     (batch) => ({
       id: batch.id,
@@ -398,9 +429,21 @@ export function projectAllocationDay(
     (batch) => batch.status === "COMPLETED" && !batch.hasSample,
   ).length;
   const revision = createHash("sha256")
-    .update(JSON.stringify({ date, data }))
+    .update(JSON.stringify({ date, mealType: mealType ?? null, data }))
     .digest("hex");
   const response: AllocationDayResponse = {
+    supportsMaterialAllocation:
+      data.batches.length > 0 &&
+      data.batches.every(
+        (batch) =>
+          batch.dishes.length > 0 &&
+          batch.dishes.every(
+            (dish) =>
+              dish.allocationRecipeSnapshot !== undefined &&
+              dish.allocationRecipeSnapshot !== null,
+          ),
+      ),
+    mealType: mealType ?? null,
     date,
     totals,
     meals,
@@ -438,6 +481,8 @@ export function projectAllocationDay(
 
   if ((!data.menus.length && !data.batches.length) || !meals.length)
     return locked("EMPTY", "Hôm nay không có lô cần phân bổ.", null);
+  if (!verifyStoredMaterialAllocations(data))
+    return locked("RECONCILE", "Phân bổ nguyên liệu cần đối soát", null);
   if (issue) return locked("RECONCILE", issue, "COOKING");
   if (demandPending)
     return locked(
@@ -516,7 +561,7 @@ export function projectAllocationDay(
       // và tất cả các món trong lô phải có dòng phân bổ cùng số suất.
       const count = rows[0].allocatedPortions;
       if (
-        count <= 0 ||
+        (count <= 0 && rows[0].allocationVersion !== 2) ||
         rows.length !== raw.dishes.length ||
         raw.dishes.some(
           (dish) =>
@@ -538,7 +583,10 @@ export function projectAllocationDay(
         const key = `${demand.id}:${item.dishId}`;
         allocatedByDemandDish.set(
           key,
-          (allocatedByDemandDish.get(key) ?? 0) + item.allocatedPortions,
+          addPortions(
+            allocatedByDemandDish.get(key) ?? 0,
+            item.allocatedPortions,
+          ),
         );
       }
     }
@@ -564,8 +612,11 @@ export function projectAllocationDay(
   if (
     batches.some(
       (batch) =>
-        batch.entries.reduce((sum, row) => sum + row.allocatedPortions, 0) >
-        batch.plannedPortions!,
+        !hasMaterials(data, batch.id) &&
+        batch.entries.reduce(
+          (sum, row) => addPortions(sum, row.allocatedPortions),
+          0,
+        ) > batch.plannedPortions!,
     ) ||
     demands.some((demand) => {
       const rawDemand = data.demands.find((d) => d.id === demand.id);
@@ -681,13 +732,21 @@ function buildGradeAllocationGroups(
               allocatedPortions: allocBatch.allocatedPortions,
               locked: demand.MealAllocation?.status !== "ALLOCATED",
             });
-            allocatedCount += allocBatch.allocatedPortions;
+            allocatedCount = addPortions(
+              allocatedCount,
+              allocBatch.allocatedPortions,
+            );
           }
         }
 
-        const batchCapacity =
-          dishInBatch.plannedPortions ?? rawBatch.plannedPortions ?? 0;
-        const availablePortions = Math.max(0, batchCapacity - allocatedCount);
+        const materialMode = hasMaterials(data, rawBatch.id);
+        const batchCapacity = materialMode
+          ? allocatedCount
+          : (dishInBatch.plannedPortions ?? rawBatch.plannedPortions ?? 0);
+        const availablePortions = Prisma.Decimal.max(
+          0,
+          new Prisma.Decimal(batchCapacity).sub(allocatedCount),
+        ).toNumber();
         const batchRecord = rawBatch as {
           id: string;
           batchCode?: string | null;
@@ -696,6 +755,8 @@ function buildGradeAllocationGroups(
 
         dishBatches.push({
           cookingBatchId: rawBatch.id,
+          allocationVersion: materialMode ? 2 : 1,
+          allocatedForGrade: new Prisma.Decimal(allocatedCount).toFixed(2),
           batchCode: batchRecord.batchCode || rawBatch.id,
           batchNumber: batchRecord.batchNumber ?? null,
           plannedPortions: batchCapacity,
@@ -710,7 +771,10 @@ function buildGradeAllocationGroups(
         isSingleBatch &&
         dishBatches[0].plannedPortions >= totalRequiredPortions;
 
-      const autoAssigned = isSingleBatch && canCoverAll;
+      const autoAssigned =
+        isSingleBatch &&
+        canCoverAll &&
+        !dishBatches.some((batch) => batch.allocationVersion === 2);
 
       if (autoAssigned && dishBatches.length === 1) {
         dishBatches[0].autoAssigned = true;
@@ -813,9 +877,11 @@ export function prepareChanges(
         )
           throw new HttpError(400, "Lớp không hợp lệ hoặc bị trùng trong lô");
         seen.add(demand.id);
-        used += entry.allocatedPortions;
-        const total =
-          (totalsByDemand.get(demand.id) ?? 0) + entry.allocatedPortions;
+        used = addPortions(used, entry.allocatedPortions);
+        const total = addPortions(
+          totalsByDemand.get(demand.id) ?? 0,
+          entry.allocatedPortions,
+        );
         if (used > batch.plannedPortions! || total > demand.totalPortions)
           throw new HttpError(
             409,
@@ -867,11 +933,12 @@ export function prepareChanges(
             throw new HttpError(400, "Lớp không hợp lệ hoặc bị trùng trong lô");
 
           seen.add(demand.id);
-          used += entry.allocatedPortions;
+          used = addPortions(used, entry.allocatedPortions);
           const demandDishKey = `${demand.id}:${dishId}`;
-          const currentDemandTotal =
-            (totalsByDemandDish.get(demandDishKey) ?? 0) +
-            entry.allocatedPortions;
+          const currentDemandTotal = addPortions(
+            totalsByDemandDish.get(demandDishKey) ?? 0,
+            entry.allocatedPortions,
+          );
 
           const maxCapacity =
             dishInBatch.plannedPortions ?? rawBatch.plannedPortions ?? 0;
@@ -960,15 +1027,21 @@ export function createMealAllocationService(
   > = blockchainProofService,
 ) {
   return {
-    getToday(principal: AuthPrincipal) {
+    getToday(principal: AuthPrincipal, query: AllocationQueryRequest = {}) {
       assertPermission(principal, "meal_allocation.view");
       const schoolId = schoolIdFor(principal);
       const date = dateFormatter.format(now());
       return withReadTransaction(
         async (tx) =>
           projectAllocationDay(
-            await readAllocationDay(tx, schoolId, new Date(date)),
+            await readAllocationDay(
+              tx,
+              schoolId,
+              new Date(date),
+              query.mealType,
+            ),
             date,
+            query.mealType,
           ),
         connect,
       );
@@ -983,8 +1056,13 @@ export function createMealAllocationService(
         async (tx, actor, schoolId) => {
           const date = dateFormatter.format(now());
           const day = new Date(date);
-          const data = await readAllocationDay(tx, schoolId, day);
-          const view = projectAllocationDay(data, date);
+          const data = await readAllocationDay(
+            tx,
+            schoolId,
+            day,
+            input.mealType,
+          );
+          const view = projectAllocationDay(data, date, input.mealType);
           if (view.status !== "READY")
             throw new HttpError(409, view.message, view.status);
           if (view.revision !== input.revision)
@@ -993,14 +1071,26 @@ export function createMealAllocationService(
               "Dữ liệu phân bổ đã thay đổi. Vui lòng tải lại.",
               "ALLOCATION_STALE",
             );
+          if (
+            data.demands.some((d) =>
+              d.MealAllocation?.mealAllocationBatches.some(
+                (row) => row.allocationVersion === 2,
+              ),
+            )
+          )
+            throw new HttpError(
+              409,
+              "Phân bổ nguyên liệu phải được tính lại qua phương án tự động",
+            );
           const changes = prepareChanges(data, view, input);
           if (changes.some((change) => !change.allocationId))
             assertPermission(actor, "meal_allocation.create");
           if (!changes.length) return view;
           await writeAllocationDay(tx, actor.id, schoolId, day, changes);
           return projectAllocationDay(
-            await readAllocationDay(tx, schoolId, day),
+            await readAllocationDay(tx, schoolId, day, input.mealType),
             date,
+            input.mealType,
           );
         },
       );
@@ -1082,3 +1172,30 @@ export const mealAllocationService = createMealAllocationService();
 export type MealAllocationService = ReturnType<
   typeof createMealAllocationService
 >;
+
+/** Public wire representation uses strings for decimal portion values. */
+export function serializeAllocationPortions<T>(
+  value: T,
+): DecimalPortionFields<T>;
+export function serializeAllocationPortions(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    const items: unknown[] = value;
+    return items.map((item) => serializeAllocationPortions(item));
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        [
+          "allocatedPortions",
+          "availablePortions",
+          "plannedPortions",
+          "totalRequiredPortions",
+        ].includes(key) && typeof item === "number"
+          ? new Prisma.Decimal(item).toFixed(2)
+          : serializeAllocationPortions(item),
+      ]),
+    );
+  }
+  return value;
+}

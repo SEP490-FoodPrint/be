@@ -1,3 +1,4 @@
+import { Prisma } from "../../generated/prisma/client";
 import {
   canonicalizeJson,
   computeCanonicalHash,
@@ -237,7 +238,16 @@ export type MealDistributedInput = {
     mealAllocationBatches: {
       cookingBatchId: string;
       dishId: string;
-      allocatedPortions: number;
+      allocatedPortions: number | Prisma.Decimal;
+      allocationVersion?: number;
+      theoreticalPortions?: Prisma.Decimal | null;
+      materials?: {
+        ingredientLotId: string;
+        ingredientId: string;
+        quantity: Prisma.Decimal;
+        quantityPerPortion: Prisma.Decimal;
+        unit: string;
+      }[];
     }[];
   }[];
   cookingCompletedHash: (cookingBatchId: string) => string | null;
@@ -253,7 +263,15 @@ export function buildMealDistributedPayload(
     .filter((value): value is Date => value !== null)
     .sort((a, b) => a.getTime() - b.getTime());
   return {
-    v: PAYLOAD_VERSION,
+    v: allocations.some((a) =>
+      a.mealAllocationBatches.some(
+        (b) =>
+          b.allocationVersion === 2 ||
+          !new Prisma.Decimal(b.allocatedPortions).isInteger(),
+      ),
+    )
+      ? 2
+      : PAYLOAD_VERSION,
     type: "MEAL_DISTRIBUTED",
     schoolId: input.schoolId,
     date: input.date,
@@ -289,7 +307,26 @@ export function buildMealDistributedPayload(
         mealAllocationId: batch.allocationId,
         cookingBatchId: batch.cookingBatchId,
         dishId: batch.dishId,
-        portions: integer(batch.allocatedPortions),
+        portions:
+          batch.allocationVersion === 2 ||
+          !new Prisma.Decimal(batch.allocatedPortions).isInteger()
+            ? new Prisma.Decimal(batch.allocatedPortions).toFixed(2)
+            : integer(Number(batch.allocatedPortions)),
+        ...(batch.allocationVersion === 2
+          ? {
+              theoreticalPortions:
+                batch.theoreticalPortions?.toFixed(12) ?? null,
+              materials: (batch.materials ?? [])
+                .map((material) => ({
+                  ingredientLotId: material.ingredientLotId,
+                  ingredientId: material.ingredientId,
+                  quantity: material.quantity.toFixed(9),
+                  quantityPerPortion: material.quantityPerPortion.toFixed(9),
+                  unit: material.unit,
+                }))
+                .sort(byKey((material) => material.ingredientLotId)),
+            }
+          : {}),
         cookingCompletedHash: input.cookingCompletedHash(batch.cookingBatchId),
       })),
   };

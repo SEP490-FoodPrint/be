@@ -3,6 +3,7 @@ import type {
   BlockchainProofEventType,
   Prisma,
 } from "../../generated/prisma/client";
+import { Prisma as RuntimePrisma } from "../../generated/prisma/client";
 
 type Db = Prisma.TransactionClient;
 export type ProofKind =
@@ -164,7 +165,7 @@ export type ChainCookingBatchStep = {
   status: string;
   dishes: string[];
   plannedPortions: number | null;
-  allocatedPortions: number;
+  allocatedPortions: number | string;
   completedAt: string | null;
 };
 export type ChainSampleStep = {
@@ -238,6 +239,8 @@ async function mealSubjects(db: Db, where: Prisma.MealAllocationWhereInput) {
       mealAllocationBatches: {
         select: {
           allocatedPortions: true,
+          allocationVersion: true,
+          dishId: true,
           CookingBatchDish: { select: { Dish: { select: { name: true } } } },
           CookingBatch: {
             select: {
@@ -292,6 +295,7 @@ async function mealSubjects(db: Db, where: Prisma.MealAllocationWhereInput) {
   const lotDeliveries = new Map<string, string>();
   const deliveries = new Map<string, ChainDeliveryStep>();
   const batches = new Map<string, ChainCookingBatchStep>();
+  const portionsByDish = new Map<string, Map<string, RuntimePrisma.Decimal>>();
   const samples = new Map<string, ChainSampleStep>();
   for (const allocation of allocations)
     for (const row of allocation.mealAllocationBatches) {
@@ -305,7 +309,22 @@ async function mealSubjects(db: Db, where: Prisma.MealAllocationWhereInput) {
         allocatedPortions: 0,
         completedAt: iso(batch.completedAt),
       };
-      step.allocatedPortions += row.allocatedPortions;
+      const dishCounts =
+        portionsByDish.get(batch.id) ??
+        new Map<string, RuntimePrisma.Decimal>();
+      dishCounts.set(
+        row.dishId,
+        (dishCounts.get(row.dishId) ?? new RuntimePrisma.Decimal(0)).add(
+          row.allocatedPortions,
+        ),
+      );
+      portionsByDish.set(batch.id, dishCounts);
+      const allocated = RuntimePrisma.Decimal.max(...dishCounts.values());
+      step.allocatedPortions =
+        row.allocationVersion === 2 ||
+        typeof step.allocatedPortions === "string"
+          ? allocated.toFixed(2)
+          : allocated.toNumber();
       const dish = row.CookingBatchDish.Dish.name;
       if (!step.dishes.includes(dish)) step.dishes.push(dish);
       batches.set(batch.id, step);
@@ -638,6 +657,9 @@ export function createBlockchainProofRepository() {
               cookingBatchId: true,
               dishId: true,
               allocatedPortions: true,
+              allocationVersion: true,
+              theoreticalPortions: true,
+              materials: true,
             },
           },
         },

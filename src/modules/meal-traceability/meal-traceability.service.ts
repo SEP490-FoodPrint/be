@@ -149,7 +149,15 @@ export const mealTraceabilityService = {
       const batchTrace: BatchTraceDto = {
         cookingBatchId: cb.id,
         batchCode: cb.batchCode,
-        allocatedPortions: mab.allocatedPortions,
+        allocatedPortions: mab.allocatedPortions.toFixed(2),
+        allocationVersion: mab.allocationVersion,
+        materials: mab.materials.map((m) => ({
+          ingredientLotId: m.ingredientLotId,
+          ingredientId: m.ingredientId,
+          quantity: m.quantity.toFixed(9),
+          quantityPerPortion: m.quantityPerPortion.toFixed(9),
+          unit: m.unit,
+        })),
         plannedPortions: cbd.plannedPortions,
         status: cb.status,
         confirmedAt: iso(cb.confirmedAt),

@@ -1,0 +1,10 @@
+# Hợp đồng phân bổ nguyên liệu
+
+- GET `/api/meal-allocations?mealType=LUNCH|AFTERNOON` yêu cầu `meal_allocation.view`, phạm vi trường từ principal. Tự bổ sung `materialPlan` khi bữa chưa có dòng phân bổ đã lưu và đã hoàn tất chế biến/lưu mẫu. GET chỉ đọc DB. Nếu nguồn hoặc định lượng không đủ, trả `materialPlanError` giải thích lý do chặn. Khi đã có phân bổ, trả dữ liệu đã lưu, không tự tính đè. GET không có bữa tiếp tục phục vụ thông tin cả ngày.
+- `materialPlan` có revision, planId, algorithmVersion, optimal, entries, totals, groups và remaining. Mỗi dòng gồm nguồn lô, lớp, món, khối lượng, suất lý thuyết và allocatedPortions dạng chuỗi hai chữ số. Phương án hợp lệ có status READY. FE hiển thị trực tiếp phương án BE, không có nút tính.
+- PUT `/api/meal-allocations` nhận `{mealType, revision, planId, priorityClassIds: []}`, yêu cầu `meal_allocation.update` và thêm `meal_allocation.create` khi tạo hồ sơ lớp. BE đọc lại và tính lại trong transaction trường. Sai revision/planId trả 409 ALLOCATION_STALE, không ghi một phần. Retry phương án cũ không cấp trùng nguồn. Payload cũ `{mealType?, revision, batches}` vẫn tương thích dữ liệu cũ.
+- Không có endpoint POST `/material-plan` hoặc `/material-plan/apply`.
+- Công thức được chụp khi tạo lô mới. Lô cũ không có snapshot dùng định lượng thực đơn đã duyệt; thực đơn toàn trường dùng công thức khối hiện có khi có dữ liệu. Định lượng này thuộc revision và được lưu cùng lượng thực cấp trên từng dòng nguyên liệu khi áp dụng. Không ghi đè snapshot hoặc lịch sử đã giao. Thiếu định lượng hợp lệ hoặc công thức giữa các lô không thống nhất vẫn chặn với lý do cụ thể.
+- Lượng khả dụng lấy từ CookingBatchLot theo từng nguyên liệu của món, không suy ra từ plannedPortions. Gia vị dùng chung theo bữa tiếp tục có dữ liệu riêng.
+- Nhóm suất và dị ứng được kiểm tra qua readMealPortionDemand; nhu cầu mỗi món lấy từ nhóm suất lớp. Mọi nguồn nguyên liệu phải đáp ứng riêng, không bù thiếu thịt bằng rau.
+- Xác nhận giao theo cả ngày. Payload MEAL_DISTRIBUTED phiên bản 2 ghi suất Decimal dạng chuỗi và lượng nguồn; bằng chứng lịch sử giữ định dạng cũ.

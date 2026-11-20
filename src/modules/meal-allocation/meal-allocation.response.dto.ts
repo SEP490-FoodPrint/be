@@ -1,4 +1,18 @@
 type MealType = "LUNCH" | "AFTERNOON";
+type DecimalWireValue<T> = T extends number ? string : T;
+export type DecimalPortionFields<T> = T extends readonly (infer Item)[]
+  ? DecimalPortionFields<Item>[]
+  : T extends object
+    ? {
+        [Key in keyof T]: Key extends
+          | "allocatedPortions"
+          | "availablePortions"
+          | "plannedPortions"
+          | "totalRequiredPortions"
+          ? DecimalWireValue<T[Key]>
+          : DecimalPortionFields<T[Key]>;
+      }
+    : T;
 type Status =
   | "EMPTY"
   | "DEMAND_PENDING"
@@ -21,6 +35,8 @@ export interface DishBatchSlot {
   plannedPortions: number;
   availablePortions: number;
   autoAssigned: boolean;
+  allocationVersion?: number;
+  allocatedForGrade?: string;
   entries: {
     dailyMealPortionId: string;
     className?: string;
@@ -52,6 +68,10 @@ export interface GradeAllocationGroup {
 }
 
 export interface AllocationDayResponse {
+  materialPlan?: import("./material-allocation.response.dto").MaterialPlanResponseDTO;
+  materialPlanError?: string;
+  supportsMaterialAllocation?: boolean;
+  mealType: MealType | null;
   date: string;
   status: Status;
   message: string;

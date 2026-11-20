@@ -1413,8 +1413,19 @@ export function createKitchenLifecycle(
             true,
             stock,
           )) ?? [];
+        const allocationProfiles = menu.WeeklyMenu?.isSchoolWide
+          ? await repository.allocationGradeRecipes(
+              tx,
+              schoolId,
+              children.flatMap((child) =>
+                child.dishes.map((dish) => dish.dishId),
+              ),
+            )
+          : [];
         const planVersion = createHash("sha256")
-          .update(JSON.stringify({ mode, children, seasonings }))
+          .update(
+            JSON.stringify({ mode, children, seasonings, allocationProfiles }),
+          )
           .digest("hex");
         if (preview)
           return {
@@ -1486,6 +1497,45 @@ export function createKitchenLifecycle(
                   create: child.dishes.map((d) => ({
                     dishId: d.dishId,
                     plannedPortions: d.plannedPortions,
+                    allocationRecipeSnapshot: {
+                      version: 1,
+                      profiles: menu.WeeklyMenu?.isSchoolWide
+                        ? (
+                            allocationProfiles.find(
+                              (row) => row.id === d.dishId,
+                            )?.gradeRecipes ?? []
+                          ).map((profile) => ({
+                            gradeId: profile.gradeId,
+                            lines: profile.lines.map((line) => ({
+                              ingredientId: line.entry.ingredientId,
+                              quantityPerPortion:
+                                line.requiredQuantity.toString(),
+                              unit: line.unit,
+                            })),
+                          }))
+                        : (menu.WeeklyMenu?.grades ?? []).map((profile) => ({
+                            gradeId: profile.gradeId,
+                            lines: (
+                              menu.menuDayDishes.find(
+                                (row) => row.dishId === d.dishId,
+                              )?.ingredients ?? []
+                            ).map((line) => ({
+                              ingredientId: line.ingredientId,
+                              quantityPerPortion:
+                                line.quantityPerPortion.toString(),
+                              unit: line.unit,
+                            })),
+                          })),
+                      fallback: (
+                        menu.menuDayDishes.find(
+                          (row) => row.dishId === d.dishId,
+                        )?.ingredients ?? []
+                      ).map((line) => ({
+                        ingredientId: line.ingredientId,
+                        quantityPerPortion: line.quantityPerPortion.toString(),
+                        unit: line.unit,
+                      })),
+                    },
                   })),
                 },
               },

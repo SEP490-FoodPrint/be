@@ -14,6 +14,7 @@ export const mealAllocationTraceInclude = {
   },
   mealAllocationBatches: {
     include: {
+      materials: true,
       CookingBatch: {
         include: {
           completedByUser: { select: { fullName: true } },

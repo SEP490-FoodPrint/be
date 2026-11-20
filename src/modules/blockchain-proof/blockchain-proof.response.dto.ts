@@ -96,7 +96,7 @@ export interface BlockchainProofChainStepsDTO {
     dishes: string[];
     plannedPortions: number | null;
     /** Portions of this batch given to the traced meal. */
-    allocatedPortions: number;
+    allocatedPortions: number | string;
     completedAt: string | null;
   }[];
   retainedSamples: {

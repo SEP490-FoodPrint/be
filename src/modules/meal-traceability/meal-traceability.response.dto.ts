@@ -100,7 +100,15 @@ export interface IngredientTraceDto {
 export interface BatchTraceDto {
   cookingBatchId: string;
   batchCode: string;
-  allocatedPortions: number;
+  allocatedPortions: string;
+  allocationVersion: number;
+  materials: {
+    ingredientLotId: string;
+    ingredientId: string;
+    quantity: string;
+    quantityPerPortion: string;
+    unit: string;
+  }[];
   plannedPortions: number | null;
   status: string;
   confirmedAt: string | null;
