@@ -227,11 +227,11 @@ void test("file verification uses content, restricts size, removes path/control 
 
 void test("supplier onboarding validation rejects mass assignment, invalid dates, unverified activation and bad order quantities", () => {
   assert.throws(() =>
-    contractPayload({ supplierId: id, schoolId: id, ingredientIds: [] }, true),
+    contractPayload({ supplierId: id, schoolId: id, items: [] }, true),
   );
   assert.throws(() =>
     contractPayload(
-      { supplierId: id, ingredientIds: [], signedOn: "2026-02-30" },
+      { supplierId: id, items: [], signedOn: "2026-02-30" },
       true,
     ),
   );
@@ -239,7 +239,7 @@ void test("supplier onboarding validation rejects mass assignment, invalid dates
     contractPayload(
       {
         supplierId: id,
-        ingredientIds: [],
+        items: [],
         startsOn: "2026-12-01",
         endsOn: "2026-01-01",
       },
@@ -250,7 +250,7 @@ void test("supplier onboarding validation rejects mass assignment, invalid dates
     contractPayload(
       {
         supplierId: id,
-        ingredientIds: [],
+        items: [],
         certificationId: id,
         exemptionNote: "Other",
       },

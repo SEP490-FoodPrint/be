@@ -1539,10 +1539,12 @@ model SupplierContract {
 }
 
 model SupplierContractItem {
-  contractId   String           @map("contract_id") @db.Uuid
-  ingredientId String           @map("ingredient_id") @db.Uuid
-  contract     SupplierContract @relation(fields: [contractId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  ingredient   Ingredient       @relation(fields: [ingredientId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  contractId   String                  @map("contract_id") @db.Uuid
+  ingredientId String                  @map("ingredient_id") @db.Uuid
+  /// Loại nguyên liệu chọn trong hồ sơ; được ghi vào IngredientEntry khi kích hoạt. NULL ở hồ sơ tạo trước khi có cột này.
+  handlingType IngredientHandlingType? @map("handling_type")
+  contract     SupplierContract        @relation(fields: [contractId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  ingredient   Ingredient              @relation(fields: [ingredientId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@id([contractId, ingredientId])
   @@map("supplier_contract_items")
