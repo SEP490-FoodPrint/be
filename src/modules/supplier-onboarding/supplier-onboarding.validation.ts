@@ -49,6 +49,42 @@ function date(value: unknown): Date | null {
   return result;
 }
 
+const handlingTypeSchema = z.enum(["DRY_STOCK", "DIRECT_USE"], {
+  error: "Chọn loại nguyên liệu: Lưu kho hoặc Dùng ngay",
+});
+const handlingItemSchema = z.strictObject({
+  ingredientId: requestUuidSchema,
+  handlingType: handlingTypeSchema,
+});
+const uniqueIngredients = (
+  items: { ingredientId: string }[],
+  ctx: z.RefinementCtx,
+) => {
+  if (new Set(items.map((item) => item.ingredientId)).size !== items.length)
+    ctx.addIssue({
+      code: "custom",
+      message: "Không lặp nguyên liệu",
+    });
+};
+export const contractItemsSchema = z
+  .array(handlingItemSchema, { error: "Danh sách nguyên liệu không hợp lệ" })
+  .max(200, { error: "Chọn tối đa 200 nguyên liệu" })
+  .superRefine(uniqueIngredients);
+export const ingredientHandlingParamsSchema = z.strictObject({
+  supplierId: requestUuidSchema,
+});
+export const ingredientHandlingSchema = z.strictObject({
+  items: z
+    .array(handlingItemSchema, { error: "Danh sách nguyên liệu không hợp lệ" })
+    .min(1, { error: "Cần ít nhất 1 nguyên liệu" })
+    .max(200, { error: "Tối đa 200 nguyên liệu mỗi lần lưu" })
+    .superRefine(uniqueIngredients),
+});
+export const validateIngredientHandlingParams = (value: unknown) =>
+  parseRequest(ingredientHandlingParamsSchema, value);
+export const validateIngredientHandlingBody = (value: unknown) =>
+  parseRequest(ingredientHandlingSchema, value);
+
 export function revision(value: unknown): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1)
     throw new HttpError(400, "Phiên bản hồ sơ không hợp lệ.");
@@ -66,7 +102,7 @@ export function contractPayload(value: unknown, create: boolean) {
     "scopeNote",
     "certificationId",
     "exemptionNote",
-    "ingredientIds",
+    "items",
   ]);
   if (!create && body.supplierId !== undefined)
     throw new HttpError(400, "Không được đổi nhà cung cấp của hồ sơ.");
@@ -74,9 +110,7 @@ export function contractPayload(value: unknown, create: boolean) {
     value === undefined || value === null || value === ""
       ? null
       : text(value, max);
-  if (!Array.isArray(body.ingredientIds) || body.ingredientIds.length > 200)
-    throw new HttpError(400, "Chọn tối đa 200 nguyên liệu.");
-  const ingredientIds = [...new Set(body.ingredientIds.map(uuid))];
+  const items = parseRequest(contractItemsSchema, body.items);
   const data = {
     number: optional(body.number, 120),
     signedOn: date(body.signedOn),
@@ -96,7 +130,8 @@ export function contractPayload(value: unknown, create: boolean) {
   return {
     supplierId: create ? uuid(body.supplierId) : undefined,
     revision: create ? undefined : revision(body.revision),
-    ingredientIds,
+    items,
+    ingredientIds: items.map((item) => item.ingredientId),
     data,
   };
 }

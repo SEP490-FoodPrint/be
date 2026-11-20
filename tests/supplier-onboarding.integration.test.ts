@@ -311,7 +311,7 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
     startsOn: dayString(today),
     endsOn: dayString(end),
     certificationId: certificate,
-    ingredientIds: [ingredientA],
+    items: [{ ingredientId: ingredientA, handlingType: "DRY_STOCK" }],
   });
   const pdf = Buffer.from(
     "%PDF-1.4\n[TEST ONLY] signed agreement evidence\n%%EOF",
@@ -375,7 +375,7 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
         (
           await call("/supplier-contracts", tokenA, "POST", {
             ...payload("BAD-SCOPE"),
-            ingredientIds: [ingredientB],
+            items: [{ ingredientId: ingredientB, handlingType: "DIRECT_USE" }],
           })
         ).status,
         400,

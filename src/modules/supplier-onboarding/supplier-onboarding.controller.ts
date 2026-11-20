@@ -12,6 +12,8 @@ import {
   validateOrderSendParams,
   validateOrderSendBody,
   reasonPayload,
+  validateIngredientHandlingBody,
+  validateIngredientHandlingParams,
 } from "./supplier-onboarding.validation";
 
 export const onboardingController = {
@@ -140,6 +142,19 @@ export const onboardingController = {
         String(req.params.action),
         reasonPayload(req.body as unknown),
       ),
+    );
+  }),
+  ingredientHandling: asyncHandler(async (req, res) => {
+    const params = validateIngredientHandlingParams(req.params);
+    const body = validateIngredientHandlingBody(req.body as unknown);
+    sendSuccess(
+      res,
+      await service.updateIngredientHandling(
+        requirePrincipal(req),
+        params,
+        body,
+      ),
+      "Đã cập nhật loại nguyên liệu.",
     );
   }),
   createOrder: asyncHandler(async (req, res) => {

@@ -23,19 +23,25 @@ import type {
 } from "./supplier-onboarding.validation";
 import {
   contractInclude,
+  ingredientHandlingRepository,
   lockSupplier,
   supplierOrderRepository,
 } from "./supplier-onboarding.repository";
 import { createIntakeAccessRepository } from "../account-lifecycle/intake-access.repository";
 import { createIntakeAccessService } from "../account-lifecycle/intake-access.service";
 import type {
+  ContractItemsRequestDTO,
+  IngredientHandlingParamsRequestDTO,
+  IngredientHandlingRequestDTO,
   OrderDraftRequestDTO,
   OrderSendParamsRequestDTO,
   OrderSendRequestDTO,
 } from "./supplier-onboarding.request.dto";
 import type {
+  IngredientHandlingResponseDTO,
   OrderDraftResponseDTO,
   OrderSendResponseDTO,
+  SuppliedIngredientResponseDTO,
 } from "./supplier-onboarding.response.dto";
 
 const intakeRepository = createIntakeAccessRepository();
@@ -176,6 +182,119 @@ async function event(
       reason,
     },
   });
+}
+
+type HandlingType = "DRY_STOCK" | "DIRECT_USE";
+type HandlingItem = ContractItemsRequestDTO[number];
+type HandlingChange = {
+  ingredientId: string;
+  from: HandlingType | null;
+  to: HandlingType;
+};
+
+export const HANDLING_LABELS: Record<HandlingType, string> = {
+  DRY_STOCK: "Lưu kho",
+  DIRECT_USE: "Dùng ngay",
+};
+
+/** Hồ sơ tạo trước khi có cột loại nguyên liệu phải được chọn loại trước khi kích hoạt. */
+export function contractHandlingItems(
+  items: { ingredientId: string; handlingType: HandlingType | null }[],
+): HandlingItem[] {
+  if (items.some((item) => !item.handlingType))
+    throw new HttpError(
+      409,
+      "Còn nguyên liệu chưa chọn loại Lưu kho/Dùng ngay. Cập nhật hồ sơ trước khi kích hoạt.",
+    );
+  return items.map((item) => ({
+    ingredientId: item.ingredientId,
+    handlingType: item.handlingType!,
+  }));
+}
+
+/**
+ * Tạo IngredientEntry còn thiếu và cập nhật loại/trạng thái entry đã có theo (trường, nguyên liệu).
+ * Chạy trong transaction đã giữ khóa trường–NCC nên không tạo trùng.
+ */
+export async function syncIngredientEntries(
+  tx: Tx,
+  schoolId: string,
+  actorId: string,
+  items: HandlingItem[],
+  repository: typeof ingredientHandlingRepository = ingredientHandlingRepository,
+): Promise<HandlingChange[]> {
+  if (!items.length) return [];
+  const existing = await repository.findEntries(
+    tx,
+    schoolId,
+    items.map((item) => item.ingredientId),
+  );
+  const byIngredient = new Map(
+    existing.map((entry) => [entry.ingredientId, entry]),
+  );
+  const missing = items.filter((item) => !byIngredient.has(item.ingredientId));
+  if (missing.length)
+    await repository.createEntries(tx, schoolId, actorId, missing);
+  const changes: HandlingChange[] = missing.map((item) => ({
+    ingredientId: item.ingredientId,
+    from: null,
+    to: item.handlingType,
+  }));
+  for (const item of items) {
+    const entry = byIngredient.get(item.ingredientId);
+    if (
+      !entry ||
+      (entry.handlingType === item.handlingType && entry.status === "ACTIVE")
+    )
+      continue;
+    const previous = entry.handlingType;
+    await repository.updateEntry(tx, entry.id, item.handlingType);
+    if (previous !== item.handlingType)
+      changes.push({
+        ingredientId: item.ingredientId,
+        from: previous,
+        to: item.handlingType,
+      });
+  }
+  return changes;
+}
+
+async function suppliedIngredientsOf(
+  db: Tx,
+  schoolId: string,
+  supplierId: string,
+): Promise<SuppliedIngredientResponseDTO[]> {
+  const rows = await ingredientHandlingRepository.activeContractItems(
+    db,
+    schoolId,
+    supplierId,
+  );
+  if (!rows.length) return [];
+  const entries = await ingredientHandlingRepository.findEntries(db, schoolId, [
+    ...new Set(rows.map((row) => row.ingredientId)),
+  ]);
+  const handling = new Map(
+    entries.map((entry) => [entry.ingredientId, entry.handlingType]),
+  );
+  const result = new Map<string, SuppliedIngredientResponseDTO>();
+  for (const row of rows) {
+    const item = result.get(row.ingredientId) ?? {
+      ingredientId: row.ingredientId,
+      name: row.ingredient.name,
+      unit: row.ingredient.defaultUnit,
+      category: row.ingredient.ingredientCategory?.categoryName ?? null,
+      handlingType: handling.get(row.ingredientId) ?? null,
+      contracts: [],
+    };
+    item.contracts.push({
+      id: row.contract.id,
+      number: row.contract.number,
+      startsOn: row.contract.startsOn ? dayString(row.contract.startsOn) : null,
+      endsOn: row.contract.endsOn ? dayString(row.contract.endsOn) : null,
+    });
+    result.set(row.ingredientId, item);
+  }
+  return [...result.values()];
 }
 
 async function findContract(principal: AuthPrincipal, id: string) {
@@ -417,6 +536,9 @@ export async function supplierDetail(
         orderBy: { createdAt: "desc" },
       })
     : [];
+  const suppliedIngredients = canRead
+    ? await suppliedIngredientsOf(db, schoolId, supplierId)
+    : [];
   const events = canRead
     ? await db.supplierRelationshipEvent.findMany({
         where: { relationship: { schoolId, supplierId } },
@@ -448,6 +570,7 @@ export async function supplierDetail(
         ) &&
         contractDto(contract).eligible,
     })),
+    suppliedIngredients,
     events,
     canManage:
       principal.permissions.includes("supplier_relationship.manage") &&
@@ -558,8 +681,9 @@ export async function saveDraft(
             ...draft.data,
             revision: { increment: 1 },
             items: {
-              create: draft.ingredientIds.map((ingredientId) => ({
+              create: draft.items.map(({ ingredientId, handlingType }) => ({
                 ingredientId,
+                handlingType,
               })),
             },
           },
@@ -573,8 +697,9 @@ export async function saveDraft(
           supplierId,
           createdByUserId: actor.id,
           items: {
-            create: draft.ingredientIds.map((ingredientId) => ({
+            create: draft.items.map(({ ingredientId, handlingType }) => ({
               ingredientId,
+              handlingType,
             })),
           },
         },
@@ -677,6 +802,7 @@ export async function activateContract(
       );
     const issues = currentContractIssues(contract, activationDate(contract));
     if (issues.length) throw new HttpError(409, issues.join(" "));
+    const contractItems = contractHandlingItems(contract.items);
     const supplier = await tx.supplier.findUniqueOrThrow({
       where: { id: contract.supplierId },
       select: {
@@ -745,6 +871,7 @@ export async function activateContract(
         id,
       );
     }
+    await syncIngredientEntries(tx, schoolId, actor.id, contractItems);
     const snapshot = {
       supplier,
       number: contract.number,
@@ -756,6 +883,7 @@ export async function activateContract(
         id: item.ingredientId,
         name: item.ingredient.name,
         unit: item.ingredient.defaultUnit,
+        handlingType: item.handlingType,
       })),
       certification: contract.certification,
       exemptionNote: contract.exemptionNote,
@@ -1111,3 +1239,96 @@ export async function orderEvidence(principal: AuthPrincipal, id: string) {
     );
   return order;
 }
+
+export function createIngredientHandlingService(
+  dependencies: {
+    repository?: typeof ingredientHandlingRepository;
+    write?: typeof write;
+  } = {},
+) {
+  const repository = dependencies.repository ?? ingredientHandlingRepository;
+  const writeHandling = dependencies.write ?? write;
+
+  async function updateIngredientHandling(
+    principal: AuthPrincipal,
+    params: IngredientHandlingParamsRequestDTO,
+    body: IngredientHandlingRequestDTO,
+  ): Promise<IngredientHandlingResponseDTO> {
+    assertContractManager(principal);
+    return writeHandling(
+      principal,
+      params.supplierId,
+      async (tx, actor, schoolId) => {
+        const scope = await repository.activeContractItems(
+          tx,
+          schoolId,
+          params.supplierId,
+        );
+        const names = new Map(
+          scope.map((row) => [row.ingredientId, row.ingredient.name]),
+        );
+        if (body.items.some((item) => !names.has(item.ingredientId)))
+          throw new HttpError(
+            409,
+            "Có nguyên liệu không thuộc hợp đồng đang hiệu lực của trường với nhà cung cấp này.",
+          );
+        const entries = await repository.findEntries(
+          tx,
+          schoolId,
+          body.items.map((item) => item.ingredientId),
+        );
+        const current = new Map(
+          entries.map((entry) => [entry.ingredientId, entry.handlingType]),
+        );
+        const changed = body.items.filter(
+          (item) => current.get(item.ingredientId) !== item.handlingType,
+        );
+        if (!changed.length) return { changes: [] };
+        const blocked = await repository.pendingDeliveries(
+          tx,
+          schoolId,
+          changed.map((item) => item.ingredientId),
+        );
+        if (blocked.length)
+          throw new HttpError(
+            409,
+            `Không thể đổi loại khi còn xe đã đến hoặc đang chờ duyệt có nguyên liệu này: ${blocked
+              .map((delivery) => delivery.deliveryNo)
+              .join(", ")}.`,
+          );
+        const changes = await syncIngredientEntries(
+          tx,
+          schoolId,
+          actor.id,
+          changed,
+          repository,
+        );
+        const relationshipId = scope.find((row) => row.contract.relationshipId)
+          ?.contract.relationshipId;
+        if (!relationshipId)
+          throw new HttpError(409, "Không tìm thấy liên kết của hợp đồng.");
+        const result = changes.map((change) => ({
+          ...change,
+          name: names.get(change.ingredientId)!,
+        }));
+        await repository.createEvent(tx, {
+          relationshipId,
+          actorId: actor.id,
+          actorName: actor.fullName,
+          action: "INGREDIENT_HANDLING_CHANGED",
+          reason: result
+            .map(
+              (change) =>
+                `${change.name}: ${change.from ? HANDLING_LABELS[change.from] : "Chưa có"} → ${HANDLING_LABELS[change.to]}`,
+            )
+            .join("; "),
+        });
+        return { changes: result };
+      },
+    );
+  }
+
+  return { updateIngredientHandling };
+}
+
+export const { updateIngredientHandling } = createIngredientHandlingService();
