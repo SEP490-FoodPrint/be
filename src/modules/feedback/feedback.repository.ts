@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from "../../generated/prisma/client";
+import { allocateBusinessCode } from "../../utils/business-code";
 type Db = PrismaClient | Prisma.TransactionClient;
 
 export const complaintInclude = {
@@ -114,9 +115,22 @@ export function createFeedbackRepository() {
         },
       });
     },
+    /** Cấp mã FP-MC-NNNNN (hậu tố Feistel) trong transaction tạo khiếu nại; không trùng mã đã có. */
+    allocateMealComplaintCode(tx: Prisma.TransactionClient) {
+      return allocateBusinessCode(tx, "MC", async (codes) => {
+        const rows = await tx.mealComplaint.findMany({
+          where: { code: { in: [...codes] } },
+          select: { code: true },
+        });
+        return new Set(
+          rows.flatMap((row) => (row.code === null ? [] : [row.code])),
+        );
+      });
+    },
     create(
       db: Db,
       data: {
+        code: string;
         dailyMealPortionId: string;
         submittedByUserId: string;
         complaintType: CreateDataType;

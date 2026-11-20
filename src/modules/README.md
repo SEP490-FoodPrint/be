@@ -32,6 +32,7 @@ Module auth còn hỗ trợ đổi mật khẩu bằng mật khẩu cũ và khô
 Ban Giám hiệu quyết định nguyên `WeeklyMenu`; `MenuDay` chỉ là dữ liệu chi tiết và được đồng bộ trạng thái trong cùng transaction.
 
 - `GET /api/v1/menus/:menuId/approval-detail`: hồ sơ duyệt thuộc trường hiện tại, yêu cầu vai trò Ban Giám hiệu và quyền `menu.view`.
+- `GET /api/v1/menus/approval-week?date=YYYY-MM-DD`: hồ sơ duyệt của mọi thực đơn đã gửi (khác `DRAFT`) trong tuần chứa `date` (ngày bất kỳ, quy về thứ Hai), mỗi thực đơn kèm `isSchoolWide` và `grades`. Bỏ `date` thì chọn tuần còn chờ duyệt mới nhất, không có thì tuần mới nhất. Trả thêm `weeks[]` (số thực đơn/chờ duyệt theo tuần) và `weekNumber`. Cùng điều kiện quyền với `approval-detail`.
 - `POST /api/v1/menus/:menuId/reviews`: body `{ "decision": "APPROVED" | "REVISION_REQUESTED", "feedback": "..." }`. Phê duyệt cần `menu.approve`; yêu cầu chỉnh sửa cần `menu.review` và bắt buộc có `feedback`.
 
 Chỉ tuần `PENDING_APPROVAL` được quyết định. Quyết định cập nhật mọi ngày, cập nhật tuần và ghi một `MenuReviewRecord` có `menuDayId = null` trong cùng transaction. API từ chối `menuDayId` trong body; bản ghi cấp ngày cũ vẫn được giữ làm lịch sử. Số suất hiển thị lấy từ nhu cầu lớp đã `FINALIZED`, không lấy từ kích thước khẩu phần của món.
@@ -44,7 +45,7 @@ Tất cả đường dẫn bên dưới dùng phương thức **GET**.
 | ----------------------------- | ------------------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------ |
 | `auth`                        | `/api/auth/roles`                    | `Role`                                 | —                                                                                    |
 | `user`                        | `/api/users`                         | `User`                                 | —                                                                                    |
-| `organization`                | `/api/schools`                       | `School`                               | —                                                                                    |
+| `organization`                | `/api/schools`                       | `School`                               | `SchoolDeliveryInspectionRole`                                                       |
 | `ingredient`                  | `/api/ingredients`                   | `Ingredient`                           | —                                                                                    |
 | `menu`                        | `/api/menus`                         | `WeeklyMenu`                           | MenuDay, MenuDayDish                                                                 |
 | `supply-order`                | `/api/supply-requests`               | `SupplyRequest`                        | SupplyRequestItem                                                                    |
@@ -65,7 +66,7 @@ Tất cả đường dẫn bên dưới dùng phương thức **GET**.
 | `ingredient-entry`            | `/api/ingredient-entries`            | `IngredientEntry`                      | —                                                                                    |
 | `allergy`                     | `/api/class-allergies`               | `ClassAllergy`                         | —                                                                                    |
 | `supplier-order`              | `/api/deliveries/management`         | `Delivery`                             | DeliveryItem                                                                         |
-| `delivery`                    | `/api/deliveries`                    | `Delivery`                             | DeliveryItem, DeliveryApproval                                                       |
+| `delivery`                    | `/api/deliveries`                    | `Delivery`                             | DeliveryItem, DeliveryApproval, DeliveryInspectionRole                               |
 | `delivery-trace`              | `/api/public/delivery-items`         | `DeliveryItem`                         | Delivery, Supplier                                                                   |
 | `dish`                        | `/api/dishes`                        | `Dish`                                 | DishIngredientEntry                                                                  |
 | `inventory`                   | `/api/inventory-transactions`        | `InventoryTransaction`                 | —                                                                                    |
@@ -82,7 +83,9 @@ Tất cả đường dẫn bên dưới dùng phương thức **GET**.
 
 ## Mã hồ sơ đăng ký
 
-Các phản hồi chứa hồ sơ có thêm `registrationID` chỉ đọc dạng `FP-REG-00001`, tăng phần số chung cho SCHOOL/SUPPLIER và mở rộng sau 99999. UUID `id` tiếp tục dùng cho URL/FK; danh sách vẫn sắp theo UUID, không dùng mã làm số dòng hoặc tổng số hồ sơ.
+Các phản hồi chứa hồ sơ có thêm `registrationID` chỉ đọc, lấy từ cột `registration_requests.code`. Hồ sơ cũ giữ mã tuần tự `FP-REG-00001` đã phát hành. Hồ sơ mới nhận `FP-RG-NNNNN`, trong đó 5 chữ số là hoán vị Feistel có khóa của số thứ tự, nên không suy ra được thứ tự hay số lượng hồ sơ (xem [contract mã nghiệp vụ](../../specs/feistel-business-codes/contracts/business-code.md)). Tìm kiếm danh sách nhận cả hai dạng mã, không phân biệt hoa thường. UUID `id` tiếp tục dùng cho URL/FK; danh sách vẫn sắp theo UUID, không dùng mã làm số dòng hoặc tổng số hồ sơ.
+
+Khiếu nại bữa ăn (`feedback`) có trường `code` dạng `FP-MC-NNNNN`, cấp trong transaction tạo khiếu nại; khiếu nại cũ chưa backfill trả `code: null`. Chuyến giao mới (`FP-DE-`) và khiếu nại nguyên liệu mới (`FP-CP-`) dùng cùng allocator `src/utils/business-code.ts`; mã cũ tuần tự vẫn hợp lệ.
 
 Mã xuất hiện ở danh sách, chi tiết, own/submit/approve/reject và summary `registrationRequest` trong login/refresh/GET me/PATCH me. Khi chưa có hồ sơ, summary/own vẫn null. Chỉnh sửa, gửi lại và xét duyệt giữ nguyên mã. Request tự gán mã hoặc số nội bộ bị 400 qua validation strict; không thêm endpoint tìm kiếm theo mã hay mở rộng quyền.
 
@@ -199,7 +202,7 @@ Module `ingredient-quality-feedback` (mở rộng đầy đủ 7 file `routes`, 
 - `GET /api/ingredient-quality-feedback/:feedbackId`: tra cứu theo UUID (không dùng `FP-CP-...` trong đường dẫn), cho phép `SUPPLIER` có `view_details` hoặc `SCHOOL` có `view_details`/`view_own` (để trường đọc câu trả lời theo `FR-011`). Trả `FeedbackDetail` với `complaintCode` gốc, danh tính `{ id, fullName }` lịch sử của người gửi/phản hồi, lô nguyên liệu được kiểm chứng cùng `deliveryId` (lệch chuyến hoặc thiếu/hỏng mã trả `503`), và `404` thống nhất cho ngoài phạm vi/không tồn tại (`Cache-Control: private, no-store`). `SYSTEM`/`AUTHORITY` bị chặn `403`.
 - `POST /api/ingredient-quality-feedback/:feedbackId/response`: dành cho `SUPPLIER` (`ADMIN`/`STAFF`) có **đồng thời** `ingredient_quality_feedback.view_details` **và** `ingredient_quality_feedback.respond`; body chỉ nhận `supplierResponse` (1–5.000 Unicode code points sau trim hai đầu). Khóa theo thứ tự chung và cập nhật có điều kiện `SUBMITTED -> RESPONDED` trong transaction `Serializable` (cạnh tranh kết thúc một `200` và một `409`, không ghi đè, không gọi allocator số thứ tự hay sửa `id`/`complaintCode`).
 
-**Phạm vi producer BGH:** API HTTP/service tạo khiếu nại phía Ban Giám hiệu và quyền mặc định tương ứng chưa tồn tại trong repository. Tính năng này mới chuẩn bị storage `complaintCode`/sequence, pure formatter/parser tại [complaint-code.ts](../utils/complaint-code.ts) và allocator nội bộ `nextComplaintCodeSequence(tx)` theo [producer contract](../../specs/supplier-complaint-response/contracts/complaint-code-producer.md); xem chi tiết API tại [ingredient-quality-feedback-api.md](../../specs/supplier-complaint-response/contracts/ingredient-quality-feedback-api.md).
+**Phạm vi producer BGH:** API HTTP/service tạo khiếu nại phía Ban Giám hiệu và quyền mặc định tương ứng chưa tồn tại trong repository. Tính năng này mới chuẩn bị storage `complaintCode` và allocator nội bộ `allocateComplaintCode(tx)` (cấp `FP-CP-NNNNN` với hậu tố Feistel qua [business-code.ts](../utils/business-code.ts), xem [contract mã nghiệp vụ](../../specs/feistel-business-codes/contracts/business-code.md)); mã tuần tự cũ đã phát hành vẫn hợp lệ khi đọc. Producer phải gọi allocator trong cùng transaction tạo khiếu nại (phần cấp mã của [producer contract](../../specs/supplier-complaint-response/contracts/complaint-code-producer.md) được thay bằng [contract mã nghiệp vụ](../../specs/feistel-business-codes/contracts/business-code.md)); xem chi tiết API tại [ingredient-quality-feedback-api.md](../../specs/supplier-complaint-response/contracts/ingredient-quality-feedback-api.md).
 
 ## Quản trị quyền toàn hệ thống
 

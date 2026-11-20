@@ -76,6 +76,12 @@ export function createSupplierOnboardingRouter(
     manage,
     controller.close,
   );
+  router.put(
+    "/supplier-partnerships/:supplierId/ingredient-handling",
+    authHandler,
+    manage,
+    controller.ingredientHandling,
+  );
   router.post(
     "/supplier-partnerships/:id/:action",
     authHandler,

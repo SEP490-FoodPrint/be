@@ -16,6 +16,8 @@ export interface MenuApprovalDayResponseDTO {
 export interface MenuApprovalDetailResponseDTO {
   id: string;
   title: string | null;
+  isSchoolWide: boolean;
+  grades: { id: string; name: string }[];
   status: "DRAFT" | "PENDING_APPROVAL" | "REVISION_REQUIRED" | "APPROVED";
   canDecide: boolean;
   submittedAt: string | null;
@@ -55,4 +57,20 @@ export interface MenuApprovalDecisionResponseDTO {
     id: string;
     fullName: string;
   };
+}
+
+export interface MenuApprovalWeekOptionDTO {
+  weekStartDate: string;
+  weekEndDate: string;
+  total: number;
+  pending: number;
+}
+
+export interface MenuApprovalWeekResponseDTO {
+  /** null khi trường chưa có thực đơn nào được gửi duyệt. */
+  weekStartDate: string | null;
+  weekEndDate: string | null;
+  weekNumber: number | null;
+  weeks: MenuApprovalWeekOptionDTO[];
+  menus: MenuApprovalDetailResponseDTO[];
 }

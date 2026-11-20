@@ -1,5 +1,7 @@
 export interface ComplaintResponseDTO {
   id: string;
+  /** `FP-MC-NNNNN`; `null` với khiếu nại cũ chưa được backfill. */
+  code: string | null;
   complaintType: string;
   description: string;
   status: string;

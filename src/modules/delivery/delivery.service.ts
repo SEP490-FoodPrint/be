@@ -8,7 +8,18 @@ import {
 } from "../../utils/authorization";
 import { HttpError } from "../../utils/http-error";
 import { getDeliveryStatusLabel } from "../../utils/delivery-status";
-import { ROLE_LABELS } from "../../constants/roles";
+import { ROLE_LABELS, ROLES } from "../../constants/roles";
+import {
+  DELIVERY_INSPECTION_ROLES,
+  DEFAULT_INSPECTION_TIERS,
+  LEGACY_INSPECTION_TIERS,
+  INSPECTION_TIER_LABELS,
+  resolveSchoolTiers,
+  resolveDeliveryTiers,
+  isInspectionComplete,
+  type DeliveryInspectionRoleCode,
+  type DeliveryInspectionTierCode,
+} from "../../constants/delivery-inspection";
 import {
   deliveryInspectionRepository as inspections,
   deliveryListSelect,
@@ -89,6 +100,7 @@ export function createDeliveryService(
           supplyRequestId: row.supplyRequestId,
           orderNo: row.SupplyRequest?.requestNo ?? null,
           requestNo: row.SupplyRequest?.requestNo ?? null,
+          ...deliveryOrderTypeBatch(row),
           supplierId: row.supplierId,
           supplierName: row.Supplier?.name ?? null,
           supplierPhone: row.Supplier?.phone ?? null,
@@ -142,37 +154,71 @@ export const deliveryService = createDeliveryService();
 export type DeliveryService = ReturnType<typeof createDeliveryService>;
 
 export const deliveryInspectionRoles = [
-  "SCHOOL_NUTRITION_OFFICER",
-  "SCHOOL_KITCHEN_STAFF",
-  "INGREDIENT_MANAGEMENT_DEPARTMENT",
-  "PARENTS_COMMITTEE",
+  ROLES.SCHOOL_NUTRITION_OFFICER,
+  ROLES.SCHOOL_KITCHEN_STAFF,
+  ROLES.INGREDIENT_MANAGEMENT,
+  ROLES.PARENTS_COMMITTEE,
 ] as const;
 type DeliveryInspectionRole = (typeof deliveryInspectionRoles)[number];
 
 /**
- * Bộ phận phải ký nhận một chuyến giao. Xe của NCC đồ khô (supplierIsDry) hoặc xe chỉ gồm đồ khô
- * (DRY_STOCK) chỉ cần Ban quản lý nguyên liệu kiểm tra; còn lại cần đủ 4 bộ phận.
+ * Xe đồ khô khi mọi dòng hàng là DRY_STOCK: chỉ Ban quản lý nguyên liệu kiểm tra.
+ * Chỉ cần 1 dòng đồ tươi là xe đồ tươi, theo cấu hình phân nhóm duyệt của trường.
+ * Không suy luận theo nhà cung cấp.
  */
+export function isDryDelivery(row: {
+  SupplyRequest?: { orderType?: string | null } | null;
+  deliveryItems?: {
+    IngredientEntry: { handlingType: string } | null;
+    SupplyRequestItem: {
+      IngredientEntry: { handlingType: string } | null;
+    } | null;
+  }[];
+}): boolean {
+  // Đơn có orderType là nguồn sự thật; chỉ xe STANDALONE (hoặc đơn cũ chưa backfill) suy từ dòng hàng.
+  const orderType = row.SupplyRequest?.orderType;
+  if (orderType) return orderType === "DRY_STOCK";
+  const items = row.deliveryItems ?? [];
+  return (
+    items.length > 0 &&
+    items.every(
+      (item) =>
+        (item.IngredientEntry?.handlingType ??
+          item.SupplyRequestItem?.IngredientEntry?.handlingType) ===
+        "DRY_STOCK",
+    )
+  );
+}
+
+/** orderType/batchNo của xe: lấy từ SupplyRequest; xe STANDALONE suy loại từ dòng hàng, không có đợt. */
+export function deliveryOrderTypeBatch(
+  row: Parameters<typeof isDryDelivery>[0] & {
+    SupplyRequest?: {
+      orderType?: string | null;
+      batchNo?: number | null;
+    } | null;
+  },
+): { orderType: "DIRECT_USE" | "DRY_STOCK" | null; batchNo: number | null } {
+  const orderType = row.SupplyRequest?.orderType;
+  if (orderType === "DRY_STOCK" || orderType === "DIRECT_USE")
+    return { orderType, batchNo: row.SupplyRequest?.batchNo ?? null };
+  if (!row.deliveryItems?.length) return { orderType: null, batchNo: null };
+  return {
+    orderType: isDryDelivery(row) ? "DRY_STOCK" : "DIRECT_USE",
+    batchNo: null,
+  };
+}
+
 export function requiredInspectionRoles(row: {
-  supplierIsDry?: boolean;
-  deliveryItems: {
+  SupplyRequest?: { orderType?: string | null } | null;
+  deliveryItems?: {
     IngredientEntry: { handlingType: string } | null;
     SupplyRequestItem: {
       IngredientEntry: { handlingType: string } | null;
     } | null;
   }[];
 }): readonly DeliveryInspectionRole[] {
-  const items = row.deliveryItems ?? [];
-  const dryOnly =
-    row.supplierIsDry === true ||
-    (items.length > 0 &&
-      items.every(
-        (item) =>
-          (item.IngredientEntry?.handlingType ??
-            item.SupplyRequestItem?.IngredientEntry?.handlingType) ===
-          "DRY_STOCK",
-      ));
-  return dryOnly
+  return isDryDelivery(row)
     ? ["INGREDIENT_MANAGEMENT_DEPARTMENT"]
     : deliveryInspectionRoles;
 }
@@ -199,28 +245,127 @@ function inspectionScope(principal: AuthPrincipal) {
   ) {
     throw new HttpError(
       403,
-      "Chỉ bốn bộ phận kiểm tra đầu vào của trường được truy cập",
+      "Chỉ các bộ phận kiểm tra đầu vào của trường được truy cập",
     );
   }
   return principal.schoolId;
 }
 
+const TIER_ORDER: Record<DeliveryInspectionTierCode, number> = {
+  PRIMARY: 1,
+  REQUIRED: 2,
+  OPTIONAL: 3,
+};
+
 function inspectionDTO(
   row: DeliveryInspectionRow,
   principal: AuthPrincipal,
+  schoolTiers?: Record<
+    DeliveryInspectionRoleCode,
+    DeliveryInspectionTierCode
+  > | null,
 ): DeliveryInspectionDTO {
   const source = row.SupplyRequest;
   const sourceType =
     row.creationMode ?? (row.supplyRequestId ? "REQUEST" : "STANDALONE");
   const rejectedCount = source?._count?.deliveries ?? 0;
+  const isDryOnly = isDryDelivery(row);
+
+  const activeTiers =
+    resolveDeliveryTiers(row.inspectionRoles) ??
+    (row.status === "IN_TRANSIT"
+      ? (schoolTiers ?? DEFAULT_INSPECTION_TIERS)
+      : LEGACY_INSPECTION_TIERS);
+
+  const currentTier =
+    isDryOnly && principal.role === "INGREDIENT_MANAGEMENT_DEPARTMENT"
+      ? "PRIMARY"
+      : (activeTiers[principal.role as DeliveryInspectionRoleCode] ?? null);
+
+  const effectiveSchoolTiers = schoolTiers ?? DEFAULT_INSPECTION_TIERS;
+  const canConfirmArrival =
+    row.status === "IN_TRANSIT" &&
+    row.traceabilityVersion === 1 &&
+    principal.permissions.includes("delivery.inspect") &&
+    (isDryOnly
+      ? principal.role === "INGREDIENT_MANAGEMENT_DEPARTMENT"
+      : effectiveSchoolTiers[principal.role as DeliveryInspectionRoleCode] ===
+        "PRIMARY");
+
+  const hasBlockingReject = row.deliveryApprovals.some((approval) => {
+    if (approval.decision !== "REJECT") return false;
+    const approverTier =
+      activeTiers[approval.Role.code as DeliveryInspectionRoleCode];
+    return approverTier === "PRIMARY" || approverTier === "REQUIRED";
+  });
+
+  const canInspect =
+    principal.permissions.includes("delivery.inspect") &&
+    requiredInspectionRoles(row).some((role) => role === principal.role) &&
+    (!source || (rejectedCount <= 2 && source.status !== "CANCELLED")) &&
+    ["ARRIVED", "PENDING_APPROVAL"].includes(row.status) &&
+    !hasBlockingReject &&
+    !row.deliveryApprovals.some(
+      (approval) => approval.roleId === principal.roleId,
+    );
+
+  const requiredRoles = requiredInspectionRoles(row)
+    .map((code) => {
+      const tier =
+        isDryOnly && code === "INGREDIENT_MANAGEMENT_DEPARTMENT"
+          ? "PRIMARY"
+          : (activeTiers[code] ?? "OPTIONAL");
+      return {
+        code,
+        name: ROLE_LABELS[code] ?? code,
+        tier,
+        tierLabel: INSPECTION_TIER_LABELS[tier],
+      };
+    })
+    .sort((a, b) => TIER_ORDER[a.tier] - TIER_ORDER[b.tier]);
+
+  const approvedRoleCodes = new Set(
+    row.deliveryApprovals
+      .filter((approval) => approval.decision === "APPROVE")
+      .map((approval) => approval.Role.code),
+  );
+
+  let requiredTotal = 0;
+  let requiredApproved = 0;
+  let optionalTotal = 0;
+  let optionalApproved = 0;
+
+  for (const r of requiredRoles) {
+    if (r.tier === "PRIMARY" || r.tier === "REQUIRED") {
+      requiredTotal++;
+      if (approvedRoleCodes.has(r.code)) {
+        requiredApproved++;
+      }
+    } else if (r.tier === "OPTIONAL") {
+      optionalTotal++;
+      if (approvedRoleCodes.has(r.code)) {
+        optionalApproved++;
+      }
+    }
+  }
+
+  const approvalSummary = {
+    requiredApproved,
+    requiredTotal,
+    optionalApproved,
+    optionalTotal,
+  };
+
   return {
     id: row.id,
     deliveryNo: row.deliveryNo,
     schoolId: row.schoolId,
     sourceType,
     traceabilityVersion: row.traceabilityVersion ?? null,
+    isDryOnly,
     supplyRequestId: row.supplyRequestId,
     requestNo: source?.requestNo ?? null,
+    ...deliveryOrderTypeBatch(row),
     supplierName: row.Supplier.name,
     status: row.status,
     statusLabel: getDeliveryStatusLabel(row.status),
@@ -230,24 +375,17 @@ function inspectionDTO(
     vehiclePlate: row.vehiclePlate,
     note: row.note,
     currentRole: principal.role,
-    canInspect:
-      principal.permissions.includes("delivery.inspect") &&
-      requiredInspectionRoles(row).some((role) => role === principal.role) &&
-      (!source || (rejectedCount <= 2 && source.status !== "CANCELLED")) &&
-      ["ARRIVED", "PENDING_APPROVAL"].includes(row.status) &&
-      !row.deliveryApprovals.some(
-        (approval) => approval.roleId === principal.roleId,
-      ),
+    currentTier,
+    canConfirmArrival,
+    canInspect,
+    approvalSummary,
     redeliveryRequiredCount: source ? rejectedCount : null,
     redeliveryLimit: source ? 2 : null,
     cancellationNotice:
       source && (source.status === "CANCELLED" || rejectedCount > 2)
         ? `Đơn ${source.requestNo}${source.status === "CANCELLED" ? " đã hủy phần chưa nhận" : " bị chặn nhận tiếp"}${rejectedCount > 2 ? " do tổng số lần phải giao lại vượt quá 2" : ""}. Không tiếp nhận thêm nguyên liệu của đơn này.`
         : null,
-    requiredRoles: requiredInspectionRoles(row).map((code) => ({
-      code,
-      name: ROLE_LABELS[code],
-    })),
+    requiredRoles,
     deliveryApprovals: row.deliveryApprovals.map((approval) => ({
       id: approval.id,
       roleCode: approval.Role.code,
@@ -265,9 +403,13 @@ function inspectionDetailDTO(
   row: DeliveryInspectionDetailRow,
   principal: AuthPrincipal,
   receiptIssue: string | null = null,
+  schoolTiers?: Record<
+    DeliveryInspectionRoleCode,
+    DeliveryInspectionTierCode
+  > | null,
 ): DeliveryInspectionDTO {
   return {
-    ...inspectionDTO(row, principal),
+    ...inspectionDTO(row, principal, schoolTiers),
     receiptIssue,
     deliveryItems: row.deliveryItems.map((item) => ({
       id: item.id,
@@ -704,10 +846,25 @@ export function createDeliveryInspectionService(
               row.status,
             )
           ) {
+            const isDryOnly = isDryDelivery(row);
+            const defaultDryTiers: Record<
+              DeliveryInspectionRoleCode,
+              DeliveryInspectionTierCode
+            > = {
+              SCHOOL_KITCHEN_STAFF: "OPTIONAL",
+              INGREDIENT_MANAGEMENT_DEPARTMENT: "PRIMARY",
+              SCHOOL_NUTRITION_OFFICER: "OPTIONAL",
+              PARENTS_COMMITTEE: "OPTIONAL",
+            };
+            const schoolTiersRows = await inspections.findSchoolInspectionTiers(
+              tx,
+              schoolId,
+            );
             return inspectionDetailDTO(
               row,
               actor,
               await receiptIssue(tx, row, schoolId, now()),
+              isDryOnly ? defaultDryTiers : resolveSchoolTiers(schoolTiersRows),
             );
           }
           if (row.status !== "IN_TRANSIT" || row.arrivedAt !== null) {
@@ -715,6 +872,33 @@ export function createDeliveryInspectionService(
               409,
               "Trạng thái đợt giao không hợp lệ để xác nhận đến trường",
             );
+          }
+          const isDryOnly = isDryDelivery(row);
+          const schoolTiersRows = await inspections.findSchoolInspectionTiers(
+            tx,
+            schoolId,
+          );
+          const tiers = resolveSchoolTiers(schoolTiersRows);
+          if (isDryOnly) {
+            if (actor.role !== "INGREDIENT_MANAGEMENT_DEPARTMENT") {
+              throw new HttpError(
+                403,
+                "Chuyến giao đồ khô: chỉ Ban quản lý nguyên liệu được xác nhận xe đã đến",
+              );
+            }
+          } else {
+            if (tiers[actor.role as DeliveryInspectionRoleCode] !== "PRIMARY") {
+              const primaryRoleCode = (
+                Object.keys(tiers) as DeliveryInspectionRoleCode[]
+              ).find((r) => tiers[r] === "PRIMARY");
+              const primaryRoleName = primaryRoleCode
+                ? ROLE_LABELS[primaryRoleCode]
+                : "Người duyệt chính";
+              throw new HttpError(
+                403,
+                `Chỉ người duyệt chính (${primaryRoleName}) được xác nhận xe đã đến`,
+              );
+            }
           }
           const updated = await inspections.markArrived(
             tx,
@@ -728,11 +912,33 @@ export function createDeliveryInspectionService(
               "Trạng thái đợt giao đã thay đổi trước khi xác nhận đến trường",
             );
           }
+          const roleCodes = DELIVERY_INSPECTION_ROLES;
+          const roleRows = await inspections.findInspectionRoleIds(tx, [
+            ...roleCodes,
+          ]);
+          const roleIdByCode = new Map(roleRows.map((r) => [r.code, r.id]));
+          const effectiveTiers: Record<
+            DeliveryInspectionRoleCode,
+            DeliveryInspectionTierCode
+          > = isDryOnly
+            ? {
+                SCHOOL_KITCHEN_STAFF: "OPTIONAL",
+                INGREDIENT_MANAGEMENT_DEPARTMENT: "PRIMARY",
+                SCHOOL_NUTRITION_OFFICER: "OPTIONAL",
+                PARENTS_COMMITTEE: "OPTIONAL",
+              }
+            : tiers;
+          const snapshotRows = roleCodes.map((code) => ({
+            roleId: roleIdByCode.get(code)!,
+            tier: effectiveTiers[code],
+          }));
+          await inspections.snapshotInspectionRoles(tx, id, snapshotRows);
           const saved = (await inspections.detail(tx, schoolId, id))!;
           return inspectionDetailDTO(
             saved,
             actor,
             await receiptIssue(tx, saved, schoolId, now()),
+            effectiveTiers,
           );
         },
       );
@@ -771,6 +977,30 @@ export function createDeliveryInspectionService(
               "Bạn đã ký kiểm tra đợt này với vai trò khác; không được ký thay bộ phận khác",
             );
           }
+          const schoolTiersRows = await inspections.findSchoolInspectionTiers(
+            tx,
+            schoolId,
+          );
+          const schoolTiers = resolveSchoolTiers(schoolTiersRows);
+          const isDryOnly = isDryDelivery(row);
+          const defaultDryTiers: Record<
+            DeliveryInspectionRoleCode,
+            DeliveryInspectionTierCode
+          > = {
+            SCHOOL_KITCHEN_STAFF: "OPTIONAL",
+            INGREDIENT_MANAGEMENT_DEPARTMENT: "PRIMARY",
+            SCHOOL_NUTRITION_OFFICER: "OPTIONAL",
+            PARENTS_COMMITTEE: "OPTIONAL",
+          };
+          const tiers =
+            resolveDeliveryTiers(row.inspectionRoles) ??
+            (isDryOnly
+              ? defaultDryTiers
+              : row.status === "IN_TRANSIT"
+                ? schoolTiers
+                : LEGACY_INSPECTION_TIERS);
+          const actorTier = tiers[actor.role as DeliveryInspectionRoleCode];
+
           if (existing) {
             if (
               existing.userId !== actor.id ||
@@ -782,15 +1012,21 @@ export function createDeliveryInspectionService(
                 409,
                 "Bộ phận của bạn đã ghi quyết định; không được sửa biên bản",
               );
-            return { ...inspectionDTO(row, actor), created: false };
+            return { ...inspectionDTO(row, actor, tiers), created: false };
           }
+
+          const hasBlockingReject = row.deliveryApprovals.some((approval) => {
+            if (approval.decision !== "REJECT") return false;
+            const approverTier =
+              tiers[approval.Role.code as DeliveryInspectionRoleCode];
+            return approverTier === "PRIMARY" || approverTier === "REQUIRED";
+          });
+
           if (
             row.SupplyRequest?.status === "CANCELLED" ||
             (row.SupplyRequest?._count?.deliveries ?? 0) > 2 ||
             !["ARRIVED", "PENDING_APPROVAL"].includes(row.status) ||
-            row.deliveryApprovals.some(
-              (approval) => approval.decision === "REJECT",
-            )
+            hasBlockingReject
           )
             throw new HttpError(
               409,
@@ -803,7 +1039,7 @@ export function createDeliveryInspectionService(
               "Chuyến giao đồ khô: chỉ Ban quản lý nguyên liệu kiểm tra và ký nhận",
             );
           if (input.decision === "APPROVE") {
-            // Chặn ngay chữ ký "Đạt" khi dữ liệu không thể tiếp nhận, không đợi bộ phận thứ 4.
+            // Chặn ngay chữ ký "Đạt" khi dữ liệu không thể tiếp nhận, không đợi bộ phận bắt buộc cuối.
             const issue = await receiptIssue(tx, row, schoolId, now());
             if (issue) throw new HttpError(409, issue);
             const approvedRoles = new Set(
@@ -812,7 +1048,13 @@ export function createDeliveryInspectionService(
                 .map((approval) => approval.Role.code),
             );
             approvedRoles.add(actor.role);
-            if (requiredRoles.every((role) => approvedRoles.has(role))) {
+            const isDryOnly =
+              requiredRoles.length === 1 &&
+              requiredRoles[0] === "INGREDIENT_MANAGEMENT_DEPARTMENT";
+            const isComplete = isDryOnly
+              ? approvedRoles.has("INGREDIENT_MANAGEMENT_DEPARTMENT")
+              : isInspectionComplete(tiers, Array.from(approvedRoles));
+            if (isComplete) {
               const lots = row.deliveryItems.flatMap(
                 (item) => item.ingredientLots,
               );
@@ -886,7 +1128,9 @@ export function createDeliveryInspectionService(
               );
             }
           } else {
-            await inspections.setStatus(tx, id, "REJECTED", actor.id, now());
+            if (actorTier !== "OPTIONAL") {
+              await inspections.setStatus(tx, id, "REJECTED", actor.id, now());
+            }
           }
           await inspections.decide(
             tx,
@@ -899,6 +1143,7 @@ export function createDeliveryInspectionService(
           );
           if (
             input.decision === "REJECT" &&
+            actorTier !== "OPTIONAL" &&
             row.supplyRequestId !== null &&
             (await inspections.rejectedCount(tx, row.supplyRequestId)) > 2
           )
@@ -908,7 +1153,7 @@ export function createDeliveryInspectionService(
             saved.status === "RECEIVED" || saved.status === "REJECTED"
               ? await proofs.prepareDeliveryInspected(tx, id, actor.id)
               : null;
-          return { ...inspectionDTO(saved, actor), created: true };
+          return { ...inspectionDTO(saved, actor, tiers), created: true };
         },
       );
       proofs.scheduleAnchor(proof);
@@ -919,7 +1164,7 @@ export function createDeliveryInspectionService(
       return databaseOperation(async () => {
         const db = await connect();
         const range = inspectionDateRange(query.period, now(), query.date);
-        const [rows, counts] = await Promise.all([
+        const [rows, counts, schoolTiersRows] = await Promise.all([
           inspections.list(db, schoolId, query, range, hidesDryOnly(principal)),
           inspections.counts(
             db,
@@ -928,7 +1173,9 @@ export function createDeliveryInspectionService(
             range,
             hidesDryOnly(principal),
           ),
+          inspections.findSchoolInspectionTiers(db, schoolId),
         ]);
+        const schoolTiers = resolveSchoolTiers(schoolTiersRows);
         const statuses = Object.fromEntries(
           counts.map((row) => [row.status, row._count._all]),
         );
@@ -937,7 +1184,7 @@ export function createDeliveryInspectionService(
           0,
         );
         return {
-          items: rows.map((row) => inspectionDTO(row, principal)),
+          items: rows.map((row) => inspectionDTO(row, principal, schoolTiers)),
           pagination: {
             page: query.page,
             limit: query.limit,
@@ -984,14 +1231,19 @@ export function createDeliveryInspectionService(
       const schoolId = inspectionScope(principal);
       return databaseOperation(async () => {
         const db = await connect();
-        const row = await inspections.detail(db, schoolId, id);
+        const [row, schoolTiersRows] = await Promise.all([
+          inspections.detail(db, schoolId, id),
+          inspections.findSchoolInspectionTiers(db, schoolId),
+        ]);
         if (!row)
           throw new HttpError(404, "Không tìm thấy đợt giao trong trường");
         assertVisibleTo(row, principal);
+        const schoolTiers = resolveSchoolTiers(schoolTiersRows);
         const dto = inspectionDetailDTO(
           row,
           principal,
           await receiptIssue(db, row, schoolId, now()),
+          schoolTiers,
         );
         return withLabelQrImages(dto);
       });

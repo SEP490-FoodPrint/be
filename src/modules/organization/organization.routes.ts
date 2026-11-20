@@ -36,6 +36,7 @@ export function createOrganizationRouter(
   router.get("/public", controller.getPublicSchools);
   router.get("/public/locations", controller.getPublicLocations);
   router.get("/public/code/:code", controller.getPublicSchoolByCode);
+  router.get("/public/:schoolCode/grades", controller.getPublicSchoolGrades);
   router.get("/public/:schoolCode/daily-menu", controller.getPublicDailyMenu);
   router.get("/public/:schoolCode/weekly-menu", controller.getPublicWeeklyMenu);
   router.get("/public/:id", controller.getPublicSchoolById);
@@ -72,6 +73,18 @@ export function createOrganizationRouter(
     authHandler,
     requirePermission("school_meal_times.manage"),
     controller.updateMealTimes,
+  );
+  router.get(
+    "/me/delivery-inspection-roles",
+    authHandler,
+    requirePermission("school_delivery_inspection.manage"),
+    controller.getDeliveryInspectionRoles,
+  );
+  router.put(
+    "/me/delivery-inspection-roles",
+    authHandler,
+    requirePermission("school_delivery_inspection.manage"),
+    controller.updateDeliveryInspectionRoles,
   );
   router.get(
     "/summary",

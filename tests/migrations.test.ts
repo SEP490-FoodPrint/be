@@ -1223,6 +1223,127 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
     },
   );
   await context.test(
+    "business code migration keeps legacy FP-REG codes and enforces FP-XX-NNNNN checks",
+    async () => {
+      const name = `foodprint_migration_test_bizcode_${randomUUID().replaceAll("-", "")}`;
+      await db.query(`CREATE DATABASE "${name}"`);
+      recordLocalTestDatabase(name);
+      const fresh = new URL(url);
+      fresh.pathname = `/${name}`;
+      const legacy = new Client({ connectionString: fresh.toString() });
+      await legacy.connect();
+      try {
+        // Một số migration cũ dùng tên bảng không kèm schema.
+        await legacy.query("SET search_path TO foodprint, public");
+        const feistel = "20261123000100_business_code_feistel";
+        for (const migration of migrationNames.filter(
+          (value) => value < feistel,
+        )) {
+          await legacy.query(
+            await readFile(
+              path.join(root, "prisma/migrations", migration, "migration.sql"),
+              "utf8",
+            ),
+          );
+        }
+        const roleId = randomUUID();
+        await legacy.query(
+          "INSERT INTO foodprint.roles(id,code,name,type) VALUES ($1,'SCHOOL_ADMINISTRATION','School admin','SCHOOL')",
+          [roleId],
+        );
+        const legacyNumbers = ["7", "99999", "123456"];
+        const ids: string[] = [];
+        for (const [index, number] of legacyNumbers.entries()) {
+          const userId = randomUUID();
+          await legacy.query(
+            "INSERT INTO foodprint.users(id,role_id,role_code,username,email,password_hash,full_name) VALUES($1,$2,'SCHOOL_ADMINISTRATION',$3,$4,'fixture-only','Legacy applicant')",
+            [
+              userId,
+              roleId,
+              `bizcode_${index}`,
+              `bizcode_${index}@example.test`,
+            ],
+          );
+          const id = randomUUID();
+          ids.push(id);
+          await legacy.query(
+            "INSERT INTO foodprint.registration_requests(id,applicant_user_id,request_type,registration_number,profile_data,supporting_documents) VALUES($1,$2,'SCHOOL',$3,'{}','[]')",
+            [id, userId, number],
+          );
+        }
+        await legacy.query(
+          await readFile(
+            path.join(root, "prisma/migrations", feistel, "migration.sql"),
+            "utf8",
+          ),
+        );
+        const codes = await legacy.query<{ id: string; code: string }>(
+          "SELECT id,code FROM foodprint.registration_requests",
+        );
+        assert.deepEqual(
+          Object.fromEntries(codes.rows.map((row) => [row.id, row.code])),
+          {
+            [ids[0]]: "FP-REG-00007",
+            [ids[1]]: "FP-REG-99999",
+            [ids[2]]: "FP-REG-123456",
+          },
+        );
+        await legacy.query(
+          "UPDATE foodprint.registration_requests SET code='FP-RG-58213' WHERE id=$1",
+          [ids[0]],
+        );
+        for (const invalid of ["FP-RG-00000", "FP-RG-1234", "FP-XX-12345"]) {
+          await assert.rejects(
+            legacy.query(
+              "UPDATE foodprint.registration_requests SET code=$1 WHERE id=$2",
+              [invalid, ids[1]],
+            ),
+            (error: unknown) => sqlState(error, "23514"),
+            invalid,
+          );
+        }
+        await assert.rejects(
+          legacy.query(
+            "UPDATE foodprint.registration_requests SET code='FP-RG-58213' WHERE id=$1",
+            [ids[1]],
+          ),
+          (error: unknown) => sqlState(error, "23505"),
+        );
+        await assert.rejects(
+          legacy.query(
+            "UPDATE foodprint.registration_requests SET code=NULL WHERE id=$1",
+            [ids[1]],
+          ),
+          (error: unknown) => sqlState(error, "23502"),
+        );
+        await legacy.query(
+          "INSERT INTO foodprint.business_code_counters(code_type,last_sequence) VALUES('DE',100000)",
+        );
+        await assert.rejects(
+          legacy.query(
+            "UPDATE foodprint.business_code_counters SET last_sequence=100001 WHERE code_type='DE'",
+          ),
+          (error: unknown) => sqlState(error, "23514"),
+        );
+        await assert.rejects(
+          legacy.query(
+            "INSERT INTO foodprint.business_code_counters(code_type,last_sequence) VALUES('de',1)",
+          ),
+          (error: unknown) => sqlState(error, "23514"),
+        );
+        for (const table of ["meal_complaints", "food_safety_incidents"]) {
+          const column = await legacy.query<{ is_nullable: string }>(
+            "SELECT is_nullable FROM information_schema.columns WHERE table_schema='foodprint' AND table_name=$1 AND column_name='code'",
+            [table],
+          );
+          assert.equal(column.rows[0]?.is_nullable, "YES", table);
+        }
+      } finally {
+        await legacy.end();
+      }
+    },
+  );
+  await context.test(
     "cooking grouping backfill preserves child/sample history and enforces dish context",
     async () => {
       const name = `foodprint_migration_test_cooking_${randomUUID().replaceAll("-", "")}`;

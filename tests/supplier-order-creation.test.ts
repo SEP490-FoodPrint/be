@@ -32,6 +32,11 @@ import { HttpError } from "../src/utils/http-error";
 import { RequestValidationError } from "../src/utils/request-validation";
 import { startHttp } from "./helpers/http";
 import { testAdmin, testStaff } from "./helpers/authorization";
+import {
+  businessCodeSuffix,
+  formatBusinessCode,
+} from "../src/utils/business-code";
+import { readBusinessCodeKey } from "../src/config/env";
 
 const uid = (n: number) =>
   `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -126,7 +131,7 @@ function setupUs1Harness(options?: {
   priorDelivery?: boolean;
   updateInProgressCount?: number;
   guardError?: Error;
-  highestSequence?: bigint;
+  deliveryNo?: string;
   sourceFacilities?: Array<{
     id: string;
     supplierId: string;
@@ -146,7 +151,7 @@ function setupUs1Harness(options?: {
       ? options.supplyRequest
       : makeSupplyRequestRecord("ACCEPTED");
   let hasPrior = options?.priorDelivery ?? false;
-  const highestSequence = options?.highestSequence ?? 0n;
+  const nextDeliveryNo = options?.deliveryNo ?? "FP-DE-00001";
   const facilities = options?.sourceFacilities ?? [
     {
       id: sourceFacilityId,
@@ -173,9 +178,7 @@ function setupUs1Harness(options?: {
       ),
     findSupplyRequestForCreation: () => Promise.resolve(requestState ?? null),
     hasDeliveryForRequest: () => Promise.resolve(hasPrior),
-    lockSupplierForDeliveryNumber: () => Promise.resolve(),
-    findHighestCanonicalDeliverySequence: () =>
-      Promise.resolve(highestSequence),
+    allocateDeliveryNo: () => Promise.resolve(nextDeliveryNo),
     lockSourceFacilities: (_db, _supId, ids) => {
       lockedSourceIds.push(...ids);
       return Promise.resolve();
@@ -210,6 +213,8 @@ function setupUs1Harness(options?: {
           ? {
               status: requestState?.status ?? "IN_PROGRESS",
               requestNo: "SR-2026-001",
+              orderType: null,
+              batchNo: null,
             }
           : null,
         deliveryItems: input.items.map((item, idx) => ({
@@ -806,7 +811,7 @@ void test("US1 creates REQUEST delivery for both supplier roles from ACCEPTED or
 
   const inProgressHarness = setupUs1Harness({
     supplyRequest: makeSupplyRequestRecord("IN_PROGRESS", true, 2),
-    highestSequence: 99999n,
+    deliveryNo: "FP-DE-58213",
   });
   const body = validateCreateSupplierOrderBody({
     sourceType: "REQUEST",
@@ -831,7 +836,7 @@ void test("US1 creates REQUEST delivery for both supplier roles from ACCEPTED or
   assert.equal(inProgressResult.created, true);
   assert.equal(inProgressResult.workflowVersion, 2);
   assert.equal(inProgressResult.status, "PREPARING");
-  assert.equal(inProgressResult.deliveryNo, "FP-DE-100000");
+  assert.equal(inProgressResult.deliveryNo, "FP-DE-58213");
   assert.equal(inProgressResult.items.length, 2);
   assert.notEqual(
     inProgressResult.items[0].traceUrl,
@@ -992,12 +997,16 @@ void test("US1 repository queries enforce supplier scope, ordering, locks, FP-LO
       const sql = (strings as TemplateStringsArray).join("?");
       rawQueries.push(sql);
       if (sql.includes("pg_advisory_xact_lock")) {
-        assert.equal(values[0], "foodprint:fp-code:LO");
+        assert.ok(
+          ["foodprint:fp-code:LO", "foodprint:business-code:DE"].includes(
+            values[0] as string,
+          ),
+        );
         return Promise.resolve([{ locked: 1 }]);
       }
-      if (sql.includes("MAX(substring")) {
-        assert.equal(values[0], supplierId);
-        return Promise.resolve([{ maxSeq: "99999" }]);
+      if (sql.includes("business_code_counters")) {
+        assert.equal(values[0], "DE");
+        return Promise.resolve([{ lastSequence: 1 }]);
       }
       return Promise.resolve([{ id: supplierId }]);
     },
@@ -1005,6 +1014,12 @@ void test("US1 repository queries enforce supplier scope, ordering, locks, FP-LO
       findFirst: ({ where }: { where: Record<string, unknown> }) => {
         assert.deepEqual(where, { supplyRequestId });
         return Promise.resolve(null);
+      },
+      findMany: ({ where }: { where: { deliveryNo: { in: string[] } } }) => {
+        // Mã mới được kiểm tra trùng trên toàn bảng, không lọc theo nhà cung cấp.
+        assert.deepEqual(Object.keys(where), ["deliveryNo"]);
+        assert.equal(where.deliveryNo.in.length, 1);
+        return Promise.resolve([]);
       },
       create: ({ data }: { data: unknown }) => {
         seenCreateData = data;
@@ -1023,12 +1038,12 @@ void test("US1 repository queries enforce supplier scope, ordering, locks, FP-LO
     SupplierOrderRepository["findSupplyRequestForCreation"]
   >[0];
 
+  const allocatedDeliveryNo =
+    await supplierOrderRepository.allocateDeliveryNo(mockDb);
+  // Số thứ tự 1 → hậu tố Feistel(0) với khóa test, không phải 00001 thô.
   assert.equal(
-    await supplierOrderRepository.findHighestCanonicalDeliverySequence(
-      mockDb,
-      supplierId,
-    ),
-    99999n,
+    allocatedDeliveryNo,
+    formatBusinessCode("DE", businessCodeSuffix(1, readBusinessCodeKey())),
   );
   await supplierOrderRepository.lockSourceFacilities(mockDb, supplierId, [
     sourceFacilityIdNullCode,
@@ -1228,8 +1243,7 @@ void test("T111 REQUEST multi-source allocation supports 6A+4B split, prevents c
       Promise.resolve(stored.get(`${supId}:${userId}:${key}`) ?? null),
     findSupplyRequestForCreation: () => Promise.resolve(requestState),
     hasDeliveryForRequest: () => Promise.resolve(hasPrior),
-    lockSupplierForDeliveryNumber: () => Promise.resolve(),
-    findHighestCanonicalDeliverySequence: () => Promise.resolve(0n),
+    allocateDeliveryNo: () => Promise.resolve("FP-DE-00001"),
     lockSourceFacilities: () => Promise.resolve(),
     findSourceFacilitiesByIds: (_db, ids) =>
       Promise.resolve(
@@ -1276,6 +1290,8 @@ void test("T111 REQUEST multi-source allocation supports 6A+4B split, prevents c
         SupplyRequest: {
           status: requestState.status,
           requestNo: requestState.requestNo,
+          orderType: null,
+          batchNo: null,
         },
         deliveryItems: input.items.map((item, idx) => ({
           id: item.id ?? uid(5500 + idx),
@@ -2115,13 +2131,11 @@ void test("US2 creates STANDALONE delivery for both supplier roles, links only e
         return Promise.resolve(null);
       },
       hasDeliveryForRequest: () => Promise.resolve(false),
-      lockSupplierForDeliveryNumber: (_db, supId) => {
-        lockCalls.push(`supplier:${supId}`);
-        return Promise.resolve();
-      },
-      findHighestCanonicalDeliverySequence: () => {
-        lockCalls.push("sequence");
-        return Promise.resolve(BigInt(createdPayloads.length));
+      allocateDeliveryNo: () => {
+        lockCalls.push("deliveryNo");
+        return Promise.resolve(
+          `FP-DE-${String(createdPayloads.length + 1).padStart(5, "0")}`,
+        );
       },
       lockSourceFacilities: (_db, _supId, ids) => {
         lockCalls.push(`sourceFacilities:${ids.join(",")}`);
@@ -2350,8 +2364,7 @@ void test("US2 creates STANDALONE delivery for both supplier roles, links only e
     assert.deepEqual(h.lockCalls, [
       `sourceFacilities:${sourceFacilityId},${sourceFacilityIdNullCode}`,
       `findSourceFacilities:${sourceFacilityId},${sourceFacilityIdNullCode}`,
-      `supplier:${supplierId}`,
-      "sequence",
+      "deliveryNo",
     ]);
   }
 
@@ -3322,8 +3335,7 @@ void test("US3 idempotent replay returns 200 without re-creating, checks live ac
     findSupplyRequestForCreation: () =>
       Promise.resolve(makeSupplyRequestRecord("ACCEPTED")),
     hasDeliveryForRequest: () => Promise.resolve(false),
-    lockSupplierForDeliveryNumber: () => Promise.resolve(),
-    findHighestCanonicalDeliverySequence: () => Promise.resolve(0n),
+    allocateDeliveryNo: () => Promise.resolve("FP-DE-00001"),
     lockSourceFacilities: () => Promise.resolve(),
     findSourceFacilitiesByIds: (_db, ids) =>
       Promise.resolve(
@@ -3560,7 +3572,12 @@ void test("US3 lists, filters legacy+standalone deliveries, returns detail and e
     createdAt: now,
     updatedAt: now,
     School: { name: "Tiểu học Hoa Mai" },
-    SupplyRequest: { status: "IN_PROGRESS" as const, requestNo: "SR-2026-001" },
+    SupplyRequest: {
+      status: "IN_PROGRESS" as const,
+      requestNo: "SR-2026-001",
+      orderType: null,
+      batchNo: null,
+    },
   };
   const standaloneRecord: SupplierOrderDetailRecord = {
     id: uid(199),
@@ -3656,8 +3673,7 @@ void test("US3 lists, filters legacy+standalone deliveries, returns detail and e
     connect: () => Promise.resolve(mockDb as never),
     findByCreationKey: (_db, supId, userId, key) =>
       Promise.resolve(persisted.get(`${supId}:${userId}:${key}`) ?? null),
-    lockSupplierForDeliveryNumber: () => Promise.resolve(),
-    findHighestCanonicalDeliverySequence: () => Promise.resolve(0n),
+    allocateDeliveryNo: () => Promise.resolve("FP-DE-00001"),
     lockSourceFacilities: () => Promise.resolve(),
     findSourceFacilitiesByIds: (_db, ids) =>
       Promise.resolve(
@@ -3897,7 +3913,12 @@ void test("US3 read matrix covers supplier roles with view-or-manage permission,
       createdAt: createdOlder,
       updatedAt: createdOlder,
       School: { name: "Tiểu học Hoa Mai" },
-      SupplyRequest: { status: "COMPLETED", requestNo: "SR-LEGACY-01" },
+      SupplyRequest: {
+        status: "COMPLETED",
+        requestNo: "SR-LEGACY-01",
+        orderType: null,
+        batchNo: null,
+      },
       deliveryItems: [
         {
           id: uid(9911),
@@ -4206,8 +4227,8 @@ void test("US3 canonical v2 equivalence, field-level conflict matrix, legacy bas
     findSupplyRequestForCreation: () =>
       Promise.resolve(makeSupplyRequestRecord("ACCEPTED", true, 2)),
     hasDeliveryForRequest: () => Promise.resolve(false),
-    lockSupplierForDeliveryNumber: () => Promise.resolve(),
-    findHighestCanonicalDeliverySequence: () => Promise.resolve(seq),
+    allocateDeliveryNo: () =>
+      Promise.resolve(`FP-DE-${String(seq + 1n).padStart(5, "0")}`),
     lockSourceFacilities: () => Promise.resolve(),
     findSourceFacilitiesByIds: (_db, ids) =>
       Promise.resolve(
@@ -4299,7 +4320,12 @@ void test("US3 canonical v2 equivalence, field-level conflict matrix, legacy bas
         updatedAt: now,
         School: { name: "Tiểu học Hoa Mai" },
         SupplyRequest: input.supplyRequestId
-          ? { status: "IN_PROGRESS", requestNo: "SR-2026-001" }
+          ? {
+              status: "IN_PROGRESS",
+              requestNo: "SR-2026-001",
+              orderType: null,
+              batchNo: null,
+            }
           : null,
         deliveryItems: input.items.map((item, idx) => ({
           id: uid(9970 + idx + Number(seq) * 10),
@@ -4834,6 +4860,7 @@ void test("US6 HTTP contract enforces dispatch strict validation, mount order, m
   const declared: string[] = [];
   const scheduled: unknown[] = [];
   const service = createSupplierOrderService(repo, {
+    now: () => new Date("2026-11-01T00:00:00.000Z"),
     transaction: (fn) => fn({} as never),
     guard,
     proofs: {
@@ -5110,7 +5137,12 @@ void test("US6 dispatch service handles continuation policy, all-state replay/40
     createdAt: new Date("2026-11-15T01:00:00.000Z"),
     updatedAt: initialUpdatedAt,
     School: { name: "Tiểu học Hòa Bình" },
-    SupplyRequest: { status: "IN_PROGRESS", requestNo: "YC-7803" },
+    SupplyRequest: {
+      status: "IN_PROGRESS",
+      requestNo: "YC-7803",
+      orderType: null,
+      batchNo: null,
+    },
     deliveryItems: [
       {
         id: uid(7804),
@@ -5193,6 +5225,7 @@ void test("US6 dispatch service handles continuation policy, all-state replay/40
       () => Promise.resolve(actor),
     );
     const service = createSupplierOrderService(repo, {
+      now: () => new Date("2026-11-01T00:00:00.000Z"),
       guard,
       transaction: async (fn) => {
         try {
@@ -5222,6 +5255,33 @@ void test("US6 dispatch service handles continuation policy, all-state replay/40
     assert.equal(committed.expectedArrivalAt, null);
     assert.equal(committed.vehiclePlate, null);
     assert.equal(committed.updatedAt.getTime(), initialUpdatedAt.getTime());
+
+    // First dispatch with ETA not after "now" (equal or earlier) -> 422, nothing written
+    for (const nowOffsetMs of [0, 60_000]) {
+      const lateService = createSupplierOrderService(repo, {
+        now: () => new Date(validEta.getTime() + nowOffsetMs),
+        guard,
+        transaction: (fn) => fn({} as never),
+      });
+      await assert.rejects(
+        () =>
+          lateService.dispatch(
+            { id: committed.id },
+            validateDispatchSupplierOrderBody({
+              expectedArrivalAt: validEta.toISOString(),
+              vehiclePlate: validPlate,
+            }),
+            actor,
+          ),
+        {
+          statusCode: 422,
+          message: "Giờ dự kiến đến phải sau thời điểm hiện tại",
+        },
+      );
+      assert.equal(committed.status, "PREPARING");
+      assert.equal(committed.expectedArrivalAt, null);
+      assert.equal(committed.vehiclePlate, null);
+    }
   }
 
   // 2. Replay across all post-dispatch states (same body -> 200 & untouched updatedAt; diff body -> 409)
@@ -5242,6 +5302,8 @@ void test("US6 dispatch service handles continuation policy, all-state replay/40
       SupplyRequest: {
         status: replayStatus === "CANCELLED" ? "CANCELLED" : "IN_PROGRESS",
         requestNo: "YC-7803",
+        orderType: null,
+        batchNo: null,
       },
     });
     let dispatchWrites = 0;
@@ -5434,6 +5496,7 @@ void test("US6 dispatch service handles continuation policy, all-state replay/40
       () => Promise.resolve(actor),
     );
     const service = createSupplierOrderService(repo, {
+      now: () => new Date("2026-11-01T00:00:00.000Z"),
       guard,
       transaction: (fn) => fn({} as never),
     });
@@ -5522,6 +5585,7 @@ void test("US6 dispatch service handles continuation policy, all-state replay/40
       () => Promise.resolve(actor),
     );
     const service = createSupplierOrderService(repo, {
+      now: () => new Date("2026-11-01T00:00:00.000Z"),
       guard,
       transaction: (fn) => fn({} as never),
       renderQrBatch: () => Promise.reject(new Error("renderer offline")),
@@ -5753,6 +5817,8 @@ void test("US3 management list/detail enforce PREPARING filter, nextAction read/
     )
       ? {
           requestNo: "SR-901",
+          orderType: null,
+          batchNo: null,
           status: overrides.requestStatus ?? "IN_PROGRESS",
         }
       : null,

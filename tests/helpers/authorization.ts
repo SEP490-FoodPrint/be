@@ -3,6 +3,8 @@ import type { AuthPrincipal } from "../../src/types/auth";
 import { HttpError } from "../../src/utils/http-error";
 
 process.env.JWT_SECRET ??= "foodprint-unit-test-only-secret";
+process.env.BUSINESS_CODE_KEY ||=
+  "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
 
 export const testAdmin: AuthPrincipal = {
   id: "00000000-0000-4000-8000-000000000001",

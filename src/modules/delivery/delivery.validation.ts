@@ -17,6 +17,14 @@ export const deliveryInspectionQuerySchema = paginationSchema.safeExtend({
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/)
     .optional(),
+  orderType: z
+    .enum(["DIRECT_USE", "DRY_STOCK"], { error: "Loại đơn không hợp lệ" })
+    .optional(),
+  batchNo: z
+    .string({ error: "Đợt giao phải là 1 hoặc 2" })
+    .regex(/^[12]$/, { error: "Đợt giao phải là 1 hoặc 2" })
+    .transform((v) => Number(v) as 1 | 2)
+    .optional(),
 });
 export const validateDeliveryInspectionQuery = (value: unknown) =>
   parseRequest(deliveryInspectionQuerySchema, value);

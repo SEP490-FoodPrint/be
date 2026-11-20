@@ -4,7 +4,9 @@ import {
   requestUuidSchema,
 } from "../../utils/request-validation";
 
-export const allocationQuerySchema = z.strictObject({});
+export const allocationQuerySchema = z.strictObject({
+  mealType: z.enum(["LUNCH", "AFTERNOON"]).optional(),
+});
 export const confirmDistributionSchema = z.strictObject({
   revision: z
     .string()
@@ -12,6 +14,7 @@ export const confirmDistributionSchema = z.strictObject({
 });
 export const allocationApplySchema = z.strictObject({
   ...confirmDistributionSchema.shape,
+  ...allocationQuerySchema.shape,
   batches: z.array(
     z.strictObject({
       cookingBatchId: requestUuidSchema,
@@ -20,10 +23,16 @@ export const allocationApplySchema = z.strictObject({
         z.strictObject({
           dailyMealPortionId: requestUuidSchema,
           allocatedPortions: z
-            .number({ error: "Số suất phải là số nguyên dương" })
-            .int({ error: "Số suất phải là số nguyên dương" })
-            .min(1, { error: "Số suất phải lớn hơn 0" })
-            .max(2147483647, { error: "Số suất vượt giới hạn" }),
+            .union([z.string(), z.number()])
+            .transform(String)
+            .refine(
+              (value) =>
+                /^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/.test(value) &&
+                Number(value) > 0 &&
+                Number(value) <= 2147483647,
+              "Số suất phải dương, tối đa hai chữ số thập phân",
+            )
+            .transform(Number),
         }),
       ),
     }),
@@ -36,3 +45,16 @@ export const validateAllocationApply = (value: unknown) =>
   parseRequest(allocationApplySchema, value);
 export const validateConfirmDistribution = (value: unknown) =>
   parseRequest(confirmDistributionSchema, value);
+
+export const materialPlanSchema = z.strictObject({
+  mealType: z.enum(["LUNCH", "AFTERNOON"]),
+  priorityClassIds: z.array(requestUuidSchema).max(1000).default([]),
+});
+export const materialApplySchema = materialPlanSchema.extend({
+  revision: z.string().regex(/^[a-f0-9]{64}$/),
+  planId: z.string().regex(/^[a-f0-9]{64}$/),
+});
+export const validateMaterialPlan = (value: unknown) =>
+  parseRequest(materialPlanSchema, value);
+export const validateMaterialApply = (value: unknown) =>
+  parseRequest(materialApplySchema, value);

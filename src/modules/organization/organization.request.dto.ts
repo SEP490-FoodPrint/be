@@ -2,16 +2,21 @@ import type { z } from "zod";
 import type {
   cookingModeBodySchema,
   mealTimesBodySchema,
+  deliveryInspectionRolesBodySchema,
   organizationSummaryQuerySchema,
   organizationDetailParamsSchema,
   organizationListQuerySchema,
   publicSchoolListQuerySchema,
   publicDailyMenuQuerySchema,
   publicWeeklyMenuQuerySchema,
+  publicSchoolGradesQuerySchema,
 } from "./organization.validation";
 
 export type CookingModeRequestDTO = z.infer<typeof cookingModeBodySchema>;
 export type MealTimesRequestDTO = z.infer<typeof mealTimesBodySchema>;
+export type DeliveryInspectionRolesRequestDTO = z.infer<
+  typeof deliveryInspectionRolesBodySchema
+>;
 
 export type OrganizationListRequestDTO = z.infer<
   typeof organizationListQuerySchema
@@ -23,6 +28,10 @@ export type PublicSchoolListRequestDTO = z.infer<
 
 export type PublicDailyMenuRequestDTO = z.infer<
   typeof publicDailyMenuQuerySchema
+>;
+
+export type PublicSchoolGradesRequestDTO = z.infer<
+  typeof publicSchoolGradesQuerySchema
 >;
 
 export type PublicWeeklyMenuRequestDTO = z.infer<

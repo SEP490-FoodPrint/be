@@ -75,6 +75,12 @@ export interface FinalizedPortionRow {
   totalPortions: number;
 }
 
+export interface SubmittedWeekRow {
+  weekStartDate: Date;
+  status: "DRAFT" | "PENDING_APPROVAL" | "REVISION_REQUIRED" | "APPROVED";
+  count: number;
+}
+
 type TransactionClient = Prisma.TransactionClient;
 
 export interface MenuApprovalRepository {
@@ -84,6 +90,15 @@ export interface MenuApprovalRepository {
     schoolId: string,
   ): Promise<MenuCalendarYear[]>;
   findDetail(id: string, schoolId: string): Promise<ApprovalDetailRow | null>;
+  /** Mọi thực đơn đã gửi (khác DRAFT) của một tuần. */
+  findWeekDetails(
+    scope: Prisma.WeeklyMenuWhereInput,
+    weekStartDate: Date,
+  ): Promise<ApprovalDetailRow[]>;
+  /** Số thực đơn đã gửi theo từng tuần và trạng thái. */
+  listSubmittedWeeks(
+    scope: Prisma.WeeklyMenuWhereInput,
+  ): Promise<SubmittedWeekRow[]>;
   findFinalizedPortions(
     dates: Date[],
     schoolId: string,
@@ -138,6 +153,31 @@ export function createMenuApprovalRepository(
         where: { id, schoolId },
         include: approvalDetailInclude,
       });
+    },
+
+    async findWeekDetails(scope, weekStartDate) {
+      const prisma = await getClient();
+      return prisma.weeklyMenu.findMany({
+        where: {
+          AND: [scope, { weekStartDate, status: { not: "DRAFT" } }],
+        },
+        include: approvalDetailInclude,
+        orderBy: [{ isSchoolWide: "desc" }, { createdAt: "asc" }],
+      });
+    },
+
+    async listSubmittedWeeks(scope) {
+      const prisma = await getClient();
+      const rows = await prisma.weeklyMenu.groupBy({
+        by: ["weekStartDate", "status"],
+        where: { AND: [scope, { status: { not: "DRAFT" } }] },
+        _count: { _all: true },
+      });
+      return rows.map((row) => ({
+        weekStartDate: row.weekStartDate,
+        status: row.status,
+        count: row._count._all,
+      }));
     },
 
     async findFinalizedPortions(dates, schoolId, gradeIds = []) {

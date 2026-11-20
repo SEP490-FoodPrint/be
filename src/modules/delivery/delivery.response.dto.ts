@@ -10,8 +10,11 @@ export interface DeliveryInspectionDTO {
   schoolId: string;
   sourceType: "REQUEST" | "STANDALONE";
   traceabilityVersion: number | null;
+  isDryOnly?: boolean;
   supplyRequestId: string | null;
   requestNo: string | null;
+  orderType: "DIRECT_USE" | "DRY_STOCK" | null;
+  batchNo: number | null;
   supplierName: string;
   status: DeliveryStatus;
   statusLabel: string;
@@ -21,7 +24,15 @@ export interface DeliveryInspectionDTO {
   vehiclePlate: string | null;
   note: string | null;
   currentRole: string;
+  currentTier?: "PRIMARY" | "REQUIRED" | "OPTIONAL" | null;
+  canConfirmArrival?: boolean;
   canInspect: boolean;
+  approvalSummary?: {
+    requiredApproved: number;
+    requiredTotal: number;
+    optionalApproved: number;
+    optionalTotal: number;
+  };
   /**
    * Lý do đợt giao không thể tiếp nhận vào kho (dữ liệu lô/danh mục không khớp),
    * kiểm tra sớm khi xe đến và trước chữ ký "Đạt" đầu tiên; null nếu hợp lệ.
@@ -30,7 +41,12 @@ export interface DeliveryInspectionDTO {
   redeliveryRequiredCount: number | null;
   redeliveryLimit: number | null;
   cancellationNotice: string | null;
-  requiredRoles: { code: string; name: string }[];
+  requiredRoles: {
+    code: string;
+    name: string;
+    tier?: "PRIMARY" | "REQUIRED" | "OPTIONAL";
+    tierLabel?: string;
+  }[];
   deliveryApprovals: {
     id: string;
     roleCode: string;

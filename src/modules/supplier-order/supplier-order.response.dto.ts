@@ -36,6 +36,8 @@ export interface SupplierOrderSummaryDTO {
   supplierId: string;
   supplyRequestId: string | null;
   requestNo: string | null;
+  orderType: "DIRECT_USE" | "DRY_STOCK" | null;
+  batchNo: number | null;
   status: DeliveryStatus;
   statusLabel: string;
   expectedArrivalAt: string | null;

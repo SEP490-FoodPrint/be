@@ -11,6 +11,7 @@
 | GET `/days/:menuDayId/meals/:mealType/ingredients`  | `menu.view`, SCHOOL sở hữu thực đơn; định mức và các lô gia vị đã giữ/tiêu hao                            |
 | PUT cùng đường dẫn trên                             | `menu.update`, SCHOOL; xác minh lại actor trong transaction, chỉ sửa nháp/được yêu cầu sửa và chưa lập mẻ |
 | GET `/days/:menuDayId/meals/:mealType/requirements` | `menu.view`, SCHOOL; nhu cầu theo số suất FINALIZED, tồn khả dụng và thiếu hụt, không tạo reservation     |
+| GET `/approval-week`                                | `menu.view`, chỉ Ban Giám hiệu của SCHOOL; phạm vi `listScopes.menu` (trường hiện tại), bỏ thực đơn DRAFT |
 
 PUT thay thế toàn bộ định mức của bữa trong một transaction:
 
@@ -183,7 +184,7 @@ School xem supplier qua quan hệ ACTIVE/SUSPENDED; ingredient qua IngredientEnt
 ## API phân bổ suất ăn hôm nay
 
 - `GET /api/meal-allocations` yêu cầu `meal_allocation.view` trong phạm vi trường. Trả trạng thái nấu, lưu mẫu, dữ liệu lô và phiên bản phân bổ.
-- `PUT /api/meal-allocations` yêu cầu `meal_allocation.update`, và `meal_allocation.create` khi tạo hồ sơ lớp. BE kiểm lại điều kiện của cả ngày và ghi nguyên tử.
+- `PUT /api/meal-allocations` yêu cầu `meal_allocation.update`, và `meal_allocation.create` khi tạo hồ sơ lớp. BE kiểm lại điều kiện của bữa được chọn qua mealType LUNCH/AFTERNOON và ghi nguyên tử; thiếu mealType giữ phạm vi cả ngày. GET nhận mealType trong query, PUT nhận trong body. Response có mealType null cho cả ngày, revision ràng buộc phạm vi.
 - `POST /api/meal-allocations/confirm-distribution` yêu cầu vai trò `SCHOOL_KITCHEN_STAFF` và quyền hiệu lực `meal_allocation.update`. Xác nhận toàn bộ phân bổ đủ điều kiện trong ngày của trường từ phiên đăng nhập. Yêu cầu `revision` để kiểm tra phiên bản dữ liệu trước khi ghi.
 - Dùng ngày ăn hiện tại theo giờ Việt Nam. Hợp đồng này thay các route đọc chi tiết, tạo tự động, xác nhận phân phối và alias v1 của module.
 
@@ -338,12 +339,12 @@ Hai API `POST /api/ingredients/management/upload-image` và `POST /api/ingredien
 
 Màn dùng chung cho `SCHOOL_NUTRITION_OFFICER`, `SCHOOL_KITCHEN_STAFF`, `INGREDIENT_MANAGEMENT_DEPARTMENT`, `PARENTS_COMMITTEE`. Ngoài role hợp lệ, cần quyền hiệu lực trong trường hiện tại; không dùng role/school/user do client gửi.
 
-| Method | Endpoint                         | Quyền                                 |
-| ------ | -------------------------------- | ------------------------------------- |
-| GET    | `/api/deliveries/inspections`    | `delivery.view`                       |
-| GET    | `/api/deliveries/:id/inspection` | `delivery.view`                       |
-| POST   | `/api/deliveries/:id/arrival`    | `delivery.view` và `delivery.inspect` |
-| POST   | `/api/deliveries/:id/inspection` | `delivery.inspect` và `delivery.view` |
+| Method | Endpoint                         | Quyền                                                                                    |
+| ------ | -------------------------------- | ---------------------------------------------------------------------------------------- |
+| GET    | `/api/deliveries/inspections`    | `delivery.view`; lọc tùy chọn `orderType`, `batchNo`; response có `orderType`, `batchNo` |
+| GET    | `/api/deliveries/:id/inspection` | `delivery.view`                                                                          |
+| POST   | `/api/deliveries/:id/arrival`    | `delivery.view` và `delivery.inspect`                                                    |
+| POST   | `/api/deliveries/:id/inspection` | `delivery.inspect` và `delivery.view`                                                    |
 
 `POST /api/deliveries/:id/arrival` chỉ dành cho bốn vai trò kiểm nhận thuộc đúng trường của đợt giao (chặn nhà cung cấp, truy cập public và tài khoản ngoài trường bằng `403`/`404`, chặn đơn/nguồn đã hủy hoặc đang ở `PREPARING` bằng `409`), chỉ áp dụng cho đơn `traceabilityVersion = 1` đang `IN_TRANSIT` để chuyển `IN_TRANSIT -> ARRIVED` với `arrivedAt` do server ghi nhận; gọi lại khi đã qua bước nhận nơi giữ nguyên trạng thái và timestamp ban đầu. Danh sách nhận `page`, `limit`, `search`, `status`, `period` (`ALL`, `today`, `week`); tìm/lọc/phân trang và thống kê cùng phạm vi tại BE. Ngày/tuần dùng múi giờ Việt Nam. GET `/api/deliveries` cũ giữ nguyên. Chi tiết kiểm nhận trả thêm `traceabilityVersion`, `statusLabel` và snapshot `deliveryItems[].sourceFacility` (`id`, `name`, `facilityCode`).
 
@@ -381,11 +382,11 @@ Hợp đồng chi tiết: [Source Facility API](../specs/027-source-facility-man
 
 ## Tiếp nhận yêu cầu nguyên liệu phía nhà cung cấp
 
-| Endpoint                               | Quyền và phạm vi                                                                                                                                    |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| GET `/api/supply-requests`             | `supply_request.view`; SUPPLIER chỉ admin/staff hiện tại, chỉ đơn của nhà cung cấp ngoài DRAFT; SCHOOL/SYSTEM giữ scope và projection cũ.           |
-| GET `/api/supply-requests/:id`         | `supply_request.view`; chỉ INGREDIENT_SUPPLIER_ADMIN/INGREDIENT_SUPPLIER_STAFF thuộc SUPPLIER, đúng supplierId và ngoài DRAFT.                      |
-| POST `/api/supply-requests/:id/accept` | `supply_request.accept`; cùng hai role supplier, xác minh lại quyền/membership/trạng thái trong Serializable transaction. Không yêu cầu quyền view. |
+| Endpoint                               | Quyền và phạm vi                                                                                                                                                                                                                                                                    |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET `/api/supply-requests`             | Lọc tùy chọn `orderType` (`DIRECT_USE`/`DRY_STOCK`), `batchNo` (1/2); response có `orderType`, `batchNo`, `orderTypeLabel`, `batchLabel`. `supply_request.view`; SUPPLIER chỉ admin/staff hiện tại, chỉ đơn của nhà cung cấp ngoài DRAFT; SCHOOL/SYSTEM giữ scope và projection cũ. |
+| GET `/api/supply-requests/:id`         | `supply_request.view`; chỉ INGREDIENT_SUPPLIER_ADMIN/INGREDIENT_SUPPLIER_STAFF thuộc SUPPLIER, đúng supplierId và ngoài DRAFT.                                                                                                                                                      |
+| POST `/api/supply-requests/:id/accept` | `supply_request.accept`; cùng hai role supplier, xác minh lại quyền/membership/trạng thái trong Serializable transaction. Không yêu cầu quyền view.                                                                                                                                 |
 
 Nhánh danh sách SUPPLIER hỗ trợ `status` trong SENT/ACCEPTED/IN_PROGRESS/COMPLETED/CANCELLED; mặc định cả năm trạng thái. Giữ page mặc định 1, limit mặc định 20/tối đa 100 và hasNext; thêm schoolName, requestedDeliveryDate, sentAt và projection `orderProgress` (`ACCEPTED`/`IN_PROGRESS` chưa có `Delivery` -> `stage = CONFIRMED`, `statusLabel = "Đã xác nhận"`, `deliveryId = null`, `nextAction = ADD_INGREDIENTS` khi đủ quyền `delivery.manage`; có đúng một `Delivery` `creationMode = REQUEST` -> phản ánh trạng thái `Delivery` và `nextAction`; legacy nhiều đợt không có `REQUEST` duy nhất hoặc chưa tiếp nhận/đã đóng chưa có `Delivery` -> `null`). SCHOOL/SYSTEM vẫn chỉ nhận page/limit, giữ projection cũ và không trả `orderProgress`, gửi status trả 400; trường vẫn xem được bản nháp của chính mình theo quyền. Không lấy supplierId/schoolId từ query để mở rộng scope.
 
@@ -468,4 +469,23 @@ Module `ingredient-quality-feedback` dùng phân quyền động theo DB trên t
 | GET    | `/api/ingredient-quality-feedback/:feedbackId`          | `SCHOOL` (`FR-011`)              | `view_details`: toàn trường (`Delivery.schoolId`); chỉ `view_own`: đúng `submittedByUserId`; `SYSTEM`/`AUTHORITY` bị `403`                    |
 | POST   | `/api/ingredient-quality-feedback/:feedbackId/response` | `SUPPLIER` (`ADMIN`/`STAFF`)     | Bắt buộc **đồng thời** `ingredient_quality_feedback.view_details` **và** `ingredient_quality_feedback.respond`; phạm vi `Delivery.supplierId` |
 
+## Cấu hình nhóm duyệt kiểm nhận nguyên liệu theo trường (delivery-inspection-tiers)
+
+Module `organization` và `delivery` hỗ trợ cấu hình phân nhóm duyệt linh hoạt theo từng trường thay vì hardcode 4 bộ phận cố định:
+
+- Nhóm 1 (`PRIMARY`): Đúng 1 vai trò (mặc định Bếp trưởng `SCHOOL_KITCHEN_STAFF`). Duy nhất vai trò này được bấm "Xác nhận xe đã đến" (`POST /api/deliveries/:id/arrival`), đồng thời bắt buộc phải duyệt kiểm nhận.
+- Nhóm 2 (`REQUIRED`): Bắt buộc phải duyệt chấp thuận (`ACCEPTED`) thì đợt giao mới hoàn tất chuyển sang `RECEIVED` (mặc định Kho `INGREDIENT_MANAGEMENT_DEPARTMENT` và Dinh dưỡng `SCHOOL_NUTRITION_OFFICER`).
+- Nhóm 3 (`OPTIONAL`): Ban Đại diện Phụ huynh (`PARENTS_COMMITTEE`) luôn cố định ở nhóm này (chỉ đọc trên UI, không cho BGH sửa, không lưu vào DB cấu hình trường). Ý kiến từ chối (`REJECTED`) của nhóm OPTIONAL chỉ mang tính chất tham khảo, không làm chuyển đợt giao sang `REJECTED` và không tính vào giới hạn `cap3`.
+
+| Method | Path                                        | Vai trò và quyền                                                                                                                                                |
+| ------ | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/schools/me/delivery-inspection-roles` | `school_delivery_inspection.manage`; vai trò `SCHOOL_MANAGEMENT_BOARD`, tổ chức `SCHOOL`. Trả danh sách 4 vai trò kèm `tier`, nhãn tiếng Việt và cờ `editable`. |
+| PUT    | `/api/schools/me/delivery-inspection-roles` | `school_delivery_inspection.manage`; vai trò `SCHOOL_MANAGEMENT_BOARD`, tổ chức `SCHOOL`. Body gồm 3 vai trò (`PARENTS_COMMITTEE` bị loại trừ), đúng 1 PRIMARY. |
+| POST   | `/api/deliveries/:id/arrival`               | `delivery.inspect`; chỉ tài khoản có vai trò `PRIMARY` theo snapshot của đợt giao (hoặc cấu hình trường) mới được xác nhận xe đến.                              |
+| POST   | `/api/deliveries/:id/inspections`           | `delivery.inspect`; tài khoản có vai trò thuộc đợt giao. Sau khi đợt giao đã `RECEIVED`, khóa duyệt trả `409 Conflict`.                                         |
+
+Khi xe đến, snapshot cấu hình nhóm duyệt được lưu bất biến vào bảng `delivery_inspection_roles`. Mọi cập nhật cấu hình của Ban Giám hiệu sau thời điểm đó chỉ áp dụng cho các đợt xe đến mới.
+
 Điểm chấp nhận ghi phản hồi thực hiện trong transaction `Serializable`: đọc lại actor trực tiếp qua `identitySelect` -> khóa `school -> supplier -> actor user -> actor role (FOR SHARE) -> permission rows (view_details/respond FOR SHARE theo id) -> delivery -> complaint` -> kiểm lại actor (cùng `roleId`/`role`/`orgType`/`supplierId` và đủ cả hai quyền), trạng thái `SUBMITTED` và update có điều kiện. Thu hồi quyền, khóa user hoặc thay role grant hoàn tất trước điểm khóa khiến transaction retry đọc snapshot mới và từ chối `403`. `SCHOOL`, `SYSTEM`, `AUTHORITY` và supplier thiếu một trong hai quyền đều nhận `403` trên POST; mọi UUID ngoài phạm vi/không tồn tại trả cùng `404`. Producer HTTP/service tạo khiếu nại cho Ban Giám hiệu và default grants tương ứng nằm ngoài phạm vi và chưa được thêm vào repo. Chi tiết: [ingredient-quality-feedback-api.md](../specs/supplier-complaint-response/contracts/ingredient-quality-feedback-api.md).
+
+Phân bổ theo nguyên liệu dùng GET /api/meal-allocations?mealType (meal_allocation.view) tự lập phương án cho bữa chưa phân bổ và PUT /api/meal-allocations (meal_allocation.update, thêm create khi cần) để lưu. Không có endpoint tính riêng. Phạm vi trường từ principal, bữa từ validation, áp dụng yêu cầu revision/planId. Chi tiết tại specs/meal-allocation-materials/contracts/material-plan.md.

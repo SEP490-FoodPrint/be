@@ -80,7 +80,7 @@ async function authApi(context: TestContext, withRegistration = false) {
     registrationRequest: withRegistration
       ? {
           id: "00000000-0000-4000-8000-000000000101",
-          registrationNumber: 1n,
+          code: "FP-REG-00001",
           status: "PENDING",
           submittedAt: new Date("2026-11-01T00:00:00.000Z"),
           rejectionReason: null,

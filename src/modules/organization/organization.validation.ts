@@ -194,6 +194,11 @@ export const publicDailyMenuQuerySchema = z.strictObject(
       )
       .transform((val) => (val === "" ? undefined : val))
       .optional(),
+    grade: z
+      .string({ error: "Mã khối/nhóm không hợp lệ" })
+      .transform((val) => val.trim())
+      .transform((val) => (val === "" ? undefined : val))
+      .optional(),
   },
   {
     error: (issue) =>
@@ -201,6 +206,26 @@ export const publicDailyMenuQuerySchema = z.strictObject(
         ? "Tham số thực đơn ngày không hợp lệ"
         : "Tham số thực đơn ngày không hợp lệ",
   },
+);
+
+export const publicSchoolGradesQuerySchema = z.strictObject(
+  {
+    week: z
+      .string({ error: "Ngày tuần không đúng định dạng (yêu cầu YYYY-MM-DD)" })
+      .transform((val) => val.trim())
+      .refine(
+        (val) => {
+          if (val === "") return true;
+          if (!DATE_REGEX.test(val)) return false;
+          const parsed = new Date(`${val}T00:00:00.000Z`);
+          return !Number.isNaN(parsed.getTime());
+        },
+        { error: "Ngày tuần không đúng định dạng (yêu cầu YYYY-MM-DD)" },
+      )
+      .transform((val) => (val === "" ? undefined : val))
+      .optional(),
+  },
+  { error: () => "Tham số danh sách khối không hợp lệ" },
 );
 
 export const publicWeeklyMenuQuerySchema = z.strictObject(
@@ -239,7 +264,11 @@ export const publicWeeklyMenuQuerySchema = z.strictObject(
 );
 
 export function validateOrganizationListQuery(value: unknown) {
-  return parse(organizationListQuerySchema, value);
+  const result = organizationListQuerySchema.safeParse(value);
+  if (!result.success) {
+    throw new OrganizationValidationError(mapZodIssues(result.error.issues));
+  }
+  return result.data;
 }
 
 export function validateCookingMode(value: unknown) {
@@ -296,8 +325,74 @@ export function validatePublicDailyMenuQuery(value: unknown) {
   return result.data;
 }
 
+export function validatePublicSchoolGradesQuery(value: unknown) {
+  const result = publicSchoolGradesQuerySchema.safeParse(value);
+  if (!result.success) {
+    throw new OrganizationValidationError(mapZodIssues(result.error.issues));
+  }
+  return result.data;
+}
+
 export function validatePublicWeeklyMenuQuery(value: unknown) {
   const result = publicWeeklyMenuQuerySchema.safeParse(value);
+  if (!result.success) {
+    throw new OrganizationValidationError(mapZodIssues(result.error.issues));
+  }
+  return result.data;
+}
+
+const deliveryInspectionTierEnum = z.enum(["PRIMARY", "REQUIRED", "OPTIONAL"], {
+  error: "Nhóm duyệt không hợp lệ",
+});
+
+export const deliveryInspectionRolesBodySchema = z
+  .strictObject({
+    roles: z
+      .array(
+        z.strictObject({
+          roleCode: z.enum(
+            [
+              "SCHOOL_KITCHEN_STAFF",
+              "INGREDIENT_MANAGEMENT_DEPARTMENT",
+              "SCHOOL_NUTRITION_OFFICER",
+            ],
+            { error: "Bộ phận không thuộc danh sách được cấu hình" },
+          ),
+          tier: deliveryInspectionTierEnum,
+        }),
+      )
+      .length(3, "Phải cấu hình đủ 3 bộ phận"),
+  })
+  .superRefine((value, ctx) => {
+    const roleCodes = new Set<string>();
+    let primaryCount = 0;
+
+    value.roles.forEach((item, index) => {
+      if (roleCodes.has(item.roleCode)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Mỗi bộ phận chỉ được khai báo một lần",
+          path: ["roles", index, "roleCode"],
+        });
+      }
+      roleCodes.add(item.roleCode);
+
+      if (item.tier === "PRIMARY") {
+        primaryCount++;
+      }
+    });
+
+    if (primaryCount !== 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Phải chọn đúng một người duyệt chính",
+        path: ["roles"],
+      });
+    }
+  });
+
+export function validateDeliveryInspectionRoles(value: unknown) {
+  const result = deliveryInspectionRolesBodySchema.safeParse(value);
   if (!result.success) {
     throw new OrganizationValidationError(mapZodIssues(result.error.issues));
   }

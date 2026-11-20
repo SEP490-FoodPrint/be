@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readAllocationDay } from "../src/modules/meal-allocation/meal-allocation.repository";
+import type { Prisma } from "../src/generated/prisma/client";
 import type { AllocationDay } from "../src/modules/meal-allocation/meal-allocation.repository";
 import {
   prepareChanges,
@@ -411,4 +413,65 @@ void test("prepareChanges bảo lưu phân bổ món khác khi FE chỉ gửi m�
     ),
     "món main không gửi vẫn được bảo lưu 40",
   );
+});
+
+void test("meal revisions cannot be used for another scope", () => {
+  const data = fixture();
+  const lunch = projectAllocationDay(data, date, "LUNCH");
+  assert.equal(lunch.status, "READY");
+  assert.equal(lunch.mealType, "LUNCH");
+  assert.notEqual(lunch.revision, projectAllocationDay(data, date).revision);
+  assert.notEqual(
+    lunch.revision,
+    projectAllocationDay(data, date, "AFTERNOON").revision,
+  );
+});
+
+void test("lunch readiness is independent from unfinished afternoon cooking", () => {
+  const lunch = fixture();
+  const day = structuredClone(lunch);
+  day.menus[0].menuDayDishes.push({
+    dishId: "snack",
+    mealType: "AFTERNOON",
+    Dish: { name: "snack" },
+  });
+  day.demands.push({
+    ...structuredClone(day.demands[0]),
+    id: "afternoon",
+    mealType: "AFTERNOON",
+    totalPortions: 500,
+  });
+  assert.equal(projectAllocationDay(day, date).status, "COOKING_PENDING");
+  assert.equal(projectAllocationDay(lunch, date, "LUNCH").status, "READY");
+  assert.equal(
+    projectAllocationDay(lunch, date, "LUNCH").totals.finalized,
+    100,
+  );
+});
+
+void test("repository scopes every meal source consistently", async () => {
+  const captured: unknown[] = [];
+  const model = {
+    findMany: (args: unknown) => {
+      captured.push(args);
+      return Promise.resolve([]);
+    },
+  };
+  const tx = {
+    menuDay: model,
+    cookingBatch: model,
+    dailyMealPortion: model,
+  } as unknown as Prisma.TransactionClient;
+  await readAllocationDay(tx, "school", new Date(date), "LUNCH");
+  const [menu, batch, demand] = captured as {
+    where: { mealType?: string };
+    select: {
+      menuDayDishes: { where: { mealType: string } };
+      portionGroups: { where: { mealType: string } };
+    };
+  }[];
+  assert.equal(menu.select.menuDayDishes.where.mealType, "LUNCH");
+  assert.equal(menu.select.portionGroups.where.mealType, "LUNCH");
+  assert.equal(batch.where.mealType, "LUNCH");
+  assert.equal(demand.where.mealType, "LUNCH");
 });

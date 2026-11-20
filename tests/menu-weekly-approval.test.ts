@@ -6,7 +6,7 @@ import {
 } from "../src/utils/menu-week";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { PrismaClient } from "../src/generated/prisma/client";
+import type { Prisma, PrismaClient } from "../src/generated/prisma/client";
 import { ROLES } from "../src/constants/roles";
 import {
   createMenuApprovalService,
@@ -115,6 +115,8 @@ function decisionHarness(options?: {
     },
     findDetail: () => Promise.resolve(null),
     findFinalizedPortions: () => Promise.resolve([]),
+    findWeekDetails: () => Promise.resolve([]),
+    listSubmittedWeeks: () => Promise.resolve([]),
     findForDecision: () => Promise.resolve(options?.week ?? decisionWeek()),
     createReview: (_tx, input) => {
       writes.reviews.push(input);
@@ -376,6 +378,8 @@ void test("approval detail stays in school scope and uses finalized class demand
           totalPortions: 390,
         },
       ]),
+    findWeekDetails: () => Promise.resolve([]),
+    listSubmittedWeeks: () => Promise.resolve([]),
     findForDecision: () => Promise.resolve(null),
     academicYears: () => Promise.resolve([]),
     createReview: () => Promise.reject(new Error("not used")),
@@ -445,6 +449,8 @@ void test("approval detail is restricted to the school management board", async 
       return Promise.resolve(detailRow());
     },
     findFinalizedPortions: () => Promise.resolve([]),
+    findWeekDetails: () => Promise.resolve([]),
+    listSubmittedWeeks: () => Promise.resolve([]),
     findForDecision: () => Promise.resolve(null),
     academicYears: () => Promise.resolve([]),
     createReview: () => Promise.reject(new Error("not used")),
@@ -579,4 +585,105 @@ void test("thực đơn tuần phải tạo và gửi duyệt trước hết Ch�
   });
   assert.equal(menuWeekLock(week, "2026-11-24", false).locked, true);
   assert.equal(menuWeekLock(week, "2026-11-24", true).locked, false);
+});
+
+void test("approval week returns every submitted grade menu of the week in one call", async () => {
+  const gradeRow = (id: string, gradeId: string, name: string) =>
+    ({
+      ...detailRow(),
+      id,
+      isSchoolWide: false,
+      grades: [{ gradeId, grade: { name } }],
+    }) as unknown as ApprovalDetailRow;
+  let requestedWeek: string | undefined;
+  const portionScopes: string[][] = [];
+  const repository = {
+    connect: () => Promise.resolve(transactionDatabase(board)),
+    findDetail: () => Promise.resolve(null),
+    findWeekDetails: (
+      scope: Prisma.WeeklyMenuWhereInput,
+      weekStartDate: Date,
+    ) => {
+      assert.deepEqual(scope, { schoolId });
+      requestedWeek = weekStartDate.toISOString().slice(0, 10);
+      return Promise.resolve([
+        gradeRow("00000000-0000-4000-8000-0000000000e2", "g10", "Khối 10"),
+        gradeRow("00000000-0000-4000-8000-0000000000e1", "g2", "Khối 2"),
+      ]);
+    },
+    listSubmittedWeeks: () =>
+      Promise.resolve([
+        {
+          weekStartDate: new Date("2026-11-09T00:00:00.000Z"),
+          status: "APPROVED" as const,
+          count: 1,
+        },
+        {
+          weekStartDate: new Date("2026-11-02T00:00:00.000Z"),
+          status: "PENDING_APPROVAL" as const,
+          count: 2,
+        },
+      ]),
+    findFinalizedPortions: (
+      _dates: Date[],
+      _schoolId: string,
+      gradeIds = [],
+    ) => {
+      portionScopes.push(gradeIds);
+      return Promise.resolve([]);
+    },
+    findForDecision: () => Promise.resolve(null),
+    academicYears: () =>
+      Promise.resolve([
+        {
+          startDate: new Date("2026-09-07T00:00:00.000Z"),
+          endDate: new Date("2027-05-28T00:00:00.000Z"),
+          holidays: [],
+        },
+      ]),
+    createReview: () => Promise.reject(new Error("not used")),
+    updateAllDays: () => Promise.reject(new Error("not used")),
+    updateWeek: () => Promise.reject(new Error("not used")),
+  } satisfies MenuApprovalRepository;
+  const service = createMenuApprovalService(repository);
+
+  // Không truyền ngày: chọn tuần còn chờ duyệt mới nhất
+  const week = await service.getWeek({}, board);
+  assert.equal(requestedWeek, "2026-11-02");
+  assert.equal(week.weekEndDate, "2026-11-06");
+  assert.equal(week.weekNumber, 9);
+  assert.deepEqual(
+    week.weeks.map((item) => [item.weekStartDate, item.total, item.pending]),
+    [
+      ["2026-11-09", 1, 0],
+      ["2026-11-02", 2, 2],
+    ],
+  );
+  assert.deepEqual(
+    week.menus.map((menu) => menu.grades.map((grade) => grade.name)),
+    [["Khối 2"], ["Khối 10"]],
+  );
+  assert.deepEqual(portionScopes.sort(), [["g10"], ["g2"]]);
+
+  // Ngày bất kỳ trong tuần (thứ Sáu) được quy về thứ Hai
+  await service.getWeek({ date: new Date("2026-11-13T00:00:00.000Z") }, board);
+  assert.equal(requestedWeek, "2026-11-09");
+});
+
+void test("approval week is empty when nothing has been submitted", async () => {
+  const repository = {
+    connect: () => Promise.reject(new Error("not used")),
+    findDetail: () => Promise.resolve(null),
+    findWeekDetails: () => Promise.reject(new Error("not used")),
+    listSubmittedWeeks: () => Promise.resolve([]),
+    findFinalizedPortions: () => Promise.resolve([]),
+    findForDecision: () => Promise.resolve(null),
+    academicYears: () => Promise.resolve([]),
+    createReview: () => Promise.reject(new Error("not used")),
+    updateAllDays: () => Promise.reject(new Error("not used")),
+    updateWeek: () => Promise.reject(new Error("not used")),
+  } satisfies MenuApprovalRepository;
+  const week = await createMenuApprovalService(repository).getWeek({}, board);
+  assert.equal(week.weekStartDate, null);
+  assert.deepEqual(week.menus, []);
 });

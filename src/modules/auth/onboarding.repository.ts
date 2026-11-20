@@ -11,7 +11,7 @@ import { registrationApplicantSelect } from "../registration/registration.select
 
 export const applicationSelect = {
   id: true,
-  registrationNumber: true,
+  code: true,
   applicantUserId: true,
   requestType: true,
   status: true,
@@ -105,13 +105,25 @@ export const onboardingRepository = {
       select: reviewSelect,
     });
   },
+  /** Mã hồ sơ trong `codes` đã tồn tại; dùng cùng transaction với lần cấp mã. */
+  async findExistingRegistrationCodes(
+    tx: AuthorizationClient,
+    codes: readonly string[],
+  ): Promise<ReadonlySet<string>> {
+    const rows = await tx.registrationRequest.findMany({
+      where: { code: { in: [...codes] } },
+      select: { code: true },
+    });
+    return new Set(rows.map((row) => row.code));
+  },
   createSubmission(
     tx: AuthorizationClient,
     applicantUserId: string,
+    code: string,
     input: SubmissionWrite,
   ) {
     return tx.registrationRequest.create({
-      data: { applicantUserId, ...submissionData(input) },
+      data: { applicantUserId, code, ...submissionData(input) },
       select: applicationSelect,
     });
   },

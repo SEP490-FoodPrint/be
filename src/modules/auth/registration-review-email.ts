@@ -1,5 +1,4 @@
 import type { ReviewRow } from "./registration-review";
-import { formatRegistrationID } from "../../utils/registration-id";
 import type { Application } from "./onboarding.repository";
 
 function escapeHtml(value: string): string {
@@ -16,7 +15,7 @@ function escapeHtml(value: string): string {
 }
 
 export function reviewEmail(row: ReviewRow, rejectionReason?: string) {
-  const registrationID = formatRegistrationID(row.registrationNumber);
+  const registrationID = row.code;
   const name = row.applicantUser.fullName;
   const organization =
     row.profileData &&
@@ -43,7 +42,7 @@ export function submissionEmail(
   row: Application,
   recipient: { fullName: string; email: string },
 ) {
-  const registrationID = formatRegistrationID(row.registrationNumber);
+  const registrationID = row.code;
   const text = `Xin chào ${recipient.fullName},\n\nFoodPrint đã tiếp nhận hồ sơ ${registrationID} của bạn. Hồ sơ đang chờ xét duyệt.\nChúng tôi sẽ gửi email khi hồ sơ được phê duyệt hoặc từ chối. Bạn có thể đăng nhập FoodPrint để theo dõi hồ sơ.`;
   return {
     recipientEmail: recipient.email,

@@ -304,6 +304,30 @@ export const kitchenRepository = {
       },
     });
   },
+  allocationGradeRecipes(client: Tx, schoolId: string, dishIds: string[]) {
+    return client.dish.findMany({
+      where: { schoolId, id: { in: dishIds } },
+      orderBy: { id: "asc" },
+      select: {
+        id: true,
+        gradeRecipes: {
+          orderBy: { gradeId: "asc" },
+          select: {
+            gradeId: true,
+            lines: {
+              orderBy: { ingredientEntryId: "asc" },
+              where: { ingredientRole: "MAIN" },
+              select: {
+                requiredQuantity: true,
+                unit: true,
+                entry: { select: { ingredientId: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+  },
   findPlanMeal(
     client: Tx,
     menuDayId: string,
@@ -313,6 +337,9 @@ export const kitchenRepository = {
     return client.menuDay.findFirst({
       where: { id: menuDayId, WeeklyMenu: { schoolId } },
       select: {
+        WeeklyMenu: {
+          select: { isSchoolWide: true, grades: { select: { gradeId: true } } },
+        },
         menuDate: true,
         approvalStatus: true,
         menuDayDishes: {

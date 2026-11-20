@@ -31,6 +31,31 @@ export const menuApprovalDecisionSchema = z
     }
   });
 
+const weekDateMessage = "Ngày phải có định dạng YYYY-MM-DD";
+
+/** date là ngày bất kỳ trong tuần; bỏ trống để server tự chọn tuần mặc định. */
+export const menuApprovalWeekQuerySchema = z.strictObject({
+  date: z
+    .string({ error: weekDateMessage })
+    .regex(/^\d{4}-\d{2}-\d{2}$/, { error: weekDateMessage })
+    .refine(
+      (value) => {
+        const date = new Date(value + "T00:00:00.000Z");
+        return (
+          Number.isFinite(date.getTime()) &&
+          date.toISOString().slice(0, 10) === value
+        );
+      },
+      { error: "Ngày không hợp lệ" },
+    )
+    .transform((value) => new Date(value + "T00:00:00.000Z"))
+    .optional(),
+});
+
+export function validateMenuApprovalWeekQuery(value: unknown) {
+  return parseRequest(menuApprovalWeekQuerySchema, value);
+}
+
 export function validateMenuApprovalParams(value: unknown) {
   return parseRequest(menuApprovalParamsSchema, value);
 }

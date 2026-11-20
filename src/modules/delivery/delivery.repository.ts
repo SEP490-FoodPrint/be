@@ -1,4 +1,8 @@
-import type { DeliveryStatus, Prisma } from "../../generated/prisma/client";
+import type {
+  DeliveryInspectionTier,
+  DeliveryStatus,
+  Prisma,
+} from "../../generated/prisma/client";
 import { getPrisma } from "../../utils/database";
 
 type Tx = Prisma.TransactionClient;
@@ -10,6 +14,8 @@ export interface DeliveryInspectionQueryFilter {
   status?: DeliveryStatus;
   period: "ALL" | "today" | "week";
   date?: string;
+  orderType?: "DIRECT_USE" | "DRY_STOCK";
+  batchNo?: 1 | 2;
 }
 
 export const deliveryListSelect = {
@@ -41,6 +47,8 @@ export const deliveryListSelect = {
       requestedDeliveryDate: true,
       note: true,
       status: true,
+      orderType: true,
+      batchNo: true,
     },
   },
   deliveryApprovals: {
@@ -138,13 +146,21 @@ const summarySelect = {
       schoolId: true,
       supplierId: true,
       status: true,
+      orderType: true,
+      batchNo: true,
       _count: {
         select: {
           deliveries: {
-            where: { deliveryApprovals: { some: { decision: "REJECT" } } },
+            where: { status: "REJECTED" },
           },
         },
       },
+    },
+  },
+  inspectionRoles: {
+    select: {
+      tier: true,
+      Role: { select: { code: true } },
     },
   },
   deliveryApprovals: {
@@ -250,70 +266,55 @@ const detailSelect = {
   },
 } as const satisfies Prisma.DeliverySelect;
 
-/** Xe chỉ gồm đồ khô (mọi dòng hàng là DRY_STOCK), cùng tiêu chí với requiredInspectionRoles. */
-export const dryOnlyDeliveryWhere = {
-  deliveryItems: {
-    some: {},
-    every: {
-      OR: [
-        { IngredientEntry: { handlingType: "DRY_STOCK" } },
-        {
-          ingredientEntryId: null,
-          SupplyRequestItem: { IngredientEntry: { handlingType: "DRY_STOCK" } },
-        },
-      ],
-    },
-  },
-} satisfies Prisma.DeliveryWhereInput;
-
 /**
- * NCC đồ khô của trường: NCC có số nguyên liệu DRY_STOCK nhiều hơn DIRECT_USE trong danh mục
- * (ingredient entries ACTIVE) của trường. Mọi xe của NCC này chỉ Ban quản lý nguyên liệu kiểm tra.
+ * Xe đồ khô: mọi dòng hàng là DRY_STOCK. Chỉ cần 1 dòng đồ tươi là xe đồ tươi.
+ * Cùng tiêu chí với requiredInspectionRoles; không suy luận theo nhà cung cấp.
  */
-async function drySupplierIds(tx: Tx, schoolId: string): Promise<string[]> {
-  const entries = await tx.ingredientEntry.findMany({
-    where: { schoolId, status: "ACTIVE" },
-    select: {
-      handlingType: true,
-      Ingredient: { select: { supplierId: true } },
+export const dryOnlyDeliveryWhere = {
+  // Đơn có orderType thì dùng orderType; chỉ xe STANDALONE / đơn cũ chưa backfill mới suy từ dòng hàng.
+  OR: [
+    { SupplyRequest: { is: { orderType: "DRY_STOCK" } } },
+    {
+      OR: [
+        { supplyRequestId: null },
+        { SupplyRequest: { is: { orderType: null } } },
+      ],
+      deliveryItems: {
+        some: {},
+        every: {
+          OR: [
+            { IngredientEntry: { handlingType: "DRY_STOCK" } },
+            {
+              ingredientEntryId: null,
+              SupplyRequestItem: {
+                IngredientEntry: { handlingType: "DRY_STOCK" },
+              },
+            },
+          ],
+        },
+      },
     },
-  });
-  const balance = new Map<string, number>();
-  for (const entry of entries) {
-    const id = entry.Ingredient.supplierId;
-    balance.set(
-      id,
-      (balance.get(id) ?? 0) + (entry.handlingType === "DRY_STOCK" ? 1 : -1),
-    );
-  }
-  return [...balance].filter(([, n]) => n > 0).map(([id]) => id);
-}
-
-/** Xe chỉ Ban quản lý nguyên liệu được thấy: xe của NCC đồ khô hoặc xe chỉ gồm đồ khô. */
-const dryDeliveryWhere = (
-  drySuppliers: string[],
-): Prisma.DeliveryWhereInput => ({
-  OR: [dryOnlyDeliveryWhere, { supplierId: { in: drySuppliers } }],
-});
-
-const markDrySupplier = <T extends { supplierId: string }>(
-  row: T,
-  drySuppliers: string[],
-) => ({ ...row, supplierIsDry: drySuppliers.includes(row.supplierId) });
+  ],
+} satisfies Prisma.DeliveryWhereInput;
 
 function inspectionWhere(
   schoolId: string,
   query: DeliveryInspectionQueryFilter,
   range?: { gte: Date; lt: Date },
-  hiddenDrySuppliers?: string[],
+  hideDryOnly = false,
 ): Prisma.DeliveryWhereInput {
   return {
     schoolId,
     ...(query.status ? { status: query.status } : {}),
     AND: [
       // Xe đồ khô chỉ hiện cho Ban quản lý nguyên liệu.
-      ...(hiddenDrySuppliers
-        ? [{ NOT: dryDeliveryWhere(hiddenDrySuppliers) }]
+      ...(hideDryOnly ? [{ NOT: dryOnlyDeliveryWhere }] : []),
+      ...(query.orderType === "DRY_STOCK" ? [dryOnlyDeliveryWhere] : []),
+      ...(query.orderType === "DIRECT_USE"
+        ? [{ NOT: dryOnlyDeliveryWhere }]
+        : []),
+      ...(query.batchNo
+        ? [{ SupplyRequest: { is: { batchNo: query.batchNo } } }]
         : []),
       ...(query.search
         ? [
@@ -351,6 +352,11 @@ function inspectionWhere(
                   expectedArrivalAt: null,
                   receivedAt: null,
                   createdAt: range,
+                },
+                {
+                  SupplyRequest: {
+                    requestedDeliveryDate: range,
+                  },
                 },
               ],
             },
@@ -507,11 +513,50 @@ export const deliveryInspectionRepository = {
       },
     });
   },
+  findSchoolInspectionTiers(tx: Tx, schoolId: string) {
+    if (!tx.schoolDeliveryInspectionRole?.findMany) {
+      return Promise.resolve([]);
+    }
+    return tx.schoolDeliveryInspectionRole.findMany({
+      where: { schoolId },
+      select: {
+        tier: true,
+        Role: { select: { code: true } },
+      },
+    });
+  },
+  snapshotInspectionRoles(
+    tx: Tx,
+    deliveryId: string,
+    rows: { roleId: string; tier: DeliveryInspectionTier }[],
+  ) {
+    if (!tx.deliveryInspectionRole?.createMany) {
+      return Promise.resolve({ count: rows.length });
+    }
+    return tx.deliveryInspectionRole.createMany({
+      data: rows.map((r) => ({
+        deliveryId,
+        roleId: r.roleId,
+        tier: r.tier,
+      })),
+    });
+  },
+  findInspectionRoleIds(tx: Tx, codes: string[]) {
+    if (!tx.role?.findMany) {
+      return Promise.resolve(
+        codes.map((code, idx) => ({ id: `role-id-${idx}`, code })),
+      );
+    }
+    return tx.role.findMany({
+      where: { code: { in: codes } },
+      select: { id: true, code: true },
+    });
+  },
   rejectedCount(tx: Tx, supplyRequestId: string) {
     return tx.delivery.count({
       where: {
         supplyRequestId,
-        deliveryApprovals: { some: { decision: "REJECT" } },
+        status: "REJECTED",
       },
     });
   },
@@ -577,20 +622,13 @@ export const deliveryInspectionRepository = {
     range?: { gte: Date; lt: Date },
     hideDryOnly = false,
   ) {
-    const dry = await drySupplierIds(tx, schoolId);
-    const rows = await tx.delivery.findMany({
-      where: inspectionWhere(
-        schoolId,
-        query,
-        range,
-        hideDryOnly ? dry : undefined,
-      ),
+    return tx.delivery.findMany({
+      where: inspectionWhere(schoolId, query, range, hideDryOnly),
       select: summarySelect,
       orderBy: [{ createdAt: "desc" }, { id: "asc" }],
       skip: (query.page - 1) * query.limit,
       take: query.limit,
     });
-    return rows.map((row) => markDrySupplier(row, dry));
   },
   async counts(
     tx: Tx,
@@ -599,19 +637,17 @@ export const deliveryInspectionRepository = {
     range?: { gte: Date; lt: Date },
     hideDryOnly = false,
   ) {
-    const dry = hideDryOnly ? await drySupplierIds(tx, schoolId) : undefined;
     return tx.delivery.groupBy({
       by: ["status"],
-      where: inspectionWhere(schoolId, query, range, dry),
+      where: inspectionWhere(schoolId, query, range, hideDryOnly),
       _count: { _all: true },
     });
   },
   async detail(tx: Tx, schoolId: string, id: string) {
-    const row = await tx.delivery.findFirst({
+    return tx.delivery.findFirst({
       where: { id, schoolId },
       select: detailSelect,
     });
-    return row && markDrySupplier(row, await drySupplierIds(tx, schoolId));
   },
   /** Tìm đợt giao của trường theo mã QR dòng hàng, mã QR lô hoặc mã đợt giao. */
   async findByScanCode(
@@ -620,11 +656,10 @@ export const deliveryInspectionRepository = {
     code: string,
     hideDryOnly = false,
   ) {
-    const dry = hideDryOnly ? await drySupplierIds(tx, schoolId) : undefined;
     return tx.delivery.findFirst({
       where: {
         schoolId,
-        ...(dry ? { NOT: dryDeliveryWhere(dry) } : {}),
+        ...(hideDryOnly ? { NOT: dryOnlyDeliveryWhere } : {}),
         OR: [
           { deliveryNo: code },
           { deliveryItems: { some: { qrToken: code } } },
@@ -642,7 +677,7 @@ export const deliveryInspectionRepository = {
 };
 export type DeliveryInspectionRow = Prisma.DeliveryGetPayload<{
   select: typeof summarySelect;
-}> & { supplierIsDry?: boolean };
+}>;
 export type DeliveryInspectionDetailRow = Prisma.DeliveryGetPayload<{
   select: typeof detailSelect;
-}> & { supplierIsDry?: boolean };
+}>;

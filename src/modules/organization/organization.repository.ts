@@ -1,5 +1,6 @@
 import type {
   CookingMode,
+  DeliveryInspectionTier,
   Prisma,
   PrismaClient,
 } from "../../generated/prisma/client";
@@ -78,9 +79,25 @@ export type SchoolForMenuDbRow = Prisma.SchoolGetPayload<{
   select: typeof schoolForMenuSelect;
 }>;
 
+// Thông tin nguyên liệu công khai: tên, nhóm, nhà cung cấp, đơn vị mặc định
+const publicIngredientSelect = {
+  id: true,
+  name: true,
+  defaultUnit: true,
+  ingredientCategory: { select: { categoryName: true } },
+  Supplier: { select: { name: true } },
+} as const satisfies Prisma.IngredientSelect;
+
+const publicRecipeLineSelect = {
+  ingredientEntryId: true,
+  ingredientRole: true,
+  requiredQuantity: true,
+  unit: true,
+} as const;
+
 export const publicMenuDayInclude = {
   WeeklyMenu: {
-    select: { id: true, title: true, weekStartDate: true },
+    select: { id: true, title: true, weekStartDate: true, isSchoolWide: true },
   },
   menuDayDishes: {
     include: {
@@ -90,6 +107,40 @@ export const publicMenuDayInclude = {
           name: true,
           description: true,
           status: true,
+          category: true,
+          schoolCategory: { select: { name: true } },
+          // Định lượng chuẩn của món (1 suất)
+          dishIngredientEntries: {
+            select: {
+              ...publicRecipeLineSelect,
+              IngredientEntry: {
+                select: { Ingredient: { select: publicIngredientSelect } },
+              },
+            },
+          },
+          // Định lượng riêng theo khối
+          gradeRecipes: {
+            select: {
+              gradeId: true,
+              lines: {
+                select: {
+                  ...publicRecipeLineSelect,
+                  entry: {
+                    select: { Ingredient: { select: publicIngredientSelect } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      // Nguyên liệu chính cố định cho lần xuất hiện này của món trong thực đơn
+      ingredients: {
+        select: {
+          ingredientId: true,
+          quantityPerPortion: true,
+          unit: true,
+          ingredient: { select: publicIngredientSelect },
         },
       },
     },
@@ -98,6 +149,17 @@ export const publicMenuDayInclude = {
       { displayOrder: "asc" as const },
       { dishId: "asc" as const },
     ],
+  },
+  // Nhóm suất ăn (tiêu chuẩn / dị ứng) để ghép món thay thế
+  portionGroups: {
+    select: {
+      id: true,
+      name: true,
+      isDefault: true,
+      mealType: true,
+      dishes: { select: { dishId: true } },
+    },
+    orderBy: { name: "asc" as const },
   },
 } as const satisfies Prisma.MenuDayInclude;
 
@@ -163,12 +225,6 @@ export interface PublicSchoolFilterArgs {
   district?: string;
 }
 
-export interface RawPortionGroup {
-  id: string;
-  name: string;
-  is_default: boolean;
-}
-
 export interface OrganizationRepository {
   listDirectory?(
     tx: Prisma.TransactionClient,
@@ -200,6 +256,32 @@ export interface OrganizationRepository {
     schoolId: string,
     data: { lunchTime: Date | null; afternoonMealTime: Date | null },
   ): Promise<{ lunchTime: Date | null; afternoonMealTime: Date | null }>;
+  findDeliveryInspectionRoles(schoolId: string): Promise<
+    Array<{
+      tier: DeliveryInspectionTier;
+      updatedAt: Date;
+      Role: { code: string };
+    }>
+  >;
+  findRoleIdsByCodes(
+    tx: Prisma.TransactionClient,
+    codes: string[],
+  ): Promise<Array<{ id: string; code: string }>>;
+  replaceDeliveryInspectionRoles(
+    tx: Prisma.TransactionClient,
+    schoolId: string,
+    rows: Array<{
+      roleId: string;
+      tier: DeliveryInspectionTier;
+      updatedByUserId: string;
+    }>,
+  ): Promise<
+    Array<{
+      tier: DeliveryInspectionTier;
+      updatedAt: Date;
+      Role: { code: string };
+    }>
+  >;
   listSchools(
     query: ListQuery,
     principal: AuthPrincipal,
@@ -214,10 +296,17 @@ export interface OrganizationRepository {
   findMenuDayForDailyMenu(
     schoolId: string,
     targetDate: Date,
+    gradeId?: string,
   ): Promise<PublicMenuDayDbRow | null>;
   findLatestApprovedMenuDay(
     schoolId: string,
+    gradeId?: string,
   ): Promise<PublicMenuDayDbRow | null>;
+  findSchoolGrades?(schoolId: string): Promise<{ id: string; name: string }[]>;
+  findWeekMenuCoverage?(
+    schoolId: string,
+    weekMonday: Date,
+  ): Promise<{ hasSchoolWideMenu: boolean; gradeIds: string[] }>;
   findWeeklyMenu(
     schoolId: string,
     targetWeekMonday?: Date,
@@ -242,11 +331,6 @@ export interface OrganizationRepository {
     startRange?: Date,
     endRange?: Date,
   ): Promise<string[]>;
-  findWeekGrades(
-    schoolId: string,
-    targetWeekMonday: Date,
-  ): Promise<{ id: string; name: string }[]>;
-  findPortionGroupsRaw(dayIds: string[]): Promise<RawPortionGroup[]>;
 }
 
 export function createOrganizationRepository(
@@ -322,6 +406,49 @@ export function createOrganizationRepository(
         where: { id: schoolId },
         data,
         select: { lunchTime: true, afternoonMealTime: true },
+      });
+    },
+
+    async findDeliveryInspectionRoles(schoolId) {
+      const prisma = await getClient();
+      return prisma.schoolDeliveryInspectionRole.findMany({
+        where: { schoolId },
+        select: {
+          tier: true,
+          updatedAt: true,
+          Role: { select: { code: true } },
+        },
+      });
+    },
+
+    findRoleIdsByCodes(tx, codes) {
+      return tx.role.findMany({
+        where: { code: { in: codes } },
+        select: { id: true, code: true },
+      });
+    },
+
+    async replaceDeliveryInspectionRoles(tx, schoolId, rows) {
+      await tx.schoolDeliveryInspectionRole.deleteMany({
+        where: { schoolId },
+      });
+      if (rows.length > 0) {
+        await tx.schoolDeliveryInspectionRole.createMany({
+          data: rows.map((r) => ({
+            schoolId,
+            roleId: r.roleId,
+            tier: r.tier,
+            updatedByUserId: r.updatedByUserId,
+          })),
+        });
+      }
+      return tx.schoolDeliveryInspectionRole.findMany({
+        where: { schoolId },
+        select: {
+          tier: true,
+          updatedAt: true,
+          Role: { select: { code: true } },
+        },
       });
     },
 
@@ -434,7 +561,37 @@ export function createOrganizationRepository(
       });
     },
 
-    async findMenuDayForDailyMenu(schoolId: string, targetDate: Date) {
+    async findSchoolGrades(schoolId: string) {
+      const prisma = await getClient();
+      return prisma.schoolGrade.findMany({
+        where: { schoolId },
+        select: { id: true, name: true },
+        orderBy: { name: "asc" },
+      });
+    },
+
+    async findWeekMenuCoverage(schoolId: string, weekMonday: Date) {
+      const prisma = await getClient();
+      const menus = await prisma.weeklyMenu.findMany({
+        where: {
+          schoolId,
+          weekStartDate: weekMonday,
+          status: { in: ["APPROVED", "PENDING_APPROVAL"] },
+          menuDays: { some: { approvalStatus: "APPROVED" } },
+        },
+        select: { isSchoolWide: true, grades: { select: { gradeId: true } } },
+      });
+      return {
+        hasSchoolWideMenu: menus.some((m) => m.isSchoolWide),
+        gradeIds: menus.flatMap((m) => m.grades.map((g) => g.gradeId)),
+      };
+    },
+
+    async findMenuDayForDailyMenu(
+      schoolId: string,
+      targetDate: Date,
+      gradeId?: string,
+    ) {
       const prisma = await getClient();
       return prisma.menuDay.findFirst({
         where: {
@@ -442,24 +599,44 @@ export function createOrganizationRepository(
           WeeklyMenu: {
             schoolId,
             status: { in: ["APPROVED", "PENDING_APPROVAL"] },
+            ...(gradeId && gradeId !== "all"
+              ? {
+                  OR: [
+                    { isSchoolWide: true },
+                    { grades: { some: { gradeId } } },
+                  ],
+                }
+              : {}),
           },
           approvalStatus: "APPROVED",
         },
+        orderBy: [{ WeeklyMenu: { isSchoolWide: "asc" } }],
         include: publicMenuDayInclude,
       });
     },
 
-    async findLatestApprovedMenuDay(schoolId: string) {
+    async findLatestApprovedMenuDay(schoolId: string, gradeId?: string) {
       const prisma = await getClient();
       return prisma.menuDay.findFirst({
         where: {
           WeeklyMenu: {
             schoolId,
             status: { in: ["APPROVED", "PENDING_APPROVAL"] },
+            ...(gradeId && gradeId !== "all"
+              ? {
+                  OR: [
+                    { isSchoolWide: true },
+                    { grades: { some: { gradeId } } },
+                  ],
+                }
+              : {}),
           },
           approvalStatus: "APPROVED",
         },
-        orderBy: { menuDate: "desc" },
+        orderBy: [
+          { menuDate: "desc" },
+          { WeeklyMenu: { isSchoolWide: "asc" } },
+        ],
         include: publicMenuDayInclude,
       });
     },
@@ -482,7 +659,10 @@ export function createOrganizationRepository(
       };
       return prisma.weeklyMenu.findFirst({
         where,
-        orderBy: [{ isSchoolWide: "desc" }, { createdAt: "asc" }],
+        orderBy: [
+          { isSchoolWide: gradeId && gradeId !== "all" ? "asc" : "desc" },
+          { createdAt: "asc" },
+        ],
         include: publicWeeklyMenuInclude,
       });
     },
@@ -535,30 +715,6 @@ export function createOrganizationRepository(
       return menus.map((m) => m.weekStartDate.toISOString().slice(0, 10));
     },
 
-    async findWeekGrades(schoolId: string, targetWeekMonday: Date) {
-      const prisma = await getClient();
-      const menuGrades = await prisma.weeklyMenuGrade.findMany({
-        where: {
-          schoolId,
-          weekStartDate: targetWeekMonday,
-          weeklyMenu: { status: { in: ["APPROVED", "PENDING_APPROVAL"] } },
-        },
-        select: {
-          gradeId: true,
-          grade: { select: { id: true, name: true } },
-        },
-      });
-      const seen = new Set<string>();
-      const result: { id: string; name: string }[] = [];
-      for (const mg of menuGrades) {
-        if (mg.grade && !seen.has(mg.grade.id)) {
-          seen.add(mg.grade.id);
-          result.push({ id: mg.grade.id, name: mg.grade.name });
-        }
-      }
-      return result;
-    },
-
     async findLatestApprovedWeeklyMenu(schoolId: string) {
       const prisma = await getClient();
       return prisma.weeklyMenu.findFirst({
@@ -581,22 +737,6 @@ export function createOrganizationRepository(
         select: availableWeekSelect,
         orderBy: { weekStartDate: "desc" },
       });
-    },
-
-    async findPortionGroupsRaw(dayIds: string[]) {
-      if (dayIds.length === 0) return [];
-      const prisma = await getClient();
-      try {
-        const rawGroups = await prisma.$queryRaw<RawPortionGroup[]>`
-          SELECT DISTINCT id, name, is_default
-          FROM foodprint.menu_meal_portion_groups
-          WHERE menu_day_id = ANY(${dayIds}::uuid[])
-          ORDER BY is_default DESC, name ASC;
-        `;
-        return rawGroups ?? [];
-      } catch {
-        return [];
-      }
     },
   };
 }

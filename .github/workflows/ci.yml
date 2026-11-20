@@ -27,6 +27,7 @@ jobs:
       # Prisma config needs a valid URL; these checks never connect to PostgreSQL.
       DATABASE_URL: postgresql://ci_validation@127.0.0.1:1/foodprint_ci?schema=foodprint
       JWT_SECRET: foodprint-ci-test-only-secret-not-for-runtime
+      BUSINESS_CODE_KEY: 0f1e2d3c4b5a69788796a5b4c3d2e1f00112233445566778899aabbccddeeff0
       AUTH_ACCESS_TTL_SECONDS: "900"
       PRISMA_HIDE_UPDATE_MESSAGE: "true"
     steps:
@@ -103,6 +104,7 @@ jobs:
       NPM_CONFIG_ENGINE_STRICT: "true"
       DATABASE_URL: postgresql://foodprint_test:foodprint_test_only@127.0.0.1:5432/foodprint_migration_test?schema=foodprint
       JWT_SECRET: foodprint-ci-test-only-secret-not-for-runtime
+      BUSINESS_CODE_KEY: 0f1e2d3c4b5a69788796a5b4c3d2e1f00112233445566778899aabbccddeeff0
       MIGRATION_TEST_DATABASE_URL: postgresql://foodprint_test:foodprint_test_only@127.0.0.1:5432/foodprint_migration_test?schema=foodprint
       REDIS_URL: redis://127.0.0.1:6379/0
       PRISMA_HIDE_UPDATE_MESSAGE: "true"

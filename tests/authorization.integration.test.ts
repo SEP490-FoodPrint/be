@@ -107,7 +107,6 @@ import {
 import { createIngredientQualityFeedbackRepository } from "../src/modules/ingredient-quality-feedback/ingredient-quality-feedback.repository";
 import { createIngredientQualityFeedbackService } from "../src/modules/ingredient-quality-feedback/ingredient-quality-feedback.service";
 import { createPermissionService } from "../src/modules/permission/permission.service";
-import { formatComplaintCode } from "../src/utils/complaint-code";
 import {
   validateFoodSample,
   validateSampleDisposal,
@@ -1719,7 +1718,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         select: { allocatedPortions: true },
       });
       assert.deepEqual(
-        revisedRows.map((row) => row.allocatedPortions),
+        revisedRows.map((row) => Number(row.allocatedPortions)),
         [10],
       );
       assert.equal(
@@ -6345,7 +6344,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
     );
     assert.equal(response.status, 200);
     const detail = record(record(response.body).data);
-    assert.match(String(detail.registrationID), /^FP-REG-[0-9]{5,}$/);
+    assert.match(String(detail.registrationID), /^FP-RG-[0-9]{5}$/);
     if (applicationCodes.has(id))
       assert.equal(detail.registrationID, applicationCodes.get(id));
     assert(!JSON.stringify(response.body).includes("registrationNumber"));
@@ -7173,7 +7172,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         assert.equal(data.accountStatus, "UNVERIFIED");
         const id = String(data.id);
         applicationIds.set(type, id);
-        assert.match(String(data.registrationID), /^FP-REG-[0-9]{5,}$/);
+        assert.match(String(data.registrationID), /^FP-RG-[0-9]{5}$/);
         applicationCodes.set(id, String(data.registrationID));
         const userAfter = await db.user.findUniqueOrThrow({
           where: { id: account.id },
@@ -9526,7 +9525,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             method: "POST",
             headers: headers(v1SupplierStaff.id),
             body: JSON.stringify({
-              expectedArrivalAt: "2026-11-20T06:30:00.000Z",
+              expectedArrivalAt: "2099-11-20T06:30:00.000Z",
               vehiclePlate: "29C-11111",
             }),
           },
@@ -9676,7 +9675,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             method: "POST",
             headers: headers(v1SupplierStaff.id),
             body: JSON.stringify({
-              expectedArrivalAt: "2026-11-20T08:00:00.000Z",
+              expectedArrivalAt: "2099-11-20T08:00:00.000Z",
               vehiclePlate: "29C-22222",
             }),
           },
@@ -9699,11 +9698,22 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
 
         const missingEntryIssue =
           "Chưa cấu hình danh mục nguyên liệu đang hoạt động của trường để tiếp nhận lô";
+        // Only the school's PRIMARY inspection role (kitchen staff by default)
+        // may confirm arrival; REQUIRED/OPTIONAL roles receive 403.
+        assert.equal(
+          (
+            await http.request(`/api/deliveries/${standaloneId}/arrival`, {
+              method: "POST",
+              headers: headers(deptUser.id),
+            })
+          ).status,
+          403,
+        );
         const standaloneArrival = await http.request(
           `/api/deliveries/${standaloneId}/arrival`,
           {
             method: "POST",
-            headers: headers(deptUser.id),
+            headers: headers(kitchenUser.id),
           },
         );
         assert.equal(standaloneArrival.status, 200);
@@ -10363,10 +10373,9 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       });
       const mkFeedback = async (title: string) =>
         db.$transaction(async (tx) => {
-          const seq = await iqfRepo.nextComplaintCodeSequence(tx);
           return tx.ingredientQualityFeedback.create({
             data: {
-              complaintCode: formatComplaintCode(seq),
+              complaintCode: await iqfRepo.allocateComplaintCode(tx),
               deliveryId: del1.id,
               submittedByUserId: raceSubmitter.id,
               title,
@@ -10849,10 +10858,9 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         });
         const mkFb = async (title: string) =>
           db.$transaction(async (tx) => {
-            const seq = await iqfRepo.nextComplaintCodeSequence(tx);
             return tx.ingredientQualityFeedback.create({
               data: {
-                complaintCode: formatComplaintCode(seq),
+                complaintCode: await iqfRepo.allocateComplaintCode(tx),
                 deliveryId: del1.id,
                 submittedByUserId: schoolSubmitter.id,
                 title,

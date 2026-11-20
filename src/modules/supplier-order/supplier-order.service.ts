@@ -8,7 +8,6 @@ import {
 } from "../blockchain-proof/blockchain-proof.service";
 import type { AuthPrincipal } from "../../types/auth";
 import { databaseOperation, loadPrincipal } from "../../utils/authorization";
-import { formatDeliveryCode } from "../../utils/delivery-code";
 import {
   getDeliveryStatusLabel,
   resolveSupplierDeliveryNextAction,
@@ -76,6 +75,8 @@ type Dependencies = {
   transaction?: <T>(
     fn: (tx: Prisma.TransactionClient) => Promise<T>,
   ) => Promise<T>;
+  /** Current time source; injectable so tests can pin "now" for dispatch ETA checks. */
+  now?: () => Date;
   guard?: Pick<ReturnType<typeof createIntakeAccessService>, "assertAccess"> &
     Partial<
       Pick<
@@ -153,6 +154,8 @@ function mapSupplierOrderSummary(
     supplierId: row.supplierId,
     supplyRequestId: row.supplyRequestId,
     requestNo: row.SupplyRequest?.requestNo ?? null,
+    orderType: row.SupplyRequest?.orderType ?? null,
+    batchNo: row.SupplyRequest?.batchNo ?? null,
     status: row.status,
     statusLabel: getDeliveryStatusLabel(row.status),
     expectedArrivalAt: row.expectedArrivalAt?.toISOString() ?? null,
@@ -477,6 +480,7 @@ export function createSupplierOrderService(
       }
     });
   const proofs = dependencies?.proofs ?? blockchainProofService;
+  const now = dependencies?.now ?? (() => new Date());
   const guard = dependencies?.guard ?? createIntakeAccessService();
   const fallbackGuard = dependencies?.guard?.assertDeliveryContinuation
     ? null
@@ -572,16 +576,10 @@ export function createSupplierOrderService(
     return facilityById;
   }
 
-  async function reserveNextDeliveryNo(
+  function reserveNextDeliveryNo(
     tx: Prisma.TransactionClient,
-    supplierId: string,
   ): Promise<string> {
-    await repository.lockSupplierForDeliveryNumber(tx, supplierId);
-    const highestSeq = await repository.findHighestCanonicalDeliverySequence(
-      tx,
-      supplierId,
-    );
-    return formatDeliveryCode(highestSeq + 1n);
+    return repository.allocateDeliveryNo(tx);
   }
 
   async function createFromRequest(
@@ -707,7 +705,7 @@ export function createSupplierOrderService(
       liveScope.supplierId,
       sourceFacilityIds,
     );
-    const deliveryNo = await reserveNextDeliveryNo(tx, liveScope.supplierId);
+    const deliveryNo = await reserveNextDeliveryNo(tx);
 
     const created = await repository.createDeliveryWithItems(tx, {
       deliveryNo,
@@ -849,7 +847,7 @@ export function createSupplierOrderService(
         expiryDate: item.expiryDate,
       })),
     );
-    const deliveryNo = await reserveNextDeliveryNo(tx, liveScope.supplierId);
+    const deliveryNo = await reserveNextDeliveryNo(tx);
 
     const created = await repository.createDeliveryWithItems(tx, {
       deliveryNo,
@@ -1248,6 +1246,13 @@ export function createSupplierOrderService(
           throw new HttpError(
             409,
             "Đơn giao hàng không ở trạng thái đang chuẩn bị để bắt đầu giao",
+          );
+        }
+        // Chỉ chặn ở lần bắt đầu giao đầu tiên; replay idempotent với cùng giờ đã lưu vẫn hợp lệ dù giờ đó đã qua.
+        if (expectedArrivalAt.getTime() <= now().getTime()) {
+          throw new HttpError(
+            422,
+            "Giờ dự kiến đến phải sau thời điểm hiện tại",
           );
         }
 

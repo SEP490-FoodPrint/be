@@ -10,13 +10,18 @@ import {
   mealAllocationService,
   type MealAllocationService,
 } from "./meal-allocation.service";
+import {
+  materialAllocationService,
+  type MaterialAllocationService,
+} from "./material-allocation.service";
 
 export function createMealAllocationRouter(
   service: MealAllocationService = mealAllocationService,
   authHandler: RequestHandler = authenticate,
+  materials: MaterialAllocationService = materialAllocationService,
 ) {
   const router = Router();
-  const controller = createMealAllocationController(service);
+  const controller = createMealAllocationController(service, materials);
   router.get(
     "/",
     authHandler,

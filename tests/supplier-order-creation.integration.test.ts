@@ -18,6 +18,14 @@ import {
   type OnboardingDocument,
 } from "../src/utils/onboarding-documents";
 import { createLifecycleTestDatabase } from "./helpers/account-lifecycle-database";
+import "./helpers/authorization";
+import { readBusinessCodeKey } from "../src/config/env";
+import {
+  businessCodeSuffix,
+  formatBusinessCode,
+} from "../src/utils/business-code";
+import { feistelDecrypt } from "../src/utils/feistel";
+import { supplierOrderRepository } from "../src/modules/supplier-order/supplier-order.repository";
 
 async function startHttp(app: Express) {
   const server = app.listen(0, "127.0.0.1");
@@ -167,6 +175,16 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       schoolId: schoolA.id,
     }),
   ]);
+  // Default tiers: kitchen PRIMARY, nutrition + ingredient management REQUIRED,
+  // parents OPTIONAL. Snapshot deliveries complete on the last REQUIRED approval,
+  // so ingredient management signs last to keep four signatures before RECEIVED.
+  const approvalOrder = [
+    inspectorUsers[0],
+    inspectorUsers[1],
+    inspectorUsers[3],
+    inspectorUsers[2],
+  ];
+  const finalApprover = inspectorUsers[2];
   const supplierAdminA = await createAccount(
     "INGREDIENT_SUPPLIER_ADMIN",
     "supa_admin",
@@ -677,22 +695,22 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   const committedB = resConcB.filter((r) => r.status === 201);
   assert.equal(committedA.length, 20);
   assert.equal(committedB.length, 20);
-  const expectedSeq = Array.from(
-    { length: 20 },
-    (_, i) => `FP-DE-${String(i + 1).padStart(5, "0")}`,
+  // Mã mới dùng bộ đếm DE toàn hệ thống với hậu tố Feistel: 40 lần tạo đồng thời của 2 nhà cung cấp
+  // cho 40 mã khác nhau, không phải FP-DE-00001..00020 lặp lại theo từng supplier.
+  const businessKey = readBusinessCodeKey();
+  const concurrentCodes = [...committedA, ...committedB].map(
+    (r) => unwrap<{ deliveryNo: string }>(r.body).deliveryNo,
   );
-  assert.deepEqual(
-    committedA
-      .map((r) => unwrap<{ deliveryNo: string }>(r.body).deliveryNo)
-      .sort(),
-    expectedSeq,
-  );
-  assert.deepEqual(
-    committedB
-      .map((r) => unwrap<{ deliveryNo: string }>(r.body).deliveryNo)
-      .sort(),
-    expectedSeq,
-  );
+  assert.equal(new Set(concurrentCodes).size, 40);
+  for (const code of concurrentCodes) {
+    assert.match(code, /^FP-DE-[0-9]{5}$/);
+    assert.notEqual(code, "FP-DE-00000");
+  }
+  const decodedSequences = concurrentCodes
+    .map((code) => feistelDecrypt(Number(code.slice(-5)), businessKey) + 1)
+    .sort((a, b) => a - b);
+  assert.equal(new Set(decodedSequences).size, 40);
+  assert(decodedSequences.every((sequence) => sequence >= 1 && sequence <= 41));
   const dbConcurrentItems = await db.deliveryItem.findMany({
     where: {
       Delivery: {
@@ -708,7 +726,18 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   assert.equal(dbConcurrentItems.length, 40);
   assert.equal(new Set(dbConcurrentItems.map((row) => row.qrToken)).size, 40);
 
-  // Legacy + FP-DE-99999 -> FP-DE-100000 boundary on Supplier B
+  // Mã cũ (tuần tự / định dạng khác) được giữ nguyên; mã mới trùng mã cũ bị bỏ qua.
+  const counterRow = await db.businessCodeCounter.findUniqueOrThrow({
+    where: { codeType: "DE" },
+  });
+  let collidingSequence = counterRow.lastSequence + 1;
+  while (businessCodeSuffix(collidingSequence, businessKey) === 0) {
+    collidingSequence++;
+  }
+  const collidingCode = formatBusinessCode(
+    "DE",
+    businessCodeSuffix(collidingSequence, businessKey),
+  );
   await db.delivery.create({
     data: {
       schoolId: schoolA.id,
@@ -724,13 +753,14 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   await db.delivery.create({
     data: {
       schoolId: schoolA.id,
-      supplierId: supplierB.id,
+      supplierId: supplierA.id,
       creationMode: "STANDALONE",
       creationKey: randomUUID(),
       creationFingerprint: "1".repeat(64),
-      deliveryNo: "FP-DE-99999",
+      // Mã cũ của nhà cung cấp A trùng đúng mã kế tiếp: nhà cung cấp B vẫn không được nhận mã này.
+      deliveryNo: collidingCode,
       status: "IN_TRANSIT",
-      createdByUserId: supplierAdminB.id,
+      createdByUserId: supplierAdminA.id,
     },
   });
   const boundaryRes = await apiRequest(
@@ -754,9 +784,38 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     },
   );
   assert.equal(boundaryRes.status, 201);
+  const skippedCode = unwrap<{ deliveryNo: string }>(
+    boundaryRes.body,
+  ).deliveryNo;
+  assert.match(skippedCode, /^FP-DE-[0-9]{5}$/);
+  assert.notEqual(skippedCode, collidingCode);
+  assert(
+    feistelDecrypt(Number(skippedCode.slice(-5)), businessKey) + 1 >
+      collidingSequence,
+  );
+
+  // Rollback sau khi đã cấp mã: bộ đếm rollback cùng transaction, lần cấp sau nhận lại đúng mã đó.
+  const rollbackMarker = new Error("delivery code rollback test");
+  let rolledBackCode = "";
+  await assert.rejects(
+    db.$transaction(async (tx) => {
+      rolledBackCode = await supplierOrderRepository.allocateDeliveryNo(tx);
+      throw rollbackMarker;
+    }),
+    (error: unknown) => error === rollbackMarker,
+  );
+  let reissuedCode = "";
+  await assert.rejects(
+    db.$transaction(async (tx) => {
+      reissuedCode = await supplierOrderRepository.allocateDeliveryNo(tx);
+      throw rollbackMarker;
+    }),
+    (error: unknown) => error === rollbackMarker,
+  );
+  assert.equal(reissuedCode, rolledBackCode);
   assert.equal(
-    unwrap<{ deliveryNo: string }>(boundaryRes.body).deliveryNo,
-    "FP-DE-100000",
+    await db.delivery.count({ where: { deliveryNo: rolledBackCode } }),
+    0,
   );
 
   // 3. REQUEST v1 creation moves ACCEPTED -> IN_PROGRESS + canonical replay/conflict + render 503 retry + 2-actor race
@@ -815,7 +874,8 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   assert.equal(createdReq.nextAction, "ENTER_SHIPPING");
   assert.equal(createdReq.expectedArrivalAt, null);
   assert.equal(createdReq.vehiclePlate, null);
-  assert.equal(createdReq.deliveryNo, "FP-DE-00021");
+  assert.match(createdReq.deliveryNo, /^FP-DE-[0-9]{5}$/);
+  assert(![...concurrentCodes, skippedCode].includes(createdReq.deliveryNo));
   assert.equal(createdReq.items[0].ingredientEntryId, riceEntry.id);
   assert.equal(createdReq.items[0].actualQuantity, "15.5");
   assert.deepEqual(createdReq.items[0].sourceFacility, {
@@ -838,7 +898,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     (
       await apiRequest(
         `/api/deliveries/${createdReq.id}/arrival`,
-        inspectorUsers[0].id,
+        inspectorUsers[1].id,
         { method: "POST" },
       )
     ).status,
@@ -913,7 +973,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     {
       method: "POST",
       body: {
-        expectedArrivalAt: "2026-11-16T08:00:00+07:00",
+        expectedArrivalAt: "2099-11-16T08:00:00+07:00",
         vehiclePlate: "29A-11111",
       },
     },
@@ -930,7 +990,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   assert.equal(dispatchedReq.status, "IN_TRANSIT");
   assert.equal(dispatchedReq.statusLabel, "Đang giao hàng");
   assert.equal(dispatchedReq.nextAction, "TRACK_DELIVERY");
-  assert.equal(dispatchedReq.expectedArrivalAt, "2026-11-16T01:00:00.000Z");
+  assert.equal(dispatchedReq.expectedArrivalAt, "2099-11-16T01:00:00.000Z");
   assert.equal(dispatchedReq.vehiclePlate, "29A-11111");
 
   const dispatchReplayRes = await apiRequest(
@@ -939,7 +999,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     {
       method: "POST",
       body: {
-        expectedArrivalAt: "2026-11-16T01:00:00Z",
+        expectedArrivalAt: "2099-11-16T01:00:00Z",
         vehiclePlate: "  29A-11111  ",
       },
     },
@@ -957,7 +1017,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
         {
           method: "POST",
           body: {
-            expectedArrivalAt: "2026-11-16T01:00:00Z",
+            expectedArrivalAt: "2099-11-16T01:00:00Z",
             vehiclePlate: "29A-99999",
           },
         },
@@ -1397,7 +1457,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     (
       await apiRequest(
         `/api/deliveries/${standaloneOrder.id}/arrival`,
-        inspectorUsers[0].id,
+        inspectorUsers[1].id,
         { method: "POST" },
       )
     ).status,
@@ -1443,7 +1503,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     {
       method: "POST",
       body: {
-        expectedArrivalAt: "2026-11-16T08:00:00+07:00",
+        expectedArrivalAt: "2099-11-16T08:00:00+07:00",
         vehiclePlate: "29C-77777",
       },
     },
@@ -1469,7 +1529,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   // School arrival succeeds + idempotent replay preserves arrivedAt
   const arrivalRes = await apiRequest(
     `/api/deliveries/${standaloneOrder.id}/arrival`,
-    inspectorUsers[0].id,
+    inspectorUsers[1].id,
     { method: "POST" },
   );
   assert.equal(arrivalRes.status, 200);
@@ -1525,7 +1585,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       status: "ACTIVE",
     },
   });
-  for (const user of inspectorUsers.slice(0, 3)) {
+  for (const user of approvalOrder.slice(0, 3)) {
     const approveRes = await apiRequest(
       `/api/deliveries/${standaloneOrder.id}/inspection`,
       user.id,
@@ -1536,7 +1596,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   assert.equal(uploadedPhotos.size, 3);
   const finalApprove = await apiRequest(
     `/api/deliveries/${standaloneOrder.id}/inspection`,
-    inspectorUsers[3].id,
+    finalApprover.id,
     { method: "POST", body: inspectionForm("APPROVE") },
   );
   assert.equal(finalApprove.status, 200, JSON.stringify(finalApprove.body));
@@ -1656,7 +1716,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   // 5. REJECT -> manual STANDALONE creates fresh deliveryNo/QR/approvals and completes independently
   const rejectedReqRes = await apiRequest(
     `/api/deliveries/${createdReq.id}/arrival`,
-    inspectorUsers[0].id,
+    inspectorUsers[1].id,
     { method: "POST" },
   );
   assert.equal(rejectedReqRes.status, 200);
@@ -1712,7 +1772,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
         {
           method: "POST",
           body: {
-            expectedArrivalAt: "2026-11-17T08:00:00+07:00",
+            expectedArrivalAt: "2099-11-17T08:00:00+07:00",
             vehiclePlate: "29C-66666",
           },
         },
@@ -1725,13 +1785,13 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     (
       await apiRequest(
         `/api/deliveries/${replacement.id}/arrival`,
-        inspectorUsers[0].id,
+        inspectorUsers[1].id,
         { method: "POST" },
       )
     ).status,
     200,
   );
-  for (const user of inspectorUsers) {
+  for (const user of approvalOrder) {
     assert.equal(
       (
         await apiRequest(
@@ -1778,7 +1838,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       {
         method: "POST",
         body: {
-          expectedArrivalAt: "2026-11-18T08:00:00+07:00",
+          expectedArrivalAt: "2099-11-18T08:00:00+07:00",
           vehiclePlate: "29A-77701",
         },
       },
@@ -1789,7 +1849,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       {
         method: "POST",
         body: {
-          expectedArrivalAt: "2026-11-18T01:00:00Z",
+          expectedArrivalAt: "2099-11-18T01:00:00Z",
           vehiclePlate: "  29A-77701 ",
         },
       },
@@ -1833,7 +1893,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       {
         method: "POST",
         body: {
-          expectedArrivalAt: "2026-11-18T08:00:00+07:00",
+          expectedArrivalAt: "2099-11-18T08:00:00+07:00",
           vehiclePlate: "29A-77702",
         },
       },
@@ -1844,7 +1904,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       {
         method: "POST",
         body: {
-          expectedArrivalAt: "2026-11-18T08:00:00+07:00",
+          expectedArrivalAt: "2099-11-18T08:00:00+07:00",
           vehiclePlate: "29A-77703",
         },
       },
@@ -1908,7 +1968,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     {
       method: "POST",
       body: {
-        expectedArrivalAt: "2026-11-18T08:00:00+07:00",
+        expectedArrivalAt: "2099-11-18T08:00:00+07:00",
         vehiclePlate: "29A-77704",
       },
     },
@@ -1922,7 +1982,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     {
       method: "POST",
       body: {
-        expectedArrivalAt: "2026-11-17T08:00:00+07:00",
+        expectedArrivalAt: "2099-11-17T08:00:00+07:00",
         vehiclePlate: "29C-66666",
       },
     },
@@ -1944,7 +2004,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
         {
           method: "POST",
           body: {
-            expectedArrivalAt: "2026-11-17T09:00:00+07:00",
+            expectedArrivalAt: "2099-11-17T09:00:00+07:00",
             vehiclePlate: "29C-64002",
           },
         },
@@ -1956,13 +2016,13 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     (
       await apiRequest(
         `/api/deliveries/${multiStandalone.id}/arrival`,
-        inspectorUsers[0].id,
+        inspectorUsers[1].id,
         { method: "POST" },
       )
     ).status,
     200,
   );
-  for (const user of inspectorUsers.slice(0, 3)) {
+  for (const user of approvalOrder.slice(0, 3)) {
     assert.equal(
       (
         await apiRequest(
@@ -1977,7 +2037,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   const [concApprove1, concApprove2] = await Promise.all([
     apiRequest(
       `/api/deliveries/${multiStandalone.id}/inspection`,
-      inspectorUsers[3].id,
+      finalApprover.id,
       {
         method: "POST",
         body: inspectionForm("APPROVE"),
@@ -1985,7 +2045,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     ),
     apiRequest(
       `/api/deliveries/${multiStandalone.id}/inspection`,
-      inspectorUsers[3].id,
+      finalApprover.id,
       {
         method: "POST",
         body: inspectionForm("APPROVE"),
@@ -2088,7 +2148,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
         {
           method: "POST",
           body: {
-            expectedArrivalAt: "2026-11-22T07:00:00+07:00",
+            expectedArrivalAt: "2099-11-22T07:00:00+07:00",
             vehiclePlate: "29C-64003",
           },
         },
@@ -2100,7 +2160,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     (
       await apiRequest(
         `/api/deliveries/${splitOrder.id}/arrival`,
-        inspectorUsers[0].id,
+        inspectorUsers[1].id,
         { method: "POST" },
       )
     ).status,
@@ -2114,7 +2174,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   const splitDetailBody = unwrap<Record<string, unknown>>(splitDetailRes.body);
   assert.equal("workflowVersion" in splitDetailBody, false);
 
-  for (const user of inspectorUsers.slice(0, 3)) {
+  for (const user of approvalOrder.slice(0, 3)) {
     assert.equal(
       (
         await apiRequest(
@@ -2129,7 +2189,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   const [splitFinal1, splitFinal2] = await Promise.all([
     apiRequest(
       `/api/deliveries/${splitOrder.id}/inspection`,
-      inspectorUsers[3].id,
+      finalApprover.id,
       {
         method: "POST",
         body: inspectionForm("APPROVE"),
@@ -2137,7 +2197,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     ),
     apiRequest(
       `/api/deliveries/${splitOrder.id}/inspection`,
-      inspectorUsers[3].id,
+      finalApprover.id,
       {
         method: "POST",
         body: inspectionForm("APPROVE"),
@@ -2273,8 +2333,8 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
         traceabilityVersion,
         deliveryNo: seqNo,
         status: "ARRIVED",
-        expectedArrivalAt: new Date("2026-11-23T06:00:00.000Z"),
-        arrivedAt: new Date("2026-11-23T06:15:00.000Z"),
+        expectedArrivalAt: new Date("2099-11-23T06:00:00.000Z"),
+        arrivedAt: new Date("2099-11-23T06:15:00.000Z"),
         vehiclePlate: "29C-64999",
         createdByUserId: supplierAdminA.id,
         deliveryItems: {
@@ -2570,7 +2630,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
         {
           method: "POST",
           body: {
-            expectedArrivalAt: "2026-11-24T07:00:00+07:00",
+            expectedArrivalAt: "2099-11-24T07:00:00+07:00",
             vehiclePlate: "29C-CAPRCV",
           },
         },
@@ -2582,13 +2642,13 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     (
       await apiRequest(
         `/api/deliveries/${capReceived.id}/arrival`,
-        inspectorUsers[0].id,
+        inspectorUsers[1].id,
         { method: "POST" },
       )
     ).status,
     200,
   );
-  for (const user of inspectorUsers) {
+  for (const user of approvalOrder) {
     assert.equal(
       (
         await apiRequest(
@@ -2621,9 +2681,9 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
         traceabilityVersion: null,
         deliveryNo: `LEG-CAP-${String(capDeliverySeq++)}`,
         status,
-        expectedArrivalAt: plate ? new Date("2026-11-24T08:00:00.000Z") : null,
+        expectedArrivalAt: plate ? new Date("2099-11-24T08:00:00.000Z") : null,
         arrivedAt:
-          status === "ARRIVED" ? new Date("2026-11-24T08:15:00.000Z") : null,
+          status === "ARRIVED" ? new Date("2099-11-24T08:15:00.000Z") : null,
         vehiclePlate: plate,
         createdByUserId: supplierAdminA.id,
         deliveryItems: {
@@ -3095,7 +3155,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
         {
           method: "POST",
           body: {
-            expectedArrivalAt: "2026-11-26T08:00:00+07:00",
+            expectedArrivalAt: "2099-11-26T08:00:00+07:00",
             vehiclePlate: "29C-88864",
           },
         },
@@ -3156,7 +3216,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       creationFingerprint: "a".repeat(64),
       deliveryNo: "FP-DE-90999",
       status: "IN_TRANSIT",
-      expectedArrivalAt: new Date("2026-11-26T08:00:00.000Z"),
+      expectedArrivalAt: new Date("2099-11-26T08:00:00.000Z"),
       vehiclePlate: "29C-V1OLD",
       traceabilityVersion: 1,
       workflowVersion: null,
@@ -3230,7 +3290,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     {
       method: "POST",
       body: {
-        expectedArrivalAt: "2026-11-16T08:00:00+07:00",
+        expectedArrivalAt: "2099-11-16T08:00:00+07:00",
         vehiclePlate: "29A-11111",
       },
     },

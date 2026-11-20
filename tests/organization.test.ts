@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { Prisma, PrismaClient } from "../src/generated/prisma/client";
 import type { AuthPrincipal } from "../src/types/auth";
 import {
   validateOrganizationListQuery,
   validatePublicDailyMenuQuery,
+  validatePublicSchoolGradesQuery,
   validatePublicSchoolQuery,
   validatePublicWeeklyMenuQuery,
   validateSchoolCode,
@@ -184,6 +186,23 @@ void test("organization service maps school rows correctly and respects paginati
           updatedAt: dummyDate,
         },
       ]),
+    listDirectory: () =>
+      Promise.resolve({
+        items: [
+          {
+            id: dummySchool.id,
+            name: dummySchool.name,
+            code: dummySchool.code,
+            email: dummySchool.email,
+            phone: dummySchool.phone,
+            address: dummySchool.address,
+            status: dummySchool.status,
+            createdAt: dummyDate,
+            updatedAt: dummyDate,
+          },
+        ],
+        total: 1,
+      }),
     findPublicSchools: () =>
       Promise.resolve({ items: [dummySchool], total: 1 }),
     findPublicSchoolByCode: (code) =>
@@ -209,11 +228,18 @@ void test("organization service maps school rows correctly and respects paginati
     findAvailableWeeklyMenuWeeks: () => Promise.resolve([]),
     findCurrentAcademicYear: () => Promise.resolve(null),
     findApprovedWeekStartDates: () => Promise.resolve([]),
-    findWeekGrades: () => Promise.resolve([]),
-    findPortionGroupsRaw: () => Promise.resolve([]),
+    findDeliveryInspectionRoles: () => Promise.resolve([]),
+    findRoleIdsByCodes: () => Promise.resolve([]),
+    replaceDeliveryInspectionRoles: () => Promise.resolve([]),
   };
 
-  const service = createOrganizationService(mockRepo);
+  const mockClient = {
+    $transaction: <T>(op: (tx: unknown) => Promise<T>) => op({}),
+  } as unknown as PrismaClient;
+
+  const service = createOrganizationService(mockRepo, () =>
+    Promise.resolve(mockClient),
+  );
 
   // 1. getAll admin
   const adminList = await service.getAll({ page: 1, limit: 10 }, testAdmin);
@@ -234,4 +260,207 @@ void test("organization service maps school rows correctly and respects paginati
 
   const notFound = await service.getPublicSchoolByCode("NOT-EXIST");
   assert.equal(notFound, null);
+});
+
+void test("public school grades flag hasMenu from school-wide and grade menus", async () => {
+  const grades = [
+    { id: "g1", name: "Khối 1" },
+    { id: "g2", name: "Khối 2" },
+  ];
+  const makeService = (coverage: {
+    hasSchoolWideMenu: boolean;
+    gradeIds: string[];
+  }) => {
+    let requestedMonday: Date | undefined;
+    const repo = {
+      findSchoolForMenu: () => Promise.resolve({ id: "school-1" }),
+      findSchoolGrades: () => Promise.resolve(grades),
+      findWeekMenuCoverage: (_schoolId: string, weekMonday: Date) => {
+        requestedMonday = weekMonday;
+        return Promise.resolve(coverage);
+      },
+    } as unknown as OrganizationRepository;
+    return {
+      service: createOrganizationService(repo),
+      monday: () => requestedMonday?.toISOString().slice(0, 10),
+    };
+  };
+
+  const schoolWide = makeService({ hasSchoolWideMenu: true, gradeIds: [] });
+  const all = await schoolWide.service.getPublicSchoolGrades("SCH", {
+    week: "2026-11-19",
+  });
+  assert.deepEqual(
+    all.map((g) => g.hasMenu),
+    [true, true],
+  );
+  assert.equal(schoolWide.monday(), "2026-11-16");
+
+  const gradeOnly = makeService({ hasSchoolWideMenu: false, gradeIds: ["g2"] });
+  const partial = await gradeOnly.service.getPublicSchoolGrades("SCH", {});
+  assert.deepEqual(
+    partial.map((g) => [g.id, g.hasMenu]),
+    [
+      ["g1", false],
+      ["g2", true],
+    ],
+  );
+});
+
+void test("public school grades query validates week format", () => {
+  assert.deepEqual(validatePublicSchoolGradesQuery({ week: "2026-11-16" }), {
+    week: "2026-11-16",
+  });
+  assert.throws(
+    () => validatePublicSchoolGradesQuery({ week: "16/11/2026" }),
+    OrganizationValidationError,
+  );
+  assert.throws(
+    () => validatePublicSchoolGradesQuery({ grade: "x" }),
+    OrganizationValidationError,
+  );
+});
+
+void test("public daily menu resolves per-grade portions, ingredients and allergy substitutes", async () => {
+  const dec = (v: string) => new Prisma.Decimal(v);
+  const ing = (id: string, name: string) => ({
+    id,
+    name,
+    defaultUnit: "g",
+    ingredientCategory: { categoryName: "Thịt" },
+    Supplier: { name: "NCC A" },
+  });
+  const dish = (
+    id: string,
+    name: string,
+    opts: {
+      standard?: [string, string, string, string][];
+      grade?: Record<string, [string, string, string, string][]>;
+      menu?: [string, string, string][];
+    } = {},
+  ) => ({
+    menuDayId: "day-1",
+    dishId: id,
+    mealType: "LUNCH",
+    portionSize: null,
+    portionUnit: null,
+    displayOrder: Number(id.slice(-1)),
+    Dish: {
+      id,
+      name,
+      description: null,
+      status: "ACTIVE",
+      category: "MAIN_DISH",
+      schoolCategory: null,
+      dishIngredientEntries: (opts.standard ?? []).map(([iid, n, q, role]) => ({
+        ingredientEntryId: `e-${iid}`,
+        ingredientRole: role,
+        requiredQuantity: dec(q),
+        unit: "g",
+        IngredientEntry: { Ingredient: ing(iid, n) },
+      })),
+      gradeRecipes: Object.entries(opts.grade ?? {}).map(
+        ([gradeId, lines]) => ({
+          gradeId,
+          lines: lines.map(([iid, n, q, role]) => ({
+            ingredientEntryId: `e-${iid}`,
+            ingredientRole: role,
+            requiredQuantity: dec(q),
+            unit: "g",
+            entry: { Ingredient: ing(iid, n) },
+          })),
+        }),
+      ),
+    },
+    ingredients: (opts.menu ?? []).map(([iid, n, q]) => ({
+      ingredientId: iid,
+      quantityPerPortion: dec(q),
+      unit: "kg",
+      ingredient: ing(iid, n),
+    })),
+  });
+
+  const menuDay = {
+    id: "day-1",
+    menuDate: new Date("2026-11-16T00:00:00.000Z"),
+    note: null,
+    WeeklyMenu: {
+      id: "wm",
+      title: "T",
+      weekStartDate: new Date(),
+      isSchoolWide: true,
+    },
+    menuDayDishes: [
+      dish("d1", "Thịt kho", {
+        standard: [
+          ["i1", "Thịt heo", "60", "MAIN"],
+          ["i9", "Muối", "1", "SEASONING"],
+        ],
+        grade: { g2: [["i1", "Thịt heo", "80", "MAIN"]] },
+        menu: [["i1", "Thịt heo", "0.07"]],
+      }),
+      dish("d2", "Canh rau", { standard: [["i2", "Rau ngót", "40", "MAIN"]] }),
+      dish("d3", "Đậu sốt cà", { standard: [["i3", "Đậu phụ", "70", "MAIN"]] }),
+    ],
+    portionGroups: [
+      {
+        id: "pg-std",
+        name: "Tiêu chuẩn",
+        isDefault: true,
+        mealType: "LUNCH",
+        dishes: [{ dishId: "d1" }, { dishId: "d2" }],
+      },
+      {
+        id: "pg-alg",
+        name: "Dị ứng thịt",
+        isDefault: false,
+        mealType: "LUNCH",
+        dishes: [{ dishId: "d2" }, { dishId: "d3" }],
+      },
+    ],
+  };
+
+  const repo = {
+    findSchoolForMenu: () =>
+      Promise.resolve({
+        id: "school-1",
+        lunchTime: null,
+        afternoonMealTime: null,
+        coverImageUrl: null,
+      }),
+    findMenuDayForDailyMenu: () => Promise.resolve(menuDay),
+    findLatestApprovedMenuDay: () => Promise.resolve(null),
+  } as unknown as OrganizationRepository;
+  const service = createOrganizationService(repo);
+
+  // Khối có định lượng riêng -> dùng định lượng khối
+  const g2 = await service.getPublicDailyMenu("SCH", {
+    date: "2026-11-16",
+    grade: "g2",
+  });
+  const mainG2 = g2!.lunch.dishes.find((d) => d.id === "d1")!;
+  assert.equal(mainG2.recipeSource, "GRADE");
+  assert.equal(mainG2.portion, "80 g");
+  assert.equal(mainG2.ingredients![0].portion, "80 g");
+  assert.equal(mainG2.ingredients![0].supplierName, "NCC A");
+
+  // Khối không có định lượng riêng -> dùng nguyên liệu đã chốt trong thực đơn
+  const g1 = await service.getPublicDailyMenu("SCH", {
+    date: "2026-11-16",
+    grade: "g1",
+  });
+  const mainG1 = g1!.lunch.dishes.find((d) => d.id === "d1")!;
+  assert.equal(mainG1.recipeSource, "MENU");
+  assert.equal(mainG1.portion, "70 g");
+
+  // Món chỉ thuộc nhóm dị ứng là món thay thế, không nằm ở cột chính
+  assert.deepEqual(
+    g1!.lunch.dishes.map((d) => d.id),
+    ["d1", "d2"],
+  );
+  assert.equal(mainG1.alternativeDish?.id, "d3");
+  assert.equal(mainG1.alternativeDish?.allergyGroup, "Dị ứng thịt");
+  assert.equal(mainG1.alternativeDish?.portion, "70 g");
+  assert.equal(g1!.lunch.dishes[1].alternativeDish, null);
+  assert.equal(g1!.lunch.dishes[1].recipeSource, "STANDARD");
 });

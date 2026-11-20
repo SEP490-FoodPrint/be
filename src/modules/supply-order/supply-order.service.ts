@@ -37,6 +37,7 @@ import type {
   SupplierOrderListResponseDTO,
   SupplierOrderDetailResponseDTO,
   SupplyOrderProgressResponseDTO,
+  OrderTypeValue,
 } from "./supply-order.response.dto";
 
 type Dependencies = {
@@ -103,6 +104,23 @@ function mapSupplierOrderProgress(
     }),
   };
 }
+function mapOrderTypeBatch(row: {
+  orderType: OrderTypeValue | null;
+  batchNo: number | null;
+}) {
+  return {
+    orderType: row.orderType,
+    orderTypeLabel:
+      row.orderType === "DRY_STOCK"
+        ? "Đồ khô"
+        : row.orderType === "DIRECT_USE"
+          ? "Đồ tươi"
+          : null,
+    batchNo: row.batchNo,
+    batchLabel:
+      row.batchNo === 1 ? "Đợt 1" : row.batchNo === 2 ? "Đợt 2" : null,
+  };
+}
 function mapSupplierList(
   order: SupplierOrderListRow,
   principal: AuthPrincipal,
@@ -114,6 +132,7 @@ function mapSupplierList(
     supplierId: order.supplierId,
     schoolName: order.School.name,
     status: order.status,
+    ...mapOrderTypeBatch(order),
     orderProgress: mapSupplierOrderProgress(order, principal),
     requestedDeliveryDate:
       order.requestedDeliveryDate?.toISOString().slice(0, 10) ?? null,
@@ -167,6 +186,7 @@ export function createSupplyOrderService(
             schoolId: row.schoolId,
             supplierId: row.supplierId,
             status: row.status,
+            ...mapOrderTypeBatch(row),
             acceptedAt: row.acceptedAt?.toISOString() ?? null,
             createdAt: row.createdAt.toISOString(),
             updatedAt: row.updatedAt.toISOString(),
@@ -200,6 +220,7 @@ export function createSupplyOrderService(
           schoolId: row.schoolId,
           supplierId: row.supplierId,
           status: row.status,
+          ...mapOrderTypeBatch(row),
           acceptedAt: row.acceptedAt?.toISOString() ?? null,
           createdAt: row.createdAt.toISOString(),
           updatedAt: row.updatedAt.toISOString(),

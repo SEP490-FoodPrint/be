@@ -1,7 +1,8 @@
 import type { AuthPrincipal } from "./auth";
 
 interface RegistrationState {
-  registrationNumber: bigint;
+  /** Mã hồ sơ đã lưu: FP-REG-… (cũ) hoặc FP-RG-NNNNN. */
+  code: string;
   id: string;
   status: "PENDING" | "APPROVED" | "REJECTED";
   submittedAt: Date;

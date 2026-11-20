@@ -1,6 +1,10 @@
 import { Prisma } from "../generated/prisma/client";
 
 /**
+ * Chỉ dùng cho mã lô đánh số tuần tự LO/CB/BG/SU (ngoài phạm vi nguyên tắc VII).
+ * Mã nghiệp vụ của các danh sách (hồ sơ, chuyến giao, khiếu nại, sự cố...) dùng `business-code.ts`
+ * với hậu tố mã hóa Feistel; không thêm loại mã danh sách mới vào đây.
+ *
  * Mã định danh thống nhất của hệ thống: FP-<2 chữ viết tắt tính năng>-<số thứ tự 5 chữ số>.
  * Đánh số toàn hệ thống, tăng dần theo từng loại mã. Mã chuyến giao (FP-DE), phản hồi chất lượng
  * (FP-CP) và cơ sở nguồn cung (FP-SF) có bộ sinh riêng từ trước.
