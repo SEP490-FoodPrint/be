@@ -1717,7 +1717,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         select: { allocatedPortions: true },
       });
       assert.deepEqual(
-        revisedRows.map((row) => row.allocatedPortions),
+        revisedRows.map((row) => Number(row.allocatedPortions)),
         [10],
       );
       assert.equal(
