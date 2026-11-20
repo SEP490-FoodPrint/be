@@ -184,7 +184,7 @@ School xem supplier qua quan hệ ACTIVE/SUSPENDED; ingredient qua IngredientEnt
 ## API phân bổ suất ăn hôm nay
 
 - `GET /api/meal-allocations` yêu cầu `meal_allocation.view` trong phạm vi trường. Trả trạng thái nấu, lưu mẫu, dữ liệu lô và phiên bản phân bổ.
-- `PUT /api/meal-allocations` yêu cầu `meal_allocation.update`, và `meal_allocation.create` khi tạo hồ sơ lớp. BE kiểm lại điều kiện của cả ngày và ghi nguyên tử.
+- `PUT /api/meal-allocations` yêu cầu `meal_allocation.update`, và `meal_allocation.create` khi tạo hồ sơ lớp. BE kiểm lại điều kiện của bữa được chọn qua mealType LUNCH/AFTERNOON và ghi nguyên tử; thiếu mealType giữ phạm vi cả ngày. GET nhận mealType trong query, PUT nhận trong body. Response có mealType null cho cả ngày, revision ràng buộc phạm vi.
 - `POST /api/meal-allocations/confirm-distribution` yêu cầu vai trò `SCHOOL_KITCHEN_STAFF` và quyền hiệu lực `meal_allocation.update`. Xác nhận toàn bộ phân bổ đủ điều kiện trong ngày của trường từ phiên đăng nhập. Yêu cầu `revision` để kiểm tra phiên bản dữ liệu trước khi ghi.
 - Dùng ngày ăn hiện tại theo giờ Việt Nam. Hợp đồng này thay các route đọc chi tiết, tạo tự động, xác nhận phân phối và alias v1 của module.
 
@@ -487,3 +487,5 @@ Module `organization` và `delivery` hỗ trợ cấu hình phân nhóm duyệt 
 Khi xe đến, snapshot cấu hình nhóm duyệt được lưu bất biến vào bảng `delivery_inspection_roles`. Mọi cập nhật cấu hình của Ban Giám hiệu sau thời điểm đó chỉ áp dụng cho các đợt xe đến mới.
 
 Điểm chấp nhận ghi phản hồi thực hiện trong transaction `Serializable`: đọc lại actor trực tiếp qua `identitySelect` -> khóa `school -> supplier -> actor user -> actor role (FOR SHARE) -> permission rows (view_details/respond FOR SHARE theo id) -> delivery -> complaint` -> kiểm lại actor (cùng `roleId`/`role`/`orgType`/`supplierId` và đủ cả hai quyền), trạng thái `SUBMITTED` và update có điều kiện. Thu hồi quyền, khóa user hoặc thay role grant hoàn tất trước điểm khóa khiến transaction retry đọc snapshot mới và từ chối `403`. `SCHOOL`, `SYSTEM`, `AUTHORITY` và supplier thiếu một trong hai quyền đều nhận `403` trên POST; mọi UUID ngoài phạm vi/không tồn tại trả cùng `404`. Producer HTTP/service tạo khiếu nại cho Ban Giám hiệu và default grants tương ứng nằm ngoài phạm vi và chưa được thêm vào repo. Chi tiết: [ingredient-quality-feedback-api.md](../specs/supplier-complaint-response/contracts/ingredient-quality-feedback-api.md).
+
+Phân bổ theo nguyên liệu dùng GET /api/meal-allocations?mealType (meal_allocation.view) tự lập phương án cho bữa chưa phân bổ và PUT /api/meal-allocations (meal_allocation.update, thêm create khi cần) để lưu. Không có endpoint tính riêng. Phạm vi trường từ principal, bữa từ validation, áp dụng yêu cầu revision/planId. Chi tiết tại specs/meal-allocation-materials/contracts/material-plan.md.
