@@ -9524,7 +9524,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             method: "POST",
             headers: headers(v1SupplierStaff.id),
             body: JSON.stringify({
-              expectedArrivalAt: "2026-11-20T06:30:00.000Z",
+              expectedArrivalAt: "2099-11-20T06:30:00.000Z",
               vehiclePlate: "29C-11111",
             }),
           },
@@ -9674,7 +9674,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             method: "POST",
             headers: headers(v1SupplierStaff.id),
             body: JSON.stringify({
-              expectedArrivalAt: "2026-11-20T08:00:00.000Z",
+              expectedArrivalAt: "2099-11-20T08:00:00.000Z",
               vehiclePlate: "29C-22222",
             }),
           },
