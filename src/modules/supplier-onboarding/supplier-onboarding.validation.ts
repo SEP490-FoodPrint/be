@@ -178,6 +178,15 @@ export const orderDraftSchema = z
     supplierId: requestUuidSchema,
     requestNo: requiredText(80),
     requestedDeliveryDate: orderDate,
+    orderType: z.enum(["DIRECT_USE", "DRY_STOCK"], {
+      error: "Loại đơn không hợp lệ",
+    }),
+    batchNo: z
+      .union([z.literal(1), z.literal(2)], {
+        error: "Đợt giao phải là 1 hoặc 2",
+      })
+      .nullable()
+      .optional(),
     note: z.string().max(500).optional(),
     items: z
       .array(orderItemSchema, { error: "Đơn phải có danh sách nguyên liệu" })
@@ -185,6 +194,18 @@ export const orderDraftSchema = z
       .max(100, { error: "Đơn phải có từ 1 đến 100 dòng nguyên liệu" }),
   })
   .superRefine((value, ctx) => {
+    if (value.orderType === "DIRECT_USE" && value.batchNo == null)
+      ctx.addIssue({
+        code: "custom",
+        path: ["batchNo"],
+        message: "Đơn đồ tươi phải chọn Đợt 1 hoặc Đợt 2",
+      });
+    if (value.orderType === "DRY_STOCK" && value.batchNo != null)
+      ctx.addIssue({
+        code: "custom",
+        path: ["batchNo"],
+        message: "Đơn đồ khô không có đợt giao",
+      });
     if (
       new Set(value.items.map((item) => item.ingredientEntryId)).size !==
       value.items.length
@@ -196,8 +217,9 @@ export const orderDraftSchema = z
       });
     }
   })
-  .transform(({ requestedDeliveryDate, ...value }) => ({
+  .transform(({ requestedDeliveryDate, batchNo, ...value }) => ({
     ...value,
+    batchNo: value.orderType === "DRY_STOCK" ? null : (batchNo ?? null),
     deliveryDate: new Date(`${requestedDeliveryDate}T00:00:00.000Z`),
   }));
 export const orderSendParamsSchema = z.strictObject({ id: requestUuidSchema });

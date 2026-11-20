@@ -1,0 +1,8 @@
+- [x] T001 Prisma schema + migration 1 + script báo cáo
+- [x] T002 supplier-onboarding validation/service/repository/DTO
+- [x] T003 supply-order đọc + filter + nhãn
+- [x] T004 delivery + supplier-order trả orderType/batchNo, isDryDelivery
+- [x] T005 Test T1–T8, cập nhật test cũ
+- [x] T006 docs/AUTHORIZATION.md
+- [ ] T007 T9 migration test (cần cho phép DB local tạm)
+- [ ] T008 Migration 2 (NOT NULL + CHECK chặt) sau khi báo cáo rỗng

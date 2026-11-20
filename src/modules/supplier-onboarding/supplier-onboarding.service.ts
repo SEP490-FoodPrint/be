@@ -1073,7 +1073,15 @@ export function createOrderIntakeService(
           );
         // Đợt 2 (mã đuôi -D2 / -D2-n) tính theo sĩ số thực tế: mọi lớp có đăng ký suất ăn phải chốt
         // điểm danh bữa trưa của ngày giao trước khi được tạo yêu cầu nhập hàng.
-        if (/-D2(-\d+)?$/.test(body.requestNo)) {
+        const mismatched = entries.find(
+          (entry) => entry.handlingType !== body.orderType,
+        );
+        if (mismatched)
+          throw new HttpError(
+            400,
+            `Nguyên liệu ${mismatched.Ingredient.name} không thuộc loại ${body.orderType === "DRY_STOCK" ? "Đồ khô" : "Đồ tươi"} của đơn`,
+          );
+        if (body.orderType === "DIRECT_USE" && body.batchNo === 2) {
           const notFinalized = await tx.class.findMany({
             where: {
               schoolId,
@@ -1104,6 +1112,8 @@ export function createOrderIntakeService(
           createdByUserId: actor.id,
           requestNo: body.requestNo,
           deliveryDate: body.deliveryDate,
+          orderType: body.orderType,
+          batchNo: body.batchNo,
           note: body.note,
           items: body.items.map((item) => ({
             ...item,
@@ -1115,6 +1125,8 @@ export function createOrderIntakeService(
           id: result.id,
           status: result.status,
           requestNo: result.requestNo,
+          orderType: result.orderType ?? body.orderType,
+          batchNo: (result.batchNo ?? null) as 1 | 2 | null,
         };
       },
       "supply_request.create",

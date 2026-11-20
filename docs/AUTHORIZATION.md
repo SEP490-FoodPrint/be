@@ -339,12 +339,12 @@ Hai API `POST /api/ingredients/management/upload-image` và `POST /api/ingredien
 
 Màn dùng chung cho `SCHOOL_NUTRITION_OFFICER`, `SCHOOL_KITCHEN_STAFF`, `INGREDIENT_MANAGEMENT_DEPARTMENT`, `PARENTS_COMMITTEE`. Ngoài role hợp lệ, cần quyền hiệu lực trong trường hiện tại; không dùng role/school/user do client gửi.
 
-| Method | Endpoint                         | Quyền                                 |
-| ------ | -------------------------------- | ------------------------------------- |
-| GET    | `/api/deliveries/inspections`    | `delivery.view`                       |
-| GET    | `/api/deliveries/:id/inspection` | `delivery.view`                       |
-| POST   | `/api/deliveries/:id/arrival`    | `delivery.view` và `delivery.inspect` |
-| POST   | `/api/deliveries/:id/inspection` | `delivery.inspect` và `delivery.view` |
+| Method | Endpoint                         | Quyền                                                                                    |
+| ------ | -------------------------------- | ---------------------------------------------------------------------------------------- |
+| GET    | `/api/deliveries/inspections`    | `delivery.view`; lọc tùy chọn `orderType`, `batchNo`; response có `orderType`, `batchNo` |
+| GET    | `/api/deliveries/:id/inspection` | `delivery.view`                                                                          |
+| POST   | `/api/deliveries/:id/arrival`    | `delivery.view` và `delivery.inspect`                                                    |
+| POST   | `/api/deliveries/:id/inspection` | `delivery.inspect` và `delivery.view`                                                    |
 
 `POST /api/deliveries/:id/arrival` chỉ dành cho bốn vai trò kiểm nhận thuộc đúng trường của đợt giao (chặn nhà cung cấp, truy cập public và tài khoản ngoài trường bằng `403`/`404`, chặn đơn/nguồn đã hủy hoặc đang ở `PREPARING` bằng `409`), chỉ áp dụng cho đơn `traceabilityVersion = 1` đang `IN_TRANSIT` để chuyển `IN_TRANSIT -> ARRIVED` với `arrivedAt` do server ghi nhận; gọi lại khi đã qua bước nhận nơi giữ nguyên trạng thái và timestamp ban đầu. Danh sách nhận `page`, `limit`, `search`, `status`, `period` (`ALL`, `today`, `week`); tìm/lọc/phân trang và thống kê cùng phạm vi tại BE. Ngày/tuần dùng múi giờ Việt Nam. GET `/api/deliveries` cũ giữ nguyên. Chi tiết kiểm nhận trả thêm `traceabilityVersion`, `statusLabel` và snapshot `deliveryItems[].sourceFacility` (`id`, `name`, `facilityCode`).
 
@@ -382,11 +382,11 @@ Hợp đồng chi tiết: [Source Facility API](../specs/027-source-facility-man
 
 ## Tiếp nhận yêu cầu nguyên liệu phía nhà cung cấp
 
-| Endpoint                               | Quyền và phạm vi                                                                                                                                    |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| GET `/api/supply-requests`             | `supply_request.view`; SUPPLIER chỉ admin/staff hiện tại, chỉ đơn của nhà cung cấp ngoài DRAFT; SCHOOL/SYSTEM giữ scope và projection cũ.           |
-| GET `/api/supply-requests/:id`         | `supply_request.view`; chỉ INGREDIENT_SUPPLIER_ADMIN/INGREDIENT_SUPPLIER_STAFF thuộc SUPPLIER, đúng supplierId và ngoài DRAFT.                      |
-| POST `/api/supply-requests/:id/accept` | `supply_request.accept`; cùng hai role supplier, xác minh lại quyền/membership/trạng thái trong Serializable transaction. Không yêu cầu quyền view. |
+| Endpoint                               | Quyền và phạm vi                                                                                                                                                                                                                                                                    |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET `/api/supply-requests`             | Lọc tùy chọn `orderType` (`DIRECT_USE`/`DRY_STOCK`), `batchNo` (1/2); response có `orderType`, `batchNo`, `orderTypeLabel`, `batchLabel`. `supply_request.view`; SUPPLIER chỉ admin/staff hiện tại, chỉ đơn của nhà cung cấp ngoài DRAFT; SCHOOL/SYSTEM giữ scope và projection cũ. |
+| GET `/api/supply-requests/:id`         | `supply_request.view`; chỉ INGREDIENT_SUPPLIER_ADMIN/INGREDIENT_SUPPLIER_STAFF thuộc SUPPLIER, đúng supplierId và ngoài DRAFT.                                                                                                                                                      |
+| POST `/api/supply-requests/:id/accept` | `supply_request.accept`; cùng hai role supplier, xác minh lại quyền/membership/trạng thái trong Serializable transaction. Không yêu cầu quyền view.                                                                                                                                 |
 
 Nhánh danh sách SUPPLIER hỗ trợ `status` trong SENT/ACCEPTED/IN_PROGRESS/COMPLETED/CANCELLED; mặc định cả năm trạng thái. Giữ page mặc định 1, limit mặc định 20/tối đa 100 và hasNext; thêm schoolName, requestedDeliveryDate, sentAt và projection `orderProgress` (`ACCEPTED`/`IN_PROGRESS` chưa có `Delivery` -> `stage = CONFIRMED`, `statusLabel = "Đã xác nhận"`, `deliveryId = null`, `nextAction = ADD_INGREDIENTS` khi đủ quyền `delivery.manage`; có đúng một `Delivery` `creationMode = REQUEST` -> phản ánh trạng thái `Delivery` và `nextAction`; legacy nhiều đợt không có `REQUEST` duy nhất hoặc chưa tiếp nhận/đã đóng chưa có `Delivery` -> `null`). SCHOOL/SYSTEM vẫn chỉ nhận page/limit, giữ projection cũ và không trả `orderProgress`, gửi status trả 400; trường vẫn xem được bản nháp của chính mình theo quyền. Không lấy supplierId/schoolId từ query để mở rộng scope.
 

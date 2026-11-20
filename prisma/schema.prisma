@@ -1302,6 +1302,10 @@ model SupplyRequest {
   status                SupplyRequestStatus @default(DRAFT)
   requestedDeliveryDate DateTime?           @map("requested_delivery_date") @db.Date
   note                  String?             @db.Text
+  /// Loại đơn: DIRECT_USE = đồ tươi dùng trong ngày (2 đợt), DRY_STOCK = đồ khô lưu kho. Bắt buộc ở migration 2 (D4).
+  orderType             IngredientHandlingType? @map("order_type")
+  /// Đợt giao của đơn tươi: 1 hoặc 2; NULL với đơn khô. CHECK trong SQL.
+  batchNo               Int?                @map("batch_no") @db.SmallInt
   supplierResponseNote  String?             @map("supplier_response_note") @db.Text
   acceptedByUserId      String?             @map("accepted_by_user_id") @db.Uuid
   acceptedAt            DateTime?           @map("accepted_at") @db.Timestamptz(6)
@@ -1317,6 +1321,7 @@ model SupplyRequest {
 
   @@unique([requestNo])
   @@index([acceptedByUserId], map: "idx_supply_requests_accepted_by")
+  @@index([schoolId, requestedDeliveryDate, orderType, batchNo], map: "idx_supply_requests_school_date_type_batch")
   @@index([schoolId, status], map: "idx_supply_requests_school_status")
   @@index([supplierId, status], map: "idx_supply_requests_supplier_status")
   @@map("supply_requests")

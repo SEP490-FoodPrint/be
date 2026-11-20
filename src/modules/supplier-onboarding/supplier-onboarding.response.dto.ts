@@ -4,6 +4,8 @@ export interface OrderDraftResponseDTO {
   id: string;
   status: SupplyRequestStatus;
   requestNo: string;
+  orderType: "DIRECT_USE" | "DRY_STOCK";
+  batchNo: 1 | 2 | null;
 }
 export interface OrderSendResponseDTO {
   id: string;

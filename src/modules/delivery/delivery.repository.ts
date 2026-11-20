@@ -14,6 +14,8 @@ export interface DeliveryInspectionQueryFilter {
   status?: DeliveryStatus;
   period: "ALL" | "today" | "week";
   date?: string;
+  orderType?: "DIRECT_USE" | "DRY_STOCK";
+  batchNo?: 1 | 2;
 }
 
 export const deliveryListSelect = {
@@ -45,6 +47,8 @@ export const deliveryListSelect = {
       requestedDeliveryDate: true,
       note: true,
       status: true,
+      orderType: true,
+      batchNo: true,
     },
   },
   deliveryApprovals: {
@@ -142,6 +146,8 @@ const summarySelect = {
       schoolId: true,
       supplierId: true,
       status: true,
+      orderType: true,
+      batchNo: true,
       _count: {
         select: {
           deliveries: {
@@ -263,18 +269,30 @@ const detailSelect = {
  * Cùng tiêu chí với requiredInspectionRoles; không suy luận theo nhà cung cấp.
  */
 export const dryOnlyDeliveryWhere = {
-  deliveryItems: {
-    some: {},
-    every: {
+  // Đơn có orderType thì dùng orderType; chỉ xe STANDALONE / đơn cũ chưa backfill mới suy từ dòng hàng.
+  OR: [
+    { SupplyRequest: { is: { orderType: "DRY_STOCK" } } },
+    {
       OR: [
-        { IngredientEntry: { handlingType: "DRY_STOCK" } },
-        {
-          ingredientEntryId: null,
-          SupplyRequestItem: { IngredientEntry: { handlingType: "DRY_STOCK" } },
-        },
+        { supplyRequestId: null },
+        { SupplyRequest: { is: { orderType: null } } },
       ],
+      deliveryItems: {
+        some: {},
+        every: {
+          OR: [
+            { IngredientEntry: { handlingType: "DRY_STOCK" } },
+            {
+              ingredientEntryId: null,
+              SupplyRequestItem: {
+                IngredientEntry: { handlingType: "DRY_STOCK" },
+              },
+            },
+          ],
+        },
+      },
     },
-  },
+  ],
 } satisfies Prisma.DeliveryWhereInput;
 
 function inspectionWhere(
@@ -289,6 +307,13 @@ function inspectionWhere(
     AND: [
       // Xe đồ khô chỉ hiện cho Ban quản lý nguyên liệu.
       ...(hideDryOnly ? [{ NOT: dryOnlyDeliveryWhere }] : []),
+      ...(query.orderType === "DRY_STOCK" ? [dryOnlyDeliveryWhere] : []),
+      ...(query.orderType === "DIRECT_USE"
+        ? [{ NOT: dryOnlyDeliveryWhere }]
+        : []),
+      ...(query.batchNo
+        ? [{ SupplyRequest: { is: { batchNo: query.batchNo } } }]
+        : []),
       ...(query.search
         ? [
             {

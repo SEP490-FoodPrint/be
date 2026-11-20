@@ -13,6 +13,8 @@ export interface DeliveryInspectionDTO {
   isDryOnly?: boolean;
   supplyRequestId: string | null;
   requestNo: string | null;
+  orderType: "DIRECT_USE" | "DRY_STOCK" | null;
+  batchNo: number | null;
   supplierName: string;
   status: DeliveryStatus;
   statusLabel: string;
