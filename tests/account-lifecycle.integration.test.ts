@@ -2005,7 +2005,7 @@ void test("account lifecycle respects scope and intake state on disposable Postg
       const pausedDispatched = await baseDispatchService.dispatch(
         { id: pausedOkDelivery.id },
         validateDispatchSupplierOrderBody({
-          expectedArrivalAt: "2026-11-18T08:00:00+07:00",
+          expectedArrivalAt: "2099-11-18T08:00:00+07:00",
           vehiclePlate: "29L-00001",
         }),
         staffActor,
@@ -2034,7 +2034,7 @@ void test("account lifecycle respects scope and intake state on disposable Postg
               where: { id: rollbackDelivery.id, status: "PREPARING" },
               data: {
                 status: "IN_TRANSIT",
-                expectedArrivalAt: new Date("2026-11-18T01:00:00.000Z"),
+                expectedArrivalAt: new Date("2099-11-18T01:00:00.000Z"),
                 vehiclePlate: "29L-ROLLBACK",
               },
             });
@@ -2078,7 +2078,7 @@ void test("account lifecycle respects scope and intake state on disposable Postg
           }).dispatch(
             { id: raceDelivery.id },
             validateDispatchSupplierOrderBody({
-              expectedArrivalAt: "2026-11-18T08:00:00+07:00",
+              expectedArrivalAt: "2099-11-18T08:00:00+07:00",
               vehiclePlate: "29L-00002",
             }),
             staffActor,
@@ -2099,7 +2099,7 @@ void test("account lifecycle respects scope and intake state on disposable Postg
       const replayWhileAdminDeactivated = await baseDispatchService.dispatch(
         { id: pausedOkDelivery.id },
         validateDispatchSupplierOrderBody({
-          expectedArrivalAt: "2026-11-18T01:00:00Z",
+          expectedArrivalAt: "2099-11-18T01:00:00Z",
           vehiclePlate: "29L-00001",
         }),
         staffActor,
@@ -2115,7 +2115,7 @@ void test("account lifecycle respects scope and intake state on disposable Postg
           baseDispatchService.dispatch(
             { id: pausedOkDelivery.id },
             validateDispatchSupplierOrderBody({
-              expectedArrivalAt: "2026-11-18T01:00:00Z",
+              expectedArrivalAt: "2099-11-18T01:00:00Z",
               vehiclePlate: "29L-OTHER",
             }),
             staffActor,
@@ -2139,7 +2139,7 @@ void test("account lifecycle respects scope and intake state on disposable Postg
           baseDispatchService.dispatch(
             { id: pausedOkDelivery.id },
             validateDispatchSupplierOrderBody({
-              expectedArrivalAt: "2026-11-18T01:00:00Z",
+              expectedArrivalAt: "2099-11-18T01:00:00Z",
               vehiclePlate: "29L-00001",
             }),
             staffActor,
@@ -2198,7 +2198,7 @@ void test("account lifecycle respects scope and intake state on disposable Postg
           }).dispatch(
             { id: supRaceDelivery.id },
             validateDispatchSupplierOrderBody({
-              expectedArrivalAt: "2026-11-18T08:00:00+07:00",
+              expectedArrivalAt: "2099-11-18T08:00:00+07:00",
               vehiclePlate: "29L-00003",
             }),
             staff2Actor,

@@ -973,7 +973,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     {
       method: "POST",
       body: {
-        expectedArrivalAt: "2026-11-16T08:00:00+07:00",
+        expectedArrivalAt: "2099-11-16T08:00:00+07:00",
         vehiclePlate: "29A-11111",
       },
     },
@@ -990,7 +990,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   assert.equal(dispatchedReq.status, "IN_TRANSIT");
   assert.equal(dispatchedReq.statusLabel, "Đang giao hàng");
   assert.equal(dispatchedReq.nextAction, "TRACK_DELIVERY");
-  assert.equal(dispatchedReq.expectedArrivalAt, "2026-11-16T01:00:00.000Z");
+  assert.equal(dispatchedReq.expectedArrivalAt, "2099-11-16T01:00:00.000Z");
   assert.equal(dispatchedReq.vehiclePlate, "29A-11111");
 
   const dispatchReplayRes = await apiRequest(
@@ -999,7 +999,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     {
       method: "POST",
       body: {
-        expectedArrivalAt: "2026-11-16T01:00:00Z",
+        expectedArrivalAt: "2099-11-16T01:00:00Z",
         vehiclePlate: "  29A-11111  ",
       },
     },
@@ -1017,7 +1017,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
         {
           method: "POST",
           body: {
-            expectedArrivalAt: "2026-11-16T01:00:00Z",
+            expectedArrivalAt: "2099-11-16T01:00:00Z",
             vehiclePlate: "29A-99999",
           },
         },
@@ -1503,7 +1503,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     {
       method: "POST",
       body: {
-        expectedArrivalAt: "2026-11-16T08:00:00+07:00",
+        expectedArrivalAt: "2099-11-16T08:00:00+07:00",
         vehiclePlate: "29C-77777",
       },
     },
@@ -1772,7 +1772,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
         {
           method: "POST",
           body: {
-            expectedArrivalAt: "2026-11-17T08:00:00+07:00",
+            expectedArrivalAt: "2099-11-17T08:00:00+07:00",
             vehiclePlate: "29C-66666",
           },
         },
@@ -1838,7 +1838,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       {
         method: "POST",
         body: {
-          expectedArrivalAt: "2026-11-18T08:00:00+07:00",
+          expectedArrivalAt: "2099-11-18T08:00:00+07:00",
           vehiclePlate: "29A-77701",
         },
       },
@@ -1849,7 +1849,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       {
         method: "POST",
         body: {
-          expectedArrivalAt: "2026-11-18T01:00:00Z",
+          expectedArrivalAt: "2099-11-18T01:00:00Z",
           vehiclePlate: "  29A-77701 ",
         },
       },
@@ -1893,7 +1893,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       {
         method: "POST",
         body: {
-          expectedArrivalAt: "2026-11-18T08:00:00+07:00",
+          expectedArrivalAt: "2099-11-18T08:00:00+07:00",
           vehiclePlate: "29A-77702",
         },
       },
@@ -1904,7 +1904,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       {
         method: "POST",
         body: {
-          expectedArrivalAt: "2026-11-18T08:00:00+07:00",
+          expectedArrivalAt: "2099-11-18T08:00:00+07:00",
           vehiclePlate: "29A-77703",
         },
       },
@@ -1968,7 +1968,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     {
       method: "POST",
       body: {
-        expectedArrivalAt: "2026-11-18T08:00:00+07:00",
+        expectedArrivalAt: "2099-11-18T08:00:00+07:00",
         vehiclePlate: "29A-77704",
       },
     },
@@ -1982,7 +1982,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     {
       method: "POST",
       body: {
-        expectedArrivalAt: "2026-11-17T08:00:00+07:00",
+        expectedArrivalAt: "2099-11-17T08:00:00+07:00",
         vehiclePlate: "29C-66666",
       },
     },
@@ -2004,7 +2004,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
         {
           method: "POST",
           body: {
-            expectedArrivalAt: "2026-11-17T09:00:00+07:00",
+            expectedArrivalAt: "2099-11-17T09:00:00+07:00",
             vehiclePlate: "29C-64002",
           },
         },
@@ -2148,7 +2148,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
         {
           method: "POST",
           body: {
-            expectedArrivalAt: "2026-11-22T07:00:00+07:00",
+            expectedArrivalAt: "2099-11-22T07:00:00+07:00",
             vehiclePlate: "29C-64003",
           },
         },
@@ -2333,8 +2333,8 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
         traceabilityVersion,
         deliveryNo: seqNo,
         status: "ARRIVED",
-        expectedArrivalAt: new Date("2026-11-23T06:00:00.000Z"),
-        arrivedAt: new Date("2026-11-23T06:15:00.000Z"),
+        expectedArrivalAt: new Date("2099-11-23T06:00:00.000Z"),
+        arrivedAt: new Date("2099-11-23T06:15:00.000Z"),
         vehiclePlate: "29C-64999",
         createdByUserId: supplierAdminA.id,
         deliveryItems: {
@@ -2630,7 +2630,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
         {
           method: "POST",
           body: {
-            expectedArrivalAt: "2026-11-24T07:00:00+07:00",
+            expectedArrivalAt: "2099-11-24T07:00:00+07:00",
             vehiclePlate: "29C-CAPRCV",
           },
         },
@@ -2681,9 +2681,9 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
         traceabilityVersion: null,
         deliveryNo: `LEG-CAP-${String(capDeliverySeq++)}`,
         status,
-        expectedArrivalAt: plate ? new Date("2026-11-24T08:00:00.000Z") : null,
+        expectedArrivalAt: plate ? new Date("2099-11-24T08:00:00.000Z") : null,
         arrivedAt:
-          status === "ARRIVED" ? new Date("2026-11-24T08:15:00.000Z") : null,
+          status === "ARRIVED" ? new Date("2099-11-24T08:15:00.000Z") : null,
         vehiclePlate: plate,
         createdByUserId: supplierAdminA.id,
         deliveryItems: {
@@ -3155,7 +3155,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
         {
           method: "POST",
           body: {
-            expectedArrivalAt: "2026-11-26T08:00:00+07:00",
+            expectedArrivalAt: "2099-11-26T08:00:00+07:00",
             vehiclePlate: "29C-88864",
           },
         },
@@ -3216,7 +3216,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
       creationFingerprint: "a".repeat(64),
       deliveryNo: "FP-DE-90999",
       status: "IN_TRANSIT",
-      expectedArrivalAt: new Date("2026-11-26T08:00:00.000Z"),
+      expectedArrivalAt: new Date("2099-11-26T08:00:00.000Z"),
       vehiclePlate: "29C-V1OLD",
       traceabilityVersion: 1,
       workflowVersion: null,
@@ -3290,7 +3290,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     {
       method: "POST",
       body: {
-        expectedArrivalAt: "2026-11-16T08:00:00+07:00",
+        expectedArrivalAt: "2099-11-16T08:00:00+07:00",
         vehiclePlate: "29A-11111",
       },
     },
