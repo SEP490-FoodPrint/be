@@ -4795,6 +4795,7 @@ void test("US6 HTTP contract enforces dispatch strict validation, mount order, m
   const declared: string[] = [];
   const scheduled: unknown[] = [];
   const service = createSupplierOrderService(repo, {
+    now: () => new Date("2026-11-01T00:00:00.000Z"),
     transaction: (fn) => fn({} as never),
     guard,
     proofs: {
@@ -5154,6 +5155,7 @@ void test("US6 dispatch service handles continuation policy, all-state replay/40
       () => Promise.resolve(actor),
     );
     const service = createSupplierOrderService(repo, {
+      now: () => new Date("2026-11-01T00:00:00.000Z"),
       guard,
       transaction: async (fn) => {
         try {
@@ -5183,6 +5185,33 @@ void test("US6 dispatch service handles continuation policy, all-state replay/40
     assert.equal(committed.expectedArrivalAt, null);
     assert.equal(committed.vehiclePlate, null);
     assert.equal(committed.updatedAt.getTime(), initialUpdatedAt.getTime());
+
+    // First dispatch with ETA not after "now" (equal or earlier) -> 422, nothing written
+    for (const nowOffsetMs of [0, 60_000]) {
+      const lateService = createSupplierOrderService(repo, {
+        now: () => new Date(validEta.getTime() + nowOffsetMs),
+        guard,
+        transaction: (fn) => fn({} as never),
+      });
+      await assert.rejects(
+        () =>
+          lateService.dispatch(
+            { id: committed.id },
+            validateDispatchSupplierOrderBody({
+              expectedArrivalAt: validEta.toISOString(),
+              vehiclePlate: validPlate,
+            }),
+            actor,
+          ),
+        {
+          statusCode: 422,
+          message: "Giờ dự kiến đến phải sau thời điểm hiện tại",
+        },
+      );
+      assert.equal(committed.status, "PREPARING");
+      assert.equal(committed.expectedArrivalAt, null);
+      assert.equal(committed.vehiclePlate, null);
+    }
   }
 
   // 2. Replay across all post-dispatch states (same body -> 200 & untouched updatedAt; diff body -> 409)
@@ -5395,6 +5424,7 @@ void test("US6 dispatch service handles continuation policy, all-state replay/40
       () => Promise.resolve(actor),
     );
     const service = createSupplierOrderService(repo, {
+      now: () => new Date("2026-11-01T00:00:00.000Z"),
       guard,
       transaction: (fn) => fn({} as never),
     });
@@ -5483,6 +5513,7 @@ void test("US6 dispatch service handles continuation policy, all-state replay/40
       () => Promise.resolve(actor),
     );
     const service = createSupplierOrderService(repo, {
+      now: () => new Date("2026-11-01T00:00:00.000Z"),
       guard,
       transaction: (fn) => fn({} as never),
       renderQrBatch: () => Promise.reject(new Error("renderer offline")),

@@ -75,6 +75,8 @@ type Dependencies = {
   transaction?: <T>(
     fn: (tx: Prisma.TransactionClient) => Promise<T>,
   ) => Promise<T>;
+  /** Current time source; injectable so tests can pin "now" for dispatch ETA checks. */
+  now?: () => Date;
   guard?: Pick<ReturnType<typeof createIntakeAccessService>, "assertAccess"> &
     Partial<
       Pick<
@@ -434,6 +436,7 @@ export function createSupplierOrderService(
       }
     });
   const proofs = dependencies?.proofs ?? blockchainProofService;
+  const now = dependencies?.now ?? (() => new Date());
   const guard = dependencies?.guard ?? createIntakeAccessService();
   const fallbackGuard = dependencies?.guard?.assertDeliveryContinuation
     ? null
@@ -1199,6 +1202,13 @@ export function createSupplierOrderService(
           throw new HttpError(
             409,
             "Đơn giao hàng không ở trạng thái đang chuẩn bị để bắt đầu giao",
+          );
+        }
+        // Chỉ chặn ở lần bắt đầu giao đầu tiên; replay idempotent với cùng giờ đã lưu vẫn hợp lệ dù giờ đó đã qua.
+        if (expectedArrivalAt.getTime() <= now().getTime()) {
+          throw new HttpError(
+            422,
+            "Giờ dự kiến đến phải sau thời điểm hiện tại",
           );
         }
 
