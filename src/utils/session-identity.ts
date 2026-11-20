@@ -16,6 +16,9 @@ export const sessionIdentitySelect = {
   emailVerifiedAt: true,
   email: true,
   phone: true,
+  School: { select: { name: true } },
+  Supplier: { select: { name: true } },
+  communeFoodSafetyUnit: { select: { name: true } },
   RegistrationRequestAsApplicantUser: {
     select: {
       id: true,
@@ -32,11 +35,17 @@ type Identity = Prisma.UserGetPayload<{ select: typeof sessionIdentitySelect }>;
 export function sessionUserFromIdentity(user: Identity | null): SessionUser {
   if (!user) throw new HttpError(401, "Tài khoản không tồn tại");
   const registrationRequest = user.RegistrationRequestAsApplicantUser;
+  const organizationName =
+    user.School?.name ??
+    user.Supplier?.name ??
+    user.communeFoodSafetyUnit?.name ??
+    null;
   if (user.status === "ACTIVE") {
     return {
       ...principalFromIdentity(user),
       email: user.email,
       phone: user.phone,
+      organizationName,
       status: "ACTIVE",
       onboardingRequired: false,
       registrationRequest,
@@ -73,6 +82,7 @@ export function sessionUserFromIdentity(user: Identity | null): SessionUser {
     username: user.username,
     email: user.email,
     phone: user.phone,
+    organizationName,
     fullName: user.fullName,
     roleId: user.roleId,
     role: user.Role.code,

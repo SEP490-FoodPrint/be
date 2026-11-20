@@ -188,6 +188,14 @@ export const publicWeeklyMenuInclude = {
           { dishId: "asc" as const },
         ],
       },
+      // Nhóm suất để nhận ra món thay thế dị ứng (nhóm riêng đổi đúng 1 món)
+      portionGroups: {
+        select: {
+          mealType: true,
+          isDefault: true,
+          dishes: { select: { dishId: true } },
+        },
+      },
     },
     orderBy: { menuDate: "asc" as const },
   },

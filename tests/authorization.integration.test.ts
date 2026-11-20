@@ -1233,6 +1233,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         quantity: 150,
         unit: "g",
         storageUnitId: fridge.id,
+        storageLocation: "Ngăn 1",
         sampledAt: new Date().toISOString(),
       });
       const saved = await samples.create(batch.id, sampleInput, chef);
@@ -1423,13 +1424,13 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           {
             classId: grClass.id,
             ingredientEntryId: grMilk.entry.id,
-            affectedCount: 10,
+            affectedCount: 13,
             updatedByUserId: health.id,
           },
           {
             classId: grClass.id,
             ingredientEntryId: grPeanut.entry.id,
-            affectedCount: 5,
+            affectedCount: 13,
             updatedByUserId: health.id,
           },
         ],
@@ -1458,13 +1459,13 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             dailyMealPortionId: grDaily.id,
             classId: grClass.id,
             ingredientEntryId: grMilk.entry.id,
-            portionCount: 10,
+            portionCount: 13,
           },
           {
             dailyMealPortionId: grDaily.id,
             classId: grClass.id,
             ingredientEntryId: grPeanut.entry.id,
-            portionCount: 5,
+            portionCount: 13,
           },
         ],
       });
@@ -1472,11 +1473,12 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         () => batches.plan({ ...grKey, dishId: grCommon }, chef),
         (e: unknown) => e instanceof HttpError && e.statusCode === 409,
       );
+      // Shared class allergy list: one student count, counted once in the group avoiding the most allergens.
       const grCounts: Record<string, number> = {
         Regular: 107,
-        Milk: 8,
-        Peanut: 3,
-        Both: 2,
+        Milk: 0,
+        Peanut: 0,
+        Both: 13,
       };
       const grInput = validateDailyPortionGroups({
         menuDayId: grDay.id,

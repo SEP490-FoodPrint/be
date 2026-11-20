@@ -1997,7 +1997,7 @@ function createMenuOperations(
       schoolId,
       actor.id,
       input.weekStartDate,
-      `Thực đơn tuần ${weekNumber}`,
+      `Thực đơn dinh dưỡng tuần ${weekNumber}`,
       gradeIds,
     );
 

@@ -8,12 +8,14 @@ import {
 import { HttpError } from "../../utils/http-error";
 import type {
   MealSummaryQuery,
+  ClassAllergyProfileInput,
   DailyPortionGroupsInput,
   DailyMealPortionInput,
 } from "./meal-attendance.validation";
 import { assertPortionGroupSafety } from "../kitchen/kitchen.service";
 import {
   allergyCountsFromGroups,
+  expectedSpecialGroupCounts,
   splitPortionsIntoGroups,
 } from "../../utils/allergy-match";
 import { getPrisma } from "../../utils/database";
@@ -249,7 +251,135 @@ export function createMealAttendanceService(
     }
     return demand;
   }
+  /** Nguyên liệu trong kho trường thuộc NCC đang liên kết (ACTIVE) — dùng để khai dị ứng lớp. */
+  function allergyOptionWhere(
+    schoolId: string,
+  ): Prisma.IngredientEntryWhereInput {
+    return {
+      schoolId,
+      status: "ACTIVE",
+      Ingredient: {
+        status: "ACTIVE",
+        Supplier: {
+          status: "ACTIVE",
+          schoolSupplierRelationships: {
+            some: { schoolId, status: "ACTIVE" },
+          },
+        },
+      },
+    };
+  }
+  const todayDate = () => new Date(`${vietnamToday()}T00:00:00Z`);
+
   return {
+    async getClassAllergyOptions(principal: AuthPrincipal) {
+      assertPermission(principal, "daily_meal_portion.view");
+      const db = await connect();
+      await assignedClass(db, principal, todayDate());
+      const rows = await db.ingredientEntry.findMany({
+        where: allergyOptionWhere(principal.schoolId!),
+        select: {
+          id: true,
+          Ingredient: {
+            select: {
+              name: true,
+              ingredientCategory: { select: { categoryName: true } },
+              Supplier: { select: { name: true } },
+            },
+          },
+        },
+        orderBy: { Ingredient: { name: "asc" } },
+        take: 2000,
+      });
+      return rows.map((row) => ({
+        ingredientEntryId: row.id,
+        name: row.Ingredient.name,
+        category: row.Ingredient.ingredientCategory?.categoryName ?? null,
+        supplierName: row.Ingredient.Supplier?.name ?? null,
+      }));
+    },
+
+    async saveClassAllergies(
+      input: ClassAllergyProfileInput,
+      principal: AuthPrincipal,
+    ) {
+      return withSchoolTransaction(
+        await connect(),
+        principal,
+        "daily_meal_portion.update",
+        async (tx, actor) => {
+          const assigned = await assignedClass(tx, actor, todayDate());
+          const current = new Map(
+            assigned.classAllergies.map((row) => [row.ingredientEntryId, row]),
+          );
+          if (input.affectedCount > assigned.registeredMealPortions)
+            throw new HttpError(
+              422,
+              `Số học sinh dị ứng vượt số suất đăng ký của lớp (${assigned.registeredMealPortions})`,
+            );
+          const newIds = input.ingredientEntryIds.filter(
+            (id) => !current.has(id),
+          );
+          if (newIds.length) {
+            const allowed = await tx.ingredientEntry.count({
+              where: {
+                ...allergyOptionWhere(actor.schoolId!),
+                id: { in: newIds },
+              },
+            });
+            if (allowed !== newIds.length)
+              throw new HttpError(
+                422,
+                "Chỉ được chọn nguyên liệu trong kho trường thuộc NCC đang liên kết",
+              );
+          }
+          const keep = new Set(input.ingredientEntryIds);
+          const removed = [...current.keys()].filter((id) => !keep.has(id));
+          if (removed.length) {
+            const used = await tx.dailyAllergyPortion.findFirst({
+              where: {
+                classId: assigned.id,
+                ingredientEntryId: { in: removed },
+              },
+              select: { ingredientEntryId: true },
+            });
+            if (used)
+              throw new HttpError(
+                409,
+                `Không thể xoá "${current.get(used.ingredientEntryId)?.IngredientEntry.Ingredient.name}" vì đã được dùng khi khai suất ăn. Hãy giữ lại và sửa số học sinh.`,
+              );
+            await tx.classAllergy.deleteMany({
+              where: {
+                classId: assigned.id,
+                ingredientEntryId: { in: removed },
+              },
+            });
+          }
+          // Mọi nguyên liệu trong danh sách dùng chung một số học sinh dị ứng
+          for (const ingredientEntryId of input.ingredientEntryIds)
+            await tx.classAllergy.upsert({
+              where: {
+                classId_ingredientEntryId: {
+                  classId: assigned.id,
+                  ingredientEntryId,
+                },
+              },
+              create: {
+                classId: assigned.id,
+                ingredientEntryId,
+                affectedCount: input.affectedCount,
+                updatedByUserId: actor.id,
+              },
+              update: {
+                affectedCount: input.affectedCount,
+                updatedByUserId: actor.id,
+              },
+            });
+          return (await assignedClass(tx, actor, todayDate())).classAllergies;
+        },
+      );
+    },
+
     async getMyClass(query: MealSummaryQuery, principal: AuthPrincipal) {
       assertPermission(principal, "daily_meal_portion.view");
       const db = await connect();
@@ -300,6 +430,17 @@ export function createMealAttendanceService(
             throw new HttpError(
               409,
               "Suất ăn đã chốt, không thể sửa trực tiếp",
+            );
+          const declared = new Set(
+            input.allergies.map((item) => item.ingredientEntryId),
+          );
+          const missing = assigned.classAllergies.find(
+            (item) => !declared.has(item.ingredientEntryId),
+          );
+          if (missing)
+            throw new HttpError(
+              422,
+              `Chưa nhập số suất dị ứng cho "${missing.IngredientEntry.Ingredient.name}" (nhập 0 nếu không có)`,
             );
           const data = {
             confirmedByUserId: actor.id,
@@ -477,40 +618,53 @@ export function createMealAttendanceService(
               },
             },
           });
+          const inputCount = (groupId: string) =>
+            input.groups.find((g) => g.portionGroupId === groupId)!
+              .portionCount;
+          const masterAllergies = master.map((m) => ({
+            ingredientEntryId: m.ingredientEntryId,
+            allergenName: m.IngredientEntry.Ingredient.name,
+          }));
           const {
             byAllergy: avoidedCounts,
             uncovered,
             relevant,
-          } = allergyCountsFromGroups(
+          } = allergyCountsFromGroups(groups, inputCount, masterAllergies);
+          // Mỗi dị ứng tính vào nhóm riêng đầu tiên tránh nó; nhóm tránh nhiều dị ứng thì cộng dồn, không tính trùng.
+          const nameOf = new Map(
+            masterAllergies.map((m) => [m.ingredientEntryId, m.allergenName]),
+          );
+          const expectedFromDaily = expectedSpecialGroupCounts(
             groups,
-            (groupId) =>
-              input.groups.find((g) => g.portionGroupId === groupId)!
-                .portionCount,
-            master.map((m) => ({
-              ingredientEntryId: m.ingredientEntryId,
-              allergenName: m.IngredientEntry.Ingredient.name,
+            demand.dailyAllergyPortions.map((a) => ({
+              ingredientEntryId: a.ingredientEntryId,
+              allergenName: nameOf.get(a.ingredientEntryId) ?? "",
+              portionCount: a.portionCount,
             })),
           );
           if (
-            demand.dailyAllergyPortions.some(
-              (a) =>
-                relevant.has(a.ingredientEntryId) &&
-                (avoidedCounts.get(a.ingredientEntryId) ?? 0) !==
-                  a.portionCount,
+            demand.dailyAllergyPortions.some((a) =>
+              relevant.has(a.ingredientEntryId),
+            ) &&
+            [...expectedFromDaily].some(
+              ([groupId, count]) => inputCount(groupId) !== count,
             )
           )
             throw new HttpError(
               422,
               "Nh贸m su岷 kh谩c s峄?su岷 d峄?峄﹏g 膽茫 ch峄憈; c岷 膽峄慽 chi岷縰, kh么ng t峄?ghi 膽猫",
             );
+          const capacity = expectedSpecialGroupCounts(
+            groups,
+            master.map((m) => ({
+              ingredientEntryId: m.ingredientEntryId,
+              allergenName: m.IngredientEntry.Ingredient.name,
+              portionCount: m.affectedCount,
+            })),
+          );
           if (
             uncovered ||
-            [...avoidedCounts].some(
-              ([entryId, count]) =>
-                count >
-                (master.find((m) => m.ingredientEntryId === entryId)
-                  ?.affectedCount ?? 0),
-            )
+            [...capacity].some(([groupId, max]) => inputCount(groupId) > max)
           )
             throw new HttpError(
               422,

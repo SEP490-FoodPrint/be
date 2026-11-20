@@ -119,6 +119,8 @@ export interface DishItemDTO {
   recipeSource?: PublicRecipeSource;
   ingredients?: PublicDishIngredientDTO[];
   alternativeDish?: (DishItemDTO & { allergyGroup: string }) | null;
+  /** Có giá trị khi đây là món thay thế dị ứng cho món gốc này (chỉ trong thực đơn tuần công khai). */
+  substituteForDishId?: string | null;
 }
 
 export interface SnackItemDTO {

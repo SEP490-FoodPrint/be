@@ -623,6 +623,9 @@ function unverifiedIdentity(): SessionIdentity {
     schoolId: null,
     supplierId: null,
     communeFoodSafetyUnitId: null,
+    School: null,
+    Supplier: null,
+    communeFoodSafetyUnit: null,
     Role: {
       code: "SCHOOL_ADMINISTRATION",
       type: "SCHOOL",

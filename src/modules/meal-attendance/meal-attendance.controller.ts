@@ -11,6 +11,7 @@ import {
   validateDailyPortionGroups,
   validateDailyMealPortion,
   validateMyClassMealQuery,
+  validateClassAllergyProfile,
 } from "./meal-attendance.validation";
 import { uuid } from "../../utils/auth-validation";
 
@@ -25,6 +26,22 @@ export function createMealAttendanceController(
           validateMyClassMealQuery(req.query),
           requirePrincipal(req),
         ),
+      );
+    }),
+    getClassAllergyOptions: asyncHandler(async (req, res) => {
+      sendSuccess(
+        res,
+        await service.getClassAllergyOptions(requirePrincipal(req)),
+      );
+    }),
+    saveClassAllergies: asyncHandler(async (req, res) => {
+      sendSuccess(
+        res,
+        await service.saveClassAllergies(
+          validateClassAllergyProfile(req.body),
+          requirePrincipal(req),
+        ),
+        "Đã cập nhật hồ sơ dị ứng của lớp",
       );
     }),
     saveDraft: asyncHandler(async (req, res) => {

@@ -97,9 +97,8 @@ export function allergyCountsFromGroups(
 }
 
 /**
- * Chia sĩ số đã chốt vào các nhóm suất của bữa: mỗi suất dị ứng GVCN khai lúc điểm danh vào nhóm suất
- * riêng đầu tiên tránh dị ứng đó (khớp mã hoặc tên); phần còn lại vào nhóm thường (mặc định).
- * Dị ứng không có nhóm riêng nào tránh thì bữa này không chứa nguyên liệu đó: tính vào nhóm thường.
+ * Chia sĩ số đã chốt vào các nhóm suất của bữa: số học sinh dị ứng (một con số chung cho cả danh sách
+ * nguyên liệu dị ứng của lớp) vào một nhóm suất riêng theo sharedAllergyTarget; còn lại vào nhóm thường.
  */
 export function splitPortionsIntoGroups(
   groups: {
@@ -117,17 +116,65 @@ export function splitPortionsIntoGroups(
   const fallback = groups.find((group) => group.isDefault);
   if (!fallback) return null;
   const counts = new Map(groups.map((group) => [group.id, 0]));
-  let special = 0;
-  for (const allergy of allergies) {
-    if (allergy.portionCount <= 0) continue;
-    const group = groups.find(
-      (g) => !g.isDefault && avoidanceCovers(g.avoidances, allergy, ""),
-    );
-    if (!group) continue;
-    counts.set(group.id, counts.get(group.id)! + allergy.portionCount);
-    special += allergy.portionCount;
-  }
-  if (special > totalPortions) return null;
-  counts.set(fallback.id, totalPortions - special);
+  const { groupId, portions } = sharedAllergyTarget(groups, allergies);
+  if (portions > totalPortions) return null;
+  if (groupId) counts.set(groupId, portions);
+  counts.set(fallback.id, totalPortions - (groupId ? portions : 0));
   return counts;
+}
+
+/**
+ * Lớp khai dị ứng theo MỘT danh sách chung: các nguyên liệu dị ứng + một số học sinh dị ứng
+ * (mọi dòng dị ứng của lớp cùng một con số). Số học sinh đó chỉ tính MỘT lần, vào nhóm suất riêng
+ * tránh được nhiều nguyên liệu dị ứng của lớp nhất (ưu tiên nhóm đứng trước khi bằng nhau).
+ * Không có nhóm riêng nào tránh nguyên liệu nào của lớp thì bữa này không chứa chúng: không có suất riêng.
+ */
+export function sharedAllergyTarget(
+  groups: {
+    id: string;
+    isDefault: boolean;
+    avoidances: Parameters<typeof avoidanceCovers>[0];
+  }[],
+  allergies: {
+    ingredientEntryId: string;
+    allergenName: string;
+    portionCount: number;
+  }[],
+): { groupId: string | null; portions: number } {
+  const portions = Math.max(0, ...allergies.map((a) => a.portionCount));
+  if (portions <= 0) return { groupId: null, portions: 0 };
+  let best: { id: string; covered: number } | null = null;
+  for (const group of groups) {
+    if (group.isDefault) continue;
+    // Chỉ xét nguyên liệu còn suất hôm nay (nguyên liệu GVCN bỏ khỏi danh sách có 0 suất)
+    const covered = allergies.filter(
+      (allergy) =>
+        allergy.portionCount > 0 &&
+        avoidanceCovers(group.avoidances, allergy, ""),
+    ).length;
+    if (covered > 0 && (!best || covered > best.covered))
+      best = { id: group.id, covered };
+  }
+  return best ? { groupId: best.id, portions } : { groupId: null, portions: 0 };
+}
+
+/** Số suất mỗi nhóm suất riêng phải có theo dị ứng đã khai (quy tắc sharedAllergyTarget). */
+export function expectedSpecialGroupCounts(
+  groups: {
+    id: string;
+    isDefault: boolean;
+    avoidances: Parameters<typeof avoidanceCovers>[0];
+  }[],
+  allergies: {
+    ingredientEntryId: string;
+    allergenName: string;
+    portionCount: number;
+  }[],
+): Map<string, number> {
+  const expected = new Map(
+    groups.filter((g) => !g.isDefault).map((g) => [g.id, 0]),
+  );
+  const { groupId, portions } = sharedAllergyTarget(groups, allergies);
+  if (groupId) expected.set(groupId, portions);
+  return expected;
 }

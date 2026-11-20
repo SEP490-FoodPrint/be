@@ -241,7 +241,8 @@ const draftInput = (overrides: Record<string, unknown> = {}) => ({
   mealType: "LUNCH" as const,
   totalPortions: 25,
   allergyNotes: null,
-  allergies: [],
+  // Lớp trong fixture có 1 dị ứng; GVCN bắt buộc khai số suất (kể cả 0).
+  allergies: [{ ingredientEntryId: ENTRY_ID, portionCount: 0 }],
   ...overrides,
 });
 
@@ -317,4 +318,20 @@ void test("GVCN chỉ khai và chốt cho hôm nay, đúng ngày học có thự
   const stale = build({ hasMenu: false }, "DRAFT");
   await rejects(stale.service.finalize(DEMAND_ID, teacher), /chưa có thực đơn/);
   assert.equal(stale.writes.length, 0);
+});
+
+void test("GVCN phải nhập số suất cho mọi nguyên liệu dị ứng của lớp", async () => {
+  const { db, writes } = database();
+  const service = createMealAttendanceService(
+    undefined,
+    () => Promise.resolve(db),
+    undefined,
+    clock,
+  );
+  await assert.rejects(
+    service.saveDraft(draftInput({ allergies: [] }), teacher),
+    (error: unknown) =>
+      isHttp(422)(error) && /Chưa nhập số suất dị ứng/.test(String(error)),
+  );
+  assert.equal(writes.length, 0);
 });

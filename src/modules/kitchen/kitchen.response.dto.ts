@@ -11,6 +11,10 @@ export interface RetainedSampleBriefDTO {
   status: RetainedSampleStatus;
   sampledAt: string;
   disposedAt: string | null;
+  photoUrl?: string | null;
+  quantity?: string | null;
+  unit?: string | null;
+  storageLocation?: string | null;
 }
 
 export interface CookingBatchLotDTO {

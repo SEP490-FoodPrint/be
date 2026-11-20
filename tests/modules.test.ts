@@ -381,6 +381,14 @@ void test("retained samples and kitchen filters reject malformed quantities, tim
     sampledAt: "2026-11-01T10:30:00Z",
   };
   assert.equal(validateFoodSample(input).quantity, "150");
+  assert.throws(
+    () => validateFoodSample({ ...input, storageLocation: undefined }),
+    HttpError,
+  );
+  assert.throws(
+    () => validateFoodSample({ ...input, storageLocation: "Khay phụ A" }),
+    HttpError,
+  );
   // Mẫu lưu bắt buộc chọn tủ lưu mẫu hợp lệ.
   assert.throws(
     () => validateFoodSample({ ...input, storageUnitId: undefined }),

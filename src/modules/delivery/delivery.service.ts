@@ -1,4 +1,5 @@
 import type { AuthPrincipal } from "../../types/auth";
+import { renderDeliveryQrBatch } from "../../utils/qr-code";
 import { recordPhotoUrl, type RecordPhoto } from "../../utils/record-photo";
 import {
   assertPermission,
@@ -431,6 +432,8 @@ function inspectionDetailDTO(
             facilityCode: item.sourceFacilityCodeSnapshot ?? null,
           }
         : null,
+      traceUrl: item.qrUrl ?? null,
+      qrImageDataUrl: null,
       ingredientLots: item.ingredientLots.map((lot) => ({
         id: lot.id,
         lotCode: lot.lotCode,
@@ -1236,14 +1239,41 @@ export function createDeliveryInspectionService(
           throw new HttpError(404, "Không tìm thấy đợt giao trong trường");
         assertVisibleTo(row, principal);
         const schoolTiers = resolveSchoolTiers(schoolTiersRows);
-        return inspectionDetailDTO(
+        const dto = inspectionDetailDTO(
           row,
           principal,
           await receiptIssue(db, row, schoolId, now()),
           schoolTiers,
         );
+        return withLabelQrImages(dto);
       });
     },
+  };
+}
+
+/** Vẽ lại đúng mã QR trên nhãn bao bì NCC (từ qr_url) để trường đối chiếu khi kiểm tra. */
+async function withLabelQrImages(
+  dto: DeliveryInspectionDTO,
+): Promise<DeliveryInspectionDTO> {
+  const items = dto.deliveryItems ?? [];
+  const urls = items
+    .map((item) => item.traceUrl)
+    .filter((url): url is string => Boolean(url));
+  if (!urls.length) return dto;
+  let images: string[] = [];
+  try {
+    images = await renderDeliveryQrBatch(urls);
+  } catch {
+    // Không vẽ được ảnh thì vẫn trả chi tiết đợt giao; giao diện hiện link truy xuất.
+    return dto;
+  }
+  const byUrl = new Map(urls.map((url, index) => [url, images[index] ?? null]));
+  return {
+    ...dto,
+    deliveryItems: items.map((item) => ({
+      ...item,
+      qrImageDataUrl: item.traceUrl ? (byUrl.get(item.traceUrl) ?? null) : null,
+    })),
   };
 }
 export const deliveryInspectionService = createDeliveryInspectionService();

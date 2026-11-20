@@ -68,6 +68,10 @@ export interface DeliveryInspectionDTO {
       name: string;
       facilityCode: string | null;
     } | null;
+    /** Link truy xuất trên nhãn QR bao bì do NCC tạo khi lập đơn giao (null với đơn cũ). */
+    traceUrl: string | null;
+    /** Ảnh PNG (data URL) của đúng mã QR đó; null nếu không có hoặc tạo ảnh lỗi. */
+    qrImageDataUrl: string | null;
     ingredientLots: {
       id: string;
       lotCode: string;

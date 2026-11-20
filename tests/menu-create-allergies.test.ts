@@ -353,7 +353,7 @@ void test("new menu title comes from the school academic week, not the request",
   await f.service.create(f.input, f.principal);
   assert.equal(
     f.createWeeklyMenuStub.mock.calls[0].arguments[4],
-    "Th\u1ef1c \u0111\u01a1n tu\u1ea7n 10",
+    "Thực đơn dinh dưỡng tuần 10",
   );
 });
 

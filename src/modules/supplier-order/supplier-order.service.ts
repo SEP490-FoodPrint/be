@@ -262,6 +262,9 @@ function lotDatesFingerprint(line: {
  * Ngày của lô khi NCC tạo chuyến giao: đồ khô (DRY_STOCK) bắt buộc có ngày sản xuất và hạn dùng;
  * ngày sản xuất không được sau hôm nay (giờ VN). Đồ tươi không bắt buộc.
  */
+/** Đồ khô phải còn hạn sử dụng ít nhất số ngày này khi NCC giao. */
+const DRY_MIN_SHELF_DAYS = 7;
+
 function assertLotDates(
   lines: {
     name: string;
@@ -290,6 +293,45 @@ function assertLotDates(
     throw new HttpError(
       422,
       `Ngày sản xuất không được sau hôm nay: ${[...new Set(future)].join(", ")}`,
+    );
+  const beforeManufacture = lines
+    .filter(
+      (line) =>
+        line.manufactureDate &&
+        line.expiryDate &&
+        line.expiryDate < line.manufactureDate,
+    )
+    .map((line) => line.name);
+  if (beforeManufacture.length)
+    throw new HttpError(
+      422,
+      `Hạn sử dụng phải sau hoặc bằng ngày sản xuất: ${[...new Set(beforeManufacture)].join(", ")}`,
+    );
+  const expired = lines
+    .filter((line) => line.expiryDate && line.expiryDate < today)
+    .map((line) => line.name);
+  if (expired.length)
+    throw new HttpError(
+      422,
+      `Hạn sử dụng không được trước hôm nay: ${[...new Set(expired)].join(", ")}`,
+    );
+  const dryMinimumExpiry = new Date(
+    Date.parse(`${today}T00:00:00.000Z`) + DRY_MIN_SHELF_DAYS * 86400000,
+  )
+    .toISOString()
+    .slice(0, 10);
+  const shortShelfLife = lines
+    .filter(
+      (line) =>
+        line.handlingType === "DRY_STOCK" &&
+        line.expiryDate &&
+        line.expiryDate < dryMinimumExpiry,
+    )
+    .map((line) => line.name);
+  if (shortShelfLife.length)
+    throw new HttpError(
+      422,
+      `Đồ khô cần còn hạn sử dụng ít nhất ${DRY_MIN_SHELF_DAYS} ngày kể từ hôm nay: ${[...new Set(shortShelfLife)].join(", ")}`,
     );
 }
 

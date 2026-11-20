@@ -204,6 +204,8 @@ const detailSelect = {
       ingredientNameSnapshot: true,
       actualQuantity: true,
       unit: true,
+      // Link truy xuất in trên nhãn QR bao bì mà NCC tạo khi lập đơn giao
+      qrUrl: true,
       Ingredient: {
         select: {
           id: true,

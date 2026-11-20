@@ -23,6 +23,7 @@ export function toSessionUserResponseDTO(
     fullName: user.fullName,
     email: user.email,
     phone: user.phone,
+    organizationName: user.organizationName ?? null,
     roleId: user.roleId,
     role: user.role,
     orgType: user.orgType,

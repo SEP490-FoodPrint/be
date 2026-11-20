@@ -77,6 +77,7 @@ export function createAllergyCatalogService(read = readAllergyCatalog) {
         category:
           row.IngredientEntry.Ingredient.ingredientCategory?.categoryName ??
           null,
+        supplierName: row.IngredientEntry.Ingredient.Supplier?.name ?? null,
         affectedCount: row.affectedCount,
         updatedAt: row.updatedAt.toISOString(),
       }));

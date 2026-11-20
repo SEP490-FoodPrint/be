@@ -24,6 +24,7 @@ export async function readAllergyCatalog(
             select: {
               name: true,
               ingredientCategory: { select: { categoryName: true } },
+              Supplier: { select: { name: true } },
             },
           },
         },

@@ -596,6 +596,7 @@ void test("single-dish samples are idempotent and historical multi-dish samples 
     name: "Tủ 1",
     status: "ACTIVE",
     capacity: 40,
+    compartmentCount: 3,
     currentUsage: 0,
   };
   Object.assign(f.tx, {
@@ -661,7 +662,21 @@ void test("single-dish samples are idempotent and historical multi-dish samples 
         }),
       count: () =>
         Promise.resolve(
-          saved.filter((s) => s.storageUnitId === storageUnit.id).length,
+          saved.filter(
+            (s) => s.storageUnitId === storageUnit.id && s.status === "STORED",
+          ).length,
+        ),
+      findFirst: ({
+        where,
+      }: {
+        where: { OR: [{ storageLocation: { endsWith: string } }] };
+      }) =>
+        Promise.resolve(
+          saved.find(
+            (s) =>
+              s.status === "STORED" &&
+              s.storageLocation?.endsWith(where.OR[0].storageLocation.endsWith),
+          ) ?? null,
         ),
     },
     sampleStorageUnit: { findFirst: () => Promise.resolve({ ...storageUnit }) },
@@ -697,12 +712,37 @@ void test("single-dish samples are idempotent and historical multi-dish samples 
   assert.equal(single.dishId, child.dishes[0].dishId);
   const repeat = await service.create(child.id, input, principal);
   assert.equal(repeat.created, false);
+  storageUnit.name = "Tủ đổi tên";
+  assert.equal(
+    (await service.create(child.id, input, principal)).created,
+    false,
+  );
   await assert.rejects(
     service.create(child.id, { ...input, dishId: "foreign-dish" }, principal),
   );
   // A historical multi-dish child still requires selecting the remaining dish.
   child.dishes.push(...f.children[1].dishes);
   await assert.rejects(service.create(child.id, input, principal));
+  await assert.rejects(
+    service.create(
+      child.id,
+      { ...input, dishId: child.dishes[1].dishId, storageLocation: "Ngăn 4" },
+      principal,
+    ),
+    { statusCode: 422, message: "Tủ Tủ đổi tên không có Ngăn 4" },
+  );
+  await assert.rejects(
+    service.create(
+      child.id,
+      { ...input, dishId: child.dishes[1].dishId },
+      principal,
+    ),
+    {
+      statusCode: 409,
+      message: "Ngăn 2 của tủ Tủ đổi tên đã có mẫu lưu, hãy chọn ngăn khác",
+    },
+  );
+  saved[0].status = "DISPOSED";
   const second = await service.create(
     child.id,
     { ...input, dishId: child.dishes[1].dishId },

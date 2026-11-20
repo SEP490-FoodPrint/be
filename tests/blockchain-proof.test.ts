@@ -279,7 +279,7 @@ function proofHarness(
     quantity: new Prisma.Decimal("0.1"),
     unit: "kg",
     storageUnitId: null,
-    storageLocation: "Tủ 1",
+    storageLocation: "Tủ 1 – Ngăn 1",
     photoHash: null,
     disposedAt: at,
     disposalNote: "Hết hạn",
@@ -880,7 +880,7 @@ function sampleTx(existing: boolean, disposed: boolean) {
     sampledAt: new Date(Date.now() - 48 * 3600000),
     quantity: new Prisma.Decimal("0.1"),
     unit: "kg",
-    storageLocation: "Tủ 1",
+    storageLocation: "Tủ 1 – Ngăn 1",
     photoPublicId: null,
     photoHash: null,
     storageUnitId: C,
@@ -926,7 +926,8 @@ function sampleTx(existing: boolean, disposed: boolean) {
     },
     retainedFoodSample: {
       findUnique: () => Promise.resolve(existing ? sample : null),
-      findFirst: () => Promise.resolve(sample),
+      findFirst: ({ where }: { where: { storageUnitId?: string } }) =>
+        Promise.resolve(where.storageUnitId ? null : sample),
       create: () => Promise.resolve(sample),
       update: () => Promise.resolve({ ...sample, status: "DISPOSED" }),
       count: () => Promise.resolve(0),
@@ -938,6 +939,7 @@ function sampleTx(existing: boolean, disposed: boolean) {
           name: "Tủ 1",
           status: "ACTIVE",
           capacity: 40,
+          compartmentCount: 3,
           currentUsage: 0,
         }),
     },
@@ -975,6 +977,7 @@ void test("sample create and dispose prepare a version once and schedule it afte
     quantity: "0.1",
     unit: "kg",
     storageUnitId: C,
+    storageLocation: "Ngăn 1",
     sampledAt: new Date(Date.now() - 3600000),
   };
   const created = await fresh.service.create(B, input, fresh.principal);

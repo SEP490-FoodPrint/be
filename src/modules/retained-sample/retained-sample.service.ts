@@ -115,9 +115,7 @@ export function createRetainedSampleService(
           );
           if (!unit)
             throw new HttpError(404, "Không tìm thấy tủ lưu mẫu của trường");
-          const storageLocation = input.storageLocation
-            ? `${unit.name} – ${input.storageLocation}`
-            : unit.name;
+          const storageLocation = `${unit.name} – ${input.storageLocation}`;
           const existing = await repository.findForBatch(
             tx,
             cookingBatchId,
@@ -129,7 +127,11 @@ export function createRetainedSampleService(
                 String(Number(input.quantity)) ||
               existing.unit !== input.unit ||
               existing.storageUnitId !== unit.id ||
-              existing.storageLocation !== storageLocation ||
+              (existing.storageLocation !== storageLocation &&
+                existing.storageLocation !== input.storageLocation &&
+                !existing.storageLocation?.endsWith(
+                  ` – ${input.storageLocation}`,
+                )) ||
               +existing.sampledAt !== +input.sampledAt ||
               (existing.photoHash ?? null) !== (photo?.photoHash ?? null)
             ) {
@@ -155,6 +157,17 @@ export function createRetainedSampleService(
                 ? `Tủ ${unit.name} đang bảo trì, hãy chọn tủ khác`
                 : `Tủ ${unit.name} đã ngưng sử dụng, hãy chọn tủ khác`,
             );
+          const compartmentNumber = Number(input.storageLocation.slice(5));
+          if (
+            !Number.isSafeInteger(compartmentNumber) ||
+            compartmentNumber < 1 ||
+            compartmentNumber > unit.compartmentCount ||
+            input.storageLocation !== `Ngăn ${compartmentNumber}`
+          )
+            throw new HttpError(
+              422,
+              `Tủ ${unit.name} không có ${input.storageLocation}`,
+            );
           // Cùng công thức với màn tủ lưu mẫu: max(số đã khai báo, số mẫu đang lưu).
           const stored = Math.max(
             unit.currentUsage,
@@ -164,6 +177,17 @@ export function createRetainedSampleService(
             throw new HttpError(
               409,
               `Tủ ${unit.name} đã đầy (${stored}/${unit.capacity} mẫu), hãy chọn tủ khác`,
+            );
+          if (
+            await repository.findStoredInCompartment(
+              tx,
+              unit.id,
+              input.storageLocation,
+            )
+          )
+            throw new HttpError(
+              409,
+              `${input.storageLocation} của tủ ${unit.name} đã có mẫu lưu, hãy chọn ngăn khác`,
             );
           const sample = await repository.create(tx, cookingBatchId, actor.id, {
             ...input,
