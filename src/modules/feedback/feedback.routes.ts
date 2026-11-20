@@ -14,6 +14,8 @@ export function createFeedbackRouter(
 ) {
   const router = Router();
   const controller = createFeedbackController(service);
+  const handler = requirePermission("meal_complaint.respond");
+  const requester = requirePermission("meal_complaint.submit");
   router.get("/", authHandler, requireResource("feedback"), controller.getAll);
   router.get(
     "/meal-options",
@@ -27,18 +29,17 @@ export function createFeedbackRouter(
     requireResource("feedback"),
     controller.getOne,
   );
+  router.post("/", authHandler, requester, controller.create);
+  router.post("/:id/accept", authHandler, handler, controller.accept);
   router.post(
-    "/",
+    "/:id/comments",
     authHandler,
-    requirePermission("meal_complaint.submit"),
-    controller.create,
+    requirePermission("meal_complaint.respond", "meal_complaint.submit"),
+    controller.comment,
   );
-  router.patch(
-    "/:id",
-    authHandler,
-    requirePermission("meal_complaint.respond"),
-    controller.respond,
-  );
+  router.post("/:id/resolve", authHandler, handler, controller.resolve);
+  router.post("/:id/satisfy", authHandler, requester, controller.satisfy);
+  router.post("/:id/reopen", authHandler, requester, controller.reopen);
   return router;
 }
 

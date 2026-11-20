@@ -1521,6 +1521,209 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
     },
   );
   await context.test(
+    "complaint_supertype stops on legacy complaint rows, then enforces ticket CHECKs and child kind FKs",
+    async () => {
+      const migration = "20261126000100_complaint_supertype";
+      const name = `foodprint_migration_test_ticket_${randomUUID().replaceAll("-", "")}`;
+      await db.query(`CREATE DATABASE "${name}"`);
+      recordLocalTestDatabase(name);
+      const fresh = new URL(url);
+      fresh.pathname = `/${name}`;
+      const legacy = new Client({ connectionString: fresh.toString() });
+      await legacy.connect();
+      try {
+        await legacy.query(
+          "CREATE SCHEMA IF NOT EXISTS foodprint; SET search_path = foodprint, public;",
+        );
+        for (const version of migrationNames.filter(
+          (value) => value < migration,
+        ))
+          await legacy.query(
+            await readFile(
+              path.join(root, "prisma/migrations", version, "migration.sql"),
+              "utf8",
+            ),
+          );
+        await legacy.query("SET search_path = public;");
+        const sql = await readFile(
+          path.join(root, "prisma/migrations", migration, "migration.sql"),
+          "utf8",
+        );
+        const seeded = await legacy.query<{
+          user_id: string;
+          school_id: string;
+          portion_id: string;
+        }>(`
+          WITH school AS (
+            INSERT INTO foodprint.schools(name) VALUES ('Ticket school') RETURNING id
+          ), role AS (
+            INSERT INTO foodprint.roles(code,name,type) VALUES ('PARENTS_COMMITTEE','Parent','SCHOOL') RETURNING id
+          ), actor AS (
+            INSERT INTO foodprint.users(role_id,role_code,school_id,username,email,password_hash,full_name)
+            SELECT role.id,'PARENTS_COMMITTEE',school.id,'ticket_test','ticket@example.test','test-only','Parent'
+            FROM role, school RETURNING id
+          ), classroom AS (
+            INSERT INTO foodprint.classes(school_id,name) SELECT id,'5A' FROM school RETURNING id
+          ), portion AS (
+            INSERT INTO foodprint.daily_meal_portions(class_id,confirmed_by_user_id,meal_date,meal_type,total_portions)
+            SELECT classroom.id,actor.id,'2026-11-12','LUNCH',30 FROM classroom,actor RETURNING id
+          )
+          SELECT actor.id AS user_id, school.id AS school_id, portion.id AS portion_id
+          FROM actor, school, portion
+        `);
+        const {
+          user_id: userId,
+          school_id: schoolId,
+          portion_id: portionId,
+        } = seeded.rows[0];
+        await legacy.query(
+          `INSERT INTO foodprint.meal_complaints(daily_meal_portion_id,submitted_by_user_id,complaint_type,description)
+           VALUES($1,$2,'OTHER','Legacy row')`,
+          [portionId, userId],
+        );
+        await assert.rejects(legacy.query(sql), /complaint_supertype/);
+        await legacy.query("ROLLBACK");
+        assert.equal(
+          (await legacy.query("SELECT 1 FROM foodprint.meal_complaints"))
+            .rowCount,
+          1,
+        );
+        assert.equal(
+          (
+            await legacy.query<{ name: string | null }>(
+              "SELECT to_regclass('foodprint.complaints')::text AS name",
+            )
+          ).rows[0].name,
+          null,
+        );
+        await legacy.query("DELETE FROM foodprint.meal_complaints");
+        await legacy.query(sql);
+
+        const insertComplaint = (columns: string, values: string) =>
+          legacy.query<{ id: string }>(
+            `INSERT INTO foodprint.complaints(sender_user_id,sender_role_code,title,description,${columns})
+             VALUES($1,'PARENTS_COMMITTEE','Tiêu đề','Mô tả',${values}) RETURNING id`,
+            [userId],
+          );
+        const meal = await insertComplaint("kind,code", "'MEAL','FP-MC-12345'");
+        const mealId = meal.rows[0].id;
+        await legacy.query(
+          `INSERT INTO foodprint.meal_complaints(id,school_id,daily_meal_portion_id,complaint_type)
+           VALUES($1,$2,$3,'OTHER')`,
+          [mealId, schoolId, portionId],
+        );
+        const rejected: [string, string, string][] = [
+          ["kind,code", "'MEAL','FP-CP-12345'", "complaints_code_kind"],
+          ["kind,code", "'MEAL','FP-MC-00000'", "complaints_code_format"],
+          [
+            "kind,code,status",
+            "'MEAL','FP-MC-11111','RESOLVED'",
+            "complaints_resolved_timestamp",
+          ],
+          [
+            "kind,code,status",
+            "'MEAL','FP-MC-11112','CLOSED'",
+            "complaints_closed_fields",
+          ],
+          [
+            "kind,code,status,close_reason,closed_at,closed_by_user_id",
+            "'MEAL','FP-MC-11113','CLOSED','AUTO_CLOSED',now(),$1",
+            "complaints_closed_actor",
+          ],
+          [
+            "kind,code,status,close_reason,closed_at,closed_by_user_id",
+            "'INGREDIENT','FP-CP-11114','CLOSED','ESCALATED',now(),$1",
+            "complaints_escalated_kind",
+          ],
+          [
+            "kind,code,resolved_count",
+            "'MEAL','FP-MC-11115',-1",
+            "complaints_resolved_count_range",
+          ],
+        ];
+        for (const [columns, values, constraint] of rejected)
+          await assert.rejects(
+            insertComplaint(columns, values),
+            (error: unknown) => sqlState(error, "23514", constraint),
+            constraint,
+          );
+        await insertComplaint(
+          "kind,code,status,close_reason,closed_at",
+          "'MEAL','FP-MC-11116','CLOSED','AUTO_CLOSED',now()",
+        );
+        await assert.rejects(
+          legacy.query(
+            "UPDATE foodprint.complaints SET code='FP-MC-12345' WHERE code='FP-MC-11116'",
+          ),
+          (error: unknown) => sqlState(error, "23505", "complaints_code_key"),
+        );
+        // Bảng con chỉ trỏ được tới bản ghi cha cùng loại (FK tổ hợp id, kind).
+        const ingredient = await insertComplaint(
+          "kind,code",
+          "'INGREDIENT','FP-CP-100000'",
+        );
+        await assert.rejects(
+          legacy.query(
+            `INSERT INTO foodprint.meal_complaints(id,school_id,daily_meal_portion_id,complaint_type)
+             VALUES($1,$2,$3,'OTHER')`,
+            [ingredient.rows[0].id, schoolId, portionId],
+          ),
+          (error: unknown) =>
+            sqlState(error, "23503", "meal_complaints_id_kind_fkey"),
+        );
+        await assert.rejects(
+          legacy.query(
+            `INSERT INTO foodprint.complaint_comments(complaint_id,author_user_id,author_role_code,author_side,comment_type,content)
+             VALUES($1,$2,'PARENTS_COMMITTEE','REQUESTER','RESOLUTION','Không hợp lệ')`,
+            [mealId, userId],
+          ),
+          (error: unknown) =>
+            sqlState(error, "23514", "complaint_comments_resolution_side"),
+        );
+        await assert.rejects(
+          legacy.query(
+            `INSERT INTO foodprint.complaint_comments(complaint_id,author_user_id,author_role_code,author_side,comment_type,content)
+             VALUES($1,$2,'PARENTS_COMMITTEE','REQUESTER','MESSAGE','   ')`,
+            [mealId, userId],
+          ),
+          (error: unknown) =>
+            sqlState(error, "23514", "complaint_comments_content_present"),
+        );
+        await assert.rejects(
+          legacy.query(
+            `INSERT INTO foodprint.complaint_status_histories(complaint_id,to_status,actor_type,actor_user_id,actor_role_code)
+             VALUES($1,'IN_PROGRESS','SYSTEM',$2,'PARENTS_COMMITTEE')`,
+            [mealId, userId],
+          ),
+          (error: unknown) =>
+            sqlState(error, "23514", "complaint_status_histories_actor"),
+        );
+        await legacy.query(
+          `INSERT INTO foodprint.complaint_status_histories(complaint_id,from_status,to_status,close_reason,actor_type)
+           VALUES($1,'RESOLVED','CLOSED','AUTO_CLOSED','SYSTEM')`,
+          [mealId],
+        );
+        for (const legacyType of [
+          "complaint_status",
+          "ingredient_quality_feedback_status",
+        ])
+          assert.equal(
+            (
+              await legacy.query(
+                "SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace WHERE n.nspname='foodprint' AND t.typname=$1",
+                [legacyType],
+              )
+            ).rowCount,
+            0,
+            legacyType,
+          );
+      } finally {
+        await legacy.end();
+        await db.query(`DROP DATABASE "${name}"`);
+      }
+    },
+  );
+  await context.test(
     "complaint migration preserves existing meal and response",
     async () => {
       const migration =
@@ -3865,7 +4068,7 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
   );
 
   await context.test(
-    "fresh replay configures complaint_code column and empty BIGINT sequence with no default, functions or triggers",
+    "complaint_code migration has no functions/triggers and its column/sequence are superseded by complaints.code",
     async () => {
       const migration = "20261120000300_ingredient_feedback_complaint_code";
       assert(
@@ -3889,6 +4092,8 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
         /SET\s+DEFAULT\s+nextval|ADD\s+COLUMN\s+complaint_code[\s\S]*DEFAULT/i,
       );
 
+      // Sau complaint_supertype, mã nằm ở bảng cha `complaints.code` (Feistel do backend cấp);
+      // cột complaint_code và sequence tuần tự cũ đã bị gỡ cùng bảng con cũ.
       const column = (
         await db.query<{
           type: string;
@@ -3903,8 +4108,8 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
            JOIN pg_attribute a ON a.attrelid = c.oid
            LEFT JOIN pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
            WHERE n.nspname = 'foodprint'
-             AND c.relname = 'ingredient_quality_feedback'
-             AND a.attname = 'complaint_code'
+             AND c.relname = 'complaints'
+             AND a.attname = 'code'
              AND a.attnum > 0 AND NOT a.attisdropped`,
         )
       ).rows[0];
@@ -3913,60 +4118,21 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
         not_null: true,
         default_value: null,
       });
-
-      const sequence = (
-        await db.query<{
-          data_type: string;
-          seqincrement: string;
-          seqmin: string;
-          seqmax: string;
-          seqcache: string;
-          seqcycle: boolean;
-        }>(
-          `SELECT format_type(seqtypid, -1) AS data_type,
-                  seqincrement, seqmin, seqmax, seqcache, seqcycle
-           FROM pg_sequence
-           WHERE seqrelid = 'foodprint.ingredient_quality_feedback_complaint_code_seq'::regclass`,
-        )
-      ).rows[0];
-      assert.deepEqual(sequence, {
-        data_type: "bigint",
-        seqincrement: "1",
-        seqmin: "1",
-        seqmax: "9223372036854775807",
-        seqcache: "1",
-        seqcycle: false,
-      });
       assert.equal(
         (
-          await db.query<{ owner: string }>(
-            "SELECT pg_get_serial_sequence('foodprint.ingredient_quality_feedback', 'complaint_code') AS owner",
+          await db.query<{ name: string | null }>(
+            "SELECT to_regclass('foodprint.ingredient_quality_feedback_complaint_code_seq')::text AS name",
           )
-        ).rows[0].owner,
-        "foodprint.ingredient_quality_feedback_complaint_code_seq",
-      );
-
-      const rowCount = (
-        await db.query<{ count: number }>(
-          "SELECT count(*)::int AS count FROM foodprint.ingredient_quality_feedback",
-        )
-      ).rows[0].count;
-      assert.equal(rowCount, 0);
-      assert.deepEqual(
-        (
-          await db.query<{ last_value: string; is_called: boolean }>(
-            "SELECT last_value, is_called FROM foodprint.ingredient_quality_feedback_complaint_code_seq",
-          )
-        ).rows[0],
-        { last_value: "1", is_called: false },
+        ).rows[0].name,
+        null,
       );
       assert.equal(
         (
-          await db.query<{ value: string }>(
-            "SELECT nextval('foodprint.ingredient_quality_feedback_complaint_code_seq') AS value",
+          await db.query(
+            "SELECT 1 FROM information_schema.columns WHERE table_schema='foodprint' AND table_name='ingredient_quality_feedback' AND column_name='complaint_code'",
           )
-        ).rows[0].value,
-        "1",
+        ).rowCount,
+        0,
       );
     },
   );
@@ -4324,6 +4490,8 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
           ).rows,
           deployedHistory,
         );
+        // complaint_supertype dừng nếu bảng khiếu nại cũ còn dòng (Q27): dọn dữ liệu kiểm thử trước khi deploy tiếp.
+        await legacy.query("DELETE FROM foodprint.ingredient_quality_feedback");
         for (const subsequent of migrationNames.filter(
           (item) => item > migration,
         )) {

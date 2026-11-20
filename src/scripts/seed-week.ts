@@ -1076,14 +1076,28 @@ async function deleteWeek(ctx: SchoolCtx, week: string) {
     await tx.cookingBatchGroup.deleteMany({
       where: { id: { in: batchGroups } },
     });
-    await tx.ingredientQualityFeedback.deleteMany({
-      where: {
-        OR: [
-          { deliveryId: { in: deliveries } },
-          { ingredientLotId: { in: lots } },
-        ],
-      },
+    // Phản ánh nguyên liệu là bảng con của `complaints`: xóa bình luận/lịch sử, bảng con rồi bảng cha.
+    const feedbackIds = (
+      await tx.ingredientQualityFeedback.findMany({
+        where: {
+          OR: [
+            { deliveryId: { in: deliveries } },
+            { ingredientLotId: { in: lots } },
+          ],
+        },
+        select: { id: true },
+      })
+    ).map((row) => row.id);
+    await tx.complaintComment.deleteMany({
+      where: { complaintId: { in: feedbackIds } },
     });
+    await tx.complaintStatusHistory.deleteMany({
+      where: { complaintId: { in: feedbackIds } },
+    });
+    await tx.ingredientQualityFeedback.deleteMany({
+      where: { id: { in: feedbackIds } },
+    });
+    await tx.complaint.deleteMany({ where: { id: { in: feedbackIds } } });
     await tx.inventoryTransaction.deleteMany({
       where: { ingredientLotId: { in: lots } },
     });

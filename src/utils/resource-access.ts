@@ -242,15 +242,17 @@ export const listScopes = {
       "Loại tổ chức không có phạm vi truy cập tài nguyên này",
     );
   },
-  feedback: (p: AuthPrincipal): Prisma.MealComplaintWhereInput => {
+  /** Khiếu nại suất ăn (bảng cha `complaints`, kind MEAL); trường nhận lưu ở `meal_complaints.school_id`. */
+  feedback: (p: AuthPrincipal): Prisma.ComplaintWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["feedback"]);
-    if (p.orgType === "SYSTEM") return {};
+    if (p.orgType === "SYSTEM") return { kind: "MEAL" };
     if (p.orgType === "SCHOOL" && p.role === ROLES.SCHOOL_MANAGEMENT_BOARD)
-      return { DailyMealPortion: { Class: { schoolId: school(p) } } };
+      return { kind: "MEAL", mealComplaint: { is: { schoolId: school(p) } } };
     if (p.orgType === "SCHOOL" && isComplaintSubmitter(p.role))
       return {
-        DailyMealPortion: { Class: { schoolId: school(p) } },
-        submittedByUserId: p.id,
+        kind: "MEAL",
+        mealComplaint: { is: { schoolId: school(p) } },
+        senderUserId: p.id,
       };
     throw new HttpError(403, "Vai trò không được phép xem khiếu nại");
   },
@@ -436,18 +438,26 @@ export const listScopes = {
   },
   "ingredient-quality-feedback": (
     p: AuthPrincipal,
-  ): Prisma.IngredientQualityFeedbackWhereInput => {
+  ): Prisma.ComplaintWhereInput => {
     const scope = ingredientQualityFeedbackReadScope(p, "list");
-    if (scope.kind === "SYSTEM") return {};
+    if (scope.kind === "SYSTEM") return { kind: "INGREDIENT" };
     if (scope.kind === "SCHOOL") {
       return {
-        Delivery: { schoolId: scope.schoolId },
+        kind: "INGREDIENT",
+        ingredientQualityFeedback: {
+          is: { Delivery: { schoolId: scope.schoolId } },
+        },
         ...(scope.submittedByUserId
-          ? { submittedByUserId: scope.submittedByUserId }
+          ? { senderUserId: scope.submittedByUserId }
           : {}),
       };
     }
-    return { Delivery: { supplierId: scope.supplierId } };
+    return {
+      kind: "INGREDIENT",
+      ingredientQualityFeedback: {
+        is: { Delivery: { supplierId: scope.supplierId } },
+      },
+    };
   },
   reporting: (
     p: AuthPrincipal,

@@ -1,16 +1,18 @@
-export interface ComplaintResponseDTO {
+import type {
+  TicketCommentDTO,
+  TicketFieldsDTO,
+} from "../complaint-ticket/complaint-ticket.response.dto";
+
+export interface ComplaintResponseDTO extends TicketFieldsDTO {
   id: string;
-  /** `FP-MC-NNNNN`; `null` với khiếu nại cũ chưa được backfill. */
-  code: string | null;
+  /** `FP-MC-NNNNN`. */
+  code: string;
+  title: string;
   complaintType: string;
   description: string;
-  status: string;
   submittedAt: string;
   updatedAt: string;
-  resolvedAt: string | null;
-  resolution: string | null;
   submitter: { id: string; fullName: string };
-  handler: { id: string; fullName: string } | null;
   meal: {
     dailyMealPortionId: string;
     allocationId: string | null;
@@ -21,7 +23,9 @@ export interface ComplaintResponseDTO {
     mealDate: string;
     mealType: string;
   };
-  allowedActions: Array<"START_REVIEW" | "RESOLVE">;
+}
+export interface ComplaintDetailResponseDTO extends ComplaintResponseDTO {
+  comments: TicketCommentDTO[];
 }
 export interface ComplaintListResponseDTO {
   items: ComplaintResponseDTO[];

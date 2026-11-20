@@ -3,11 +3,14 @@ import { asyncHandler } from "../../utils/async-handler";
 import { sendSuccess } from "../../utils/response";
 import { feedbackService, type FeedbackService } from "./feedback.service";
 import {
+  validateComplaintComment,
+  validateComplaintEmptyBody,
   validateComplaintId,
+  validateComplaintReopen,
+  validateComplaintResolve,
   validateMealOptionsQuery,
   validateCreateComplaint,
   validateFeedbackListQuery,
-  validateRespondComplaint,
 } from "./feedback.validation";
 
 export function createFeedbackController(
@@ -49,15 +52,56 @@ export function createFeedbackController(
         201,
       );
     }),
-    respond: asyncHandler(async (req, res) => {
+    accept: asyncHandler(async (req, res) => {
+      const id = validateComplaintId(req.params.id);
+      validateComplaintEmptyBody(req.body);
       sendSuccess(
         res,
-        await service.respond(
+        await service.accept(id, requirePrincipal(req)),
+        "Tiếp nhận khiếu nại thành công",
+      );
+    }),
+    comment: asyncHandler(async (req, res) => {
+      sendSuccess(
+        res,
+        await service.comment(
           validateComplaintId(req.params.id),
-          validateRespondComplaint(req.body),
+          validateComplaintComment(req.body),
           requirePrincipal(req),
         ),
-        "Cập nhật xử lý khiếu nại thành công",
+        "Gửi bình luận thành công",
+        201,
+      );
+    }),
+    resolve: asyncHandler(async (req, res) => {
+      sendSuccess(
+        res,
+        await service.resolve(
+          validateComplaintId(req.params.id),
+          validateComplaintResolve(req.body),
+          requirePrincipal(req),
+        ),
+        "Cập nhật đã xử lý khiếu nại thành công",
+      );
+    }),
+    satisfy: asyncHandler(async (req, res) => {
+      const id = validateComplaintId(req.params.id);
+      validateComplaintEmptyBody(req.body);
+      sendSuccess(
+        res,
+        await service.satisfy(id, requirePrincipal(req)),
+        "Đã ghi nhận hài lòng, khiếu nại được đóng",
+      );
+    }),
+    reopen: asyncHandler(async (req, res) => {
+      sendSuccess(
+        res,
+        await service.reopen(
+          validateComplaintId(req.params.id),
+          validateComplaintReopen(req.body),
+          requirePrincipal(req),
+        ),
+        "Đã gửi yêu cầu xử lý lại",
       );
     }),
   };

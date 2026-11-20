@@ -1,27 +1,41 @@
 import { z } from "zod";
 import { HttpError } from "../../utils/http-error";
+import { TICKET_STATUSES } from "../complaint-ticket/complaint-ticket.lifecycle";
+import {
+  ticketCommentBodySchema,
+  ticketEmptyBodySchema,
+  ticketReopenBodySchema,
+  ticketResolveBodySchema,
+} from "../complaint-ticket/complaint-ticket.validation";
 
+export {
+  ticketCommentBodySchema,
+  ticketReopenBodySchema,
+  ticketResolveBodySchema,
+};
+
+/** Loại khiếu nại được lọc (kể cả `HEALTH_ISSUE` của dữ liệu cũ). */
 const complaintTypes = [
   "MEAL_QUALITY",
   "FOOD_HYGIENE",
   "HEALTH_ISSUE",
   "OTHER",
 ] as const;
-const complaintStatuses = [
-  "SUBMITTED",
-  "IN_REVIEW",
-  "RESOLVED",
-  "CLOSED",
+/** Đơn mới không nhận `HEALTH_ISSUE` (Q21): vấn đề sức khỏe đi qua luồng báo cáo sự cố. */
+const submittableComplaintTypes = [
+  "MEAL_QUALITY",
+  "FOOD_HYGIENE",
+  "OTHER",
 ] as const;
 const uuid = z.string().uuid("ID không đúng định dạng UUID");
 const date = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, "Ngày phải có dạng YYYY-MM-DD");
 
-const listSchema = z.strictObject({
+export const complaintListQuerySchema = z.strictObject({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
-  status: z.enum(complaintStatuses).optional(),
+  status: z.enum(TICKET_STATUSES).optional(),
   complaintType: z.enum(complaintTypes).optional(),
   from: date.optional(),
   to: date.optional(),
@@ -34,33 +48,15 @@ export const validateMealOptionsQuery = (query: unknown) =>
 
 export const createComplaintSchema = z.strictObject({
   dailyMealPortionId: uuid,
-  complaintType: z.enum(complaintTypes),
+  complaintType: z.enum(submittableComplaintTypes, {
+    error: "Loại khiếu nại không hợp lệ; vấn đề sức khỏe gửi qua báo cáo sự cố",
+  }),
   description: z
     .string()
     .trim()
     .min(10, "Nội dung tối thiểu 10 ký tự")
     .max(2000),
 });
-
-export const respondComplaintSchema = z
-  .strictObject({
-    action: z.enum(["START_REVIEW", "RESOLVE"]),
-    resolution: z.string().trim().min(10).max(2000).optional(),
-  })
-  .superRefine((value, context) => {
-    if (value.action === "RESOLVE" && !value.resolution)
-      context.addIssue({
-        code: "custom",
-        path: ["resolution"],
-        message: "Cần nhập kết quả xử lý",
-      });
-    if (value.action === "START_REVIEW" && value.resolution !== undefined)
-      context.addIssue({
-        code: "custom",
-        path: ["resolution"],
-        message: "Không gửi kết quả khi mới tiếp nhận",
-      });
-  });
 
 function parse<T>(schema: z.ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value);
@@ -72,13 +68,19 @@ function parse<T>(schema: z.ZodType<T>, value: unknown): T {
 }
 
 export function validateFeedbackListQuery(value: unknown) {
-  const query = parse(listSchema, value);
+  const query = parse(complaintListQuerySchema, value);
   if (query.from && query.to && query.from > query.to)
     throw new HttpError(400, "Ngày bắt đầu không được sau ngày kết thúc");
   return query;
 }
 export const validateCreateComplaint = (value: unknown) =>
   parse(createComplaintSchema, value);
-export const validateRespondComplaint = (value: unknown) =>
-  parse(respondComplaintSchema, value);
 export const validateComplaintId = (value: unknown) => parse(uuid, value);
+export const validateComplaintComment = (value: unknown) =>
+  parse(ticketCommentBodySchema, value);
+export const validateComplaintResolve = (value: unknown) =>
+  parse(ticketResolveBodySchema, value);
+export const validateComplaintReopen = (value: unknown) =>
+  parse(ticketReopenBodySchema, value ?? {});
+export const validateComplaintEmptyBody = (value: unknown) =>
+  parse(ticketEmptyBodySchema, value ?? {});

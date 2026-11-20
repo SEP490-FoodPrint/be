@@ -5,6 +5,26 @@ import { HttpError } from "../../utils/http-error";
 import { ROLES } from "../../constants/roles";
 import { isComplaintSubmitter } from "../../utils/resource-access";
 
+function countComplaints(
+  rows: { complaintType: string; Complaint: { status: string } }[],
+) {
+  const counts = new Map<
+    string,
+    { status: string; type: string; count: number }
+  >();
+  for (const row of rows) {
+    const key = `${row.Complaint.status}|${row.complaintType}`;
+    const entry = counts.get(key) ?? {
+      status: row.Complaint.status,
+      type: row.complaintType,
+      count: 0,
+    };
+    entry.count += 1;
+    counts.set(key, entry);
+  }
+  return [...counts.values()];
+}
+
 export async function getSchoolOverview(
   principal: AuthPrincipal,
   connect: typeof getPrisma = getPrisma,
@@ -36,16 +56,19 @@ export async function getSchoolOverview(
         select: { id: true, title: true, status: true, weekStartDate: true },
         orderBy: { weekStartDate: "desc" },
       }),
-      db.mealComplaint.groupBy({
-        by: ["status", "complaintType"],
+      // Trạng thái nằm ở bảng cha, loại khiếu nại ở bảng con: đếm theo cặp sau khi đọc.
+      db.mealComplaint.findMany({
         where: {
-          DailyMealPortion: { Class: { schoolId } },
+          schoolId,
           ...(isComplaintSubmitter(principal.role)
-            ? { submittedByUserId: principal.id }
+            ? { Complaint: { senderUserId: principal.id } }
             : {}),
           ...(!canReadComplaints ? { id: { in: [] } } : {}),
         },
-        _count: { _all: true },
+        select: {
+          complaintType: true,
+          Complaint: { select: { status: true } },
+        },
       }),
       db.schoolSupplierRelationship.groupBy({
         by: ["status"],
@@ -78,13 +101,7 @@ export async function getSchoolOverview(
   return {
     school,
     menus: allowed("menu.view") ? menus : null,
-    complaints: canReadComplaints
-      ? complaints.map(({ status, complaintType, _count }) => ({
-          status,
-          type: complaintType,
-          count: _count._all,
-        }))
-      : null,
+    complaints: canReadComplaints ? countComplaints(complaints) : null,
     suppliers: allowed(
       "supplier_relationship.view",
       "supplier_relationship.manage",

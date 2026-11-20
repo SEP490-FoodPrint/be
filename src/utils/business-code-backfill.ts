@@ -4,8 +4,11 @@ import {
   type ExistingBusinessCodes,
 } from "./business-code";
 
-/** Các loại mã có bản ghi cũ chưa mang mã cần backfill. */
-export const BACKFILL_TYPES = ["MC", "IC"] as const;
+/**
+ * Các loại mã có bản ghi cũ chưa mang mã cần backfill. Khiếu nại (MC/CP) đã chuyển lên bảng cha
+ * `complaints` với `code NOT NULL` (specs/complaint-supertype) nên không còn cần backfill.
+ */
+export const BACKFILL_TYPES = ["IC"] as const;
 export type BackfillType = (typeof BACKFILL_TYPES)[number];
 
 export const BACKFILL_BATCH_SIZE = 100;
@@ -44,46 +47,32 @@ export function createBusinessCodeBackfillRepository(
     transaction: (operation) =>
       db.$transaction(operation, { maxWait: 20_000, timeout: 120_000 }),
     async lockUncoded(tx, type, take) {
-      const rows =
-        type === "MC"
-          ? await tx.$queryRaw<{ id: string }[]>`
-              SELECT id::text AS id FROM foodprint.meal_complaints
-              WHERE code IS NULL
-              ORDER BY submitted_at, id
-              LIMIT ${take}
-              FOR UPDATE`
-          : await tx.$queryRaw<{ id: string }[]>`
-              SELECT id::text AS id FROM foodprint.food_safety_incidents
-              WHERE code IS NULL
-              ORDER BY created_at, id
-              LIMIT ${take}
-              FOR UPDATE`;
+      const rows = await tx.$queryRaw<{ id: string }[]>`
+        SELECT id::text AS id FROM foodprint.food_safety_incidents
+        WHERE code IS NULL
+        ORDER BY created_at, id
+        LIMIT ${take}
+        FOR UPDATE`;
       return rows.map((row) => row.id);
     },
-    async existingCodes(tx, type, codes) {
-      const where = { code: { in: [...codes] } };
-      const rows =
-        type === "MC"
-          ? await tx.mealComplaint.findMany({ where, select: { code: true } })
-          : await tx.foodSafetyIncident.findMany({
-              where,
-              select: { code: true },
-            });
+    async existingCodes(tx, _type, codes) {
+      const rows = await tx.foodSafetyIncident.findMany({
+        where: { code: { in: [...codes] } },
+        select: { code: true },
+      });
       return new Set(
         rows.flatMap((row) => (row.code === null ? [] : [row.code])),
       );
     },
-    async assignCode(tx, type, id, code) {
+    async assignCode(tx, _type, id, code) {
       // Chỉ gán mã kỹ thuật cho bản ghi cũ: cố ý không đổi updated_at nghiệp vụ.
-      return type === "MC"
-        ? tx.$executeRaw`UPDATE foodprint.meal_complaints SET code = ${code} WHERE id = ${id}::uuid AND code IS NULL`
-        : tx.$executeRaw`UPDATE foodprint.food_safety_incidents SET code = ${code} WHERE id = ${id}::uuid AND code IS NULL`;
+      return tx.$executeRaw`UPDATE foodprint.food_safety_incidents SET code = ${code} WHERE id = ${id}::uuid AND code IS NULL`;
     },
   };
 }
 
 /**
- * Gán mã `FP-MC-…`/`FP-IC-…` cho bản ghi cũ `code IS NULL`, theo lô, mỗi lô một transaction
+ * Gán mã `FP-IC-…` cho sự cố cũ `code IS NULL`, theo lô, mỗi lô một transaction
  * (khóa dòng → cấp mã bằng bộ đếm chung + Feistel → cập nhật). Chạy lại sau khi xong sẽ gán 0 dòng.
  */
 export async function backfillBusinessCodes(
@@ -98,7 +87,7 @@ export async function backfillBusinessCodes(
     options.allocate ??
     ((tx, type, count, exists) =>
       allocateBusinessCodes(tx, type, count, exists));
-  const assigned: Record<BackfillType, number> = { MC: 0, IC: 0 };
+  const assigned: Record<BackfillType, number> = { IC: 0 };
   for (const type of BACKFILL_TYPES) {
     for (;;) {
       const batch = await repository.transaction(async (tx) => {

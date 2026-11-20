@@ -2188,25 +2188,66 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
     createdAt?: Date;
     updatedAt?: Date;
   }) {
+    // Ticket model (specs/complaint-supertype): SUBMITTED cũ ↔ NEW; RESPONDED cũ ↔ RESOLVED + bình luận RESOLUTION.
     return db.$transaction(async (tx) => {
       const complaintCode = await feedbackRepoFixture.allocateComplaintCode(tx);
-      return tx.ingredientQualityFeedback.create({
+      const sender = await tx.user.findUniqueOrThrow({
+        where: { id: input.submittedByUserId },
+        select: { roleCode: true, schoolId: true },
+      });
+      const responded = input.status === "RESPONDED";
+      const row = await tx.complaint.create({
         data: {
           ...(input.id ? { id: input.id } : {}),
-          complaintCode,
-          deliveryId: input.deliveryId,
-          ingredientLotId: input.ingredientLotId ?? null,
-          submittedByUserId: input.submittedByUserId,
+          kind: "INGREDIENT",
+          code: complaintCode,
           title: input.title,
           description: input.description,
-          status: input.status ?? "SUBMITTED",
-          supplierResponse: input.supplierResponse ?? null,
-          respondedByUserId: input.respondedByUserId ?? null,
-          respondedAt: input.respondedAt ?? null,
-          ...(input.createdAt ? { createdAt: input.createdAt } : {}),
+          senderUserId: input.submittedByUserId,
+          senderRoleCode: sender.roleCode,
+          senderSchoolId: sender.schoolId,
+          status: responded ? "RESOLVED" : "NEW",
+          ...(responded
+            ? {
+                lastResolvedAt: input.respondedAt ?? new Date(),
+                resolvedCount: 1,
+              }
+            : {}),
+          ...(input.createdAt ? { submittedAt: input.createdAt } : {}),
           ...(input.updatedAt ? { updatedAt: input.updatedAt } : {}),
+          ingredientQualityFeedback: {
+            create: {
+              deliveryId: input.deliveryId,
+              ingredientLotId: input.ingredientLotId ?? null,
+            },
+          },
         },
       });
+      if (responded && input.respondedByUserId && input.supplierResponse) {
+        const responder = await tx.user.findUniqueOrThrow({
+          where: { id: input.respondedByUserId },
+          select: { roleCode: true },
+        });
+        await tx.complaintComment.create({
+          data: {
+            complaintId: row.id,
+            authorUserId: input.respondedByUserId,
+            authorRoleCode: responder.roleCode,
+            authorSide: "HANDLER",
+            commentType: "RESOLUTION",
+            content: input.supplierResponse,
+          },
+        });
+      }
+      return {
+        id: row.id,
+        complaintCode: row.code,
+        title: row.title,
+        description: row.description,
+        submittedByUserId: row.senderUserId,
+        createdAt: row.submittedAt,
+        updatedAt: row.updatedAt,
+      };
     });
   }
 
@@ -2320,14 +2361,16 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
       await assert.rejects(
         db.$transaction(async (tx) => {
           rolledBackCode = await feedbackRepoFixture.allocateComplaintCode(tx);
-          await tx.ingredientQualityFeedback.create({
+          await tx.complaint.create({
             data: {
               id: rolledBackId,
-              complaintCode: rolledBackCode,
-              deliveryId: del1.id,
-              submittedByUserId: schActor1.id,
+              kind: "INGREDIENT",
+              code: rolledBackCode,
+              senderUserId: schActor1.id,
+              senderRoleCode: schActor1.roleCode,
               title: "Rolled back complaint",
               description: "Must not persist",
+              ingredientQualityFeedback: { create: { deliveryId: del1.id } },
             },
           });
           throw new Error("SIMULATED_PRODUCER_ROLLBACK");
@@ -2335,9 +2378,7 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
         /SIMULATED_PRODUCER_ROLLBACK/,
       );
       assert.equal(
-        await db.ingredientQualityFeedback.findUnique({
-          where: { id: rolledBackId },
-        }),
+        await db.complaint.findUnique({ where: { id: rolledBackId } }),
         null,
       );
 
@@ -2352,10 +2393,10 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
       assert(
         !created.some((c) => c.complaintCode === afterRollback.complaintCode),
       );
-      const reloaded = await db.ingredientQualityFeedback.findUniqueOrThrow({
+      const reloaded = await db.complaint.findUniqueOrThrow({
         where: { id: afterRollback.id },
       });
-      assert.equal(reloaded.complaintCode, afterRollback.complaintCode);
+      assert.equal(reloaded.code, afterRollback.complaintCode);
     },
   );
 
@@ -2648,7 +2689,7 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
           if (!record(res.data.pagination).hasNext) break;
         }
         assert.deepEqual(
-          collected.map((i) => ({ id: i.id, complaintCode: i.complaintCode })),
+          collected.map((i) => ({ id: i.id, complaintCode: i.code })),
           [
             { id: aNewest.id, complaintCode: aNewest.complaintCode },
             { id: aTieLow.id, complaintCode: aTieLow.complaintCode },
@@ -2661,7 +2702,7 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
         assert.equal(record(collected[0].school).code, null);
         assert.equal(record(collected[1].school).code, "SCH-SAME");
         assert.equal(record(collected[3].school).code, "SCH-UNLINKED");
-        assert.equal(collected[1].status, "RESPONDED");
+        assert.equal(collected[1].status, "RESOLVED");
         const beyond = await call(
           "/ingredient-quality-feedback?page=99&limit=2",
           cookie,
@@ -2678,7 +2719,7 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
       assert.deepEqual(
         (bRes.data.items as Record<string, unknown>[]).map((i) => ({
           id: i.id,
-          complaintCode: i.complaintCode,
+          complaintCode: i.code,
         })),
         [{ id: foreignB.id, complaintCode: foreignB.complaintCode }],
       );
@@ -2955,7 +2996,7 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
       const beforeSeq = await db.$queryRaw<
         { code_type: string; last_sequence: number }[]
       >`SELECT code_type, last_sequence FROM foodprint.business_code_counters WHERE code_type = 'CP'`;
-      const beforeRow = await db.ingredientQualityFeedback.findUniqueOrThrow({
+      const beforeRow = await db.complaint.findUniqueOrThrow({
         where: { id: respondedFeedback.id },
       });
 
@@ -2967,16 +3008,19 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
         );
         assert.equal(res.status, 200);
         assert.equal(res.data.id, respondedFeedback.id);
-        assert.equal(res.data.complaintCode, respondedFeedback.complaintCode);
+        assert.equal(res.data.code, respondedFeedback.complaintCode);
+        const resolution = (
+          res.data.comments as Record<string, unknown>[]
+        ).find((comment) => comment.commentType === "RESOLUTION");
         assert.equal(
-          res.data.supplierResponse,
+          resolution?.content,
           "Câu trả lời chính thức từ nhà cung cấp",
         );
         assert.deepEqual(res.data.submittedBy, {
           id: submitter1.id,
           fullName: submitter1.fullName,
         });
-        assert.deepEqual(res.data.respondedBy, {
+        assert.deepEqual(resolution?.author, {
           id: lockedResponder1.id,
           fullName: lockedResponder1.fullName,
         });
@@ -3024,7 +3068,7 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
 
       // Zero DB or sequence mutations on GET detail
       assert.deepEqual(
-        await db.ingredientQualityFeedback.findUniqueOrThrow({
+        await db.complaint.findUniqueOrThrow({
           where: { id: respondedFeedback.id },
         }),
         beforeRow,
@@ -3039,7 +3083,7 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
   );
 
   await context.test(
-    "US3 end-to-end supplier POST response updates SUBMITTED once, preserves UUID+complaintCode for SCHOOL FR-011 readback, supports historical unlinked data, rolls back on readback error and mutates no external timestamps or sequence",
+    "US3 end-to-end supplier accept + resolve moves NEW → RESOLVED, preserves UUID+complaintCode for SCHOOL FR-011 readback, supports historical unlinked data, rolls back on readback error and mutates no external timestamps or sequence",
     async () => {
       const supAdminRole = await db.role.findUniqueOrThrow({
         where: { code: "INGREDIENT_SUPPLIER_ADMIN" },
@@ -3223,20 +3267,18 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
       // Foreign org POST -> 404 before any mutation
       for (const c of [sup2Cookie]) {
         const nf = await call(
-          `/ingredient-quality-feedback/${fTarget.id}/response`,
+          `/ingredient-quality-feedback/${fTarget.id}/accept`,
           c,
           "POST",
-          { supplierResponse: "Unauthorized foreign supplier attempt" },
         );
         assert.equal(nf.status, 404);
       }
       assert.equal(
         (
           await call(
-            `/ingredient-quality-feedback/${fTarget.id}/response`,
+            `/ingredient-quality-feedback/${fTarget.id}/accept`,
             foreignSchoolCookie,
             "POST",
-            { supplierResponse: "School cannot reply" },
           )
         ).status,
         403,
@@ -3273,34 +3315,52 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
         "  Phản hồi chính thức sau ngừng liên kết.\nĐang đổi lô bù. ";
       const expectedReply =
         "Phản hồi chính thức sau ngừng liên kết.\nĐang đổi lô bù.";
-      const postRes = await call(
-        `/ingredient-quality-feedback/${fTarget.id}/response`,
+      const earlyResolve = await call(
+        `/ingredient-quality-feedback/${fTarget.id}/resolve`,
         sup1StaffCookie,
         "POST",
-        { supplierResponse: replyText },
+        { content: replyText },
+      );
+      assert.equal(earlyResolve.status, 409);
+      const acceptRes = await call(
+        `/ingredient-quality-feedback/${fTarget.id}/accept`,
+        sup1StaffCookie,
+        "POST",
+      );
+      assert.equal(acceptRes.status, 200);
+      assert.equal(acceptRes.data.status, "IN_PROGRESS");
+      const postRes = await call(
+        `/ingredient-quality-feedback/${fTarget.id}/resolve`,
+        sup1StaffCookie,
+        "POST",
+        { content: replyText },
       );
       assert.equal(postRes.status, 200);
       assert.equal(postRes.data.id, fTarget.id);
-      assert.equal(postRes.data.complaintCode, fTarget.complaintCode);
-      assert.equal(postRes.data.status, "RESPONDED");
-      assert.equal(postRes.data.supplierResponse, expectedReply);
-      assert.deepEqual(postRes.data.respondedBy, {
+      assert.equal(postRes.data.code, fTarget.complaintCode);
+      assert.equal(postRes.data.status, "RESOLVED");
+      assert.equal(postRes.data.resolvedCount, 1);
+      const postResolution = (
+        postRes.data.comments as Record<string, unknown>[]
+      ).at(-1);
+      assert.equal(postResolution?.commentType, "RESOLUTION");
+      assert.equal(postResolution?.content, expectedReply);
+      assert.deepEqual(postResolution?.author, {
         id: supStaff1.id,
         fullName: supStaff1.fullName,
       });
 
       // External entities and complaint sequence remain untouched
       assert.deepEqual(await snapshotExternal(), before);
-      const updatedTarget =
-        await db.ingredientQualityFeedback.findUniqueOrThrow({
-          where: { id: fTarget.id },
-        });
+      const updatedTarget = await db.complaint.findUniqueOrThrow({
+        where: { id: fTarget.id },
+      });
       assert.equal(updatedTarget.id, fTarget.id);
-      assert.equal(updatedTarget.complaintCode, fTarget.complaintCode);
+      assert.equal(updatedTarget.code, fTarget.complaintCode);
       assert.equal(updatedTarget.title, fTarget.title);
       assert.equal(updatedTarget.description, fTarget.description);
-      assert.equal(updatedTarget.submittedByUserId, submitter.id);
-      assert.equal(+updatedTarget.createdAt, +fTarget.createdAt);
+      assert.equal(updatedTarget.senderUserId, submitter.id);
+      assert.equal(+updatedTarget.submittedAt, +fTarget.createdAt);
       assert(+updatedTarget.updatedAt >= +fTarget.updatedAt);
 
       // Both supplier admin and SCHOOL (own + details) read exact same reply & id & code
@@ -3315,9 +3375,12 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
         );
         assert.equal(readRes.status, 200);
         assert.equal(readRes.data.id, fTarget.id);
-        assert.equal(readRes.data.complaintCode, fTarget.complaintCode);
-        assert.equal(readRes.data.supplierResponse, expectedReply);
-        assert.deepEqual(readRes.data.respondedBy, {
+        assert.equal(readRes.data.code, fTarget.complaintCode);
+        const readResolution = (
+          readRes.data.comments as Record<string, unknown>[]
+        ).find((comment) => comment.commentType === "RESOLUTION");
+        assert.equal(readResolution?.content, expectedReply);
+        assert.deepEqual(readResolution?.author, {
           id: supStaff1.id,
           fullName: supStaff1.fullName,
         });
@@ -3333,21 +3396,19 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
       );
       const staffPrincipal = await loadPrincipal(supStaff1.id, db);
       await assert.rejects(
-        () =>
-          rollbackSvc.respond(
-            { feedbackId: fRollback.id },
-            { supplierResponse: "Must roll back" },
-            staffPrincipal,
-          ),
+        () => rollbackSvc.accept({ feedbackId: fRollback.id }, staffPrincipal),
         (err: unknown) => err instanceof HttpError && err.statusCode === 503,
       );
-      const afterRb = await db.ingredientQualityFeedback.findUniqueOrThrow({
+      const afterRb = await db.complaint.findUniqueOrThrow({
         where: { id: fRollback.id },
       });
-      assert.equal(afterRb.status, "SUBMITTED");
-      assert.equal(afterRb.supplierResponse, null);
-      assert.equal(afterRb.respondedByUserId, null);
-      assert.equal(afterRb.respondedAt, null);
+      assert.equal(afterRb.status, "NEW");
+      assert.equal(
+        await db.complaintStatusHistory.count({
+          where: { complaintId: fRollback.id },
+        }),
+        0,
+      );
     },
   );
 });
