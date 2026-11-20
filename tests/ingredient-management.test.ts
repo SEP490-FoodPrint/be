@@ -1,3 +1,4 @@
+import { measurementUnitMock } from "./helpers/measurement-unit-mock";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
@@ -156,7 +157,10 @@ function fixture() {
   let current = principal;
   let status = "ACTIVE";
   let mutationCount = 0;
-  const tx = {} as Prisma.TransactionClient;
+  const tx = {
+    measurementUnitAlias: measurementUnitMock,
+    $queryRaw: () => Promise.resolve([]),
+  } as unknown as Prisma.TransactionClient;
   const seen: unknown[] = [];
   const rows: IngredientRow[] = [
     {

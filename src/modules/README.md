@@ -215,3 +215,7 @@ permissionConcurrencyRepository.touchUser/touchRole vẫn được export để 
 GET /api/permissions hỗ trợ search optional theo một phần tên, không phân biệt hoa/thường, trim/max150, literal wildcard và lọc trước page/limit; GET /api/roles vẫn chỉ nhận pagination. DTO/validator query được tách riêng để giữ hợp đồng này.
 
 GET /api/permissions/inactive yêu cầu SYSTEM_ADMIN/SYSTEM + permission.view, chỉ trả isActive=false với tối đa 5 mục/trang; query chỉ page, mặc định 1. Schema chuẩn hóa limit=5, repository lọc trước pagination; không dùng để liệt kê grant chưa gán theo role.
+
+### measurement-unit
+
+/api/measurement-units: danh mục đơn vị dùng chung, mọi tài khoản đã đăng nhập đọc; System Admin + measurement_unit.manage ghi. Mã/ký hiệu/nhóm bất biến, không xóa. Resolve alias khi ghi nguyên liệu/công thức, giữ chuỗi trên lịch sử. Bước số lượng chỉ khuyến nghị, không chặn yêu cầu nhập hàng. Xem specs/measurement-units/contracts.md.

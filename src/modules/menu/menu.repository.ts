@@ -331,6 +331,28 @@ export const menuRepository = {
       },
     });
   },
+  async existingUnitNorms(
+    client: Tx,
+    schoolId: string,
+    menuDayId: string,
+    mealType?: "LUNCH" | "AFTERNOON",
+  ) {
+    const [ingredients, seasonings] = await Promise.all([
+      client.menuDayDishIngredient.findMany({
+        where: {
+          menuDayId,
+          mealType,
+          menuDish: { MenuDay: { WeeklyMenu: { schoolId } } },
+        },
+        select: { dishId: true, ingredientId: true, unit: true },
+      }),
+      client.menuMealSeasoning.findMany({
+        where: { menuDayId, mealType, menuDay: { WeeklyMenu: { schoolId } } },
+        select: { ingredientEntryId: true, unit: true },
+      }),
+    ]);
+    return { ingredients, seasonings };
+  },
   mealDay(client: Tx, meal: MealReference, schoolId: string) {
     return client.menuDay.findFirst({
       where: { id: meal.menuDayId, WeeklyMenu: { schoolId } },

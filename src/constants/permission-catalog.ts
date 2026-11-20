@@ -77,6 +77,13 @@ export const INITIAL_ROLES = [
 ] as const;
 export const INITIAL_PERMISSIONS = [
   {
+    code: "measurement_unit.manage",
+    name: "Quản lý đơn vị tính",
+    module: "measurement_unit",
+    action: "manage",
+    description: "System Admin quản lý danh mục và bước số lượng khuyến nghị.",
+  },
+  {
     code: "dashboard.view",
     name: "Xem Dashboard",
     module: "dashboard",
@@ -638,6 +645,7 @@ export const INITIAL_PERMISSIONS = [
   },
 ] as const;
 export const INITIAL_ROLE_PERMISSIONS = [
+  ["SYSTEM_ADMIN", "measurement_unit.manage"],
   ["SYSTEM_ADMIN", "registration.view"],
   ["SYSTEM_ADMIN", "registration.approve"],
   ["SYSTEM_ADMIN", "registration.reject"],

@@ -1,3 +1,4 @@
+import { measurementUnitMock } from "./helpers/measurement-unit-mock";
 import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { Prisma, type PrismaClient } from "../src/generated/prisma/client";
@@ -219,6 +220,9 @@ function fixture(
     allergyReads = 0,
     failRead = false;
   const tx = {
+    measurementUnitAlias: measurementUnitMock,
+    menuDayDishIngredient: { findMany: () => Promise.resolve([]) },
+    menuMealSeasoning: { findMany: () => Promise.resolve([]) },
     user: { findUnique: () => Promise.resolve(identity) },
     school: { findUnique: () => Promise.resolve({ status: "ACTIVE" }) },
     $queryRaw: () => Promise.resolve([]),

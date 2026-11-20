@@ -7,7 +7,20 @@ import {
 import { authorizationTransaction } from "./authorization";
 
 /** Operator-run bootstrap. Existing tenant role assignments and inactive flags are preserved. */
-export async function bootstrapAuthorization(client: PrismaClient) {
+export async function bootstrapAuthorization(
+  client: PrismaClient,
+  options?: { permissionCodes: readonly string[] },
+) {
+  const requested = options ? new Set(options.permissionCodes) : null;
+  if (
+    requested &&
+    (!requested.size ||
+      [...requested].some(
+        (code) =>
+          !INITIAL_PERMISSIONS.some((permission) => permission.code === code),
+      ))
+  )
+    throw new Error("Unknown bootstrap permission selection");
   return authorizationTransaction(client, async (tx) => {
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(73412026)`;
     const existing = new Set(
@@ -15,12 +28,15 @@ export async function bootstrapAuthorization(client: PrismaClient) {
         (row) => row.code,
       ),
     );
-    await tx.role.createMany({
-      data: INITIAL_ROLES.map((role) => ({ ...role })),
-      skipDuplicates: true,
-    });
+    if (!requested)
+      await tx.role.createMany({
+        data: INITIAL_ROLES.map((role) => ({ ...role })),
+        skipDuplicates: true,
+      });
     await tx.permission.createMany({
-      data: INITIAL_PERMISSIONS.map((permission) => ({ ...permission })),
+      data: INITIAL_PERMISSIONS.filter(
+        (permission) => !requested || requested.has(permission.code),
+      ).map((permission) => ({ ...permission })),
       skipDuplicates: true,
     });
     const roles = new Map(
@@ -34,7 +50,9 @@ export async function bootstrapAuthorization(client: PrismaClient) {
       ),
     );
     const data = INITIAL_ROLE_PERMISSIONS.filter(
-      ([code]) => !existing.has(code) || code === "SYSTEM_ADMIN",
+      ([code, permission]) =>
+        (!requested || requested.has(permission)) &&
+        (!existing.has(code) || code === "SYSTEM_ADMIN"),
     ).map(([roleCode, permissionCode]) => {
       const roleId = roles.get(roleCode);
       const permissionId = permissions.get(permissionCode);
