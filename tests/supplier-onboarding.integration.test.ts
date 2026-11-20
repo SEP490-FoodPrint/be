@@ -540,20 +540,31 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
     },
   );
 
-  const createOrder = async (entry: string, number: string) =>
-    call("/supply-requests", warehouse, "POST", {
+  const createOrder = async (entry: string, number: string) => {
+    // Loại đơn phải khớp loại nguyên liệu (DIRECT_USE kèm đợt 1; DRY_STOCK không có đợt).
+    const handling = (
+      await db.ingredientEntry.findUnique({
+        where: { id: entry },
+        select: { handlingType: true },
+      })
+    )?.handlingType;
+    const orderType = handling === "DIRECT_USE" ? "DIRECT_USE" : "DRY_STOCK";
+    return call("/supply-requests", warehouse, "POST", {
       supplierId: supplierA,
       requestNo: number,
+      orderType,
+      batchNo: orderType === "DIRECT_USE" ? 1 : null,
       requestedDeliveryDate: dayString(today),
       items: [{ ingredientEntryId: entry, quantity: 10 }],
     });
+  };
   let sentId = "";
   await context.test(
     "orders enforce supplier, school, scope and current compliance, and pin the contract snapshot",
     async () => {
       assert.equal((await createOrder(entryB, "FOREIGN-ENTRY")).status, 400);
       const outside = await createOrder(otherEntryA, "OUTSIDE-SCOPE");
-      assert.equal(outside.status, 200);
+      assert.equal(outside.status, 200, JSON.stringify(outside.data));
       assert.equal(
         (
           await call(
