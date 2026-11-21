@@ -869,6 +869,18 @@ model MealComplaint {
   @@schema("foodprint")
 }
 
+/// C06: khiếu nại gửi System Admin (specs/system-complaint-management); bảng con, FK tổ hợp về bảng cha.
+model SystemComplaint {
+  id        String                  @id @db.Uuid
+  kind      ComplaintKind           @default(SYSTEM)
+  category  SystemComplaintCategory
+  Complaint Complaint               @relation(fields: [id, kind], references: [id, kind], onDelete: Restrict, onUpdate: NoAction, map: "system_complaints_id_kind_fkey")
+
+  @@unique([id, kind], map: "uq_system_complaints_id_kind")
+  @@map("system_complaints")
+  @@schema("foodprint")
+}
+
 /// Bảng cha mọi đơn khiếu nại (specs/complaint-supertype). CHECK trạng thái/mã nằm trong SQL migration.
 model Complaint {
   id                            String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -898,6 +910,7 @@ model Complaint {
   closedByUser                  User?                      @relation("complaints_closed_by_user_id__users", fields: [closedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   mealComplaint                 MealComplaint?
   ingredientQualityFeedback     IngredientQualityFeedback?
+  systemComplaint               SystemComplaint?
   comments                      ComplaintComment[]
   statusHistories               ComplaintStatusHistory[]
 
@@ -1917,6 +1930,17 @@ enum MealAllocationStatus {
   CANCELLED
 
   @@map("meal_allocation_status")
+  @@schema("foodprint")
+}
+
+enum SystemComplaintCategory {
+  ACCOUNT
+  PERMISSION
+  DATA
+  TECHNICAL
+  OTHER
+
+  @@map("system_complaint_category")
   @@schema("foodprint")
 }
 

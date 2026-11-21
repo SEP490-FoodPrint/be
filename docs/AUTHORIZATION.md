@@ -155,6 +155,7 @@ Mọi dòng đều yêu cầu một trong các permission liệt kê. SYSTEM có
 | `meal-allocation`             | `meal_allocation.view`                                                                                                    | SCHOOL                                                |
 | `ingredient-quality-feedback` | `ingredient_quality_feedback.view_own`, `ingredient_quality_feedback.view_details`, `ingredient_quality_feedback.respond` | SCHOOL (chỉ xem), SUPPLIER (`view_details`/`respond`) |
 | `reporting`                   | `food_safety_report.view`                                                                                                 | SCHOOL, AUTHORITY                                     |
+| `system-complaint`            | `system_complaint.view`, `system_complaint.submit`                                                                        | SYSTEM (`view`), SCHOOL/SUPPLIER/AUTHORITY (`submit`) |
 | `food-analysis`               | `food_analysis_result.view`                                                                                               | SCHOOL, AUTHORITY                                     |
 | `school-alert`                | `school_alert.view`                                                                                                       | SCHOOL                                                |
 | `menu-review`                 | `menu.view`, `menu.review`, `menu.approve`                                                                                | SCHOOL                                                |
@@ -181,6 +182,23 @@ School xem supplier qua quan hệ ACTIVE/SUSPENDED; ingredient qua IngredientEnt
 - `GET /api/meal-complaints/meal-options` và `POST /api/meal-complaints` yêu cầu `meal_complaint.submit` và vai trò `HOMEROOM_TEACHER` hoặc `PARENTS_COMMITTEE`. Trường, ngày ăn và phạm vi lớp do server xác định.
 - `meal_complaint.view` cho phép người gửi đọc đơn của chính mình trong trường và cho phép Ban Giám hiệu đọc đơn của trường. Migration spec 019 bổ sung quyền đọc đang hoạt động cho role `PARENTS_COMMITTEE` đã tồn tại và giữ các thiết lập thu hồi quyền theo tài khoản.
 - Đơn khiếu nại là ticket ([specs/complaint-supertype](../specs/complaint-supertype/spec.md)); không thêm mã quyền mới. `POST /api/meal-complaints/:id/accept` và `/:id/resolve` yêu cầu `meal_complaint.respond` và vai trò `SCHOOL_MANAGEMENT_BOARD` của trường sở hữu đơn. `POST /:id/satisfy` và `/:id/reopen` yêu cầu `meal_complaint.submit` và chỉ người gửi đơn được gọi. `POST /:id/comments` nhận cả hai bên: BGH sau khi đã nhận đơn, người gửi khi đơn ở `NEW`/`IN_PROGRESS`/`REOPENED`. Sai trạng thái, quá hạn 48h hoặc thua khi chạy đồng thời trả `409`. Đã bỏ `PATCH /api/meal-complaints/:id`.
+
+## Khiếu nại gửi System Admin (`system-complaint`, C06)
+
+Theo [specs/system-complaint-management](../specs/system-complaint-management/spec.md). Ba quyền mới trong catalog: `system_complaint.submit` (gán mặc định cho mọi vai trò ngoài `SYSTEM_ADMIN`), `system_complaint.view` và `system_complaint.respond` (gán mặc định cho `SYSTEM_ADMIN`). Không có ngoại lệ System Admin ngầm định. Trên DB đã có vai trò, bootstrap chỉ thêm grant cho `SYSTEM_ADMIN`; việc gán `submit` cho vai trò khác do System Admin thực hiện qua API quản trị quyền.
+
+| Method | Endpoint                              | Ai                       | Điều kiện                                                                                                    |
+| ------ | ------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| GET    | `/api/system-complaints`              | System Admin / người gửi | `SYSTEM_ADMIN` + `view`: mọi đơn kind `SYSTEM`; vai trò khác + `submit`: chỉ `senderUserId = actor.id`       |
+| GET    | `/api/system-complaints/:id`          | Như trên                 | Ngoài phạm vi hoặc thuộc luồng khác trả `404`                                                                |
+| POST   | `/api/system-complaints`              | Mọi vai trò trừ admin    | `submit`; body `{category, description}`; tổ chức người gửi lấy từ principal, kiểm tra lại trong transaction |
+| POST   | `/api/system-complaints/:id/accept`   | System Admin             | Đồng thời `view` và `respond`, kiểm tra lại trong transaction; từ `NEW`/`REOPENED`                           |
+| POST   | `/api/system-complaints/:id/resolve`  | System Admin             | Như `accept`; body `{content}`, chỉ từ `IN_PROGRESS`                                                         |
+| POST   | `/api/system-complaints/:id/comments` | System Admin / người gửi | Admin: như `accept`, chỉ ở `IN_PROGRESS`; người gửi: `submit`, ở `NEW`/`IN_PROGRESS`/`REOPENED`              |
+| POST   | `/api/system-complaints/:id/satisfy`  | Người gửi                | `submit`; chỉ người gửi, trong 48h sau lần giải quyết gần nhất                                               |
+| POST   | `/api/system-complaints/:id/reopen`   | Người gửi                | Như `satisfy`; body `{reason?}`                                                                              |
+
+Sai trạng thái, quá hạn 48h hoặc thua khi chạy đồng thời trả `409`.
 
 ## API phân bổ suất ăn hôm nay
 

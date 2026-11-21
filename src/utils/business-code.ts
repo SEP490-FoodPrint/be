@@ -19,6 +19,7 @@ export const BUSINESS_CODE_TYPES = {
   DE: "chuyến giao hàng",
   CP: "khiếu nại nguyên liệu",
   MC: "khiếu nại bữa ăn",
+  SC: "khiếu nại gửi hệ thống",
   IC: "sự cố an toàn thực phẩm",
 } as const;
 export type BusinessCodeType = keyof typeof BUSINESS_CODE_TYPES;
