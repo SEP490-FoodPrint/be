@@ -53,3 +53,10 @@ Kết quả ngày 17/11/2026:
   - neo 5 bằng chứng (khai báo, kiểm nhận, mẻ, mẫu, phân phối), cả 5 `CONFIRMED`;
   - API chuỗi `verify=true` cho `intact = true`, mọi liên kết `MATCH`;
   - sửa biển số xe thì khai báo và kiểm nhận `MISMATCH` (`vehiclePlate`); khôi phục thì lại `VERIFIED`.
+
+## Bổ sung 22/11/2026: liên kết phân phối theo phạm vi chuỗi
+
+- [x] `linkChecks` nhận phạm vi mẻ; `buildChain` truyền `cookingBatchIds`. Mẻ ngoài phạm vi không sinh liên kết, liên kết mẻ được gộp theo `field`.
+- [x] Unit test: ngày có mẻ của bữa khác vẫn `MATCH`; mẻ trong phạm vi bị sửa hash vẫn `MISMATCH`; không lặp dòng.
+- [x] Đưa `tests/meal-traceability.test.ts` vào `test:unit`.
+- [x] Giả lập local đủ 5 module cho cả bữa trưa và bữa xế, xác nhận API truy xuất `verify=true` cho `intact = true`.

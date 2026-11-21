@@ -653,10 +653,15 @@ void test("approval week returns every submitted grade menu of the week in one c
   assert.equal(week.weekEndDate, "2026-11-06");
   assert.equal(week.weekNumber, 9);
   assert.deepEqual(
-    week.weeks.map((item) => [item.weekStartDate, item.total, item.pending]),
+    week.weeks.map((item) => [
+      item.weekStartDate,
+      item.weekNumber,
+      item.total,
+      item.pending,
+    ]),
     [
-      ["2026-11-09", 1, 0],
-      ["2026-11-02", 2, 2],
+      ["2026-11-09", 10, 1, 0],
+      ["2026-11-02", 9, 2, 2],
     ],
   );
   assert.deepEqual(

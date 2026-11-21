@@ -16,7 +16,16 @@ import { createMealAllocationService } from "../src/modules/meal-allocation/meal
 import { createMealAllocationRouter } from "../src/modules/meal-allocation/meal-allocation.routes";
 import { globalErrorHandler } from "../src/middlewares/error.middleware";
 import { createBlockchainProofService } from "../src/modules/blockchain-proof/blockchain-proof.service";
-import { buildMaterialPlan } from "../src/modules/meal-allocation/material-allocation.service";
+import {
+  allocationHash,
+  buildMaterialPlan,
+  readValidatedMaterialData,
+} from "../src/modules/meal-allocation/material-allocation.service";
+import {
+  processNextAllocationDraft,
+  queueAllocationDraft,
+} from "../src/modules/meal-allocation/material-allocation-runtime";
+import type { MaterialPlanResponseDTO } from "../src/modules/meal-allocation/material-allocation.response.dto";
 import {
   readMaterialAllocationData,
   writeMaterialAllocation,
@@ -283,7 +292,39 @@ void test("material allocation migration and lifecycle in an explicitly owned di
       },
     };
   };
-  let plan: Awaited<ReturnType<typeof materials.preview>>;
+  type Plan = MaterialPlanResponseDTO;
+  let plan: Plan;
+  const planDate = "2026-11-12";
+  const compute = async () =>
+    buildMaterialPlan(
+      await db.$transaction((tx) =>
+        readValidatedMaterialData(
+          tx,
+          school.id,
+          allocationFixtureDate,
+          "LUNCH",
+        ),
+      ),
+      planDate,
+      { mealType: "LUNCH", priorityClassIds: [] },
+    );
+  const prepareDraft = async () => {
+    await db.$transaction((tx) =>
+      queueAllocationDraft(tx, school.id, allocationFixtureDate, "LUNCH"),
+    );
+    while (await processNextAllocationDraft(db));
+    const draft = await db.mealAllocationDraft.findFirstOrThrow({
+      where: { schoolId: school.id, mealType: "LUNCH" },
+    });
+    assert.equal(draft.state, "DRAFT");
+    return {
+      plan: draft.plan as unknown as Plan,
+      token: allocationHash({
+        draft: draft.revision,
+        source: draft.sourceRevision,
+      }),
+    };
+  };
   await context.test(
     "numeric(20,2) and material foreign keys deployed",
     async () => {
@@ -379,9 +420,16 @@ void test("material allocation migration and lifecycle in an explicitly owned di
       await db.cookingBatchDish.updateMany({
         data: { allocationRecipeSnapshot: Prisma.DbNull },
       });
+      assert.equal((await fetch(base + "?mealType=LUNCH")).status, 200);
+      assert.equal(
+        await db.mealAllocationDraft.count(),
+        0,
+        "GET queues nothing",
+      );
+      await prepareDraft();
       const response = await fetch(base + "?mealType=LUNCH");
       const body = (await response.json()) as {
-        data: { materialPlan: Awaited<ReturnType<typeof materials.preview>> };
+        data: { materialPlan: Plan };
       };
       assert.equal(response.status, 200, JSON.stringify(body));
       assert.equal(
@@ -409,7 +457,7 @@ void test("material allocation migration and lifecycle in an explicitly owned di
       const result = {
         status: response.status,
         body: (await response.json()) as {
-          data: { materialPlan: Awaited<ReturnType<typeof materials.preview>> };
+          data: { materialPlan: Plan };
         },
       };
       assert.equal(result.body.data.materialPlan.status, "READY");
@@ -419,10 +467,7 @@ void test("material allocation migration and lifecycle in an explicitly owned di
         "GET must not persist allocations",
       );
       assert.equal(result.status, 200, JSON.stringify(result.body));
-      plan = await materials.preview(
-        { mealType: "LUNCH", priorityClassIds: [] },
-        actor,
-      );
+      plan = (await prepareDraft()).plan;
       assert.equal(
         plan.groups.find((g) => g.gradeId === grades[0].id)?.allocatedMassKg,
         "2.400000000",
@@ -443,14 +488,36 @@ void test("material allocation migration and lifecycle in an explicitly owned di
     },
   );
   await context.test(
+    "GLPK suggestion overwrites an edited draft and restores the proposal",
+    async () => {
+      const { plan: proposed } = await prepareDraft();
+      await db.mealAllocationDraft.updateMany({
+        where: { schoolId: school.id, mealType: "LUNCH" },
+        data: {
+          plan: {
+            ...proposed,
+            entries: [],
+          } as unknown as Prisma.InputJsonValue,
+        },
+      });
+      const response = await post("/draft/suggest", { mealType: "LUNCH" });
+      assert.equal(response.status, 200);
+      const draft = await db.mealAllocationDraft.findFirstOrThrow({
+        where: { schoolId: school.id, mealType: "LUNCH" },
+      });
+      assert.equal(draft.state, "DRAFT");
+      assert.deepEqual(
+        (draft.plan as unknown as Plan).entries.map((e) => e.allocatedPortions),
+        proposed.entries.map((e) => e.allocatedPortions),
+      );
+      assert.equal(await db.mealAllocationBatch.count(), 0, "draft only");
+    },
+  );
+  await context.test(
     "concurrent apply writes once and stale retries cannot duplicate material",
     async () => {
-      const body = {
-        mealType: "LUNCH",
-        priorityClassIds: [],
-        revision: plan.revision,
-        planId: plan.planId,
-      };
+      const { token } = await prepareDraft();
+      const body = { mealType: "LUNCH", revision: token };
       const results = await Promise.all([
         post("", body, "PUT"),
         post("", body, "PUT"),
@@ -531,11 +598,22 @@ void test("material allocation migration and lifecycle in an explicitly owned di
   await context.test(
     "locked sources cannot be allocated a second time",
     async () => {
-      await assert.rejects(
-        () =>
-          materials.preview({ mealType: "LUNCH", priorityClassIds: [] }, actor),
-        /Không còn nhu cầu/,
-      );
+      await assert.rejects(() => compute(), /Không còn nhu cầu/);
+      for (const [path, method] of [
+        ["/draft", "PUT"],
+        ["", "PUT"],
+      ] as const)
+        assert.equal(
+          (
+            await post(
+              path,
+              { mealType: "LUNCH", revision: "a".repeat(64), rows: [] },
+              method,
+            )
+          ).status,
+          409,
+          "a distributed meal rejects drafts and apply",
+        );
       assert.equal(
         await db.mealAllocation.count({
           where: {

@@ -159,7 +159,11 @@ export function createSupplyOrderRepository(connect = getPrisma) {
           ],
         },
         select: supplierListSelect,
-        orderBy: [{ id: "asc" }],
+        // Ngày giao dự kiến mới nhất lên đầu; đơn chưa có ngày xếp cuối, id giữ thứ tự ổn định khi phân trang
+        orderBy: [
+          { requestedDeliveryDate: { sort: "desc", nulls: "last" } },
+          { id: "asc" },
+        ],
       });
     },
     async findDetailForSupplier(id: string, supplierId: string) {

@@ -41,6 +41,12 @@ export function createMealAllocationRouter(
     controller.saveDraft,
   );
   router.post(
+    "/draft/suggest",
+    authHandler,
+    requirePermission("meal_allocation.update"),
+    controller.suggestDraft,
+  );
+  router.post(
     "/draft/retry",
     authHandler,
     requirePermission("meal_allocation.update"),

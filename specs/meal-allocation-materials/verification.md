@@ -23,10 +23,19 @@ Lô lịch sử thiếu allocationRecipeSnapshot tiếp tục dùng luồng cũ.
 
 ## Điều chỉnh tự động mặc định qua API hiện hữu
 
-- GET theo bữa tự lập phương án khi chưa có dòng phân bổ lưu; GET không ghi dữ liệu. PUT lưu qua revision/planId, không còn POST tính riêng hoặc nút Tính phân bổ.
+- (Đã thay bởi TASK-07, xem cuối tệp) GET theo bữa chỉ đọc nháp hoặc bản đã áp dụng; phương án do tác vụ nền tạo. PUT dùng `revision` và các dòng đã chỉnh, không còn `planId`, POST tính riêng hoặc nút Tính phân bổ.
 - Lô cũ dùng định lượng thực đơn/công thức khối nếu thiếu snapshot; revision bao gồm định lượng đã tra, dòng nguyên liệu lưu định lượng thực áp dụng. Không đổi lịch sử hoặc thêm migration.
 - 827 unit test BE qua (BLOCKCHAIN_ENABLED=false trong môi trường mock), 5 regression FE về Decimal/khối/lớp qua. Build FE và BE qua.
-- Cloud integration: 9/9 qua trên DB tạm được tạo riêng, kiểm tra GET lô cũ, nguồn theo khối, không ghi trên GET, không tính đè dữ liệu đã lưu, PUT đồng thời 200/409, giao cả ngày và proof v2. Đã dọn đúng DB tạm, không ghi dữ liệu thử lên DB ứng dụng.
+- Cloud integration: 9/9 qua trên DB tạm được tạo riêng, kiểm tra (kết quả trước TASK-07; kịch bản GET tự tính và PUT `planId` nay được viết lại cho luồng nháp nền và chưa chạy lại), giao cả ngày và proof v2. Đã dọn đúng DB tạm, không ghi dữ liệu thử lên DB ứng dụng.
 - Edge headless mobile: 390px, scrollWidth=390px, phương án 16,67 + 33,33 tự xuất hiện, không có nút tính, nút áp dụng cao 44px và thao tác áp dụng qua service PUT thành công.
 
 - Kiểm tra cuối: ESLint phần sửa qua; npm run validate qua lint rồi dừng tại format:check với 433 file toàn repo. Không reformat hàng loạt các file ngoài phạm vi. Typecheck/build BE đã chạy riêng và qua.
+
+## TASK-07: phương án nền và bản nháp chỉnh sửa
+
+- Luồng: lưu mẫu xếp hàng tác vụ trong cùng giao dịch → worker tính GLPK ngoài giao dịch rồi ghi `DRAFT` nếu nguồn không đổi → GET chỉ đọc → Lưu bản nháp và Áp dụng dùng chung `buildMaterialPlan` ở chế độ chỉnh (không gọi solver) và `revision`.
+- Đã gỡ nhánh PUT `planId`, `createMaterialAllocationService().preview` và `apply` cũ; body có `planId` bị từ chối 400. `retry` kiểm tra quyền trước khi kết nối.
+- Test unit mới `tests/material-allocation-draft.test.ts` (trong `test:unit`): hai lần lưu mẫu đồng thời chỉ một tác vụ; bữa trưa và bữa xế độc lập; bữa đã có phân bổ không xếp hàng; worker ghi `DRAFT` đúng `sourceRevision`; kết quả từ dữ liệu cũ quay về `PENDING` và không ghi đè; phân bổ hoặc nháp tạo trong lúc tính được giữ; lỗi solver thành `FAILED` kèm lý do; mở trang không ghi và không gọi solver; payload chỉ nhận chuỗi thập phân.
+- Test FE mới `tests/allocation-draft.test.mjs`: đổi thứ tự hoặc `28`/`28.00` không bật Lưu bản nháp; đổi lô hoặc số suất bật; hoàn tác thì tắt.
+- Kịch bản tích hợp (GET không queue, worker tạo nháp, PUT đồng thời 200/409, bữa đã giao từ chối nháp và áp dụng) đã viết trong `material-allocation.integration.test.ts` nhưng cần DB tạm riêng, chưa chạy trong lần sửa này.
+- Chưa có test tự động cho: 409 khi hai người lưu nháp cùng revision, áp dụng đồng thời với xác nhận giao. Hai ca này dựa vào khóa hàng trường trong `withSchoolTransaction` và cần test tích hợp.

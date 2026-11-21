@@ -6,7 +6,10 @@ import { createMaterialAllocationService } from "../src/modules/meal-allocation/
 import { testStaff } from "./helpers/authorization";
 import test from "node:test";
 import { Prisma } from "../src/generated/prisma/client";
-import { buildMaterialPlan } from "../src/modules/meal-allocation/material-allocation.service";
+import {
+  buildMaterialPlan,
+  publicMaterialPlan,
+} from "../src/modules/meal-allocation/material-allocation.service";
 import { validateAllocationApply } from "../src/modules/meal-allocation/meal-allocation.validation";
 import { serializeAllocationPortions } from "../src/modules/meal-allocation/meal-allocation.service";
 
@@ -19,24 +22,17 @@ void test("material endpoints reject missing permission before connecting", asyn
     throw new Error("unexpected connection");
   });
   const principal = { ...testStaff, permissions: [] };
-  assert.throws(
-    () =>
-      service.preview({ mealType: "LUNCH", priorityClassIds: [] }, principal),
-    { statusCode: 403 },
-  );
-  await assert.rejects(
-    () =>
-      service.apply(
-        {
-          mealType: "LUNCH",
-          priorityClassIds: [],
-          revision: "a".repeat(64),
-          planId: "b".repeat(64),
-        },
-        principal,
-      ),
-    { statusCode: 403 },
-  );
+  const draft = {
+    mealType: "LUNCH" as const,
+    revision: "a".repeat(64),
+    rows: [],
+  };
+  for (const call of [
+    () => service.writeDraft(draft, principal, false),
+    () => service.writeDraft(draft, principal, true),
+    () => service.retry("LUNCH", principal),
+  ])
+    await assert.rejects(call, { statusCode: 403 });
   assert.equal(connected, false);
 });
 function fixture(): Data {
@@ -107,7 +103,7 @@ function fixture(): Data {
   };
   return data as unknown as Data;
 }
-void test("preview serves scope-local classes, source totals and stable plan identity", () => {
+void test("plan serves scope-local classes, source totals and stable plan identity", () => {
   const data = fixture(),
     input = { mealType: "LUNCH" as const, priorityClassIds: [] };
   const plan = buildMaterialPlan(data, "2026-11-20", input);
@@ -118,8 +114,8 @@ void test("preview serves scope-local classes, source totals and stable plan ide
   assert.equal(plan.groups[0].allocatedMassKg, "3.000000000");
   assert.equal(plan.groups[0].allocatedPortions, "50.00");
   assert.equal(
-    plan.planId,
-    buildMaterialPlan(data, "2026-11-20", input).planId,
+    plan.revision,
+    buildMaterialPlan(data, "2026-11-20", input).revision,
   );
   data.day.demands[0].Class.name = "4B";
   assert.notEqual(
@@ -331,5 +327,27 @@ void test("persisted material allocations remain ready and scoped to grade", () 
   assert.equal(
     projectAllocationDay(day, "2026-11-20", "LUNCH").status,
     "RECONCILE",
+  );
+});
+
+void test("public plan hides supplied ingredients but the stored plan keeps exact quantities", () => {
+  const plan = buildMaterialPlan(fixture(), "2026-11-20", {
+    mealType: "LUNCH",
+    priorityClassIds: [],
+  });
+  assert.ok(plan.entries[0].materials.length > 0);
+  const view = publicMaterialPlan(plan) as unknown as Record<string, unknown>;
+  assert.equal("remaining" in view, false);
+  for (const entry of view.entries as Record<string, unknown>[]) {
+    assert.equal("materials" in entry, false);
+    assert.equal("massKg" in entry, false);
+  }
+  for (const group of view.groups as Record<string, unknown>[]) {
+    assert.equal("allocatedMassKg" in group, false);
+    assert.equal("requiredMassKg" in group, false);
+  }
+  assert.equal(
+    (view.entries as { allocatedPortions: string }[])[0].allocatedPortions,
+    plan.entries[0].allocatedPortions,
   );
 });

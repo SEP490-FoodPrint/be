@@ -5,7 +5,6 @@ export interface MaterialPlanResponseDTO {
   date: string;
   mealType: "LUNCH" | "AFTERNOON";
   revision: string;
-  planId: string;
   algorithmVersion: 2;
   optimal: boolean;
   origin?: "GLPK" | "MANUAL";
@@ -42,3 +41,18 @@ export interface MaterialPlanResponseDTO {
   }[];
   remaining: MaterialSource[];
 }
+
+/** Phương án trả cho trang: không có nguyên liệu cấp, khối lượng và số dư nguồn. */
+export type PublicMaterialPlanDTO = Omit<
+  MaterialPlanResponseDTO,
+  "entries" | "groups" | "remaining"
+> & {
+  entries: Omit<
+    MaterialPlanResponseDTO["entries"][number],
+    "materials" | "massKg"
+  >[];
+  groups: Omit<
+    MaterialPlanResponseDTO["groups"][number],
+    "requiredMassKg" | "allocatedMassKg"
+  >[];
+};

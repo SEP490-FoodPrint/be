@@ -29,6 +29,12 @@ export function createKitchenRouter(
     requireResource("kitchen"),
     controller.getContext,
   );
+  router.get(
+    "/day-progress",
+    authHandler,
+    requireResource("kitchen"),
+    controller.dayProgress,
+  );
   // Đã gỡ bỏ API chỉnh sửa lô chế biến (PUT /:id) theo yêu cầu nghiệp vụ
   router.get(
     "/groups/:id",

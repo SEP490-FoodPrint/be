@@ -30,6 +30,10 @@ export function createKitchenController(
         await service.getGroup(uuid(req.params.id), requirePrincipal(req)),
       );
     }),
+    dayProgress: asyncHandler(async (req, res) => {
+      validateKitchenAction(req.query);
+      sendSuccess(res, await service.dayProgress(requirePrincipal(req)));
+    }),
     getContext: asyncHandler(async (req, res) => {
       validateKitchenAction(req.query);
       sendSuccess(res, await service.getContext(requirePrincipal(req)));

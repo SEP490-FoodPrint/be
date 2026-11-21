@@ -62,6 +62,8 @@ export interface MenuApprovalDecisionResponseDTO {
 export interface MenuApprovalWeekOptionDTO {
   weekStartDate: string;
   weekEndDate: string;
+  /** Số tuần theo năm học (null khi tuần nằm ngoài mọi năm học đã khai báo). */
+  weekNumber: number | null;
   total: number;
   pending: number;
 }

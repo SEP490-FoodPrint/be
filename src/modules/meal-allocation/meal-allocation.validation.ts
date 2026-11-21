@@ -50,10 +50,6 @@ export const materialPlanSchema = z.strictObject({
   mealType: z.enum(["LUNCH", "AFTERNOON"]),
   priorityClassIds: z.array(requestUuidSchema).max(1000).default([]),
 });
-export const materialApplySchema = materialPlanSchema.extend({
-  revision: z.string().regex(/^[a-f0-9]{64}$/),
-  planId: z.string().regex(/^[a-f0-9]{64}$/),
-});
 export const allocationDraftSchema = confirmDistributionSchema.extend({
   mealType: z.enum(["LUNCH", "AFTERNOON"]),
   rows: z
@@ -75,5 +71,3 @@ export const validateAllocationDraft = (value: unknown) =>
   parseRequest(allocationDraftSchema, value);
 export const validateMaterialPlan = (value: unknown) =>
   parseRequest(materialPlanSchema, value);
-export const validateMaterialApply = (value: unknown) =>
-  parseRequest(materialApplySchema, value);

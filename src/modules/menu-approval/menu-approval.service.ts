@@ -189,14 +189,31 @@ const DAY_MS = 86400000;
 const isoDate = (value: Date) => value.toISOString().slice(0, 10);
 const fridayOf = (monday: Date) => new Date(monday.getTime() + 4 * DAY_MS);
 
-/** Gom số thực đơn đã gửi theo tuần, mới nhất trước. */
-function weekOptions(rows: SubmittedWeekRow[]): MenuApprovalWeekOptionDTO[] {
+/** Số tuần theo năm học chứa tuần bắt đầu từ `monday`; null nếu ngoài mọi năm học. */
+function academicWeekNumber(
+  monday: Date,
+  years: { startDate: Date; endDate: Date }[],
+): number | null {
+  const year = years.find(
+    (item) =>
+      getSchoolMonday(item.startDate) <= monday &&
+      monday.getTime() < getSchoolMonday(item.endDate).getTime() + 7 * DAY_MS,
+  );
+  return year ? calculateAcademicWeekNumber(monday, year.startDate) : null;
+}
+
+/** Gom số thực đơn đã gửi theo tuần, mới nhất trước, kèm số tuần năm học. */
+function weekOptions(
+  rows: SubmittedWeekRow[],
+  years: { startDate: Date; endDate: Date }[],
+): MenuApprovalWeekOptionDTO[] {
   const byWeek = new Map<string, MenuApprovalWeekOptionDTO>();
   for (const row of rows) {
     const key = isoDate(row.weekStartDate);
     const option = byWeek.get(key) ?? {
       weekStartDate: key,
       weekEndDate: isoDate(fridayOf(row.weekStartDate)),
+      weekNumber: academicWeekNumber(new Date(key + "T00:00:00.000Z"), years),
       total: 0,
       pending: 0,
     };
@@ -276,7 +293,12 @@ export function createMenuApprovalService(
       const schoolId = requireBoardSchool(principal);
       // Phạm vi danh sách theo ma trận phân quyền: menu.view + lọc theo trường
       const scope = listScopes.menu(principal);
-      const weeks = weekOptions(await repository.listSubmittedWeeks(scope));
+      const submitted = await repository.listSubmittedWeeks(scope);
+      // Chỉ tải năm học khi có tuần đã gửi để đánh số tuần
+      const years = submitted.length
+        ? await repository.academicYears(await repository.connect(), schoolId)
+        : [];
+      const weeks = weekOptions(submitted, years);
       const selected = query.date
         ? isoDate(getSchoolMonday(query.date))
         : defaultWeek(weeks);
@@ -290,11 +312,7 @@ export function createMenuApprovalService(
         };
       }
       const monday = new Date(selected + "T00:00:00.000Z");
-      const database = await repository.connect();
-      const [rows, years] = await Promise.all([
-        repository.findWeekDetails(scope, monday),
-        repository.academicYears(database, schoolId),
-      ]);
+      const rows = await repository.findWeekDetails(scope, monday);
       const menus = await Promise.all(
         rows.map(async (row) =>
           mapDetail(
@@ -310,18 +328,10 @@ export function createMenuApprovalService(
       menus.sort((a, b) =>
         gradeCollator.compare(menuSortKey(a), menuSortKey(b)),
       );
-      const year = years.find(
-        (item) =>
-          getSchoolMonday(item.startDate) <= monday &&
-          monday.getTime() <
-            getSchoolMonday(item.endDate).getTime() + 7 * DAY_MS,
-      );
       return {
         weekStartDate: selected,
         weekEndDate: isoDate(fridayOf(monday)),
-        weekNumber: year
-          ? calculateAcademicWeekNumber(monday, year.startDate)
-          : null,
+        weekNumber: academicWeekNumber(monday, years),
         weeks,
         menus,
       };

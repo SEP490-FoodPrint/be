@@ -81,7 +81,7 @@ export interface AllocationDayResponse {
   materialPlanPending?: boolean;
   materialDraftStale?: boolean;
   draftRevision?: string;
-  materialPlan?: import("./material-allocation.response.dto").MaterialPlanResponseDTO;
+  materialPlan?: import("./material-allocation.response.dto").PublicMaterialPlanDTO;
   materialPlanError?: string;
   supportsMaterialAllocation?: boolean;
   mealType: MealType | null;
