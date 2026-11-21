@@ -1724,6 +1724,101 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
     },
   );
   await context.test(
+    "system_complaints child table only accepts SYSTEM parents with FP-SC codes",
+    async () => {
+      const migration = "20261127000100_system_complaints";
+      const name = `foodprint_migration_test_sc_${randomUUID().replaceAll("-", "")}`;
+      await db.query(`CREATE DATABASE "${name}"`);
+      recordLocalTestDatabase(name);
+      const fresh = new URL(url);
+      fresh.pathname = `/${name}`;
+      const client = new Client({ connectionString: fresh.toString() });
+      await client.connect();
+      try {
+        await client.query(
+          "CREATE SCHEMA IF NOT EXISTS foodprint; SET search_path = foodprint, public;",
+        );
+        for (const version of migrationNames.filter(
+          (value) => value <= migration,
+        ))
+          await client.query(
+            await readFile(
+              path.join(root, "prisma/migrations", version, "migration.sql"),
+              "utf8",
+            ),
+          );
+        await client.query("SET search_path = public;");
+        const seeded = await client.query<{ user_id: string }>(`
+          WITH role AS (
+            INSERT INTO foodprint.roles(code,name,type) VALUES ('INGREDIENT_SUPPLIER_STAFF','Staff','SUPPLIER') RETURNING id
+          ), supplier AS (
+            INSERT INTO foodprint.suppliers(name) VALUES ('SC supplier') RETURNING id
+          ), actor AS (
+            INSERT INTO foodprint.users(role_id,role_code,supplier_id,username,email,password_hash,full_name)
+            SELECT role.id,'INGREDIENT_SUPPLIER_STAFF',supplier.id,'sc_test','sc@example.test','test-only','Staff'
+            FROM role, supplier RETURNING id
+          )
+          SELECT actor.id AS user_id FROM actor
+        `);
+        const userId = seeded.rows[0].user_id;
+        const insertComplaint = (columns: string, values: string) =>
+          client.query<{ id: string }>(
+            `INSERT INTO foodprint.complaints(sender_user_id,sender_role_code,title,description,${columns})
+             VALUES($1,'INGREDIENT_SUPPLIER_STAFF','Tiêu đề','Mô tả',${values}) RETURNING id`,
+            [userId],
+          );
+        const system = await insertComplaint(
+          "kind,code",
+          "'SYSTEM','FP-SC-12345'",
+        );
+        const systemId = system.rows[0].id;
+        await client.query(
+          "INSERT INTO foodprint.system_complaints(id,category) VALUES($1,'TECHNICAL')",
+          [systemId],
+        );
+        await assert.rejects(
+          insertComplaint("kind,code", "'SYSTEM','FP-CP-12346'"),
+          (error: unknown) => sqlState(error, "23514", "complaints_code_kind"),
+        );
+        await assert.rejects(
+          insertComplaint(
+            "kind,code,status,close_reason,closed_at,closed_by_user_id",
+            "'SYSTEM','FP-SC-12347','CLOSED','ESCALATED',now(),$1",
+          ),
+          (error: unknown) =>
+            sqlState(error, "23514", "complaints_escalated_kind"),
+        );
+        const meal = await insertComplaint("kind,code", "'MEAL','FP-MC-12348'");
+        await assert.rejects(
+          client.query(
+            "INSERT INTO foodprint.system_complaints(id,category) VALUES($1,'OTHER')",
+            [meal.rows[0].id],
+          ),
+          (error: unknown) =>
+            sqlState(error, "23503", "system_complaints_id_kind_fkey"),
+        );
+        await assert.rejects(
+          client.query(
+            "INSERT INTO foodprint.system_complaints(id,kind,category) VALUES($1,'MEAL','OTHER')",
+            [meal.rows[0].id],
+          ),
+          (error: unknown) =>
+            sqlState(error, "23514", "system_complaints_kind"),
+        );
+        await assert.rejects(
+          client.query(
+            "INSERT INTO foodprint.system_complaints(id,category) VALUES($1,'BILLING')",
+            [systemId],
+          ),
+          /invalid input value for enum/,
+        );
+      } finally {
+        await client.end();
+        await db.query(`DROP DATABASE "${name}"`);
+      }
+    },
+  );
+  await context.test(
     "complaint migration preserves existing meal and response",
     async () => {
       const migration =
