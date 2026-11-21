@@ -600,6 +600,9 @@ void test("single-dish samples are idempotent and historical multi-dish samples 
     currentUsage: 0,
   };
   Object.assign(f.tx, {
+    mealAllocationDraft: {
+      findUnique: () => Promise.resolve({ state: "DRAFT" }),
+    },
     retainedFoodSample: {
       findUnique: ({
         where,

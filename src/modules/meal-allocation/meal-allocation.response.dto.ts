@@ -50,6 +50,13 @@ export interface DishAllocationGroup {
   dishName: string;
   mealType: MealType;
   totalRequiredPortions: number;
+  classRequirements?: {
+    demandId: string;
+    className: string;
+    requiredPortions: number;
+    excludedPortions: number;
+    allergens?: string[];
+  }[];
   autoAssigned: boolean;
   batches: DishBatchSlot[];
 }
@@ -68,6 +75,12 @@ export interface GradeAllocationGroup {
 }
 
 export interface AllocationDayResponse {
+  editorGrades?: GradeAllocationGroup[];
+  hasUnappliedDrafts?: boolean;
+  materialEditing?: boolean;
+  materialPlanPending?: boolean;
+  materialDraftStale?: boolean;
+  draftRevision?: string;
   materialPlan?: import("./material-allocation.response.dto").MaterialPlanResponseDTO;
   materialPlanError?: string;
   supportsMaterialAllocation?: boolean;

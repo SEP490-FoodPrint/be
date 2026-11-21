@@ -54,6 +54,25 @@ export const materialApplySchema = materialPlanSchema.extend({
   revision: z.string().regex(/^[a-f0-9]{64}$/),
   planId: z.string().regex(/^[a-f0-9]{64}$/),
 });
+export const allocationDraftSchema = confirmDistributionSchema.extend({
+  mealType: z.enum(["LUNCH", "AFTERNOON"]),
+  rows: z
+    .array(
+      z.strictObject({
+        demandId: requestUuidSchema,
+        dishId: requestUuidSchema,
+        batchId: requestUuidSchema,
+        allocatedPortions: z
+          .string()
+          .regex(/^(?:0|[1-9]\d{0,9})(?:\.\d{1,2})?$/)
+          .refine((value) => Number(value) <= 2147483647),
+      }),
+    )
+    .max(20000)
+    .optional(),
+});
+export const validateAllocationDraft = (value: unknown) =>
+  parseRequest(allocationDraftSchema, value);
 export const validateMaterialPlan = (value: unknown) =>
   parseRequest(materialPlanSchema, value);
 export const validateMaterialApply = (value: unknown) =>

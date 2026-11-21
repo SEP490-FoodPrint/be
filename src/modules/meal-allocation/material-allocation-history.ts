@@ -4,16 +4,23 @@ import type { AllocationDay } from "./meal-allocation.repository";
 import type { AllocationDayResponse } from "./meal-allocation.response.dto";
 import { verifyStoredMaterialAllocations } from "./material-allocation";
 
+import { HttpError } from "../../utils/http-error";
+import { allergyDishDemand } from "./allergy-dish-demand";
+
 const D = Prisma.Decimal;
 export function materialDishDemand(
   menu: AllocationDay["menus"][number],
   demand: AllocationDay["demands"][number],
   dishId: string,
+  data?: AllocationDay,
 ): number {
   const groups = menu.portionGroups.filter(
     (group) => group.mealType === demand.mealType,
   );
-  if (!groups.length) return demand.totalPortions;
+  if (!groups.length)
+    return data
+      ? allergyDishDemand(data, menu, demand, dishId).required
+      : demand.totalPortions;
   return groups
     .filter((group) => group.dishes?.some((dish) => dish.dishId === dishId))
     .reduce(
@@ -80,9 +87,23 @@ export function projectMaterialHistory(
       .filter((d) => d.mealType === demand.mealType)
       .map((d) => ({
         dish: d,
-        required: materialDishDemand(menu, demand, d.dishId),
+        required: (() => {
+          try {
+            return materialDishDemand(menu, demand, d.dishId, data);
+          } catch (error) {
+            if (!(error instanceof HttpError) || error.statusCode !== 409)
+              throw error;
+            issues.push(error.message);
+            return demand.totalPortions;
+          }
+        })(),
       }));
-    let fulfilled = true;
+    let fulfilled =
+      demand.totalPortions === 0 || expected.some((row) => row.required > 0);
+    if (demand.totalPortions > 0 && !fulfilled)
+      issues.push(
+        "Lớp " + demand.Class.name + " không còn món có thể phục vụ.",
+      );
     for (const { dish, required } of expected) {
       const matching = rows.filter((row) => row.dishId === dish.dishId);
       const sum = matching.reduce(
@@ -127,6 +148,16 @@ export function projectMaterialHistory(
         grade.dishes.push(group);
       }
       group.totalRequiredPortions += required;
+      (group.classRequirements ??= []).push({
+        demandId: demand.id,
+        className: demand.Class.name,
+        requiredPortions: required,
+        excludedPortions: menu.portionGroups.some(
+          (row) => row.mealType === demand.mealType,
+        )
+          ? 0
+          : demand.totalPortions - required,
+      });
       for (const row of matching) {
         const batch = data.batches.find(
           (b) =>

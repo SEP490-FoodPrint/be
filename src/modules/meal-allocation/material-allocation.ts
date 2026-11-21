@@ -4,6 +4,7 @@ import { HttpError } from "../../utils/http-error";
 import { convertQuantity } from "../kitchen/kitchen.service";
 
 const D = Prisma.Decimal;
+let solver: ReturnType<typeof GLPK> | undefined;
 export interface MaterialLine {
   ingredientId: string;
   quantityPerPortion: string;
@@ -91,7 +92,8 @@ export function planMaterialAllocation(
   deadline = Date.now() + 10000,
 ) {
   if (!demands.length) throw new HttpError(409, "Chưa có nhu cầu để phân bổ");
-  const glpk = GLPK();
+  // GLPK registers process listeners when instantiated. Reuse its synchronous solver.
+  const glpk = (solver ??= GLPK());
   const lp: LP = {
     name: "meal-materials",
     objective: { direction: glpk.GLP_MIN, name: "links", vars: [] },

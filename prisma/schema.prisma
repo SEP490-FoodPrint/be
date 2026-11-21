@@ -808,6 +808,24 @@ model MealAllocationBatch {
 }
 
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model MealAllocationDraft {
+  schoolId String @map("school_id") @db.Uuid
+  mealDate DateTime @map("meal_date") @db.Date
+  mealType MealType @map("meal_type")
+  state String @db.VarChar(16)
+  revision String @db.VarChar(64)
+  sourceRevision String? @map("source_revision") @db.VarChar(64)
+  plan Json?
+  error String?
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  school School @relation(fields: [schoolId], references: [id], onDelete: Restrict)
+
+  @@id([schoolId, mealDate, mealType])
+  @@index([state, updatedAt])
+  @@map("meal_allocation_drafts")
+  @@schema("foodprint")
+}
+
 model MealAllocation {
   id                            String                         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   dailyMealPortionId            String                         @map("daily_meal_portion_id") @db.Uuid
@@ -1174,6 +1192,7 @@ model SchoolSupplierRelationship {
 
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
 model School {
+  mealAllocationDrafts MealAllocationDraft[]
   id                          String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name                        String                       @db.VarChar(255)
   code                        String?                      @db.VarChar(80)

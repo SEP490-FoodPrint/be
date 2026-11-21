@@ -8,6 +8,7 @@ export interface MaterialPlanResponseDTO {
   planId: string;
   algorithmVersion: 2;
   optimal: boolean;
+  origin?: "GLPK" | "MANUAL";
   entries: (MaterialEntry & {
     className: string;
     gradeId: string;
