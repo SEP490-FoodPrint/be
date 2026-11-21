@@ -170,6 +170,11 @@ Ngoài xác minh toàn vẹn (dựng lại payload, so với chain), bằng ch�
 4. Với kind `meal-distributions`, `recordId` trong phản hồi là `<schoolId>:<YYYY-MM-DD>`.
 5. `declaredAt` của khai báo là thời điểm tạo bằng chứng, được chốt trong `snapshot`; người khai là `created_by_user_id`.
 6. Đối chiếu nghiệp vụ dùng dữ liệu đã neo, chỉ thêm ghi chú vào `verificationResult`. API chuỗi không dừng khi một bằng chứng thuộc mạng hoặc contract khác: bằng chứng đó được đánh dấu `FAILED`.
+7. (Bổ sung 22/11/2026) Bằng chứng phân phối là một bản cho cả trường trong ngày, nên `snapshot.batches` chứa mẻ của mọi khối và mọi bữa (trưa, xế). Chuỗi của một suất ăn chỉ nạp các mẻ đã phân bổ cho suất đó (`cookingBatchIds`). Khi kiểm tra liên kết của nút phân phối trong chuỗi này:
+   - Mẻ nằm ngoài phạm vi chuỗi bị bỏ qua, không sinh dòng `links`. Trước đây các mẻ này bị đánh `MISMATCH` vì không có nút để so, làm `intact = false` cho mọi trường có từ hai bữa hoặc hai khối trong ngày.
+   - Mẻ trong phạm vi nhưng thiếu bằng chứng hoặc lệch hash vẫn là `MISMATCH` như cũ.
+   - Mỗi mẻ chỉ có một dòng `links` (snapshot lặp mẻ theo từng lớp được gộp lại); nếu các dòng lặp cho kết quả khác nhau thì lấy `MISMATCH`.
+   - Gọi `linkChecks` không truyền phạm vi thì giữ hành vi cũ (kiểm tra mọi mẻ), chỉ gộp dòng lặp.
 
 ## Ảnh hưởng tới các nhánh đang mở
 

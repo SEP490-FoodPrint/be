@@ -1151,6 +1151,44 @@ void test("chain links match, break on a tampered reference and skip unanchored 
   assert.deepEqual(statuses(), ["MATCH", "NOT_LINKED", "MATCH", "MATCH"]);
 });
 
+void test("a meal chain ignores other meals' batches in the school-day distribution", async () => {
+  const h = proofHarness();
+  await h.service.prepareDeliveryDeclared(tx, A, C);
+  await h.service.prepareDeliveryInspected(tx, A, B);
+  await h.service.prepareCookingCompleted(tx, B, B);
+  await h.service.prepareSampleStored(tx, C, B);
+  await h.service.prepareMealDistributed(tx, C, "2026-11-15", B);
+  const distribution = h.versions[4].snapshot as {
+    batches: { cookingBatchId: string; cookingCompletedHash: string }[];
+  };
+  const own = distribution.batches[0];
+  const D = "44444444-4444-4444-8444-444444444444";
+  // Another class of the same batch, and an afternoon batch outside this chain.
+  distribution.batches.push(
+    { ...own },
+    { cookingBatchId: D, cookingCompletedHash: hashOf("a") },
+  );
+  const lots = new Map([[C, A]]);
+  const distributionLinks = (scope?: Set<string>) =>
+    linkChecks(h.versions, lots, scope).get(h.versions[4].id) ?? [];
+
+  assert.deepEqual(
+    distributionLinks(new Set([B])).map((l) => [l.field, l.status]),
+    [[`batches.${B}.cookingCompletedHash`, "MATCH"]],
+  );
+  // Without a scope every batch is still checked, one link per batch.
+  assert.deepEqual(
+    distributionLinks().map((l) => l.status),
+    ["MATCH", "MISMATCH"],
+  );
+  // A tampered in-scope reference still breaks the chain.
+  own.cookingCompletedHash = hashOf("f");
+  assert.deepEqual(
+    distributionLinks(new Set([B])).map((l) => l.status),
+    ["MISMATCH"],
+  );
+});
+
 void test("suppliers see only their own declarations and no other proof kind", async () => {
   const scopes: unknown[] = [];
   const service = createBlockchainProofService({
