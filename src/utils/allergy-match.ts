@@ -96,85 +96,130 @@ export function allergyCountsFromGroups(
   return { byAllergy, uncovered, relevant };
 }
 
+/** Một dòng dị ứng của lớp (hoặc của ngày): thuộc nhóm `groupNo`, mọi dòng cùng nhóm cùng một số. */
+export interface AllergyGroupRow {
+  /** Số thứ tự nhóm dị ứng trong lớp; thiếu thì coi là nhóm 1 (danh sách chung kiểu cũ). */
+  groupNo?: number;
+  ingredientEntryId: string;
+  allergenName: string;
+  portionCount: number;
+}
+
+/** Nhóm dị ứng: tập nguyên liệu cùng tránh + số suất (học sinh) của nhóm, tính một lần. */
+export interface AllergyGroup {
+  groupNo: number;
+  portions: number;
+  allergens: { ingredientEntryId: string; allergenName: string }[];
+}
+
 /**
- * Chia sĩ số đã chốt vào các nhóm suất của bữa: số học sinh dị ứng (một con số chung cho cả danh sách
- * nguyên liệu dị ứng của lớp) vào một nhóm suất riêng theo sharedAllergyTarget; còn lại vào nhóm thường.
+ * Gom các dòng dị ứng thành nhóm. Ví dụ A: 1, B: 1, (A, B): 1 là 3 nhóm, tổng 3 suất.
+ * Số suất của nhóm là số lớn nhất trên các dòng của nhóm (các dòng cùng nhóm cùng một số);
+ * nguyên liệu 0 suất (GVCN bỏ khỏi danh sách hôm nay) không tính vào nhóm.
+ */
+export function groupAllergies(rows: AllergyGroupRow[]): AllergyGroup[] {
+  const byGroup = new Map<number, AllergyGroup>();
+  for (const row of rows) {
+    const groupNo = row.groupNo ?? 1;
+    const group = byGroup.get(groupNo) ?? {
+      groupNo,
+      portions: 0,
+      allergens: [],
+    };
+    if (row.portionCount > 0) {
+      group.portions = Math.max(group.portions, row.portionCount);
+      if (
+        !group.allergens.some(
+          (a) => a.ingredientEntryId === row.ingredientEntryId,
+        )
+      )
+        group.allergens.push({
+          ingredientEntryId: row.ingredientEntryId,
+          allergenName: row.allergenName,
+        });
+    }
+    byGroup.set(groupNo, group);
+  }
+  return [...byGroup.values()]
+    .filter((group) => group.portions > 0 && group.allergens.length > 0)
+    .sort((a, b) => a.groupNo - b.groupNo);
+}
+
+/** Tổng số suất dị ứng của lớp: mỗi nhóm tính một lần. */
+export function totalAllergyPortions(rows: AllergyGroupRow[]): number {
+  return groupAllergies(rows).reduce((sum, group) => sum + group.portions, 0);
+}
+
+type PortionGroupLike = {
+  id: string;
+  isDefault: boolean;
+  avoidances: Parameters<typeof avoidanceCovers>[0];
+};
+
+/**
+ * Nhóm suất riêng nhận suất của một nhóm dị ứng: tránh được nhiều nguyên liệu của nhóm nhất;
+ * bằng nhau thì chọn nhóm suất tránh ít nguyên liệu hơn (sát nhất), rồi nhóm đứng trước.
+ * Không nhóm riêng nào tránh nguyên liệu nào của nhóm thì bữa này không chứa chúng: suất vào nhóm thường.
+ */
+export function allergyGroupTarget(
+  groups: PortionGroupLike[],
+  allergyGroup: AllergyGroup,
+): string | null {
+  let best: { id: string; covered: number; size: number } | null = null;
+  for (const group of groups) {
+    if (group.isDefault) continue;
+    const covered = allergyGroup.allergens.filter((allergy) =>
+      avoidanceCovers(group.avoidances, allergy, ""),
+    ).length;
+    const size = group.avoidances.length;
+    if (
+      covered > 0 &&
+      (!best ||
+        covered > best.covered ||
+        (covered === best.covered && size < best.size))
+    )
+      best = { id: group.id, covered, size };
+  }
+  return best?.id ?? null;
+}
+
+/**
+ * Chia sĩ số đã chốt vào các nhóm suất của bữa: mỗi nhóm dị ứng của lớp vào nhóm suất riêng theo
+ * allergyGroupTarget (tính một lần); còn lại vào nhóm thường. Suất dị ứng vượt sĩ số -> null.
  */
 export function splitPortionsIntoGroups(
-  groups: {
-    id: string;
-    isDefault: boolean;
-    avoidances: Parameters<typeof avoidanceCovers>[0];
-  }[],
+  groups: PortionGroupLike[],
   totalPortions: number,
-  allergies: {
-    ingredientEntryId: string;
-    allergenName: string;
-    portionCount: number;
-  }[],
+  allergies: AllergyGroupRow[],
 ): Map<string, number> | null {
   const fallback = groups.find((group) => group.isDefault);
   if (!fallback) return null;
   const counts = new Map(groups.map((group) => [group.id, 0]));
-  const { groupId, portions } = sharedAllergyTarget(groups, allergies);
-  if (portions > totalPortions) return null;
-  if (groupId) counts.set(groupId, portions);
-  counts.set(fallback.id, totalPortions - (groupId ? portions : 0));
+  let special = 0;
+  for (const [groupId, portions] of expectedSpecialGroupCounts(
+    groups,
+    allergies,
+  )) {
+    counts.set(groupId, portions);
+    special += portions;
+  }
+  if (special > totalPortions) return null;
+  counts.set(fallback.id, totalPortions - special);
   return counts;
 }
 
-/**
- * Lớp khai dị ứng theo MỘT danh sách chung: các nguyên liệu dị ứng + một số học sinh dị ứng
- * (mọi dòng dị ứng của lớp cùng một con số). Số học sinh đó chỉ tính MỘT lần, vào nhóm suất riêng
- * tránh được nhiều nguyên liệu dị ứng của lớp nhất (ưu tiên nhóm đứng trước khi bằng nhau).
- * Không có nhóm riêng nào tránh nguyên liệu nào của lớp thì bữa này không chứa chúng: không có suất riêng.
- */
-export function sharedAllergyTarget(
-  groups: {
-    id: string;
-    isDefault: boolean;
-    avoidances: Parameters<typeof avoidanceCovers>[0];
-  }[],
-  allergies: {
-    ingredientEntryId: string;
-    allergenName: string;
-    portionCount: number;
-  }[],
-): { groupId: string | null; portions: number } {
-  const portions = Math.max(0, ...allergies.map((a) => a.portionCount));
-  if (portions <= 0) return { groupId: null, portions: 0 };
-  let best: { id: string; covered: number } | null = null;
-  for (const group of groups) {
-    if (group.isDefault) continue;
-    // Chỉ xét nguyên liệu còn suất hôm nay (nguyên liệu GVCN bỏ khỏi danh sách có 0 suất)
-    const covered = allergies.filter(
-      (allergy) =>
-        allergy.portionCount > 0 &&
-        avoidanceCovers(group.avoidances, allergy, ""),
-    ).length;
-    if (covered > 0 && (!best || covered > best.covered))
-      best = { id: group.id, covered };
-  }
-  return best ? { groupId: best.id, portions } : { groupId: null, portions: 0 };
-}
-
-/** Số suất mỗi nhóm suất riêng phải có theo dị ứng đã khai (quy tắc sharedAllergyTarget). */
+/** Số suất mỗi nhóm suất riêng phải có theo các nhóm dị ứng đã khai (quy tắc allergyGroupTarget). */
 export function expectedSpecialGroupCounts(
-  groups: {
-    id: string;
-    isDefault: boolean;
-    avoidances: Parameters<typeof avoidanceCovers>[0];
-  }[],
-  allergies: {
-    ingredientEntryId: string;
-    allergenName: string;
-    portionCount: number;
-  }[],
+  groups: PortionGroupLike[],
+  allergies: AllergyGroupRow[],
 ): Map<string, number> {
   const expected = new Map(
     groups.filter((g) => !g.isDefault).map((g) => [g.id, 0]),
   );
-  const { groupId, portions } = sharedAllergyTarget(groups, allergies);
-  if (groupId) expected.set(groupId, portions);
+  for (const allergyGroup of groupAllergies(allergies)) {
+    const target = allergyGroupTarget(groups, allergyGroup);
+    if (target)
+      expected.set(target, (expected.get(target) ?? 0) + allergyGroup.portions);
+  }
   return expected;
 }

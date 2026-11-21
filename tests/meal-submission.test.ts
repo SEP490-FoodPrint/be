@@ -55,14 +55,14 @@ void test("daily portion input is aggregate-only and strictly validated", () => 
       mealType: "LUNCH",
       totalPortions: 25,
       allergyNotes: "  Không dùng lạc  ",
-      allergies: [{ ingredientEntryId: ENTRY_ID, portionCount: 2 }],
+      allergies: [{ groupNo: 1, portionCount: 2 }],
     }),
     {
       date: DATE,
       mealType: "LUNCH",
       totalPortions: 25,
       allergyNotes: "Không dùng lạc",
-      allergies: [{ ingredientEntryId: ENTRY_ID, portionCount: 2 }],
+      allergies: [{ groupNo: 1, portionCount: 2 }],
     },
   );
   assert.throws(
@@ -82,7 +82,35 @@ void test("daily portion input is aggregate-only and strictly validated", () => 
         date: "2026-11-04",
         mealType: "LUNCH",
         totalPortions: 1,
-        allergies: [{ ingredientEntryId: ENTRY_ID, portionCount: 2 }],
+        allergies: [{ groupNo: 1, portionCount: 2 }],
+      }),
+    isHttp(400),
+  );
+  // Mỗi nhóm dị ứng một dòng; tổng suất các nhóm không vượt tổng số suất.
+  assert.throws(
+    () =>
+      validateDailyMealPortion({
+        date: "2026-11-04",
+        mealType: "LUNCH",
+        totalPortions: 5,
+        allergies: [
+          { groupNo: 1, portionCount: 1 },
+          { groupNo: 1, portionCount: 1 },
+        ],
+      }),
+    isHttp(400),
+  );
+  assert.throws(
+    () =>
+      validateDailyMealPortion({
+        date: "2026-11-04",
+        mealType: "LUNCH",
+        totalPortions: 2,
+        allergies: [
+          { groupNo: 1, portionCount: 1 },
+          { groupNo: 2, portionCount: 1 },
+          { groupNo: 3, portionCount: 1 },
+        ],
       }),
     isHttp(400),
   );
@@ -110,6 +138,7 @@ function database(
     registeredMealPortions: 30,
     classAllergies: [
       {
+        groupNo: 1,
         ingredientEntryId: ENTRY_ID,
         affectedCount: 3,
         IngredientEntry: { Ingredient: { name: "Lạc" } },
@@ -199,7 +228,7 @@ void test("GVCN creates a draft for the assigned academic-year class", async () 
       mealType: "LUNCH",
       totalPortions: 25,
       allergyNotes: null,
-      allergies: [{ ingredientEntryId: ENTRY_ID, portionCount: 2 }],
+      allergies: [{ groupNo: 1, portionCount: 2 }],
     },
     teacher,
   );
@@ -242,7 +271,7 @@ const draftInput = (overrides: Record<string, unknown> = {}) => ({
   totalPortions: 25,
   allergyNotes: null,
   // Lớp trong fixture có 1 dị ứng; GVCN bắt buộc khai số suất (kể cả 0).
-  allergies: [{ ingredientEntryId: ENTRY_ID, portionCount: 0 }],
+  allergies: [{ groupNo: 1, portionCount: 0 }],
   ...overrides,
 });
 
@@ -320,7 +349,7 @@ void test("GVCN chỉ khai và chốt cho hôm nay, đúng ngày học có thự
   assert.equal(stale.writes.length, 0);
 });
 
-void test("GVCN phải nhập số suất cho mọi nguyên liệu dị ứng của lớp", async () => {
+void test("GVCN phải nhập số suất cho mọi nhóm dị ứng của lớp", async () => {
   const { db, writes } = database();
   const service = createMealAttendanceService(
     undefined,
@@ -331,7 +360,28 @@ void test("GVCN phải nhập số suất cho mọi nguyên liệu dị ứng c�
   await assert.rejects(
     service.saveDraft(draftInput({ allergies: [] }), teacher),
     (error: unknown) =>
-      isHttp(422)(error) && /Chưa nhập số suất dị ứng/.test(String(error)),
+      isHttp(422)(error) &&
+      /Chưa nhập số suất cho nhóm dị ứng "Lạc"/.test(String(error)),
+  );
+  // Vượt số học sinh của nhóm (nhóm 1 có 3 em) hoặc nhóm không tồn tại
+  await assert.rejects(
+    service.saveDraft(
+      draftInput({ allergies: [{ groupNo: 1, portionCount: 4 }] }),
+      teacher,
+    ),
+    isHttp(422),
+  );
+  await assert.rejects(
+    service.saveDraft(
+      draftInput({
+        allergies: [
+          { groupNo: 1, portionCount: 1 },
+          { groupNo: 2, portionCount: 1 },
+        ],
+      }),
+      teacher,
+    ),
+    isHttp(422),
   );
   assert.equal(writes.length, 0);
 });

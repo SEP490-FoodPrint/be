@@ -573,12 +573,8 @@ export async function readMealPortionDemand(
       portionGroups: true,
       dailyAllergyPortions: {
         include: {
-          ClassAllergy: {
-            select: {
-              IngredientEntry: {
-                select: { Ingredient: { select: { name: true } } },
-              },
-            },
+          IngredientEntry: {
+            select: { Ingredient: { select: { name: true } } },
           },
         },
       },
@@ -627,12 +623,13 @@ export async function readMealPortionDemand(
     }
     // Nhóm suất riêng quy về dị ứng khai báo của lớp theo mã hoặc tên (vd. tránh "Tôm nõn tươi" = dị ứng "Tôm nõn").
     const declared = demand.dailyAllergyPortions.map((a) => ({
+      groupNo: a.groupNo,
       ingredientEntryId: a.ingredientEntryId,
-      allergenName: a.ClassAllergy.IngredientEntry.Ingredient.name,
+      allergenName: a.IngredientEntry.Ingredient.name,
       portionCount: a.portionCount,
     }));
     const { uncovered } = allergyCountsFromGroups(groups, countOf, declared);
-    // Mỗi nhóm riêng phải bằng tổng suất dị ứng khai vào nhóm đó (không tính trùng khi một nhóm tránh nhiều dị ứng).
+    // Mỗi nhóm riêng phải bằng tổng suất của các nhóm dị ứng khai vào nhóm đó (mỗi nhóm dị ứng tính một lần).
     const expected = expectedSpecialGroupCounts(groups, declared);
     if (
       !uncovered &&

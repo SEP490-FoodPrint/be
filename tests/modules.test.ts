@@ -1258,11 +1258,13 @@ void test("composite-primary-key lists use both keys for deterministic ordering"
   const service = createAllergyService((args) => {
     assert.deepEqual(args.orderBy, [
       { classId: "asc" },
+      { groupNo: "asc" },
       { ingredientEntryId: "asc" },
     ]);
     return Promise.resolve([
       {
         classId: "class-1",
+        groupNo: 1,
         ingredientEntryId: "entry-1",
         affectedCount: 2,
         updatedByUserId: null,

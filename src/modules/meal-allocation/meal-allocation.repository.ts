@@ -138,18 +138,15 @@ export async function readAllocationDay(
         },
         dailyAllergyPortions: {
           where: { portionCount: { gt: 0 } },
-          orderBy: { ingredientEntryId: "asc" },
+          orderBy: [{ groupNo: "asc" }, { ingredientEntryId: "asc" }],
           select: {
+            groupNo: true,
             ingredientEntryId: true,
             portionCount: true,
-            ClassAllergy: {
+            IngredientEntry: {
               select: {
-                IngredientEntry: {
-                  select: {
-                    ingredientId: true,
-                    Ingredient: { select: { name: true } },
-                  },
-                },
+                ingredientId: true,
+                Ingredient: { select: { name: true } },
               },
             },
           },

@@ -622,6 +622,7 @@ export const menuRepository = {
       select: {
         ingredientEntryId: true,
         classId: true,
+        groupNo: true,
 
         affectedCount: true,
 

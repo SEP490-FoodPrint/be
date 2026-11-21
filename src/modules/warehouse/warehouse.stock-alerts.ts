@@ -60,7 +60,8 @@ const text = (value: Decimal) => value.toDecimalPlaces(3).toString();
 
 /**
  * Mô phỏng dùng kho theo từng ngày cho mỗi nguyên liệu lưu kho: ngày nào cũng lấy lô còn hạn
- * (hạn sớm dùng trước) và các yêu cầu nhập đã gửi có ngày giao không muộn hơn ngày đó.
+ * (hạn sớm dùng trước) rồi tới các yêu cầu nhập đã gửi. Yêu cầu nhập đã gửi bù được mọi ngày, kể cả
+ * ngày trước ngày giao: đã lập yêu cầu thì không cảnh báo lại; NCC không nhận (đơn bị hủy) thì hiện lại.
  * Phần không đủ là lượng cần nhập thêm; ngày đầu tiên thiếu quyết định mức cảnh báo.
  */
 export function computeStockAlerts(
@@ -119,7 +120,10 @@ export function computeStockAlerts(
         (a, b) =>
           (a.expiryDate ?? "9999-12-31").localeCompare(
             b.expiryDate ?? "9999-12-31",
-          ) || (a.availableFrom ?? "").localeCompare(b.availableFrom ?? ""),
+          ) ||
+          // Lô đang có trong kho dùng trước phần đã đặt
+          (a.kind === b.kind ? 0 : a.kind === "LOT" ? -1 : 1) ||
+          (a.availableFrom ?? "").localeCompare(b.availableFrom ?? ""),
       );
     const onHand = supplies
       .filter((supply) => supply.kind === "LOT")
@@ -138,7 +142,12 @@ export function computeStockAlerts(
       for (const supply of supplies) {
         if (need.lte(0)) break;
         if (supply.left.lte(0)) continue;
-        if (supply.availableFrom && supply.availableFrom > day) continue;
+        if (
+          supply.kind === "LOT" &&
+          supply.availableFrom &&
+          supply.availableFrom > day
+        )
+          continue;
         if (supply.expiryDate && supply.expiryDate < day) continue;
         const used = Decimal.min(supply.left, need);
         supply.left = supply.left.sub(used);

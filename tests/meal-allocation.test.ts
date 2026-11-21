@@ -234,6 +234,41 @@ void test("không bù số suất giữa hai bữa và không đoán số suất
   assert.equal(projectAllocationDay(withAllergy, date).status, "RECONCILE");
 });
 
+void test("nhóm dị ứng A: 1, B: 1, (A, B): 1 trừ 3 suất ở món chứa A hoặc B, mỗi nhóm một lần", () => {
+  const data = fixture();
+  data.menus[0].menuDayDishes.forEach((dish) => {
+    dish.ingredients =
+      dish.dishId === "main"
+        ? [{ ingredientId: "bean", ingredient: { name: "Đậu xanh hạt" } }]
+        : [{ ingredientId: "rice", ingredient: { name: "Gạo" } }];
+  });
+  const row = (groupNo: number, ingredientId: string, name: string) => ({
+    groupNo,
+    ingredientEntryId: ingredientId,
+    portionCount: 1,
+    IngredientEntry: { ingredientId, Ingredient: { name } },
+  });
+  data.demands[0].dailyAllergyPortions = [
+    row(1, "bean", "Đậu xanh"),
+    row(2, "shrimp", "Tôm"),
+    row(3, "bean", "Đậu xanh"),
+    row(3, "shrimp", "Tôm"),
+  ];
+  const view = projectAllocationDay(data, date);
+  assert.equal(view.status, "READY");
+  // Món chính chỉ có đậu xanh: nhóm 1 và nhóm 3 không ăn (2 suất), nhóm 2 (chỉ dị ứng tôm) vẫn ăn.
+  assert.equal(
+    view.grades?.flatMap((g) => g.dishes).find((d) => d.dishId === "main")
+      ?.totalRequiredPortions,
+    98,
+  );
+  assert.equal(
+    view.grades?.flatMap((g) => g.dishes).find((d) => d.dishId === "rice")
+      ?.totalRequiredPortions,
+    100,
+  );
+});
+
 void test("chỉ trừ suất dị ứng ở món khớp và không trừ lặp", () => {
   const data = fixture();
   data.menus[0].menuDayDishes.forEach((dish) => {
@@ -249,9 +284,11 @@ void test("chỉ trừ suất dị ứng ở món khớp và không trừ lặp"
     ["bean", "Đậu xanh"],
     ["shrimp", "Tôm"],
   ].map(([ingredientId, name]) => ({
+    // Một nhóm dị ứng (2 em cùng tránh đậu xanh và tôm): trừ một lần 2 suất ở món khớp
+    groupNo: 1,
     ingredientEntryId: ingredientId,
     portionCount: 2,
-    ClassAllergy: { IngredientEntry: { ingredientId, Ingredient: { name } } },
+    IngredientEntry: { ingredientId, Ingredient: { name } },
   }));
   const view = projectAllocationDay(data, date);
   assert.equal(view.status, "READY");

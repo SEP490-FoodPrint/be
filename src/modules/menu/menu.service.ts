@@ -85,6 +85,36 @@ export function matchClassAllergies<
   );
 }
 
+/**
+ * Số học sinh bị ảnh hưởng theo lớp: mỗi nhóm dị ứng (classId + groupNo) tính một lần, dù nhóm
+ * khớp nhiều nguyên liệu. Ví dụ nhóm A: 1, nhóm (A, B): 1 cùng gặp A -> 2 học sinh.
+ */
+export function affectedStudentsByClass<
+  T extends {
+    classId: string;
+    groupNo: number;
+    affectedCount: number;
+    Class: { name: string };
+  },
+>(rows: T[]) {
+  const groups = new Map<string, T>();
+  for (const row of rows) groups.set(`${row.classId}|${row.groupNo}`, row);
+  const byClass = new Map<
+    string,
+    { classId: string; className: string; count: number }
+  >();
+  for (const row of groups.values()) {
+    const item = byClass.get(row.classId) ?? {
+      classId: row.classId,
+      className: row.Class.name,
+      count: 0,
+    };
+    item.count += row.affectedCount;
+    byClass.set(row.classId, item);
+  }
+  return [...byClass.values()];
+}
+
 export async function reviewMenuAllergies(
   tx: Tx,
   days: ReturnType<typeof menuCategoryDto>["menuDays"],
@@ -139,11 +169,7 @@ export async function reviewMenuAllergies(
                 ingredient.name,
               ),
           ),
-          affectedClasses: matches.map((row) => ({
-            classId: row.classId,
-            className: row.Class.name,
-            count: row.affectedCount,
-          })),
+          affectedClasses: affectedStudentsByClass(matches),
         };
       });
       allergyChecks.push({
@@ -468,6 +494,7 @@ function createIngredientOperations(
                 allergenMatches(a.IngredientEntry.Ingredient.name, i.name),
               );
 
+              const affectedClasses = affectedStudentsByClass(rows);
               return {
                 ingredientId: i.id,
 
@@ -477,43 +504,23 @@ function createIngredientOperations(
 
                 allergenDataAvailable: false,
 
-                affectedStudentsCount: rows.reduce(
-                  (n, r) => n + r.affectedCount,
-
+                affectedStudentsCount: affectedClasses.reduce(
+                  (n, c) => n + c.count,
                   0,
                 ),
 
-                affectedClasses: rows.map((a) => ({
-                  classId: a.classId,
-
-                  className: a.Class.name,
-
-                  count: a.affectedCount,
-                })),
+                affectedClasses,
               };
             })
 
             .filter((i) => i.affectedStudentsCount > 0);
 
-          const perClass = [...new Set(allergies.map((a) => a.classId))].map(
-            (id) =>
-              allergies
-
-                .filter((a) => a.classId === id)
-
-                .map((a) => a.affectedCount),
-          );
-
-          const minimum = perClass.reduce(
-              (n, counts) => n + Math.max(...counts),
-
+          // Nhóm dị ứng đã gộp học sinh dị ứng nhiều nguyên liệu: tổng theo nhóm là con số chính xác.
+          const minimum = affectedStudentsByClass(allergies).reduce(
+              (n, c) => n + c.count,
               0,
             ),
-            maximum = perClass.reduce(
-              (n, counts) => n + counts.reduce((s, c) => s + c, 0),
-
-              0,
-            );
+            maximum = minimum;
 
           return {
             hasConflict: conflicts.length > 0,
