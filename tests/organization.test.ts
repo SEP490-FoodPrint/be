@@ -17,6 +17,7 @@ import type {
   OrganizationRepository,
   PublicSchoolDbRow,
 } from "../src/modules/organization/organization.repository";
+import { HttpError } from "../src/utils/http-error";
 
 const testAdmin: AuthPrincipal = {
   id: "admin-id",
@@ -251,7 +252,7 @@ void test("organization service maps school rows correctly and respects paginati
   const publicList = await service.getPublicSchools({ page: 1, limit: 10 });
   assert.equal(publicList.items.length, 1);
   assert.equal(publicList.items[0].boardingScale, "550 học sinh bán trú");
-  assert.equal(publicList.items[0].address, "123 Cầu Giấy, Cầu Giấy, Hà Nội");
+  assert.equal(publicList.items[0].address, "123 Cầu Giấy, Hà Nội");
   assert.equal(publicList.pagination.total, 1);
 
   // 3. getPublicSchoolByCode
@@ -463,4 +464,107 @@ void test("public daily menu resolves per-grade portions, ingredients and allerg
   assert.equal(mainG1.alternativeDish?.portion, "70 g");
   assert.equal(g1!.lunch.dishes[1].alternativeDish, null);
   assert.equal(g1!.lunch.dishes[1].recipeSource, "STANDARD");
+});
+
+void test("public school suppliers returns suppliers and their contracted and available ingredients", async () => {
+  const dummySupplierRow = {
+    supplierId: "sup-1",
+    status: "ACTIVE",
+    Supplier: {
+      id: "sup-1",
+      name: "Công ty Thực phẩm Sạch",
+      taxCode: "0101234567",
+      phone: "0912345678",
+      email: "contact@cleanfood.vn",
+      address: "Hà Nội",
+      supplierCertifications: [
+        {
+          id: "cert-1",
+          certificationType: "HACCP",
+          certificateNo: "HACCP-12345",
+          issuedDate: null,
+          expiryDate: new Date("2028-01-01"),
+          documentUrl: null,
+          status: "VALID",
+        },
+      ],
+      ingredients: [
+        {
+          id: "ing-1",
+          name: "Thịt lợn nạc",
+          defaultUnit: "kg",
+          measurementUnit: null,
+          coverImage: null,
+          description: "Thịt tươi mới mỗi sáng",
+          ingredientCategory: { categoryName: "Thịt cá" },
+        },
+        {
+          id: "ing-2",
+          name: "Cải chíp",
+          defaultUnit: "kg",
+          measurementUnit: null,
+          coverImage: null,
+          description: null,
+          ingredientCategory: { categoryName: "Rau củ" },
+        },
+      ],
+    },
+    contracts: [
+      {
+        id: "contract-1",
+        items: [
+          {
+            handlingType: "DIRECT_USE",
+            ingredient: {
+              id: "ing-1",
+              name: "Thịt lợn nạc",
+              defaultUnit: "kg",
+              measurementUnit: null,
+              coverImage: null,
+              description: "Thịt tươi mới mỗi sáng",
+              status: "ACTIVE",
+              ingredientCategory: { categoryName: "Thịt cá" },
+            },
+          },
+        ],
+      },
+    ],
+  };
+
+  const repo = {
+    findSchoolForMenu: (code: string) =>
+      Promise.resolve(
+        code === "SCH-01"
+          ? {
+              id: "sch-1",
+              lunchTime: null,
+              afternoonMealTime: null,
+              coverImageUrl: null,
+            }
+          : null,
+      ),
+    findPublicSchoolSuppliers: (schoolId: string) =>
+      Promise.resolve(schoolId === "sch-1" ? [dummySupplierRow] : []),
+  } as unknown as OrganizationRepository;
+
+  const service = createOrganizationService(repo);
+
+  // Không tìm thấy trường -> ném lỗi 404
+  await assert.rejects(
+    () => service.getPublicSchoolSuppliers("UNKNOWN"),
+    (err: unknown) => err instanceof HttpError && err.statusCode === 404,
+  );
+
+  // Tìm thấy trường -> trả về danh sách NCC và nguyên liệu
+  const suppliers = await service.getPublicSchoolSuppliers("SCH-01");
+  assert.equal(suppliers.length, 1);
+  const sup = suppliers[0];
+  assert.equal(sup.name, "Công ty Thực phẩm Sạch");
+  assert.equal(sup.taxCode, "0101234567");
+  assert.equal(sup.certifications.length, 1);
+  assert.equal(sup.certifications[0].certificationType, "HACCP");
+  assert.equal(sup.contractedIngredients.length, 1);
+  assert.equal(sup.contractedIngredients[0].name, "Thịt lợn nạc");
+  assert.equal(sup.contractedIngredients[0].category, "Thịt cá");
+  assert.equal(sup.availableIngredients.length, 2);
 });

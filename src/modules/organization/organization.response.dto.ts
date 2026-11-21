@@ -200,3 +200,37 @@ export interface OrganizationSummaryResponseDTO {
   total: number;
   activeCount: number;
 }
+
+export interface PublicSupplierCertificationDTO {
+  id: string;
+  certificationType: string;
+  certificateNo: string;
+  issuedDate: string | null;
+  expiryDate: string | null;
+  documentUrl: string | null;
+  status: string;
+}
+
+export interface PublicSupplierIngredientDTO {
+  id: string;
+  name: string;
+  category: string | null;
+  unit: string;
+  coverImage: string | null;
+  description: string | null;
+  handlingType?: string | null;
+}
+
+export interface PublicSchoolSupplierDTO {
+  id: string;
+  code?: string;
+  name: string;
+  taxCode: string | null;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  status: string;
+  certifications: PublicSupplierCertificationDTO[];
+  contractedIngredients: PublicSupplierIngredientDTO[];
+  availableIngredients: PublicSupplierIngredientDTO[];
+}

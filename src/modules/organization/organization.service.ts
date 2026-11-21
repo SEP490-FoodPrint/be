@@ -58,6 +58,8 @@ import type {
   SnackItemDTO,
   WeeklyMenuDayDTO,
   PublicSchoolGradeDTO,
+  PublicSchoolSupplierDTO,
+  PublicSupplierIngredientDTO,
 } from "./organization.response.dto";
 import {
   createOrganizationRepository,
@@ -795,6 +797,75 @@ export function createOrganizationService(
         days,
         availableWeeks,
       };
+    },
+
+    async getPublicSchoolSuppliers(
+      schoolCode: string,
+    ): Promise<PublicSchoolSupplierDTO[]> {
+      const school = await data.findSchoolForMenu(schoolCode);
+      if (!school) {
+        throw new HttpError(404, "Không tìm thấy trường học");
+      }
+      if (!data.findPublicSchoolSuppliers) {
+        return [];
+      }
+      const relationships = await data.findPublicSchoolSuppliers(school.id);
+      return relationships.map((rel) => {
+        const contractedMap = new Map<string, PublicSupplierIngredientDTO>();
+        for (const contract of rel.contracts) {
+          for (const item of contract.items) {
+            if (
+              item.ingredient &&
+              item.ingredient.status === "ACTIVE" &&
+              !contractedMap.has(item.ingredient.id)
+            ) {
+              contractedMap.set(item.ingredient.id, {
+                id: item.ingredient.id,
+                name: item.ingredient.name,
+                category:
+                  item.ingredient.ingredientCategory?.categoryName ?? null,
+                unit:
+                  item.ingredient.measurementUnit?.name ||
+                  item.ingredient.defaultUnit,
+                coverImage: item.ingredient.coverImage,
+                description: item.ingredient.description,
+                handlingType: item.handlingType,
+              });
+            }
+          }
+        }
+        return {
+          id: rel.Supplier.id,
+          name: rel.Supplier.name,
+          taxCode: rel.Supplier.taxCode,
+          phone: rel.Supplier.phone,
+          email: rel.Supplier.email,
+          address: rel.Supplier.address,
+          status: rel.status,
+          certifications: rel.Supplier.supplierCertifications.map((c) => ({
+            id: c.id,
+            certificationType: c.certificationType,
+            certificateNo: c.certificateNo,
+            issuedDate: c.issuedDate
+              ? c.issuedDate.toISOString().slice(0, 10)
+              : null,
+            expiryDate: c.expiryDate
+              ? c.expiryDate.toISOString().slice(0, 10)
+              : null,
+            documentUrl: c.documentUrl,
+            status: c.status,
+          })),
+          contractedIngredients: Array.from(contractedMap.values()),
+          availableIngredients: rel.Supplier.ingredients.map((ing) => ({
+            id: ing.id,
+            name: ing.name,
+            category: ing.ingredientCategory?.categoryName ?? null,
+            unit: ing.measurementUnit?.name || ing.defaultUnit,
+            coverImage: ing.coverImage,
+            description: ing.description,
+          })),
+        };
+      });
     },
   };
 }

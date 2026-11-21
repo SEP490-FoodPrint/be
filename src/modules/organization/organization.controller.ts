@@ -156,5 +156,15 @@ export function createOrganizationController(
       }
       sendSuccess(res, result, "Lấy thực đơn tuần thành công");
     }),
+
+    getPublicSchoolSuppliers: asyncHandler(async (req, res) => {
+      const schoolCode = validateSchoolCode(req.params.schoolCode);
+      const result = await service.getPublicSchoolSuppliers(schoolCode);
+      sendSuccess(
+        res,
+        result,
+        "Lấy danh sách nhà cung cấp của trường thành công",
+      );
+    }),
   };
 }
