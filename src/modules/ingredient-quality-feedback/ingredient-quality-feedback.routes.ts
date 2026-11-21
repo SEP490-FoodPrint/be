@@ -62,6 +62,7 @@ export function createIngredientQualityFeedbackRouter(
     requireResource("ingredient-quality-feedback"),
     controller.getAll,
   );
+  router.post("/", authHandler, requireRequester, controller.create);
   router.get(
     "/:feedbackId",
     authHandler,

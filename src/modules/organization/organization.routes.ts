@@ -39,6 +39,10 @@ export function createOrganizationRouter(
   router.get("/public/:schoolCode/grades", controller.getPublicSchoolGrades);
   router.get("/public/:schoolCode/daily-menu", controller.getPublicDailyMenu);
   router.get("/public/:schoolCode/weekly-menu", controller.getPublicWeeklyMenu);
+  router.get(
+    "/public/:schoolCode/suppliers",
+    controller.getPublicSchoolSuppliers,
+  );
   router.get("/public/:id", controller.getPublicSchoolById);
 
   // Internal admin endpoint
