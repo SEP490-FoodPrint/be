@@ -2831,9 +2831,10 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
         { schoolId: sch1.id },
       );
       // Transfer submitter1's current school to sch2 later? Check historical identity preserved & no sch2 grant!
+      // Q11 (specs/ingredient-feedback-submission): BGH là vai trò mặc định xem toàn trường.
       const peerViewer1 = await mkUser(
-        schKitchenRole.id,
-        schKitchenRole.code,
+        schBoardRole.id,
+        schBoardRole.code,
         "us2-peer-details",
         { schoolId: sch1.id },
       );
@@ -3094,6 +3095,9 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
       const schKitchenRole = await db.role.findUniqueOrThrow({
         where: { code: "SCHOOL_KITCHEN_STAFF" },
       });
+      const schBoardRole = await db.role.findUniqueOrThrow({
+        where: { code: "SCHOOL_MANAGEMENT_BOARD" },
+      });
       const sup1 = await db.supplier.create({
         data: { name: "US3 Supplier 1" },
       });
@@ -3154,8 +3158,8 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
         { schoolId: sch1.id },
       );
       const schoolDetailsPeer = await mkActor(
-        schKitchenRole.id,
-        schKitchenRole.code,
+        schBoardRole.id,
+        schBoardRole.code,
         "us3-peer-details",
         { schoolId: sch1.id },
       );
@@ -3409,6 +3413,272 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
         }),
         0,
       );
+    },
+  );
+
+  await context.test(
+    "C02 submission over HTTP (specs/ingredient-feedback-submission): BGH/kitchen/nutrition submit for RECEIVED/REJECTED deliveries of their school, Q11 read scopes, supplier handles the new ticket",
+    async () => {
+      const role = (code: string) =>
+        db.role.findUniqueOrThrow({ where: { code } });
+      const [boardRole, kitchenRole, nutritionRole, supAdminRole, teacherRole] =
+        await Promise.all([
+          role("SCHOOL_MANAGEMENT_BOARD"),
+          role("SCHOOL_KITCHEN_STAFF"),
+          role("SCHOOL_NUTRITION_OFFICER"),
+          role("INGREDIENT_SUPPLIER_ADMIN"),
+          role("HOMEROOM_TEACHER"),
+        ]);
+      const sup = await db.supplier.create({ data: { name: "PR3 Supplier" } });
+      const supOther = await db.supplier.create({
+        data: { name: "PR3 Other Supplier" },
+      });
+      const sch = await db.school.create({
+        data: { name: "PR3 School", code: "SCH-PR3" },
+      });
+      const schOther = await db.school.create({
+        data: { name: "PR3 Other School", code: "SCH-PR3-O" },
+      });
+      const mk = (
+        r: { id: string; code: string },
+        tag: string,
+        org: { schoolId?: string; supplierId?: string },
+      ) =>
+        db.user.create({
+          data: {
+            roleId: r.id,
+            roleCode: r.code,
+            schoolId: org.schoolId ?? null,
+            supplierId: org.supplierId ?? null,
+            username: `${tag}-${randomUUID().slice(0, 8)}`,
+            email: `${tag}-${randomUUID().slice(0, 8)}@test.local`,
+            passwordHash,
+            fullName: tag,
+            status: "ACTIVE",
+          },
+        });
+      const board = await mk(boardRole, "pr3-board", { schoolId: sch.id });
+      const kitchen = await mk(kitchenRole, "pr3-kitchen", {
+        schoolId: sch.id,
+      });
+      const nutrition = await mk(nutritionRole, "pr3-nutrition", {
+        schoolId: sch.id,
+      });
+      const teacher = await mk(teacherRole, "pr3-teacher", {
+        schoolId: sch.id,
+      });
+      const otherBoard = await mk(boardRole, "pr3-other-board", {
+        schoolId: schOther.id,
+      });
+      const supAdmin = await mk(supAdminRole, "pr3-sup", {
+        supplierId: sup.id,
+      });
+      const mkDelivery = (
+        deliveryNo: string,
+        status: "RECEIVED" | "REJECTED" | "ARRIVED",
+        schoolId = sch.id,
+      ) =>
+        db.delivery.create({
+          data: {
+            deliveryNo,
+            schoolId,
+            supplierId: sup.id,
+            creationMode: "STANDALONE",
+            creationKey: randomUUID(),
+            creationFingerprint: "e".repeat(64),
+            createdByUserId: supAdmin.id,
+            status,
+            ...(status === "RECEIVED"
+              ? {
+                  receivedAt: new Date("2026-11-20T08:00:00Z"),
+                  receivedByUserId: kitchen.id,
+                }
+              : {}),
+          },
+        });
+      const received = await mkDelivery("FP-DE-70001", "RECEIVED");
+      const rejected = await mkDelivery("FP-DE-70002", "REJECTED");
+      const arrived = await mkDelivery("FP-DE-70003", "ARRIVED");
+      const foreign = await mkDelivery("FP-DE-70004", "RECEIVED", schOther.id);
+      const ing = await db.ingredient.create({
+        data: { supplierId: sup.id, name: "PR3 Ing", defaultUnit: "kg" },
+      });
+      const mkLot = async (deliveryId: string, lotCode: string) =>
+        db.ingredientLot.create({
+          data: {
+            deliveryItemId: (
+              await db.deliveryItem.create({
+                data: {
+                  deliveryId,
+                  ingredientId: ing.id,
+                  actualQuantity: "5.000",
+                  unit: "kg",
+                },
+              })
+            ).id,
+            lotCode,
+            receivedQuantity: "5.000",
+            availableQuantity: "5.000",
+            unit: "kg",
+            status: "AVAILABLE",
+          },
+        });
+      const lotReceived = await mkLot(received.id, "LOT-PR3-A");
+      const lotRejected = await mkLot(rejected.id, "LOT-PR3-B");
+
+      const [boardC, kitchenC, nutritionC, teacherC, otherBoardC, supC] =
+        await Promise.all(
+          [board, kitchen, nutrition, teacher, otherBoard, supAdmin].map((u) =>
+            login(u.email),
+          ),
+        );
+      const submit = (cookie: string, body: Record<string, unknown>) =>
+        call("/ingredient-quality-feedback", cookie, "POST", body);
+      const countBefore = await db.complaint.count({
+        where: { kind: "INGREDIENT" },
+      });
+
+      // Rejected inputs never create a row.
+      const description = "Rau cải bị dập úng nhiều";
+      for (const [cookie, body, status] of [
+        [kitchenC, { deliveryId: arrived.id, description }, 409],
+        [kitchenC, { deliveryId: foreign.id, description }, 404],
+        [otherBoardC, { deliveryId: received.id, description }, 404],
+        [
+          kitchenC,
+          {
+            deliveryId: received.id,
+            ingredientLotId: lotRejected.id,
+            description,
+          },
+          400,
+        ],
+        [kitchenC, { deliveryId: received.id, description: "ngắn" }, 400],
+        [kitchenC, { deliveryId: received.id, description, title: "x" }, 400],
+        [teacherC, { deliveryId: received.id, description }, 403],
+        [supC, { deliveryId: received.id, description }, 403],
+      ] as const) {
+        const res = await submit(cookie, body);
+        assert.equal(res.status, status, JSON.stringify(body));
+      }
+      assert.equal(
+        await db.complaint.count({ where: { kind: "INGREDIENT" } }),
+        countBefore,
+      );
+
+      const byKitchen = await submit(kitchenC, {
+        deliveryId: received.id,
+        ingredientLotId: lotReceived.id,
+        description: `  ${description}  `,
+      });
+      assert.equal(byKitchen.status, 201);
+      assert.match(String(byKitchen.data.code), /^FP-CP-\d{5}$/);
+      assert.equal(
+        byKitchen.data.title,
+        "Phản ánh chất lượng nguyên liệu chuyến giao FP-DE-70001",
+      );
+      assert.equal(byKitchen.data.description, description);
+      assert.equal(byKitchen.data.displayStatus, "IN_PROGRESS");
+      assert.deepEqual(byKitchen.data.ingredientLot, {
+        id: lotReceived.id,
+        lotCode: "LOT-PR3-A",
+      });
+      const byNutrition = await submit(nutritionC, {
+        deliveryId: rejected.id,
+        ingredientLotId: null,
+        description: "Lô thịt bị từ chối vì có mùi lạ",
+      });
+      assert.equal(byNutrition.status, 201);
+      const byBoard = await submit(boardC, {
+        deliveryId: received.id,
+        description: "Phản ánh thêm về chuyến giao này",
+      });
+      assert.equal(byBoard.status, 201);
+      assert.notEqual(byBoard.data.code, byKitchen.data.code);
+
+      const stored = await db.complaint.findUniqueOrThrow({
+        where: { id: String(byKitchen.data.id) },
+        select: {
+          status: true,
+          senderUserId: true,
+          senderRoleCode: true,
+          senderSchoolId: true,
+          statusHistories: { select: { fromStatus: true, toStatus: true } },
+        },
+      });
+      assert.deepEqual(stored, {
+        status: "NEW",
+        senderUserId: kitchen.id,
+        senderRoleCode: "SCHOOL_KITCHEN_STAFF",
+        senderSchoolId: sch.id,
+        statusHistories: [{ fromStatus: null, toStatus: "NEW" }],
+      });
+
+      const ids = (res: { data: Record<string, unknown> }) =>
+        (res.data.items as { id: string }[]).map((item) => item.id).sort();
+      const all = [byKitchen, byNutrition, byBoard]
+        .map((res) => String(res.data.id))
+        .sort();
+      // Q11: BGH sees the whole school; kitchen/nutrition see only their own.
+      assert.deepEqual(
+        ids(await call("/ingredient-quality-feedback", boardC)),
+        all,
+      );
+      assert.deepEqual(
+        ids(await call("/ingredient-quality-feedback", kitchenC)),
+        [String(byKitchen.data.id)],
+      );
+      assert.equal(
+        (
+          await call(
+            `/ingredient-quality-feedback/${String(byNutrition.data.id)}`,
+            kitchenC,
+          )
+        ).status,
+        404,
+      );
+      const boardView = await call(
+        `/ingredient-quality-feedback/${String(byKitchen.data.id)}`,
+        boardC,
+      );
+      assert.equal(boardView.status, 200);
+      assert.deepEqual(boardView.data.allowedActions, []);
+      assert.equal(
+        (
+          await call(
+            `/ingredient-quality-feedback/${String(byKitchen.data.id)}/comments`,
+            boardC,
+            "POST",
+            { content: "BGH không phải người gửi" },
+          )
+        ).status,
+        404,
+      );
+
+      // Supplier of the delivery sees and handles the new tickets.
+      assert.deepEqual(
+        ids(await call("/ingredient-quality-feedback", supC)),
+        all,
+      );
+      assert.equal(
+        (
+          await call(
+            `/ingredient-quality-feedback/${String(byKitchen.data.id)}/accept`,
+            supC,
+            "POST",
+          )
+        ).status,
+        200,
+      );
+      const resolved = await call(
+        `/ingredient-quality-feedback/${String(byKitchen.data.id)}/resolve`,
+        supC,
+        "POST",
+        { content: "Đã đổi lô mới cho trường" },
+      );
+      assert.equal(resolved.status, 200);
+      assert.equal(resolved.data.status, "RESOLVED");
+      void supOther;
     },
   );
 });

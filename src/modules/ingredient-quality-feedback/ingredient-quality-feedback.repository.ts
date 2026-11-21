@@ -203,6 +203,17 @@ export function createIngredientQualityFeedbackRepository(connect = getPrisma) {
         select: { id: true },
       });
     },
+    /** Chuyến giao thuộc trường của người gửi (phạm vi tin cậy do service xác lập). */
+    findDeliveryForFeedback(
+      tx: IngredientQualityFeedbackTx,
+      deliveryId: string,
+      schoolId: string,
+    ): Promise<{ id: string; deliveryNo: string; status: string } | null> {
+      return tx.delivery.findFirst({
+        where: { id: deliveryId, schoolId },
+        select: { id: true, deliveryNo: true, status: true },
+      });
+    },
     async list(
       scope: FeedbackReadScope,
       skip: number,

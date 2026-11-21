@@ -21,7 +21,9 @@ import {
   type ComplaintTicketRepository,
   type TransitionInput,
 } from "../src/modules/complaint-ticket/complaint-ticket.repository";
+import { INITIAL_ROLE_PERMISSIONS } from "../src/constants/permission-catalog";
 import {
+  validateCreateIngredientQualityFeedbackBody,
   validateFeedbackCommentBody,
   validateFeedbackEmptyBody,
   validateFeedbackReopenBody,
@@ -550,4 +552,232 @@ void test("routes: removed /response, role guards per action, no-store headers",
     (await anonymous(`/${feedbackId1}/accept`, { method: "POST" })).status,
     401,
   );
+});
+
+void test("validation: create body is strict, trims description 10–2000 and accepts optional lot", () => {
+  assert.deepEqual(
+    validateCreateIngredientQualityFeedbackBody({
+      deliveryId: deliveryId1,
+      description: "  Rau cải bị dập úng  ",
+    }),
+    { deliveryId: deliveryId1, description: "Rau cải bị dập úng" },
+  );
+  assert.deepEqual(
+    validateCreateIngredientQualityFeedbackBody({
+      deliveryId: deliveryId1,
+      ingredientLotId: null,
+      description: "ạ".repeat(2000),
+    }).ingredientLotId,
+    null,
+  );
+  const valid = {
+    deliveryId: deliveryId1,
+    description: "Thịt có mùi lạ khi nhận",
+  };
+  for (const body of [
+    { ...valid, title: "Tự đặt" },
+    { ...valid, status: "RESOLVED" },
+    { ...valid, code: "FP-CP-00001" },
+    { ...valid, senderUserId: schoolSender.id },
+    { ...valid, supplierId: supplierIdA },
+    { ...valid, deliveryId: "FP-DE-00010" },
+    { ...valid, ingredientLotId: "lot-1" },
+    { ...valid, description: "   ngắn   " },
+    { ...valid, description: "x".repeat(2001) },
+    { description: valid.description },
+  ])
+    assert.throws(() => validateCreateIngredientQualityFeedbackBody(body), {
+      statusCode: 400,
+    });
+});
+
+function createHarness(
+  delivery: { id: string; deliveryNo: string; status: string } | null,
+  lot: { id: string; lotCode: string } | null = null,
+) {
+  const calls: string[] = [];
+  const created: unknown[] = [];
+  const h = harness({
+    repository: {
+      findDeliveryForFeedback: (_tx, deliveryId, schoolId) => {
+        calls.push(`delivery:${deliveryId}:${schoolId}`);
+        return Promise.resolve(delivery);
+      },
+      findLotInDelivery: (_tx, lotId, deliveryId, scope) => {
+        calls.push(`lot:${lotId}:${deliveryId}:${scope.kind}`);
+        return Promise.resolve(lot);
+      },
+      create: (_tx, data) => {
+        calls.push("create");
+        created.push(data);
+        return Promise.resolve({ id: feedbackId1 });
+      },
+      findDetail: (_tx, id) => {
+        calls.push(`detail:${id}`);
+        return Promise.resolve(detailRow());
+      },
+    },
+    tickets: {
+      allocateCode: (_tx, type) => {
+        calls.push(`code:${type}`);
+        return Promise.resolve("FP-CP-48213");
+      },
+      recordCreated: (_tx, id, actor) => {
+        calls.push(`history:${id}:${actor.roleCode}`);
+        return Promise.resolve({});
+      },
+    },
+  });
+  return { ...h, calls, created };
+}
+
+void test("create: checks delivery and lot in the sender's school, allocates FP-CP and records NEW", async () => {
+  const { service, calls, created, record } = createHarness({
+    id: deliveryId1,
+    deliveryNo: "FP-DE-00010",
+    status: "RECEIVED",
+  });
+  const detail = await service.create(
+    { deliveryId: deliveryId1, description: "Một thùng cải bị dập" },
+    schoolSender,
+  );
+  assert.deepEqual(record.isolation, ["Serializable"]);
+  assert.deepEqual(calls, [
+    `delivery:${deliveryId1}:${schoolIdX}`,
+    "code:CP",
+    "create",
+    `history:${feedbackId1}:SCHOOL_KITCHEN_STAFF`,
+    `detail:${feedbackId1}`,
+  ]);
+  assert.deepEqual(created, [
+    {
+      code: "FP-CP-48213",
+      title: "Phản ánh chất lượng nguyên liệu chuyến giao FP-DE-00010",
+      description: "Một thùng cải bị dập",
+      senderUserId: schoolSender.id,
+      senderRoleCode: "SCHOOL_KITCHEN_STAFF",
+      senderSchoolId: schoolIdX,
+      deliveryId: deliveryId1,
+      ingredientLotId: null,
+    },
+  ]);
+  assert.equal(detail.displayStatus, "IN_PROGRESS");
+
+  const withLot = createHarness(
+    { id: deliveryId1, deliveryNo: "FP-DE-00010", status: "REJECTED" },
+    { id: lotId1, lotCode: "LOT-1" },
+  );
+  await withLot.service.create(
+    {
+      deliveryId: deliveryId1,
+      ingredientLotId: lotId1,
+      description: "Lô thịt có mùi lạ",
+    },
+    schoolSender,
+  );
+  assert.ok(withLot.calls.includes(`lot:${lotId1}:${deliveryId1}:SCHOOL`));
+  assert.equal(
+    (withLot.created[0] as { ingredientLotId: string }).ingredientLotId,
+    lotId1,
+  );
+});
+
+void test("create: rejects foreign/unknown delivery, unreceived delivery and lot outside the delivery", async () => {
+  const body = { deliveryId: deliveryId1, description: "Một thùng cải bị dập" };
+  const missing = createHarness(null);
+  await assert.rejects(missing.service.create(body, schoolSender), {
+    statusCode: 404,
+  });
+  for (const status of [
+    "CREATED",
+    "IN_TRANSIT",
+    "ARRIVED",
+    "APPROVED",
+    "CANCELLED",
+  ]) {
+    const early = createHarness({ id: deliveryId1, deliveryNo: "D1", status });
+    await assert.rejects(early.service.create(body, schoolSender), {
+      statusCode: 409,
+    });
+    assert.ok(!early.calls.includes("create"), status);
+  }
+  const wrongLot = createHarness(
+    { id: deliveryId1, deliveryNo: "D1", status: "RECEIVED" },
+    null,
+  );
+  await assert.rejects(
+    wrongLot.service.create({ ...body, ingredientLotId: lotId1 }, schoolSender),
+    (error: { statusCode: number; fields: { field: string }[] }) =>
+      error.statusCode === 400 && error.fields[0].field === "ingredientLotId",
+  );
+  assert.ok(!wrongLot.calls.includes("create"));
+  assert.ok(!wrongLot.calls.includes("code:CP"));
+
+  const noSubmit = createHarness({
+    id: deliveryId1,
+    deliveryNo: "D1",
+    status: "RECEIVED",
+  });
+  await assert.rejects(
+    noSubmit.service.create(body, {
+      ...schoolSender,
+      permissions: ["ingredient_quality_feedback.view_own"],
+    }),
+    { statusCode: 403 },
+  );
+  await assert.rejects(noSubmit.service.create(body, supplierAdminA), {
+    statusCode: 403,
+  });
+  assert.equal(noSubmit.calls.length, 0);
+});
+
+void test("routes: POST / requires submit permission and returns 201 no-store", async (context) => {
+  context.mock.method(console, "error", () => undefined);
+  const { service } = createHarness({
+    id: deliveryId1,
+    deliveryNo: "FP-DE-00010",
+    status: "RECEIVED",
+  });
+  const body = JSON.stringify({
+    deliveryId: deliveryId1,
+    description: "Một thùng cải bị dập",
+  });
+  const init = {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body,
+  };
+  const asSchool = await startApi(context, service, schoolSender);
+  const created = await asSchool("", init);
+  assert.equal(created.status, 201);
+  assert.equal(created.headers.get("cache-control"), "private, no-store");
+  assert.equal(
+    (created.body?.data as { code: string } | undefined)?.code,
+    "FP-CP-00088",
+  );
+  const asSupplier = await startApi(context, service, supplierAdminA);
+  assert.equal((await asSupplier("", init)).status, 403);
+});
+
+void test("catalog Q11: BGH submits and sees the whole school; kitchen/nutrition see only their own", () => {
+  const grants: readonly (readonly [string, string])[] =
+    INITIAL_ROLE_PERMISSIONS;
+  const of = (role: string) =>
+    grants
+      .filter(
+        ([r, code]) =>
+          r === role && code.startsWith("ingredient_quality_feedback."),
+      )
+      .map(([, code]) => code)
+      .sort();
+  assert.deepEqual(of("SCHOOL_MANAGEMENT_BOARD"), [
+    "ingredient_quality_feedback.submit",
+    "ingredient_quality_feedback.view_details",
+    "ingredient_quality_feedback.view_own",
+  ]);
+  for (const role of ["SCHOOL_KITCHEN_STAFF", "SCHOOL_NUTRITION_OFFICER"])
+    assert.deepEqual(of(role), [
+      "ingredient_quality_feedback.submit",
+      "ingredient_quality_feedback.view_own",
+    ]);
 });

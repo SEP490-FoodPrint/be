@@ -1,5 +1,6 @@
 import type { z } from "zod";
 import type {
+  createIngredientQualityFeedbackBodySchema,
   ingredientQualityFeedbackEmptyQuerySchema,
   ingredientQualityFeedbackListQuerySchema,
   ingredientQualityFeedbackParamsSchema,
@@ -29,3 +30,7 @@ export type FeedbackResolveBodyRequest = z.infer<
 >;
 
 export type FeedbackReopenBodyRequest = z.infer<typeof ticketReopenBodySchema>;
+
+export type CreateIngredientQualityFeedbackRequest = z.infer<
+  typeof createIngredientQualityFeedbackBodySchema
+>;
