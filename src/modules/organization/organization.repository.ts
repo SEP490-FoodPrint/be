@@ -216,6 +216,46 @@ export type AvailableWeekDbRow = Prisma.WeeklyMenuGetPayload<{
   select: typeof availableWeekSelect;
 }>;
 
+export const publicSchoolSupplierInclude = {
+  Supplier: {
+    include: {
+      supplierCertifications: {
+        where: { status: "ACTIVE" as const },
+        orderBy: { createdAt: "desc" as const },
+      },
+      ingredients: {
+        where: { status: "ACTIVE" as const },
+        include: {
+          ingredientCategory: { select: { id: true, categoryName: true } },
+          measurementUnit: { select: { id: true, name: true } },
+        },
+        orderBy: { name: "asc" as const },
+      },
+    },
+  },
+  contracts: {
+    where: { status: "ACTIVE" },
+    include: {
+      items: {
+        include: {
+          ingredient: {
+            include: {
+              ingredientCategory: { select: { id: true, categoryName: true } },
+              measurementUnit: { select: { id: true, name: true } },
+            },
+          },
+        },
+      },
+    },
+    orderBy: { updatedAt: "desc" as const },
+  },
+} as const satisfies Prisma.SchoolSupplierRelationshipInclude;
+
+export type PublicSchoolSupplierDbRow =
+  Prisma.SchoolSupplierRelationshipGetPayload<{
+    include: typeof publicSchoolSupplierInclude;
+  }>;
+
 export interface PublicSchoolFilterArgs {
   skip: number;
   take: number;
@@ -331,6 +371,9 @@ export interface OrganizationRepository {
     startRange?: Date,
     endRange?: Date,
   ): Promise<string[]>;
+  findPublicSchoolSuppliers?(
+    schoolId: string,
+  ): Promise<PublicSchoolSupplierDbRow[]>;
 }
 
 export function createOrganizationRepository(
@@ -736,6 +779,21 @@ export function createOrganizationRepository(
         },
         select: availableWeekSelect,
         orderBy: { weekStartDate: "desc" },
+      });
+    },
+
+    async findPublicSchoolSuppliers(schoolId: string) {
+      const prisma = await getClient();
+      return prisma.schoolSupplierRelationship.findMany({
+        where: {
+          schoolId,
+          status: "ACTIVE",
+          Supplier: {
+            status: "ACTIVE",
+          },
+        },
+        include: publicSchoolSupplierInclude,
+        orderBy: { linkedAt: "desc" },
       });
     },
   };
