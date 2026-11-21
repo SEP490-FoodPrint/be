@@ -1,3 +1,4 @@
+import type { RequestHandler } from "express";
 import { requirePrincipal } from "../../utils/authorization";
 import { asyncHandler } from "../../utils/async-handler";
 import { sendSuccess } from "../../utils/response";
@@ -9,6 +10,8 @@ import {
 import {
   validateCookingMode,
   validateMealTimes,
+  validateSchoolLogoEnvelope,
+  validateSchoolLogoUpload,
   validateDeliveryInspectionRoles,
   validateOrganizationSummaryQuery,
   validateOrganizationDetailParams,
@@ -52,6 +55,36 @@ export function createOrganizationController(
         requirePrincipal(req),
       );
       sendSuccess(res, result, "Cập nhật chế độ nấu thành công");
+    }),
+
+    getSchoolBrand: asyncHandler(async (req, res) => {
+      const result = await service.getSchoolBrand(requirePrincipal(req));
+      sendSuccess(res, result, "Lấy thông tin trường thành công");
+    }),
+
+    // Chạy trước multer: người không có quyền bị chặn trước khi tệp được đọc.
+    authorizeSchoolLogo: ((req, _res, next) => {
+      try {
+        service.authorizeSchoolLogo(requirePrincipal(req));
+        next();
+      } catch (error) {
+        next(error);
+      }
+    }) as RequestHandler,
+
+    updateSchoolLogo: asyncHandler(async (req, res) => {
+      validateSchoolLogoEnvelope(req.body, req.query);
+      const files = Array.isArray(req.files) ? req.files : [];
+      const result = await service.updateSchoolLogo(
+        validateSchoolLogoUpload(files),
+        requirePrincipal(req),
+      );
+      sendSuccess(res, result, "Cập nhật logo trường thành công");
+    }),
+
+    removeSchoolLogo: asyncHandler(async (req, res) => {
+      const result = await service.removeSchoolLogo(requirePrincipal(req));
+      sendSuccess(res, result, "Đã gỡ logo trường");
     }),
 
     getMealTimes: asyncHandler(async (req, res) => {

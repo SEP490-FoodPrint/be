@@ -14,6 +14,7 @@ import {
   withSchoolTransaction,
 } from "../../utils/authorization";
 import { getPrisma } from "../../utils/database";
+import { cloudinaryUpload } from "../../utils/cloudinary-upload";
 import { HttpError } from "../../utils/http-error";
 import { withReadTransaction } from "../../utils/read-transaction";
 import { listScopes } from "../../utils/resource-access";
@@ -30,6 +31,7 @@ import {
 import type {
   CookingModeRequestDTO,
   MealTimesRequestDTO,
+  SchoolLogoUploadRequestDTO,
   DeliveryInspectionRolesRequestDTO,
   OrganizationListRequestDTO,
   OrganizationSummaryRequestDTO,
@@ -51,6 +53,7 @@ import type {
   AvailableWeekSummaryDTO,
   CookingModeResponseDTO,
   MealTimesResponseDTO,
+  SchoolBrandResponseDTO,
   DeliveryInspectionRolesResponseDTO,
   DishItemDTO,
   PublicDishIngredientDTO,
@@ -147,6 +150,36 @@ function assertCookingModeManager(
     throw new HttpError(403, "Chỉ Ban Giám hiệu được cấu hình chế độ nấu");
 }
 
+const SCHOOL_PROFILE_PERMISSION = "school.manage";
+
+// Mọi tài khoản thuộc trường đều thấy logo/tên trường của chính mình (sidebar).
+function assertSchoolMember(
+  principal: AuthPrincipal,
+): asserts principal is AuthPrincipal & { schoolId: string } {
+  if (principal.orgType !== ORG_TYPES.SCHOOL || !principal.schoolId)
+    throw new HttpError(403, "Tài khoản không thuộc trường học");
+}
+
+function assertSchoolProfileManager(
+  principal: AuthPrincipal,
+): asserts principal is AuthPrincipal & { schoolId: string } {
+  assertPermission(principal, SCHOOL_PROFILE_PERMISSION);
+  if (
+    principal.role !== ROLES.SCHOOL_ADMINISTRATION ||
+    principal.orgType !== ORG_TYPES.SCHOOL ||
+    !principal.schoolId
+  )
+    throw new HttpError(403, "Chỉ Quản trị nhà trường được đổi logo trường");
+}
+
+function mapSchoolBrand(row: {
+  id: string;
+  name: string;
+  logoUrl: string | null;
+}): SchoolBrandResponseDTO {
+  return { schoolId: row.id, name: row.name, logoUrl: row.logoUrl };
+}
+
 const MEAL_TIMES_PERMISSION = "school_meal_times.manage";
 
 function assertMealTimesManager(
@@ -233,6 +266,7 @@ function mapToDeliveryInspectionRolesResponseDTO(
 export function createOrganizationService(
   repository?: OrganizationRepository,
   getClient: () => Promise<PrismaClient> = getPrisma,
+  uploader: Pick<typeof cloudinaryUpload, "uploadImage"> = cloudinaryUpload,
 ) {
   const data = repository ?? createOrganizationRepository(getClient);
   return {
@@ -381,6 +415,58 @@ export function createOrganizationService(
         },
       );
       return mapToDeliveryInspectionRolesResponseDTO(rows);
+    },
+
+    async getSchoolBrand(
+      principal: AuthPrincipal,
+    ): Promise<SchoolBrandResponseDTO> {
+      assertSchoolMember(principal);
+      const row = await data.findSchoolBrand(principal.schoolId);
+      if (!row) throw new HttpError(404, "Không tìm thấy trường học");
+      return mapSchoolBrand(row);
+    },
+
+    // Kiểm tra quyền trước khi nhận tệp để không tải ảnh của người không có quyền.
+    authorizeSchoolLogo(principal: AuthPrincipal) {
+      assertSchoolProfileManager(principal);
+    },
+
+    // Ảnh cũ trên Cloudinary được giữ nguyên; chỉ thay đường dẫn đang dùng.
+    async updateSchoolLogo(
+      input: SchoolLogoUploadRequestDTO,
+      principal: AuthPrincipal,
+    ): Promise<SchoolBrandResponseDTO> {
+      assertSchoolProfileManager(principal);
+      const asset = await uploader.uploadImage(input.file, {
+        namespace: "school-logos",
+        ownerId: principal.schoolId,
+      });
+      const row = await withSchoolTransaction(
+        await getClient(),
+        principal,
+        SCHOOL_PROFILE_PERMISSION,
+        (tx, actor, schoolId) => {
+          assertSchoolProfileManager(actor);
+          return data.updateSchoolLogo(tx, schoolId, asset.url);
+        },
+      );
+      return mapSchoolBrand(row);
+    },
+
+    async removeSchoolLogo(
+      principal: AuthPrincipal,
+    ): Promise<SchoolBrandResponseDTO> {
+      assertSchoolProfileManager(principal);
+      const row = await withSchoolTransaction(
+        await getClient(),
+        principal,
+        SCHOOL_PROFILE_PERMISSION,
+        (tx, actor, schoolId) => {
+          assertSchoolProfileManager(actor);
+          return data.updateSchoolLogo(tx, schoolId, null);
+        },
+      );
+      return mapSchoolBrand(row);
     },
 
     async getPublicSchools(

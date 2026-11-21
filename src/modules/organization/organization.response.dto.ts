@@ -4,6 +4,12 @@ export interface CookingModeResponseDTO {
   cookingMode: CookingMode | null;
 }
 
+export interface SchoolBrandResponseDTO {
+  schoolId: string;
+  name: string;
+  logoUrl: string | null;
+}
+
 export interface MealTimesResponseDTO {
   lunchTime: string | null;
   afternoonMealTime: string | null;

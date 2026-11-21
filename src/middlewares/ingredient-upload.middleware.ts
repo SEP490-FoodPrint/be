@@ -2,7 +2,7 @@ import multer from "multer";
 import type { RequestHandler } from "express";
 import { HttpError } from "../utils/http-error";
 
-function createUpload(field: string, maxFiles: number): RequestHandler {
+export function createUpload(field: string, maxFiles: number): RequestHandler {
   const upload = multer({
     storage: multer.memoryStorage(),
     limits: {

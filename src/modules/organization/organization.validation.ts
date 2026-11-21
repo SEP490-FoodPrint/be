@@ -306,6 +306,49 @@ export function validateSchoolCode(value: unknown): string {
   return result.data;
 }
 
+const logoFileSchema = z.strictObject({
+  buffer: z.instanceof(Buffer, { error: "Tệp không hợp lệ" }),
+  size: z.number({ error: "Dung lượng không hợp lệ" }).int().nonnegative(),
+  mimeType: z.string({ error: "Định dạng tệp không hợp lệ" }),
+  originalName: z.string({ error: "Tên tệp không hợp lệ" }),
+});
+export const schoolLogoUploadSchema = z.strictObject({
+  file: logoFileSchema,
+});
+const schoolLogoEnvelopeSchema = z.strictObject({
+  body: z.strictObject({}),
+  query: z.strictObject({}),
+});
+
+function parseOrganization<T extends z.ZodType>(
+  schema: T,
+  value: unknown,
+): z.infer<T> {
+  const result = schema.safeParse(value);
+  if (!result.success)
+    throw new OrganizationValidationError(
+      mapZodIssues(result.error.issues),
+      result.error.issues[0]?.message,
+    );
+  return result.data;
+}
+
+export function validateSchoolLogoEnvelope(body: unknown, query: unknown) {
+  return parseOrganization(schoolLogoEnvelopeSchema, { body, query });
+}
+
+export function validateSchoolLogoUpload(files: Express.Multer.File[]) {
+  const file = files.length === 1 ? files[0] : undefined;
+  return parseOrganization(schoolLogoUploadSchema, {
+    file: file && {
+      buffer: file.buffer,
+      size: file.size,
+      mimeType: file.mimetype,
+      originalName: file.originalname,
+    },
+  });
+}
+
 export function validateSchoolId(value: unknown): string {
   const result = schoolIdSchema.safeParse(value);
   if (!result.success) {

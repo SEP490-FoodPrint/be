@@ -6,6 +6,7 @@ import {
   requireResource,
 } from "../../middlewares/permission.middleware";
 import { sendError } from "../../utils/response";
+import { createUpload } from "../../middlewares/ingredient-upload.middleware";
 import { createOrganizationController } from "./organization.controller";
 import {
   organizationService,
@@ -50,6 +51,21 @@ export function createOrganizationRouter(
   );
 
   // schoolId luôn lấy từ phiên, client không truyền trường
+  router.get("/me/brand", authHandler, controller.getSchoolBrand);
+  router.put(
+    "/me/logo",
+    authHandler,
+    requirePermission("school.manage"),
+    controller.authorizeSchoolLogo,
+    createUpload("logo", 1),
+    controller.updateSchoolLogo,
+  );
+  router.delete(
+    "/me/logo",
+    authHandler,
+    requirePermission("school.manage"),
+    controller.removeSchoolLogo,
+  );
   router.get(
     "/me/cooking-mode",
     authHandler,

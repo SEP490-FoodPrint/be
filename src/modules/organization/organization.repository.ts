@@ -282,6 +282,14 @@ export interface OrganizationRepository {
       Role: { code: string };
     }>
   >;
+  findSchoolBrand(
+    schoolId: string,
+  ): Promise<{ id: string; name: string; logoUrl: string | null } | null>;
+  updateSchoolLogo(
+    tx: Prisma.TransactionClient,
+    schoolId: string,
+    logoUrl: string | null,
+  ): Promise<{ id: string; name: string; logoUrl: string | null }>;
   listSchools(
     query: ListQuery,
     principal: AuthPrincipal,
@@ -406,6 +414,22 @@ export function createOrganizationRepository(
         where: { id: schoolId },
         data,
         select: { lunchTime: true, afternoonMealTime: true },
+      });
+    },
+
+    async findSchoolBrand(schoolId) {
+      const prisma = await getClient();
+      return prisma.school.findUnique({
+        where: { id: schoolId },
+        select: { id: true, name: true, logoUrl: true },
+      });
+    },
+
+    updateSchoolLogo(tx, schoolId, logoUrl) {
+      return tx.school.update({
+        where: { id: schoolId },
+        data: { logoUrl },
+        select: { id: true, name: true, logoUrl: true },
       });
     },
 

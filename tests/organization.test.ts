@@ -231,6 +231,9 @@ void test("organization service maps school rows correctly and respects paginati
     findDeliveryInspectionRoles: () => Promise.resolve([]),
     findRoleIdsByCodes: () => Promise.resolve([]),
     replaceDeliveryInspectionRoles: () => Promise.resolve([]),
+    findSchoolBrand: () => Promise.resolve(null),
+    updateSchoolLogo: () =>
+      Promise.resolve({ id: "school", name: "Trường", logoUrl: null }),
   };
 
   const mockClient = {
