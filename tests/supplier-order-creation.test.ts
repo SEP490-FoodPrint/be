@@ -313,7 +313,7 @@ function setupUs1Harness(options?: {
   };
 }
 
-void test("đồ khô bắt buộc nhập ngày sản xuất và hạn dùng của lô khi tạo chuyến giao; đồ tươi không cần", async () => {
+void test("đồ lưu kho bắt buộc nhập ngày sản xuất và hạn dùng của lô khi tạo chuyến giao; đồ tươi không cần", async () => {
   const dryRequest = () => {
     const record = makeSupplyRequestRecord();
     record.supplyRequestItems[0].IngredientEntry.handlingType = "DRY_STOCK";
@@ -347,7 +347,8 @@ void test("đồ khô bắt buộc nhập ngày sản xuất và hạn dùng c�
       ),
     {
       statusCode: 422,
-      message: "Đồ khô cần nhập ngày sản xuất và hạn sử dụng của lô: Gạo ST25",
+      message:
+        "Đồ lưu kho cần nhập ngày sản xuất và hạn sử dụng của lô: Gạo ST25",
     },
   );
   assert.equal(missing.createdPayloads.length, 0);
@@ -387,7 +388,7 @@ void test("đồ khô bắt buộc nhập ngày sản xuất và hạn dùng c�
   );
   assert.equal(expired.createdPayloads.length, 0);
 
-  // Đồ khô còn hạn dưới 7 ngày: 422.
+  // Đồ lưu kho còn hạn dưới 7 ngày: 422.
   const shortShelf = setupUs1Harness({ supplyRequest: dryRequest() });
   await assert.rejects(
     () =>
@@ -401,7 +402,7 @@ void test("đồ khô bắt buộc nhập ngày sản xuất và hạn dùng c�
     {
       statusCode: 422,
       message:
-        "Đồ khô cần còn hạn sử dụng ít nhất 7 ngày kể từ hôm nay: Gạo ST25",
+        "Đồ lưu kho cần còn hạn sử dụng ít nhất 7 ngày kể từ hôm nay: Gạo ST25",
     },
   );
   assert.equal(shortShelf.createdPayloads.length, 0);

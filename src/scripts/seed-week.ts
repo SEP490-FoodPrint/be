@@ -28,7 +28,7 @@
  *   a) TỰ CHỌN MÓN (không cần lên thực đơn tay):
  *      - Mỗi thực đơn khối dùng ĐÚNG 1 NCC cho toàn bộ nguyên liệu tươi (DIRECT_USE),
  *        nên đơn đặt NL đợt 1 / đợt 2 của khối đó chỉ ra 1 NCC.
- *      - Nguyên liệu khô / gia vị (DRY_STOCK) lấy từ kho khô (phải có tồn kho, xem mục 4).
+ *      - Nguyên liệu khô / gia vị (DRY_STOCK) lấy từ đồ lưu kho (phải có tồn kho, xem mục 4).
  *      - Chỉ chọn món có công thức theo khối và mọi NL đều ACTIVE, nằm trong
  *        hợp đồng ACTIVE của NCC tương ứng (điều kiện để gửi đơn được).
  *      - Món chọn theo "suất" danh mục trong CONFIG.slots (trưa: cơm + mặn + canh + rau;
@@ -63,7 +63,7 @@
  *     kèm chuyến giao (Delivery, dòng hàng, 4 phê duyệt), lô NL, phiếu nhập kho,
  *     phản hồi chất lượng.
  *   - Bằng chứng blockchain (bảng blockchain_proofs) của tất cả các bản ghi trên.
- *   - Hoàn lại tồn kho cho các lô KHÔNG bị xoá đã bị trừ khi nấu (vd. gia vị kho khô).
+ *   - Hoàn lại tồn kho cho các lô KHÔNG bị xoá đã bị trừ khi nấu (vd. gia vị lưu kho).
  *
  * Từ chối xoá (rollback toàn bộ, in lý do) khi gặp dữ liệu không thể tự quyết:
  *   sự cố ATTP / kết quả kiểm nghiệm / khiếu nại gắn vào; lô của đơn seed đã bị mẻ nấu
@@ -75,7 +75,7 @@
  * 4. YÊU CẦU TRƯỚC KHI TEST LUỒNG
  * ---------------------------------------------------------------------------
  *   - Kho khô phải có lô DRY_STOCK cho các gia vị / NL khô của thực đơn (bếp giữ gia vị
- *     khi nấu). Đơn đợt 1/đợt 2 trên FE chỉ đặt đồ tươi -> cần 1 đơn đồ khô riêng.
+ *     khi nấu). Đơn đợt 1/đợt 2 trên FE chỉ đặt đồ tươi -> cần 1 đơn đồ lưu kho riêng.
  *   - Mọi thao tác GVCN / bếp / phát suất chỉ làm được cho "hôm nay".
  * ============================================================================
  */

@@ -823,6 +823,7 @@ void test("kitchen planning stock and detail support received standalone lots wi
       ingredientEntryId: "entry-std-1",
       availableQuantity: "10",
       reservedQuantity: "0",
+      sourceFacilityId: null,
     },
   ]);
 

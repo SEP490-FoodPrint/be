@@ -210,7 +210,7 @@ export interface SupplierOrderCreateDeliveryItemInput {
   actualQuantity: Prisma.Decimal;
   unit: string;
   note: string | null;
-  /** Ngày của lô tạo kèm mặt hàng (đồ khô bắt buộc, đồ tươi để trống). */
+  /** Ngày của lô tạo kèm mặt hàng (đồ lưu kho bắt buộc, đồ tươi để trống). */
   manufactureDate?: Date | null;
   expiryDate?: Date | null;
 }

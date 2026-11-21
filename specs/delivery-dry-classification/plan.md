@@ -7,9 +7,9 @@
 
 ## Approach
 
-1. `delivery.repository.ts`: xóa `drySupplierIds`, `dryDeliveryWhere`, `markDrySupplier` và trường `supplierIsDry`; điều kiện ẩn xe đồ khô dùng `dryOnlyDeliveryWhere`.
+1. `delivery.repository.ts`: xóa `drySupplierIds`, `dryDeliveryWhere`, `markDrySupplier` và trường `supplierIsDry`; điều kiện ẩn xe đồ lưu kho dùng `dryOnlyDeliveryWhere`.
 2. `delivery.service.ts`: `isDryDelivery` chỉ xét dòng hàng (mọi dòng là `DRY_STOCK`).
-3. Thay unit test hành vi "NCC đồ khô" bằng test xe hỗn hợp khô + tươi là xe đồ tươi.
+3. Thay unit test hành vi "NCC đồ lưu kho" bằng test xe hỗn hợp khô + tươi là xe đồ tươi.
 
 ## Verification
 

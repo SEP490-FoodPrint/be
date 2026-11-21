@@ -2,7 +2,7 @@
 
 ## Context
 
-Xe giao là xe đồ khô khi mọi dòng hàng có `IngredientEntry.handlingType = DRY_STOCK` (`isDryDelivery`, spec `delivery-dry-classification`). `IngredientEntry` là duy nhất theo `(schoolId, ingredientId)` và `Ingredient` thuộc đúng một nhà cung cấp, nên `handlingType` đã là loại theo trường × nhà cung cấp × nguyên liệu; không thêm cột nhà cung cấp.
+Xe giao là xe đồ lưu kho khi mọi dòng hàng có `IngredientEntry.handlingType = DRY_STOCK` (`isDryDelivery`, spec `delivery-dry-classification`). `IngredientEntry` là duy nhất theo `(schoolId, ingredientId)` và `Ingredient` thuộc đúng một nhà cung cấp, nên `handlingType` đã là loại theo trường × nhà cung cấp × nguyên liệu; không thêm cột nhà cung cấp.
 
 Hiện không có API nào tạo/sửa `IngredientEntry` (dữ liệu đến từ seed). Kích hoạt hợp đồng chỉ tạo liên kết và snapshot, nên nguyên liệu chưa có entry không đặt hàng được (`POST /supply-requests` bắt buộc `ingredientEntryId`). Trang chi tiết nhà cung cấp chỉ hiển thị toàn bộ danh mục của nhà cung cấp, không hiển thị phạm vi hợp đồng hay loại nguyên liệu.
 
@@ -51,6 +51,6 @@ Nhãn hiển thị: `DRY_STOCK` = "Lưu kho", `DIRECT_USE` = "Dùng ngay". Dùng
 1. Lưu hồ sơ thiếu loại cho một nguyên liệu bị từ chối 400 (BE) và bị chặn trên form (FE).
 2. Kích hoạt hợp đồng với nhà cung cấp mới tạo `IngredientEntry` đúng loại; tạo được đơn nhập ngay cho nguyên liệu đó.
 3. Kích hoạt hợp đồng có nguyên liệu đã có entry chỉ cập nhật, không tạo trùng.
-4. Đổi một nguyên liệu Lưu kho → Dùng ngay ở trang chi tiết: xe chưa đến chứa nguyên liệu đó không còn là xe đồ khô; mỗi lần lưu có thay đổi tạo đúng 1 event.
+4. Đổi một nguyên liệu Lưu kho → Dùng ngay ở trang chi tiết: xe chưa đến chứa nguyên liệu đó không còn là xe đồ lưu kho; mỗi lần lưu có thay đổi tạo đúng 1 event.
 5. Người không có quyền quản lý không thấy nút "Chỉnh sửa" và nhận 403 khi gọi API.
 6. Nguyên liệu ngoài hợp đồng `ACTIVE` nhận 409; nguyên liệu nằm trên xe `ARRIVED`/`PENDING_APPROVAL` nhận 409 kèm số xe.

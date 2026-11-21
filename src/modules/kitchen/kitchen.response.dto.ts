@@ -170,3 +170,35 @@ export interface CookingBatchPreviewDTO {
     ingredientName: string | null;
   }[];
 }
+
+/** Trạng thái chế biến của một bữa (hoặc một món) trong ngày. */
+export type KitchenProgressStatus =
+  "NOT_STARTED" | "IN_PROGRESS" | "COOKED_NO_SAMPLE" | "DONE";
+
+export interface KitchenDayProgressMealDTO {
+  mealType: "LUNCH" | "AFTERNOON";
+  status: KitchenProgressStatus;
+  dishCount: number;
+  /** Món chưa lập lô nấu. */
+  notStarted: number;
+  /** Món có lô đang chờ xác nhận / đang nấu. */
+  cooking: number;
+  /** Món đã nấu xong nhưng chưa lưu đủ mẫu. */
+  cookedNoSample: number;
+  done: number;
+  /** Các món chưa hoàn tất (chưa nấu xong hoặc chưa lưu mẫu) kèm trạng thái. */
+  pendingDishes: { name: string; status: KitchenProgressStatus }[];
+}
+
+export interface KitchenDayProgressMenuDTO {
+  menuId: string;
+  menuDayId: string;
+  isSchoolWide: boolean;
+  grades: { id: string; name: string }[];
+  meals: KitchenDayProgressMealDTO[];
+}
+
+export interface KitchenDayProgressResponseDTO {
+  date: string;
+  menus: KitchenDayProgressMenuDTO[];
+}

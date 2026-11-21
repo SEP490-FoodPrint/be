@@ -256,7 +256,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
   });
 
   // DIRECT_USE: các kịch bản ở đây kiểm tra phân bổ nguồn/tạo trùng/QR, không gửi ngày lô.
-  // Quy tắc đồ khô bắt buộc ngày sản xuất và hạn dùng có unit test riêng (supplier-order-creation.test.ts).
+  // Quy tắc đồ lưu kho bắt buộc ngày sản xuất và hạn dùng có unit test riêng (supplier-order-creation.test.ts).
   const riceEntry = await db.ingredientEntry.create({
     data: {
       schoolId: schoolA.id,

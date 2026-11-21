@@ -1398,7 +1398,7 @@ model SupplyRequest {
   status                SupplyRequestStatus @default(DRAFT)
   requestedDeliveryDate DateTime?           @map("requested_delivery_date") @db.Date
   note                  String?             @db.Text
-  /// Loại đơn: DIRECT_USE = đồ tươi dùng trong ngày (2 đợt), DRY_STOCK = đồ khô lưu kho. Bắt buộc ở migration 2 (D4).
+  /// Loại đơn: DIRECT_USE = đồ tươi dùng trong ngày (2 đợt), DRY_STOCK = đồ lưu kho. Bắt buộc ở migration 2 (D4).
   orderType             IngredientHandlingType? @map("order_type")
   /// Đợt giao của đơn tươi: 1 hoặc 2; NULL với đơn khô. CHECK trong SQL.
   batchNo               Int?                @map("batch_no") @db.SmallInt
