@@ -8,6 +8,7 @@ import {
 import { isStoredBusinessCode } from "../../utils/business-code";
 import { getPrisma } from "../../utils/database";
 import { HttpError } from "../../utils/http-error";
+import { RequestValidationError } from "../../utils/request-validation";
 import { listWindow, readListPage } from "../../utils/list-query";
 import { withReadTransaction } from "../../utils/read-transaction";
 import {
@@ -18,6 +19,7 @@ import {
 import {
   assertTicketAction,
   feedbackWindowStart,
+  ingredientFeedbackTitle,
   ticketConflictMessage,
   toTicketStatus,
   TICKET_TRANSITIONS,
@@ -34,6 +36,7 @@ import {
   mapTicketFields,
 } from "../complaint-ticket/complaint-ticket.service";
 import type {
+  CreateIngredientQualityFeedbackRequest,
   FeedbackCommentBodyRequest,
   FeedbackReopenBodyRequest,
   FeedbackResolveBodyRequest,
@@ -60,6 +63,8 @@ const NOT_FOUND_MESSAGE = "Không tìm thấy khiếu nại trong phạm vi đư
 const SCOPE_CHANGED_MESSAGE = "Phạm vi tài khoản đã thay đổi";
 const CORRUPT_DATA_MESSAGE = "Không thể tải dữ liệu. Vui lòng thử lại sau.";
 const REQUESTER_PERMISSION = "ingredient_quality_feedback.submit";
+/** Chỉ chuyến giao trường đã kiểm nhận xong mới được phản ánh. */
+const FEEDBACK_DELIVERY_STATUSES: readonly string[] = ["RECEIVED", "REJECTED"];
 
 type Side = Exclude<TicketViewer, "OBSERVER">;
 
@@ -324,6 +329,66 @@ export function createIngredientQualityFeedbackService(
   }
 
   return {
+    /** Tài khoản trường có quyền gửi phản ánh chuyến giao (tùy chọn lô) của trường mình. */
+    async create(
+      body: CreateIngredientQualityFeedbackRequest,
+      principal: AuthPrincipal,
+    ): Promise<FeedbackDetail> {
+      return withSchoolTransaction(
+        await databaseOperation(() => connect()),
+        principal,
+        REQUESTER_PERMISSION,
+        async (tx, actor, schoolId) => {
+          const readScope = ingredientQualityFeedbackReadScope(actor, "detail");
+          const delivery = await repository.findDeliveryForFeedback(
+            tx,
+            body.deliveryId,
+            schoolId,
+          );
+          if (!delivery)
+            throw new HttpError(
+              404,
+              "Không tìm thấy chuyến giao trong phạm vi được phép",
+            );
+          if (!FEEDBACK_DELIVERY_STATUSES.includes(delivery.status))
+            throw new HttpError(
+              409,
+              "Chỉ phản ánh được chuyến giao đã nhận hoặc đã từ chối",
+            );
+          const ingredientLotId = body.ingredientLotId ?? null;
+          if (
+            ingredientLotId !== null &&
+            !(await repository.findLotInDelivery(
+              tx,
+              ingredientLotId,
+              delivery.id,
+              readScope,
+            ))
+          )
+            throw new RequestValidationError([
+              {
+                field: "ingredientLotId",
+                message: "Lô nguyên liệu không thuộc chuyến giao đã chọn",
+              },
+            ]);
+          const created = await repository.create(tx, {
+            code: await tickets.allocateCode(tx, "CP"),
+            title: ingredientFeedbackTitle(delivery.deliveryNo),
+            description: body.description,
+            senderUserId: actor.id,
+            senderRoleCode: actor.role,
+            senderSchoolId: schoolId,
+            deliveryId: delivery.id,
+            ingredientLotId,
+          });
+          await tickets.recordCreated(tx, created.id, {
+            userId: actor.id,
+            roleCode: actor.role,
+          });
+          return readAndMapDetail(tx, created.id, readScope, actor, now());
+        },
+      );
+    },
     async getAll(
       query: IngredientQualityFeedbackListQueryRequest,
       principal: AuthPrincipal,

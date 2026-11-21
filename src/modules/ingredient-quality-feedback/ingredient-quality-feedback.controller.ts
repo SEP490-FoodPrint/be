@@ -7,6 +7,7 @@ import {
   type IngredientQualityFeedbackService,
 } from "./ingredient-quality-feedback.service";
 import {
+  validateCreateIngredientQualityFeedbackBody,
   validateFeedbackCommentBody,
   validateFeedbackEmptyBody,
   validateFeedbackReopenBody,
@@ -36,6 +37,16 @@ export function createIngredientQualityFeedbackController(
   service: IngredientQualityFeedbackService = ingredientQualityFeedbackService,
 ) {
   return {
+    create: asyncHandler(async (req, res) => {
+      validateIngredientQualityFeedbackEmptyQuery(req.query);
+      const body = validateCreateIngredientQualityFeedbackBody(req.body);
+      privateResult(
+        res,
+        await service.create(body, requirePrincipal(req)),
+        "Gửi phản ánh chất lượng nguyên liệu thành công",
+        201,
+      );
+    }),
     getAll: asyncHandler(async (req, res) => {
       const principal = requirePrincipal(req);
       const query = validateIngredientQualityFeedbackListQuery(req.query);

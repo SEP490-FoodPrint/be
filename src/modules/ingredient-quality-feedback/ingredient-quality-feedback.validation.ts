@@ -29,6 +29,20 @@ export const ingredientQualityFeedbackParamsSchema = z.strictObject({
 
 export const ingredientQualityFeedbackEmptyQuerySchema = emptyQuerySchema;
 
+export const createIngredientQualityFeedbackBodySchema = z.strictObject({
+  deliveryId: requestUuidSchema,
+  ingredientLotId: requestUuidSchema.nullable().optional(),
+  description: z
+    .string({ error: "Nội dung phải là văn bản" })
+    .trim()
+    .refine((value) => Array.from(value).length >= 10, {
+      error: "Nội dung tối thiểu 10 ký tự",
+    })
+    .refine((value) => Array.from(value).length <= 2000, {
+      error: "Nội dung chỉ nhận tối đa 2000 ký tự",
+    }),
+});
+
 export const validateIngredientQualityFeedbackListQuery = (value: unknown) =>
   parseRequest(
     ingredientQualityFeedbackListQuerySchema,
@@ -55,3 +69,6 @@ export const validateFeedbackReopenBody = (value: unknown) =>
 
 export const validateFeedbackEmptyBody = (value: unknown) =>
   parseRequest(ticketEmptyBodySchema, value === undefined ? {} : value);
+
+export const validateCreateIngredientQualityFeedbackBody = (value: unknown) =>
+  parseRequest(createIngredientQualityFeedbackBodySchema, value);
