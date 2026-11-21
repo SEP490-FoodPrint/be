@@ -9,13 +9,14 @@ export const assignedClassSelect = {
       registeredMealPortions: true,
       classAllergies: {
         select: {
+          groupNo: true,
           ingredientEntryId: true,
           affectedCount: true,
           IngredientEntry: {
             select: { Ingredient: { select: { name: true } } },
           },
         },
-        orderBy: { ingredientEntryId: "asc" },
+        orderBy: [{ groupNo: "asc" }, { ingredientEntryId: "asc" }],
       },
     },
   },
@@ -87,8 +88,12 @@ export function createMealAttendanceRepository() {
         where: { classId_mealDate_mealType: key },
         include: {
           dailyAllergyPortions: {
-            select: { ingredientEntryId: true, portionCount: true },
-            orderBy: { ingredientEntryId: "asc" },
+            select: {
+              groupNo: true,
+              ingredientEntryId: true,
+              portionCount: true,
+            },
+            orderBy: [{ groupNo: "asc" }, { ingredientEntryId: "asc" }],
           },
           MealAllocation: { select: { id: true, status: true } },
         },
@@ -128,7 +133,11 @@ export function createMealAttendanceRepository() {
       tx: Prisma.TransactionClient,
       dailyMealPortionId: string,
       classId: string,
-      allergies: Array<{ ingredientEntryId: string; portionCount: number }>,
+      allergies: Array<{
+        groupNo: number;
+        ingredientEntryId: string;
+        portionCount: number;
+      }>,
     ) {
       await tx.dailyAllergyPortion.deleteMany({
         where: { dailyMealPortionId },
@@ -144,8 +153,12 @@ export function createMealAttendanceRepository() {
         where: { id },
         include: {
           dailyAllergyPortions: {
-            select: { ingredientEntryId: true, portionCount: true },
-            orderBy: { ingredientEntryId: "asc" },
+            select: {
+              groupNo: true,
+              ingredientEntryId: true,
+              portionCount: true,
+            },
+            orderBy: [{ groupNo: "asc" }, { ingredientEntryId: "asc" }],
           },
         },
       });
@@ -161,8 +174,12 @@ export function createMealAttendanceRepository() {
         data: { status: "FINALIZED", finalizedAt, confirmedByUserId },
         include: {
           dailyAllergyPortions: {
-            select: { ingredientEntryId: true, portionCount: true },
-            orderBy: { ingredientEntryId: "asc" },
+            select: {
+              groupNo: true,
+              ingredientEntryId: true,
+              portionCount: true,
+            },
+            orderBy: [{ groupNo: "asc" }, { ingredientEntryId: "asc" }],
           },
         },
       });

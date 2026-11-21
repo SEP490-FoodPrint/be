@@ -13,6 +13,7 @@ export async function readAllergyCatalog(
     },
     select: {
       classId: true,
+      groupNo: true,
       ingredientEntryId: true,
       affectedCount: true,
       updatedAt: true,
@@ -30,7 +31,11 @@ export async function readAllergyCatalog(
         },
       },
     },
-    orderBy: [{ classId: "asc" }, { ingredientEntryId: "asc" }],
+    orderBy: [
+      { classId: "asc" },
+      { groupNo: "asc" },
+      { ingredientEntryId: "asc" },
+    ],
     ...window,
   });
 }

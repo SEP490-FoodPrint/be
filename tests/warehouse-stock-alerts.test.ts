@@ -94,12 +94,30 @@ void test("đã gửi yêu cầu nhập đủ trước ngày cần thì hết c�
     [item.pending, item.shortage, item.firstShortDate],
     ["10", "5", "2026-11-25"],
   );
-  // Yêu cầu giao sau ngày cần không bù được ngày đó
-  const [late] = computeStockAlerts(
-    source([lot("15"), pending("15", "2026-11-25")]),
+  // Đã lập yêu cầu nhập thì hết cảnh báo, kể cả cảnh báo gấp khi ngày giao sau ngày thiếu
+  assert.deepEqual(
+    computeStockAlerts(
+      source([lot("15"), pending("15", "2026-11-25")]),
+      "2026-11-23",
+    ).items,
+    [],
+  );
+  assert.deepEqual(
+    computeStockAlerts(source([pending("30", "2026-11-26")]), "2026-11-23")
+      .items,
+    [],
+  );
+});
+
+void test("lô trong kho dùng trước phần đã đặt, kể cả khi lô có hạn còn phần đặt không hạn", () => {
+  const [item] = computeStockAlerts(
+    source([pending("20", "2026-11-24"), lot("5", "2026-11-25")]),
     "2026-11-23",
   ).items;
-  assert.deepEqual([late.shortage, late.firstShortDate], ["5", "2026-11-24"]);
+  assert.deepEqual(
+    [item.onHand, item.pending, item.shortage, item.firstShortDate],
+    ["5", "20", "5", "2026-11-25"],
+  );
 });
 
 void test("lô hết hạn trước ngày dùng không được tính; phần đã phân bổ cho bữa trừ vào nhu cầu", () => {

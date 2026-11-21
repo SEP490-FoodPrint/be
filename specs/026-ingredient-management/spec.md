@@ -14,3 +14,4 @@
 - API tổng hợp suất ăn `GET /api/v1/daily-meal-portions` bổ sung thông tin khối lớp (`gradeId`, `gradeName`) cho từng lớp học, phục vụ tính toán chính xác số suất ăn tối đa và phân bổ đợt 1 / đợt 2 theo thực đơn toàn trường hoặc theo khối lớp.
 - Loại bỏ hoàn toàn mock data ở cả frontend và backend, đồng bộ 100% dữ liệu thực từ PostgreSQL.
 - Cho phép Ban quản lý nguyên liệu (INGREDIENT_MANAGEMENT_DEPARTMENT) kiểm tra, xác nhận xe đến và duyệt độc lập đối với các đợt giao đồ khô (DRY_STOCK) với vai trò duyệt chính (PRIMARY).
+- Bộ lọc ngày của danh sách kiểm tra giao hàng (`GET /deliveries/inspections?date=`): xe thuộc ngày giờ hẹn đến (`expectedArrivalAt`) và ngày xe đến thực tế (`arrivedAt`). Ngày giao trường yêu cầu (`requestedDeliveryDate`) chỉ dùng khi xe chưa có cả hai mốc trên, để xe đã hẹn ngày khác không hiện vào ngày yêu cầu của đơn.

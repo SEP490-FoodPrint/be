@@ -7,6 +7,7 @@ import { testStaff } from "./helpers/authorization";
 const principal = { ...testStaff, permissions: ["class_allergy.view"] };
 const row = {
   classId: "class-a",
+  groupNo: 1,
   ingredientEntryId: "entry-a",
   affectedCount: 2,
   updatedAt: new Date("2026-11-13T00:00:00Z"),
@@ -33,6 +34,7 @@ void test("allergy catalogue sends trusted school scope and bounded pagination a
     classId: "class-a",
     className: "Class A",
     academicYear: "2026-2027",
+    groupNo: 1,
     ingredientEntryId: "entry-a",
     ingredientId: "ingredient-a",
     ingredientName: "Peanut",

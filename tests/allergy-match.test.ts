@@ -6,6 +6,9 @@ import {
   expectedSpecialGroupCounts,
   normalizeAllergenName,
   splitPortionsIntoGroups,
+  groupAllergies,
+  totalAllergyPortions,
+  allergyGroupTarget,
 } from "../src/utils/allergy-match";
 import {
   avoidanceCovers,
@@ -228,4 +231,85 @@ void test("danh sách dị ứng chung: số học sinh dị ứng chỉ tính m
     ]).get("kieng-dau-xanh"),
     0,
   );
+});
+
+void test("nhóm dị ứng theo lớp: A: 1, B: 1, (A, B): 1 là 3 suất, mỗi nhóm tính một lần vào nhóm suất sát nhất", () => {
+  const entry = (id: string, name: string) => ({
+    ingredientEntryId: id,
+    ingredientEntry: { Ingredient: { name } },
+  });
+  const groups = [
+    { id: "default", isDefault: true, avoidances: [] },
+    { id: "tranh-sua", isDefault: false, avoidances: [entry("e-a", "Sữa")] },
+    { id: "tranh-lac", isDefault: false, avoidances: [entry("e-b", "Lạc")] },
+    {
+      id: "tranh-ca-hai",
+      isDefault: false,
+      avoidances: [entry("e-a", "Sữa"), entry("e-b", "Lạc")],
+    },
+  ];
+  const rows = [
+    {
+      groupNo: 1,
+      ingredientEntryId: "e-a",
+      allergenName: "Sữa",
+      portionCount: 1,
+    },
+    {
+      groupNo: 2,
+      ingredientEntryId: "e-b",
+      allergenName: "Lạc",
+      portionCount: 1,
+    },
+    {
+      groupNo: 3,
+      ingredientEntryId: "e-a",
+      allergenName: "Sữa",
+      portionCount: 1,
+    },
+    {
+      groupNo: 3,
+      ingredientEntryId: "e-b",
+      allergenName: "Lạc",
+      portionCount: 1,
+    },
+  ];
+  assert.equal(groupAllergies(rows).length, 3);
+  assert.equal(totalAllergyPortions(rows), 3);
+  // Nhóm A vào "tránh sữa" (sát nhất, không vào nhóm tránh cả hai); nhóm (A, B) vào "tránh cả hai".
+  assert.equal(
+    allergyGroupTarget(groups, groupAllergies(rows)[0]),
+    "tranh-sua",
+  );
+  assert.equal(
+    allergyGroupTarget(groups, groupAllergies(rows)[2]),
+    "tranh-ca-hai",
+  );
+  assert.deepEqual(
+    Object.fromEntries(splitPortionsIntoGroups(groups, 30, rows)!),
+    {
+      default: 27,
+      "tranh-sua": 1,
+      "tranh-lac": 1,
+      "tranh-ca-hai": 1,
+    },
+  );
+  // Thực đơn chỉ có nhóm tránh cả hai: cả 3 nhóm dị ứng vào đó (3 suất, không đếm trùng).
+  assert.deepEqual(
+    Object.fromEntries(
+      splitPortionsIntoGroups([groups[0], groups[3]], 30, rows)!,
+    ),
+    { default: 27, "tranh-ca-hai": 3 },
+  );
+  // Nhóm B nghỉ hôm nay (0 suất): còn 2 suất.
+  const absentB = rows.map((r) =>
+    r.groupNo === 2 ? { ...r, portionCount: 0 } : r,
+  );
+  assert.equal(totalAllergyPortions(absentB), 2);
+  assert.equal(
+    splitPortionsIntoGroups(groups, 30, absentB)?.get("tranh-lac"),
+    0,
+  );
+  // Tổng suất dị ứng vượt sĩ số -> null.
+  assert.equal(splitPortionsIntoGroups(groups, 2, rows), null);
 });

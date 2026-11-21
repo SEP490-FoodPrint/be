@@ -15,6 +15,7 @@ import {
 
 const select = {
   classId: true,
+  groupNo: true,
   ingredientEntryId: true,
   affectedCount: true,
   updatedByUserId: true,
@@ -45,7 +46,11 @@ export function createAllergyService(read: ListReader = readFromDatabase) {
             ...listWindow(query),
             where,
             select,
-            orderBy: [{ classId: "asc" }, { ingredientEntryId: "asc" }],
+            orderBy: [
+              { classId: "asc" },
+              { groupNo: "asc" },
+              { ingredientEntryId: "asc" },
+            ],
           }),
         query,
       );
@@ -71,6 +76,7 @@ export function createAllergyCatalogService(read = readAllergyCatalog) {
         classId: row.classId,
         className: row.Class.name,
         academicYear: row.Class.academicYear,
+        groupNo: row.groupNo,
         ingredientEntryId: row.ingredientEntryId,
         ingredientId: row.IngredientEntry.ingredientId,
         ingredientName: row.IngredientEntry.Ingredient.name,

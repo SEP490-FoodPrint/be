@@ -44,7 +44,7 @@ const select = {
   updatedAt: true,
   Class: { select: { name: true, academicYear: true } },
   dailyAllergyPortions: {
-    select: { ingredientEntryId: true, portionCount: true },
+    select: { groupNo: true, ingredientEntryId: true, portionCount: true },
   },
 } as const satisfies Prisma.DailyMealPortionSelect;
 
@@ -84,14 +84,11 @@ export async function autoSplitPortionGroups(
       _count: { select: { portionGroups: true } },
       dailyAllergyPortions: {
         select: {
+          groupNo: true,
           ingredientEntryId: true,
           portionCount: true,
-          ClassAllergy: {
-            select: {
-              IngredientEntry: {
-                select: { Ingredient: { select: { name: true } } },
-              },
-            },
+          IngredientEntry: {
+            select: { Ingredient: { select: { name: true } } },
           },
         },
       },
@@ -127,8 +124,9 @@ export async function autoSplitPortionGroups(
     groups,
     demand.totalPortions,
     demand.dailyAllergyPortions.map((a) => ({
+      groupNo: a.groupNo,
       ingredientEntryId: a.ingredientEntryId,
-      allergenName: a.ClassAllergy.IngredientEntry.Ingredient.name,
+      allergenName: a.IngredientEntry.Ingredient.name,
       portionCount: a.portionCount,
     })),
   );
@@ -309,17 +307,21 @@ export function createMealAttendanceService(
         "daily_meal_portion.update",
         async (tx, actor) => {
           const assigned = await assignedClass(tx, actor, todayDate());
-          const current = new Map(
-            assigned.classAllergies.map((row) => [row.ingredientEntryId, row]),
+          const totalStudents = input.groups.reduce(
+            (sum, group) => sum + group.affectedCount,
+            0,
           );
-          if (input.affectedCount > assigned.registeredMealPortions)
+          if (totalStudents > assigned.registeredMealPortions)
             throw new HttpError(
               422,
-              `Số học sinh dị ứng vượt số suất đăng ký của lớp (${assigned.registeredMealPortions})`,
+              `Tổng số học sinh dị ứng (${totalStudents}) vượt số suất đăng ký của lớp (${assigned.registeredMealPortions})`,
             );
-          const newIds = input.ingredientEntryIds.filter(
-            (id) => !current.has(id),
+          const current = new Set(
+            assigned.classAllergies.map((row) => row.ingredientEntryId),
           );
+          const newIds = [
+            ...new Set(input.groups.flatMap((g) => g.ingredientEntryIds)),
+          ].filter((id) => !current.has(id));
           if (newIds.length) {
             const allowed = await tx.ingredientEntry.count({
               where: {
@@ -333,48 +335,19 @@ export function createMealAttendanceService(
                 "Chỉ được chọn nguyên liệu trong kho trường thuộc NCC đang liên kết",
               );
           }
-          const keep = new Set(input.ingredientEntryIds);
-          const removed = [...current.keys()].filter((id) => !keep.has(id));
-          if (removed.length) {
-            const used = await tx.dailyAllergyPortion.findFirst({
-              where: {
-                classId: assigned.id,
-                ingredientEntryId: { in: removed },
-              },
-              select: { ingredientEntryId: true },
-            });
-            if (used)
-              throw new HttpError(
-                409,
-                `Không thể xoá "${current.get(used.ingredientEntryId)?.IngredientEntry.Ingredient.name}" vì đã được dùng khi khai suất ăn. Hãy giữ lại và sửa số học sinh.`,
-              );
-            await tx.classAllergy.deleteMany({
-              where: {
-                classId: assigned.id,
-                ingredientEntryId: { in: removed },
-              },
-            });
-          }
-          // Mọi nguyên liệu trong danh sách dùng chung một số học sinh dị ứng
-          for (const ingredientEntryId of input.ingredientEntryIds)
-            await tx.classAllergy.upsert({
-              where: {
-                classId_ingredientEntryId: {
-                  classId: assigned.id,
-                  ingredientEntryId,
-                },
-              },
-              create: {
-                classId: assigned.id,
-                ingredientEntryId,
-                affectedCount: input.affectedCount,
-                updatedByUserId: actor.id,
-              },
-              update: {
-                affectedCount: input.affectedCount,
-                updatedByUserId: actor.id,
-              },
-            });
+          // Ghi lại toàn bộ nhóm: nhóm k = tập nguyên liệu + số học sinh chung của nhóm.
+          // Suất đã khai các ngày trước lưu bản chụp nhóm riêng nên không bị ảnh hưởng.
+          await tx.classAllergy.deleteMany({ where: { classId: assigned.id } });
+          const rows = input.groups.flatMap((group, index) =>
+            group.ingredientEntryIds.map((ingredientEntryId) => ({
+              classId: assigned.id,
+              groupNo: index + 1,
+              ingredientEntryId,
+              affectedCount: group.affectedCount,
+              updatedByUserId: actor.id,
+            })),
+          );
+          if (rows.length) await tx.classAllergy.createMany({ data: rows });
           return (await assignedClass(tx, actor, todayDate())).classAllergies;
         },
       );
@@ -410,14 +383,31 @@ export function createMealAttendanceService(
             date: input.date,
             mealType: input.mealType,
           });
+          // Nhóm dị ứng hiện tại của lớp: groupNo -> số học sinh + các nguyên liệu
+          const masterGroups = new Map<
+            number,
+            {
+              affectedCount: number;
+              ingredientEntryIds: string[];
+              names: string[];
+            }
+          >();
+          for (const row of assigned.classAllergies) {
+            const group = masterGroups.get(row.groupNo) ?? {
+              affectedCount: row.affectedCount,
+              ingredientEntryIds: [],
+              names: [],
+            };
+            group.ingredientEntryIds.push(row.ingredientEntryId);
+            group.names.push(row.IngredientEntry.Ingredient.name);
+            masterGroups.set(row.groupNo, group);
+          }
           for (const allergy of input.allergies) {
-            const master = assigned.classAllergies.find(
-              (item) => item.ingredientEntryId === allergy.ingredientEntryId,
-            );
+            const master = masterGroups.get(allergy.groupNo);
             if (!master || allergy.portionCount > master.affectedCount)
               throw new HttpError(
                 422,
-                "Số suất dị ứng vượt thông tin dị ứng tổng hợp của lớp",
+                "Số suất dị ứng vượt số học sinh của nhóm dị ứng trong lớp",
               );
           }
           const key = {
@@ -431,16 +421,14 @@ export function createMealAttendanceService(
               409,
               "Suất ăn đã chốt, không thể sửa trực tiếp",
             );
-          const declared = new Set(
-            input.allergies.map((item) => item.ingredientEntryId),
-          );
-          const missing = assigned.classAllergies.find(
-            (item) => !declared.has(item.ingredientEntryId),
+          const declared = new Set(input.allergies.map((item) => item.groupNo));
+          const missing = [...masterGroups].find(
+            ([groupNo]) => !declared.has(groupNo),
           );
           if (missing)
             throw new HttpError(
               422,
-              `Chưa nhập số suất dị ứng cho "${missing.IngredientEntry.Ingredient.name}" (nhập 0 nếu không có)`,
+              `Chưa nhập số suất cho nhóm dị ứng "${missing[1].names.join(", ")}" (nhập 0 nếu không có)`,
             );
           const data = {
             confirmedByUserId: actor.id,
@@ -453,11 +441,20 @@ export function createMealAttendanceService(
             key,
             data,
           );
+          // Lưu bản chụp từng nhóm: mỗi nguyên liệu của nhóm một dòng, cùng số suất của nhóm
           await repository.replaceAllergies(
             tx,
             demand.id,
             assigned.id,
-            input.allergies,
+            input.allergies.flatMap((item) =>
+              masterGroups
+                .get(item.groupNo)!
+                .ingredientEntryIds.map((ingredientEntryId) => ({
+                  groupNo: item.groupNo,
+                  ingredientEntryId,
+                  portionCount: item.portionCount,
+                })),
+            ),
           );
           return repository.getSubmissionById(tx, demand.id);
         },
@@ -611,6 +608,7 @@ export function createMealAttendanceService(
           const master = await tx.classAllergy.findMany({
             where: { classId: demand.classId },
             select: {
+              groupNo: true,
               ingredientEntryId: true,
               affectedCount: true,
               IngredientEntry: {
@@ -621,22 +619,30 @@ export function createMealAttendanceService(
           const inputCount = (groupId: string) =>
             input.groups.find((g) => g.portionGroupId === groupId)!
               .portionCount;
-          const masterAllergies = master.map((m) => ({
-            ingredientEntryId: m.ingredientEntryId,
-            allergenName: m.IngredientEntry.Ingredient.name,
-          }));
-          const {
-            byAllergy: avoidedCounts,
-            uncovered,
-            relevant,
-          } = allergyCountsFromGroups(groups, inputCount, masterAllergies);
-          // Mỗi dị ứng tính vào nhóm riêng đầu tiên tránh nó; nhóm tránh nhiều dị ứng thì cộng dồn, không tính trùng.
+          const masterAllergies = [
+            ...new Map(
+              master.map((m) => [
+                m.ingredientEntryId,
+                {
+                  ingredientEntryId: m.ingredientEntryId,
+                  allergenName: m.IngredientEntry.Ingredient.name,
+                },
+              ]),
+            ).values(),
+          ];
+          const { uncovered, relevant } = allergyCountsFromGroups(
+            groups,
+            inputCount,
+            masterAllergies,
+          );
+          // Mỗi nhóm dị ứng tính một lần vào nhóm suất riêng phù hợp nhất (allergyGroupTarget).
           const nameOf = new Map(
             masterAllergies.map((m) => [m.ingredientEntryId, m.allergenName]),
           );
           const expectedFromDaily = expectedSpecialGroupCounts(
             groups,
             demand.dailyAllergyPortions.map((a) => ({
+              groupNo: a.groupNo,
               ingredientEntryId: a.ingredientEntryId,
               allergenName: nameOf.get(a.ingredientEntryId) ?? "",
               portionCount: a.portionCount,
@@ -657,6 +663,7 @@ export function createMealAttendanceService(
           const capacity = expectedSpecialGroupCounts(
             groups,
             master.map((m) => ({
+              groupNo: m.groupNo,
               ingredientEntryId: m.ingredientEntryId,
               allergenName: m.IngredientEntry.Ingredient.name,
               portionCount: m.affectedCount,
@@ -696,21 +703,6 @@ export function createMealAttendanceService(
               409,
               "膼茫 l岷璸 m岷?ho岷穋 ph芒n ph峄慽; kh么ng thay 膽峄昳 nh贸m su岷",
             );
-          for (const [entryId, count] of avoidedCounts)
-            if (
-              count > 0 &&
-              !demand.dailyAllergyPortions.some(
-                (a) => a.ingredientEntryId === entryId,
-              )
-            )
-              await tx.dailyAllergyPortion.create({
-                data: {
-                  dailyMealPortionId: id,
-                  classId: demand.classId,
-                  ingredientEntryId: entryId,
-                  portionCount: count,
-                },
-              });
           const now = new Date();
           for (const group of input.groups)
             await tx.dailyMealPortionGroup.upsert({

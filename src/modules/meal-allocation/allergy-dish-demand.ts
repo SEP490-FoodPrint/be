@@ -13,25 +13,47 @@ export function allergyDishDemand(
   );
   if (!allergies.length)
     return { required: demand.totalPortions, allergens: [] as string[] };
-  const count = allergies[0].portionCount;
-  if (
-    count == null ||
-    !Number.isSafeInteger(count) ||
-    count <= 0 ||
-    count > demand.totalPortions ||
-    allergies.some((row) => row.portionCount !== count || !row.ClassAllergy)
-  )
+  // Gom theo nhóm dị ứng của lớp: mỗi nhóm một số suất chung, tính một lần.
+  const groups = new Map<
+    number,
+    {
+      count: number;
+      entries: NonNullable<(typeof allergies)[number]["IngredientEntry"]>[];
+    }
+  >();
+  for (const row of allergies) {
+    const count = row.portionCount;
+    const groupNo = row.groupNo ?? 1;
+    const group = groups.get(groupNo);
+    if (
+      count == null ||
+      !Number.isSafeInteger(count) ||
+      count <= 0 ||
+      !row.IngredientEntry ||
+      (group && group.count !== count)
+    )
+      throw new HttpError(
+        409,
+        "Cần đối soát số suất dị ứng của lớp " + demand.Class.name,
+      );
+    if (group) group.entries.push(row.IngredientEntry);
+    else groups.set(groupNo, { count, entries: [row.IngredientEntry] });
+  }
+  const totalAllergy = [...groups.values()].reduce((n, g) => n + g.count, 0);
+  if (totalAllergy > demand.totalPortions)
     throw new HttpError(
       409,
       "Cần đối soát số suất dị ứng của lớp " + demand.Class.name,
     );
-  const entries = allergies.map((row) => row.ClassAllergy!.IngredientEntry);
+  const entries = [...groups.values()].flatMap((group) => group.entries);
+  const entryMatches = (
+    entry: (typeof entries)[number],
+    id: string,
+    name: string,
+  ) =>
+    entry.ingredientId === id || allergenMatches(entry.Ingredient.name, name);
   const matches = (id: string, name: string) =>
-    entries.filter(
-      (entry) =>
-        entry.ingredientId === id ||
-        allergenMatches(entry.Ingredient.name, name),
-    );
+    entries.filter((entry) => entryMatches(entry, id, name));
   for (const seasoning of menu.mealSeasonings ?? []) {
     const entry = seasoning.ingredientEntry;
     if (
@@ -81,8 +103,13 @@ export function allergyDishDemand(
       ),
     ),
   ];
-  return {
-    required: demand.totalPortions - (allergens.length ? count : 0),
-    allergens,
-  };
+  // Nhóm dị ứng nào gặp nguyên liệu của món thì cả nhóm không ăn món này (trừ một lần theo nhóm)
+  const excluded = [...groups.values()]
+    .filter((group) =>
+      group.entries.some((entry) =>
+        ingredients.some((row) => entryMatches(entry, row.id, row.name)),
+      ),
+    )
+    .reduce((n, group) => n + group.count, 0);
+  return { required: demand.totalPortions - excluded, allergens };
 }

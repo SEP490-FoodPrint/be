@@ -1423,12 +1423,14 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         data: [
           {
             classId: grClass.id,
+            groupNo: 1,
             ingredientEntryId: grMilk.entry.id,
             affectedCount: 13,
             updatedByUserId: health.id,
           },
           {
             classId: grClass.id,
+            groupNo: 1,
             ingredientEntryId: grPeanut.entry.id,
             affectedCount: 13,
             updatedByUserId: health.id,
@@ -1458,12 +1460,14 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           {
             dailyMealPortionId: grDaily.id,
             classId: grClass.id,
+            groupNo: 1,
             ingredientEntryId: grMilk.entry.id,
             portionCount: 13,
           },
           {
             dailyMealPortionId: grDaily.id,
             classId: grClass.id,
+            groupNo: 1,
             ingredientEntryId: grPeanut.entry.id,
             portionCount: 13,
           },
