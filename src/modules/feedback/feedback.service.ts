@@ -70,6 +70,19 @@ function viewerOf(
   return isHandler(principal) ? "HANDLER" : "OBSERVER";
 }
 
+/** "Chuyển ATTP" chỉ có ở C03: người gửi là phụ huynh và có quyền chuyển (specs/authority-complaints). */
+function canEscalate(
+  row: { senderUserId: string; senderRoleCode: string },
+  principal: AuthPrincipal,
+): boolean {
+  return (
+    row.senderUserId === principal.id &&
+    row.senderRoleCode === ROLES.PARENTS_COMMITTEE &&
+    principal.role === ROLES.PARENTS_COMMITTEE &&
+    principal.permissions.includes("authority_complaint.submit")
+  );
+}
+
 function toResponse(
   row: ComplaintRow | ComplaintDetailRow,
   principal: AuthPrincipal,
@@ -98,7 +111,15 @@ function toResponse(
       mealDate: portion.mealDate.toISOString().slice(0, 10),
       mealType: portion.mealType,
     },
-    ...mapTicketFields(viewerOf(row, principal), row, latestCommentSide, now),
+    escalatedAuthorityComplaint: child.authorityEscalation
+      ? {
+          id: child.authorityEscalation.id,
+          code: child.authorityEscalation.Complaint.code,
+        }
+      : null,
+    ...mapTicketFields(viewerOf(row, principal), row, latestCommentSide, now, {
+      canEscalate: canEscalate(row, principal),
+    }),
   };
 }
 

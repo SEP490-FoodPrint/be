@@ -1724,6 +1724,147 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
     },
   );
   await context.test(
+    "authority_complaints: AUTHORITY parent with FP-AC code, one C05 per C03, one ATTP unit per ward",
+    async () => {
+      const migration = "20261128000100_authority_complaints";
+      const name = `foodprint_migration_test_ac_${randomUUID().replaceAll("-", "")}`;
+      await db.query(`CREATE DATABASE "${name}"`);
+      recordLocalTestDatabase(name);
+      const fresh = new URL(url);
+      fresh.pathname = `/${name}`;
+      const client = new Client({ connectionString: fresh.toString() });
+      await client.connect();
+      try {
+        await client.query(
+          "CREATE SCHEMA IF NOT EXISTS foodprint; SET search_path = foodprint, public;",
+        );
+        for (const version of migrationNames.filter(
+          (value) => value <= migration,
+        ))
+          await client.query(
+            await readFile(
+              path.join(root, "prisma/migrations", version, "migration.sql"),
+              "utf8",
+            ),
+          );
+        await client.query("SET search_path = public;");
+        const seeded = await client.query<{
+          user_id: string;
+          school_id: string;
+          portion_id: string;
+          ward_id: string;
+          unit_id: string;
+          unit2_id: string;
+        }>(`
+          WITH ward AS (
+            INSERT INTO foodprint.locations(code,name,type,level) VALUES ('W-AC','Phường AC','WARD',2) RETURNING id
+          ), school AS (
+            INSERT INTO foodprint.schools(name,location_id) SELECT 'AC school',id FROM ward RETURNING id
+          ), unit AS (
+            INSERT INTO foodprint.commune_food_safety_units(code,name,location_id) SELECT 'ATTP-AC','ATTP AC',id FROM ward RETURNING id
+          ), unit2 AS (
+            INSERT INTO foodprint.commune_food_safety_units(code,name) VALUES ('ATTP-AC2','ATTP AC 2') RETURNING id
+          ), role AS (
+            INSERT INTO foodprint.roles(code,name,type) VALUES ('PARENTS_COMMITTEE','Parent','SCHOOL') RETURNING id
+          ), actor AS (
+            INSERT INTO foodprint.users(role_id,role_code,school_id,username,email,password_hash,full_name)
+            SELECT role.id,'PARENTS_COMMITTEE',school.id,'ac_test','ac@example.test','test-only','Parent'
+            FROM role, school RETURNING id
+          ), classroom AS (
+            INSERT INTO foodprint.classes(school_id,name) SELECT id,'5A' FROM school RETURNING id
+          ), portion AS (
+            INSERT INTO foodprint.daily_meal_portions(class_id,confirmed_by_user_id,meal_date,meal_type,total_portions)
+            SELECT classroom.id,actor.id,'2026-11-20','LUNCH',30 FROM classroom,actor RETURNING id
+          )
+          SELECT actor.id AS user_id, school.id AS school_id, portion.id AS portion_id,
+                 ward.id AS ward_id, unit.id AS unit_id, unit2.id AS unit2_id
+          FROM actor, school, portion, ward, unit, unit2
+        `);
+        const row = seeded.rows[0];
+        // Mỗi phường/xã gắn tối đa một đơn vị ATTP.
+        await assert.rejects(
+          client.query(
+            "UPDATE foodprint.commune_food_safety_units SET location_id = $1 WHERE id = $2",
+            [row.ward_id, row.unit2_id],
+          ),
+          (error: unknown) =>
+            sqlState(
+              error,
+              "23505",
+              "uq_commune_food_safety_units_location_id",
+            ),
+        );
+        const insertComplaint = (columns: string, values: string) =>
+          client.query<{ id: string }>(
+            `INSERT INTO foodprint.complaints(sender_user_id,sender_role_code,title,description,${columns})
+             VALUES($1,'PARENTS_COMMITTEE','Tiêu đề','Mô tả',${values}) RETURNING id`,
+            [row.user_id],
+          );
+        const meal = await insertComplaint("kind,code", "'MEAL','FP-MC-22345'");
+        const mealId = meal.rows[0].id;
+        await client.query(
+          `INSERT INTO foodprint.meal_complaints(id,school_id,daily_meal_portion_id,complaint_type)
+           VALUES($1,$2,$3,'OTHER')`,
+          [mealId, row.school_id, row.portion_id],
+        );
+        const insertChild = (id: string, kind = "AUTHORITY", source = mealId) =>
+          client.query(
+            `INSERT INTO foodprint.authority_complaints(id,kind,school_id,recipient_commune_food_safety_unit_id,escalated_from_meal_complaint_id)
+             VALUES($1,$2,$3,$4,$5)`,
+            [id, kind, row.school_id, row.unit_id, source],
+          );
+        const c05 = await insertComplaint(
+          "kind,code",
+          "'AUTHORITY','FP-AC-12345'",
+        );
+        await insertChild(c05.rows[0].id);
+        await assert.rejects(
+          insertComplaint("kind,code", "'AUTHORITY','FP-MC-12346'"),
+          (error: unknown) => sqlState(error, "23514", "complaints_code_kind"),
+        );
+        const second = await insertComplaint(
+          "kind,code",
+          "'AUTHORITY','FP-AC-12347'",
+        );
+        await assert.rejects(insertChild(second.rows[0].id), (error: unknown) =>
+          sqlState(error, "23505", "uq_authority_complaints_escalated_from"),
+        );
+        await assert.rejects(
+          insertChild(second.rows[0].id, "AUTHORITY", randomUUID()),
+          (error: unknown) =>
+            sqlState(
+              error,
+              "23503",
+              "authority_complaints_escalated_from_fkey",
+            ),
+        );
+        const meal2 = await insertComplaint(
+          "kind,code",
+          "'MEAL','FP-MC-22346'",
+        );
+        const meal2Id = meal2.rows[0].id;
+        await client.query(
+          `INSERT INTO foodprint.meal_complaints(id,school_id,daily_meal_portion_id,complaint_type)
+           VALUES($1,$2,$3,'OTHER')`,
+          [meal2Id, row.school_id, row.portion_id],
+        );
+        await assert.rejects(
+          insertChild(meal2Id, "AUTHORITY", meal2Id),
+          (error: unknown) =>
+            sqlState(error, "23503", "authority_complaints_id_kind_fkey"),
+        );
+        await assert.rejects(
+          insertChild(meal2Id, "MEAL", meal2Id),
+          (error: unknown) =>
+            sqlState(error, "23514", "authority_complaints_kind"),
+        );
+      } finally {
+        await client.end();
+        await db.query(`DROP DATABASE "${name}"`);
+      }
+    },
+  );
+  await context.test(
     "system_complaints child table only accepts SYSTEM parents with FP-SC codes",
     async () => {
       const migration = "20261127000100_system_complaints";

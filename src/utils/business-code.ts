@@ -20,6 +20,7 @@ export const BUSINESS_CODE_TYPES = {
   CP: "khiếu nại nguyên liệu",
   MC: "khiếu nại bữa ăn",
   SC: "khiếu nại gửi hệ thống",
+  AC: "khiếu nại leo thang lên ATTP",
   IC: "sự cố an toàn thực phẩm",
 } as const;
 export type BusinessCodeType = keyof typeof BUSINESS_CODE_TYPES;
