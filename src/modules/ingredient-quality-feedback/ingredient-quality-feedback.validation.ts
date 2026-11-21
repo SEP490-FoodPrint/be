@@ -7,8 +7,19 @@ import {
   parseRequest,
   requestUuidSchema,
 } from "../../utils/request-validation";
+import {
+  ticketCommentBodySchema,
+  ticketEmptyBodySchema,
+  ticketReopenBodySchema,
+  ticketResolveBodySchema,
+} from "../complaint-ticket/complaint-ticket.validation";
 
-export const MAX_SUPPLIER_RESPONSE_LENGTH = 5000;
+export {
+  ticketCommentBodySchema,
+  ticketEmptyBodySchema,
+  ticketReopenBodySchema,
+  ticketResolveBodySchema,
+};
 
 export const ingredientQualityFeedbackListQuerySchema = paginationSchema;
 
@@ -17,21 +28,6 @@ export const ingredientQualityFeedbackParamsSchema = z.strictObject({
 });
 
 export const ingredientQualityFeedbackEmptyQuerySchema = emptyQuerySchema;
-
-export const ingredientQualityFeedbackResponseBodySchema = z.strictObject({
-  supplierResponse: z
-    .string({ error: "Phản hồi nhà cung cấp phải là văn bản" })
-    .transform((value) => value.trim())
-    .refine((value) => Array.from(value).length >= 1, {
-      error: "Phản hồi nhà cung cấp không được để trống",
-    })
-    .refine(
-      (value) => Array.from(value).length <= MAX_SUPPLIER_RESPONSE_LENGTH,
-      {
-        error: `Phản hồi nhà cung cấp chỉ nhận tối đa ${MAX_SUPPLIER_RESPONSE_LENGTH} ký tự`,
-      },
-    ),
-});
 
 export const validateIngredientQualityFeedbackListQuery = (value: unknown) =>
   parseRequest(
@@ -48,5 +44,14 @@ export const validateIngredientQualityFeedbackEmptyQuery = (value: unknown) =>
     value === undefined ? {} : value,
   );
 
-export const validateIngredientQualityFeedbackResponseBody = (value: unknown) =>
-  parseRequest(ingredientQualityFeedbackResponseBodySchema, value);
+export const validateFeedbackCommentBody = (value: unknown) =>
+  parseRequest(ticketCommentBodySchema, value);
+
+export const validateFeedbackResolveBody = (value: unknown) =>
+  parseRequest(ticketResolveBodySchema, value);
+
+export const validateFeedbackReopenBody = (value: unknown) =>
+  parseRequest(ticketReopenBodySchema, value === undefined ? {} : value);
+
+export const validateFeedbackEmptyBody = (value: unknown) =>
+  parseRequest(ticketEmptyBodySchema, value === undefined ? {} : value);

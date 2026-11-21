@@ -9,16 +9,22 @@ import { readPublicTraceOrigin, readRateLimitConfig } from "./config/env";
 import { createApiRateLimiter } from "./middlewares/rate-limit.middleware";
 import { startEmailRuntime } from "./utils/email-runtime";
 import { startMenuReminderScheduler } from "./modules/menu-notification/menu-notification.service";
+import { startComplaintAutoCloseRuntime } from "./utils/complaint-auto-close";
 
 const PORT = Number(process.env.PORT || 5000);
 let emailRuntime: Awaited<ReturnType<typeof startEmailRuntime>> | undefined;
+let autoCloseRuntime:
+  ReturnType<typeof startComplaintAutoCloseRuntime> | undefined;
 let stopMenuReminders: (() => void) | undefined;
 let closing: Promise<void> | undefined;
 
 const closeConnections = (): Promise<void> => {
   closing ??= (async () => {
     stopMenuReminders?.();
-    const workerResults = await Promise.allSettled([emailRuntime?.stop()]);
+    const workerResults = await Promise.allSettled([
+      emailRuntime?.stop(),
+      autoCloseRuntime?.stop(),
+    ]);
     const results = await Promise.allSettled([
       prisma.$disconnect(),
       disconnectRedis(),
@@ -45,6 +51,7 @@ const startServer = async () => {
   );
 
   emailRuntime = await startEmailRuntime(prisma);
+  autoCloseRuntime = startComplaintAutoCloseRuntime(prisma);
   // Nhắc tạo / hoàn thành thực đơn tuần tới qua email (Thứ Sáu → Chủ nhật, sau 8 giờ sáng)
   stopMenuReminders = startMenuReminderScheduler();
 

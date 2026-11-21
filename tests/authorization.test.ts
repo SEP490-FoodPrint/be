@@ -108,6 +108,11 @@ void test("all list resources deny absent grants, including System Admin", () =>
       resource === "supplier-school"
     ) {
       assert.throws(() => scope(grantedSystem), status(403));
+    } else if (resource === "feedback") {
+      // Bảng cha `complaints` dùng chung: phạm vi luôn khóa theo loại đơn.
+      assert.deepEqual(scope(grantedSystem), { kind: "MEAL" });
+    } else if (resource === "ingredient-quality-feedback") {
+      assert.deepEqual(scope(grantedSystem), { kind: "INGREDIENT" });
     } else {
       assert.deepEqual(scope(grantedSystem), {});
     }
@@ -303,8 +308,9 @@ void test("organization scope follows trusted membership and nested ownership", 
   assert.deepEqual(listScopes.menu(p), { schoolId: p.schoolId });
   assert.deepEqual(listScopes["supply-order"](p), { schoolId: p.schoolId });
   assert.deepEqual(listScopes["ingredient-quality-feedback"](p), {
-    Delivery: { schoolId: p.schoolId },
-    submittedByUserId: p.id,
+    kind: "INGREDIENT",
+    ingredientQualityFeedback: { is: { Delivery: { schoolId: p.schoolId } } },
+    senderUserId: p.id,
   });
   const deliverySchool = {
     ...testStaff,
@@ -851,7 +857,8 @@ void test("ingredient-quality-feedback scopes enforce supplier ADMIN/STAFF membe
     { kind: "SUPPLIER", supplierId },
   );
   assert.deepEqual(listScopes["ingredient-quality-feedback"](supplierStaff), {
-    Delivery: { supplierId },
+    kind: "INGREDIENT",
+    ingredientQualityFeedback: { is: { Delivery: { supplierId } } },
   });
   assert.deepEqual(
     ingredientQualityFeedbackResponseScope({

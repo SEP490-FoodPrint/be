@@ -1,4 +1,7 @@
-export type IngredientQualityFeedbackStatusDto = "SUBMITTED" | "RESPONDED";
+import type {
+  TicketCommentDTO,
+  TicketFieldsDTO,
+} from "../complaint-ticket/complaint-ticket.response.dto";
 
 export interface IngredientQualityFeedbackPaginationDto {
   page: number;
@@ -27,45 +30,25 @@ export interface FeedbackIngredientLotRefDto {
   lotCode: string;
 }
 
-export interface SupplierFeedbackListItem {
+export interface FeedbackListItem extends TicketFieldsDTO {
   id: string;
-  complaintCode: string;
+  /** `FP-CP-NNNNN` (hoặc mã tuần tự cũ). */
+  code: string;
   title: string;
   school: FeedbackSchoolRefDto;
   delivery: FeedbackDeliveryRefDto;
-  status: IngredientQualityFeedbackStatusDto;
-  createdAt: string;
-  respondedAt: string | null;
+  submittedAt: string;
+  updatedAt: string;
 }
 
-export interface SupplierFeedbackList {
-  items: SupplierFeedbackListItem[];
+export interface FeedbackList {
+  items: FeedbackListItem[];
   pagination: IngredientQualityFeedbackPaginationDto;
 }
 
-export interface FeedbackDetail extends SupplierFeedbackListItem {
+export interface FeedbackDetail extends FeedbackListItem {
   description: string;
-  updatedAt: string;
   submittedBy: FeedbackUserRefDto;
   ingredientLot: FeedbackIngredientLotRefDto | null;
-  supplierResponse: string | null;
-  respondedBy: FeedbackUserRefDto | null;
-}
-
-export interface LegacyFeedbackListItem {
-  id: string;
-  deliveryId: string;
-  ingredientLotId: string | null;
-  submittedByUserId: string;
-  title: string;
-  description: string;
-  status: IngredientQualityFeedbackStatusDto;
-  respondedAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface LegacyFeedbackList {
-  items: LegacyFeedbackListItem[];
-  pagination: IngredientQualityFeedbackPaginationDto;
+  comments: TicketCommentDTO[];
 }

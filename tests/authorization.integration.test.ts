@@ -1871,7 +1871,10 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         statusCode: 403,
       });
       const sent = await feedback.create(input, parent);
-      assert.equal(sent.status, "SUBMITTED");
+      assert.equal(sent.status, "NEW");
+      assert.equal(sent.displayStatus, "IN_PROGRESS");
+      assert.match(sent.code, /^FP-MC-[0-9]{5}$/);
+      assert.match(sent.title, /^Khiếu nại suất ăn lớp /);
       assert.equal(sent.meal.dailyMealPortionId, classB);
       const teacherSent = await feedback.create(
         { ...input, dailyMealPortionId: classA },
@@ -1890,12 +1893,61 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         schoolId: school.id,
       });
       const board = await loadPrincipal(boardAccount.id, db);
-      await feedback.respond(
+      await assert.rejects(
+        () => feedback.comment(sent.id, { content: "Chưa tiếp nhận" }, board),
+        { statusCode: 409 },
+      );
+      await assert.rejects(() => feedback.accept(sent.id, parent), {
+        statusCode: 403,
+      });
+      assert.equal(
+        (await feedback.accept(sent.id, board)).status,
+        "IN_PROGRESS",
+      );
+      await assert.rejects(() => feedback.accept(sent.id, board), {
+        statusCode: 409,
+      });
+      await feedback.comment(sent.id, { content: "Cơm bị nguội" }, parent);
+      const boardView = await feedback.getOne(sent.id, board);
+      assert.equal(boardView.hasNewMessage, true);
+      await feedback.resolve(
         sent.id,
-        { action: "RESOLVE", resolution: "Nhà trường đã kiểm tra suất ăn." },
+        { content: "Nhà trường đã kiểm tra suất ăn." },
         board,
       );
-      assert.equal((await feedback.getOne(sent.id, parent)).status, "RESOLVED");
+      const resolved = await feedback.getOne(sent.id, parent);
+      assert.equal(resolved.status, "RESOLVED");
+      assert.equal(resolved.resolvedCount, 1);
+      assert.deepEqual(resolved.allowedActions, ["SATISFY", "REOPEN"]);
+      assert.deepEqual(
+        resolved.comments.map((item) => [item.authorSide, item.commentType]),
+        [
+          ["REQUESTER", "MESSAGE"],
+          ["HANDLER", "RESOLUTION"],
+        ],
+      );
+      await assert.rejects(
+        () => feedback.comment(sent.id, { content: "Sau khi xử lý" }, parent),
+        { statusCode: 409 },
+      );
+      assert.equal(
+        (await feedback.reopen(sent.id, { reason: "Vẫn nguội" }, parent))
+          .status,
+        "REOPENED",
+      );
+      await feedback.accept(sent.id, board);
+      await feedback.resolve(sent.id, { content: "Đã hâm nóng lại" }, board);
+      const closed = await feedback.satisfy(sent.id, parent);
+      assert.equal(closed.status, "CLOSED");
+      assert.equal(closed.closeReason, "SATISFIED");
+      assert.equal(closed.resolvedCount, 2);
+      // NEW, accept, resolve, reopen, accept, resolve, satisfy.
+      assert.equal(
+        await db.complaintStatusHistory.count({
+          where: { complaintId: sent.id },
+        }),
+        7,
+      );
       const afterMidnight = createFeedbackService(
         undefined,
         () => Promise.resolve(db),
@@ -1906,7 +1958,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       });
       assert.equal(
         (await afterMidnight.getOne(sent.id, parent)).status,
-        "RESOLVED",
+        "CLOSED",
       );
     },
   );
@@ -10337,7 +10389,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   );
 
   await context.test(
-    "ingredient-quality-feedback POST response enforces Serializable single winner and deterministic barrier interleavings with denial, status lock, and role grant replacement",
+    "ingredient-quality-feedback POST accept enforces Serializable single winner and deterministic barrier interleavings with denial, status lock, and role grant replacement",
     async () => {
       const iqfRepo = createIngredientQualityFeedbackRepository();
       const sup1 = await db.supplier.create({
@@ -10374,15 +10426,18 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       });
       const mkFeedback = async (title: string) =>
         db.$transaction(async (tx) => {
-          return tx.ingredientQualityFeedback.create({
-            data: {
-              complaintCode: await iqfRepo.allocateComplaintCode(tx),
-              deliveryId: del1.id,
-              submittedByUserId: raceSubmitter.id,
-              title,
-              description: `${title} description`,
-            },
+          const complaintCode = await iqfRepo.allocateComplaintCode(tx);
+          const created = await iqfRepo.create(tx, {
+            code: complaintCode,
+            title,
+            description: `${title} description`,
+            senderUserId: raceSubmitter.id,
+            senderRoleCode: "SCHOOL_KITCHEN_STAFF",
+            senderSchoolId: sch1.id,
+            deliveryId: del1.id,
+            ingredientLotId: null,
           });
+          return { id: created.id, complaintCode };
         });
 
       const principalAdmin = await loadPrincipal(raceAdmin.id, db);
@@ -10398,7 +10453,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         "ingredient_quality_feedback.respond",
       );
 
-      // 1. Concurrent valid responders (admin vs staff1) on same SUBMITTED complaint -> 1 fulfilled, 1 409 conflict
+      // 1. Concurrent valid handlers (admin vs staff1) accept the same NEW complaint -> 1 fulfilled, 1 409 conflict
       const fRace = await mkFeedback("Concurrent responders");
       {
         const barrier = createBarrier(2);
@@ -10417,16 +10472,8 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           ),
         );
         const outcomes = await Promise.allSettled([
-          services[0].respond(
-            { feedbackId: fRace.id },
-            { supplierResponse: "Phản hồi từ Admin" },
-            principalAdmin,
-          ),
-          services[1].respond(
-            { feedbackId: fRace.id },
-            { supplierResponse: "Phản hồi từ Staff" },
-            principalStaff1,
-          ),
+          services[0].accept({ feedbackId: fRace.id }, principalAdmin),
+          services[1].accept({ feedbackId: fRace.id }, principalStaff1),
         ]);
         const fulfilled = outcomes.filter((o) => o.status === "fulfilled");
         const rejected = outcomes.filter((o) => o.status === "rejected");
@@ -10438,27 +10485,28 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         );
         const winner = fulfilled[0].value;
         assert.equal(winner.id, fRace.id);
-        assert.equal(winner.complaintCode, fRace.complaintCode);
+        assert.equal(winner.code, fRace.complaintCode);
 
         // Repeated POST preserves exact winner tuple and code
         await assert.rejects(
           () =>
             createIngredientQualityFeedbackService(iqfRepo, () =>
               Promise.resolve(db),
-            ).respond(
-              { feedbackId: fRace.id },
-              { supplierResponse: "Thử ghi đè sau khi đã thắng" },
-              principalAdmin,
-            ),
+            ).accept({ feedbackId: fRace.id }, principalAdmin),
           (err: unknown) => err instanceof HttpError && err.statusCode === 409,
         );
-        const saved = await db.ingredientQualityFeedback.findUniqueOrThrow({
+        const saved = await db.complaint.findUniqueOrThrow({
           where: { id: fRace.id },
         });
-        assert.equal(saved.status, "RESPONDED");
-        assert.equal(saved.supplierResponse, winner.supplierResponse);
-        assert.equal(saved.respondedByUserId, winner.respondedBy?.id);
-        assert.equal(saved.complaintCode, fRace.complaintCode);
+        assert.equal(saved.status, "IN_PROGRESS");
+        assert.equal(saved.code, fRace.complaintCode);
+        // Chỉ một lần chuyển NEW → IN_PROGRESS được ghi lịch sử.
+        assert.equal(
+          await db.complaintStatusHistory.count({
+            where: { complaintId: fRace.id, toStatus: "IN_PROGRESS" },
+          }),
+          1,
+        );
       }
 
       // 2a. Order 1: Admin denial / status lock / role replacement commits BEFORE response acquires lock -> retries & fails 403
@@ -10500,11 +10548,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           () => Promise.resolve(trackedDb),
         );
         try {
-          const respPromise = rSvc.respond(
-            { feedbackId },
-            { supplierResponse: `Attempt ${label}` },
-            actorPrincipal,
-          );
+          const respPromise = rSvc.accept({ feedbackId }, actorPrincipal);
           await respEntered.wait();
           await commitAdminAction();
           await adminDone.wait();
@@ -10523,11 +10567,10 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             txRuns >= 2,
             `${label} should retry stale snapshot instead of failing 503`,
           );
-          const row = await db.ingredientQualityFeedback.findUniqueOrThrow({
+          const row = await db.complaint.findUniqueOrThrow({
             where: { id: feedbackId },
           });
-          assert.equal(row.status, "SUBMITTED");
-          assert.equal(row.supplierResponse, null);
+          assert.equal(row.status, "NEW");
         } finally {
           await restoreAction();
         }
@@ -10623,26 +10666,18 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           () => Promise.resolve(db),
         );
         try {
-          const respPromise = rSvc.respond(
-            { feedbackId },
-            { supplierResponse: `Lock-first ${label}` },
-            actorPrincipal,
-          );
+          const respPromise = rSvc.accept({ feedbackId }, actorPrincipal);
           await locksHeld.wait();
           const adminPromise = adminAction(async () => {
             await adminReady.wait();
           });
           const [respResult] = await Promise.all([respPromise, adminPromise]);
-          assert.equal(respResult.status, "RESPONDED");
+          assert.equal(respResult.status, "IN_PROGRESS");
           await assert.rejects(
             () =>
               createIngredientQualityFeedbackService(iqfRepo, () =>
                 Promise.resolve(db),
-              ).respond(
-                { feedbackId: followUpFeedbackId },
-                { supplierResponse: `Next op after ${label}` },
-                actorPrincipal,
-              ),
+              ).accept({ feedbackId: followUpFeedbackId }, actorPrincipal),
             (err: unknown) =>
               err instanceof HttpError && err.statusCode === 403,
           );
@@ -10859,14 +10894,16 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         });
         const mkFb = async (title: string) =>
           db.$transaction(async (tx) => {
-            return tx.ingredientQualityFeedback.create({
-              data: {
-                complaintCode: await iqfRepo.allocateComplaintCode(tx),
-                deliveryId: del1.id,
-                submittedByUserId: schoolSubmitter.id,
-                title,
-                description: "Dynamic auth test",
-              },
+            const code = await iqfRepo.allocateComplaintCode(tx);
+            return iqfRepo.create(tx, {
+              code,
+              title,
+              description: "Dynamic auth test",
+              senderUserId: schoolSubmitter.id,
+              senderRoleCode: "SCHOOL_KITCHEN_STAFF",
+              senderSchoolId: sch1.id,
+              deliveryId: del1.id,
+              ingredientLotId: null,
             });
           });
         const fb1 = await mkFb("Dynamic feedback 1");
@@ -10915,10 +10952,9 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           assert.equal(
             (
               await callApi(
-                `/ingredient-quality-feedback/${fb1.id}/response`,
+                `/ingredient-quality-feedback/${fb1.id}/accept`,
                 cookieSchool,
                 "POST",
-                { supplierResponse: "School forbidden" },
               )
             ).status,
             403,
@@ -10926,10 +10962,9 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           assert.equal(
             (
               await callApi(
-                `/ingredient-quality-feedback/${fb1.id}/response`,
+                `/ingredient-quality-feedback/${fb1.id}/accept`,
                 cookieSystem,
                 "POST",
-                { supplierResponse: "System forbidden" },
               )
             ).status,
             403,
@@ -10937,10 +10972,9 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           assert.equal(
             (
               await callApi(
-                `/ingredient-quality-feedback/${fb1.id}/response`,
+                `/ingredient-quality-feedback/${fb1.id}/accept`,
                 cookieOfficer,
                 "POST",
-                { supplierResponse: "Authority forbidden" },
               )
             ).status,
             403,
@@ -10948,10 +10982,9 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           assert.equal(
             (
               await callApi(
-                `/ingredient-quality-feedback/${fb1.id}/response`,
+                `/ingredient-quality-feedback/${fb1.id}/accept`,
                 cookieSup2Staff,
                 "POST",
-                { supplierResponse: "Foreign supplier 404" },
               )
             ).status,
             404,
@@ -10979,10 +11012,9 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           assert.equal(
             (
               await callApi(
-                `/ingredient-quality-feedback/${fb1.id}/response`,
+                `/ingredient-quality-feedback/${fb1.id}/accept`,
                 cookieStaff1,
                 "POST",
-                { supplierResponse: "Locked account" },
               )
             ).status,
             403,
@@ -11019,10 +11051,9 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           assert.equal(
             (
               await callApi(
-                `/ingredient-quality-feedback/${fb1.id}/response`,
+                `/ingredient-quality-feedback/${fb1.id}/accept`,
                 cookieStaff1,
                 "POST",
-                { supplierResponse: "Moved org cannot reply" },
               )
             ).status,
             404,
@@ -11064,11 +11095,10 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             "Content-Type": "application/json",
           };
           const forgedPost = await fetch(
-            `${base}/ingredient-quality-feedback/${fb1.id}/response`,
+            `${base}/ingredient-quality-feedback/${fb1.id}/accept`,
             {
               method: "POST",
               headers: forgedHeader,
-              body: JSON.stringify({ supplierResponse: "Forged token" }),
             },
           );
           assert.equal(forgedPost.status, 403);
@@ -11103,10 +11133,9 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           assert.equal(
             (
               await callApi(
-                `/ingredient-quality-feedback/${fb1.id}/response`,
+                `/ingredient-quality-feedback/${fb1.id}/accept`,
                 cookieStaff1,
                 "POST",
-                { supplierResponse: "Respond denied" },
               )
             ).status,
             403,
@@ -11145,10 +11174,9 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           assert.equal(
             (
               await callApi(
-                `/ingredient-quality-feedback/${fb1.id}/response`,
+                `/ingredient-quality-feedback/${fb1.id}/accept`,
                 cookieStaff1,
                 "POST",
-                { supplierResponse: "Respond only without view_details" },
               )
             ).status,
             403,
@@ -11168,10 +11196,9 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           assert.equal(
             (
               await callApi(
-                `/ingredient-quality-feedback/${fb1.id}/response`,
+                `/ingredient-quality-feedback/${fb1.id}/accept`,
                 cookieStaff1,
                 "POST",
-                { supplierResponse: "Inactive respond permission" },
               )
             ).status,
             403,
@@ -11202,10 +11229,9 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           assert.equal(
             (
               await callApi(
-                `/ingredient-quality-feedback/${fb1.id}/response`,
+                `/ingredient-quality-feedback/${fb1.id}/accept`,
                 cookieStaff1,
                 "POST",
-                { supplierResponse: "Inactive view_details permission" },
               )
             ).status,
             403,
@@ -11222,10 +11248,9 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           assert.equal(
             (
               await callApi(
-                `/ingredient-quality-feedback/${fb1.id}/response`,
+                `/ingredient-quality-feedback/${fb1.id}/accept`,
                 cookieStaff1,
                 "POST",
-                { supplierResponse: "Lost role grant" },
               )
             ).status,
             403,

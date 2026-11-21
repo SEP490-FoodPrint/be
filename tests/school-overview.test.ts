@@ -55,9 +55,13 @@ function fixture() {
       findMany: read("menus", [{ id: "menu", status: "PENDING_APPROVAL" }]),
     },
     mealComplaint: {
-      groupBy: read("complaints", [
-        { status: "SUBMITTED", complaintType: "OTHER", _count: { _all: 3 } },
-      ]),
+      findMany: read(
+        "complaints",
+        Array.from({ length: 3 }, () => ({
+          complaintType: "OTHER",
+          Complaint: { status: "NEW" },
+        })),
+      ),
     },
     schoolSupplierRelationship: {
       groupBy: read("suppliers", [{ status: "ACTIVE", _count: { _all: 2 } }]),
@@ -76,13 +80,11 @@ void test("overview scopes every data source to the authenticated school and ser
     if (query.table === "school")
       assert.deepEqual(query.where, { id: "own-school" });
     else if (query.table === "complaints")
-      assert.deepEqual(query.where, {
-        DailyMealPortion: { Class: { schoolId: "own-school" } },
-      });
+      assert.deepEqual(query.where, { schoolId: "own-school" });
     else assert.deepEqual(query.where, { schoolId: "own-school" });
   }
   assert.deepEqual(result.complaints, [
-    { status: "SUBMITTED", type: "OTHER", count: 3 },
+    { status: "NEW", type: "OTHER", count: 3 },
   ]);
   assert.deepEqual(result.suppliers, [{ status: "ACTIVE", count: 2 }]);
 });
