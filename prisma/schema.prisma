@@ -111,8 +111,13 @@ model CommuneFoodSafetyUnit {
   foodSafetyReportForwardings FoodSafetyReportForwarding[] @relation("food_safety_report_forwardings_recipient_commune_food_safety_unit_id__commune_food_safety_units")
   userPermissionDenials       UserPermissionDenial[]       @relation("user_permission_denials_commune_food_safety_unit_id__commune_food_safety_units")
   complaintsAsSender          Complaint[]                  @relation("complaints_sender_commune_food_safety_unit_id__units")
+  /// Phường/xã phụ trách (Location level = 2, kiểm tra ở service); mỗi phường/xã tối đa một đơn vị.
+  locationId                  String?                      @map("location_id") @db.Uuid
+  location                    Location?                    @relation(fields: [locationId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "commune_food_safety_units_location_id_fkey")
+  authorityComplaints         AuthorityComplaint[]         @relation("authority_complaints_recipient_unit")
 
   @@unique([code])
+  @@unique([locationId], map: "uq_commune_food_safety_units_location_id", where: raw("(location_id IS NOT NULL)"))
   @@map("commune_food_safety_units")
   @@schema("foodprint")
 }
@@ -868,6 +873,8 @@ model MealComplaint {
   Complaint          Complaint         @relation(fields: [id, kind], references: [id, kind], onDelete: Restrict, onUpdate: NoAction, map: "meal_complaints_id_kind_fkey")
   School             School            @relation("meal_complaints_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   DailyMealPortion   DailyMealPortion  @relation(fields: [dailyMealPortionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  /// C05 sinh từ đơn này khi phụ huynh "Chuyển ATTP" (0..1).
+  authorityEscalation AuthorityComplaint? @relation("authority_complaints_escalated_from")
 
   @@unique([id, kind], map: "uq_meal_complaints_id_kind")
   @@index([dailyMealPortionId], map: "idx_meal_complaints_daily_meal_portion")
@@ -885,6 +892,25 @@ model SystemComplaint {
 
   @@unique([id, kind], map: "uq_system_complaints_id_kind")
   @@map("system_complaints")
+  @@schema("foodprint")
+}
+
+/// C05: khiếu nại leo thang lên ATTP (specs/authority-complaints); bảng con, FK tổ hợp về bảng cha.
+model AuthorityComplaint {
+  id                               String                @id @db.Uuid
+  kind                             ComplaintKind         @default(AUTHORITY)
+  schoolId                         String                @map("school_id") @db.Uuid
+  recipientCommuneFoodSafetyUnitId String                @map("recipient_commune_food_safety_unit_id") @db.Uuid
+  escalatedFromMealComplaintId     String                @unique(map: "uq_authority_complaints_escalated_from") @map("escalated_from_meal_complaint_id") @db.Uuid
+  Complaint                        Complaint             @relation(fields: [id, kind], references: [id, kind], onDelete: Restrict, onUpdate: NoAction, map: "authority_complaints_id_kind_fkey")
+  School                           School                @relation("authority_complaints_school", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "authority_complaints_school_id_fkey")
+  RecipientUnit                    CommuneFoodSafetyUnit @relation("authority_complaints_recipient_unit", fields: [recipientCommuneFoodSafetyUnitId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "authority_complaints_recipient_unit_fkey")
+  EscalatedFrom                    MealComplaint         @relation("authority_complaints_escalated_from", fields: [escalatedFromMealComplaintId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "authority_complaints_escalated_from_fkey")
+
+  @@unique([id, kind], map: "uq_authority_complaints_id_kind")
+  @@index([schoolId], map: "idx_authority_complaints_school")
+  @@index([recipientCommuneFoodSafetyUnitId], map: "idx_authority_complaints_recipient")
+  @@map("authority_complaints")
   @@schema("foodprint")
 }
 
@@ -918,6 +944,7 @@ model Complaint {
   mealComplaint                 MealComplaint?
   ingredientQualityFeedback     IngredientQualityFeedback?
   systemComplaint               SystemComplaint?
+  authorityComplaint            AuthorityComplaint?
   comments                      ComplaintComment[]
   statusHistories               ComplaintStatusHistory[]
 
@@ -1256,6 +1283,7 @@ model School {
   sampleStorageUnits          SampleStorageUnit[]          @relation("sample_storage_units_school_id__schools")
   complaintsAsSender          Complaint[]                  @relation("complaints_sender_school_id__schools")
   mealComplaints              MealComplaint[]              @relation("meal_complaints_school_id__schools")
+  authorityComplaints         AuthorityComplaint[]         @relation("authority_complaints_school")
 
   blockchainProofs BlockchainProof[] @relation("blockchain_proofs_school_id__schools")
 
@@ -1604,6 +1632,7 @@ model Location {
   schools      School[]
   suppliers    Supplier[]
   serviceAreas SupplierServiceArea[]
+  communeFoodSafetyUnits CommuneFoodSafetyUnit[]
 
   @@index([parentId], map: "idx_locations_parent_id")
   @@index([level], map: "idx_locations_level")

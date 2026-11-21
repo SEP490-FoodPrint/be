@@ -23,6 +23,8 @@ export interface ComplaintResponseDTO extends TicketFieldsDTO {
     mealDate: string;
     mealType: string;
   };
+  /** C05 sinh từ đơn này sau khi phụ huynh "Chuyển ATTP" (specs/authority-complaints). */
+  escalatedAuthorityComplaint: { id: string; code: string } | null;
 }
 export interface ComplaintDetailResponseDTO extends ComplaintResponseDTO {
   comments: TicketCommentDTO[];

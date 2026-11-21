@@ -40,6 +40,7 @@ const suffixOf = (code: string) => Number(code.slice(-5));
 
 void test("danh mục chỉ gồm chữ viết tắt 2 chữ in hoa, không trùng mã cũ", () => {
   assert.deepEqual(Object.keys(BUSINESS_CODE_TYPES).sort(), [
+    "AC",
     "CP",
     "DE",
     "IC",

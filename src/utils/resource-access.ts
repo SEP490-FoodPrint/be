@@ -106,6 +106,7 @@ export const RESOURCE_PERMISSIONS = {
   ],
   reporting: ["food_safety_report.view"],
   "system-complaint": ["system_complaint.view", "system_complaint.submit"],
+  "authority-complaint": ["authority_complaint.view"],
   "food-analysis": ["food_analysis_result.view"],
   "school-alert": ["school_alert.view"],
   "menu-review": ["menu.view", "menu.review", "menu.approve"],
@@ -268,6 +269,34 @@ export const listScopes = {
     }
     assertPermission(p, "system_complaint.submit");
     return { kind: "SYSTEM", senderUserId: p.id };
+  },
+  /**
+   * C05 (specs/authority-complaints FR-005): ATTP xem đơn gửi đơn vị mình; BGH xem đơn của trường (chỉ đọc);
+   * vai trò trường khác (phụ huynh) chỉ xem đơn mình gửi trong trường hiện tại.
+   */
+  "authority-complaint": (p: AuthPrincipal): Prisma.ComplaintWhereInput => {
+    assertPermission(p, ...RESOURCE_PERMISSIONS["authority-complaint"]);
+    if (p.orgType === "AUTHORITY")
+      return {
+        kind: "AUTHORITY",
+        authorityComplaint: {
+          is: { recipientCommuneFoodSafetyUnitId: authority(p) },
+        },
+      };
+    if (p.orgType === "SCHOOL" && p.role === ROLES.SCHOOL_ADMINISTRATION)
+      throw new HttpError(403, "Vai trò không được phép xem khiếu nại");
+    if (p.orgType === "SCHOOL" && p.role === ROLES.SCHOOL_MANAGEMENT_BOARD)
+      return {
+        kind: "AUTHORITY",
+        authorityComplaint: { is: { schoolId: school(p) } },
+      };
+    if (p.orgType === "SCHOOL")
+      return {
+        kind: "AUTHORITY",
+        authorityComplaint: { is: { schoolId: school(p) } },
+        senderUserId: p.id,
+      };
+    throw new HttpError(403, "Vai trò không được phép xem khiếu nại");
   },
   inspection: (p: AuthPrincipal): Prisma.FoodSafetyIncidentWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["inspection"]);

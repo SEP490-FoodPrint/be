@@ -18,6 +18,9 @@ const mealSelect = {
       MealAllocation: { select: { id: true, status: true } },
     },
   },
+  authorityEscalation: {
+    select: { id: true, Complaint: { select: { code: true } } },
+  },
 } as const satisfies Prisma.MealComplaintSelect;
 
 export const complaintSelect = {
@@ -27,6 +30,7 @@ export const complaintSelect = {
   description: true,
   status: true,
   senderUserId: true,
+  senderRoleCode: true,
   lastResolvedAt: true,
   resolvedCount: true,
   closeReason: true,

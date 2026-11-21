@@ -1922,7 +1922,12 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       const resolved = await feedback.getOne(sent.id, parent);
       assert.equal(resolved.status, "RESOLVED");
       assert.equal(resolved.resolvedCount, 1);
-      assert.deepEqual(resolved.allowedActions, ["SATISFY", "REOPEN"]);
+      // Phụ huynh (C03) có thêm "Chuyển ATTP" (specs/authority-complaints).
+      assert.deepEqual(resolved.allowedActions, [
+        "SATISFY",
+        "REOPEN",
+        "ESCALATE",
+      ]);
       assert.deepEqual(
         resolved.comments.map((item) => [item.authorSide, item.commentType]),
         [
@@ -11493,6 +11498,353 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         ).length,
         1,
       );
+    },
+  );
+
+  await context.test(
+    "authority complaints (C05): System Admin maps ATTP unit to the ward, parent escalates a resolved C03 once, ATTP handles, BGH reads only",
+    async () => {
+      const route = "/api/authority-complaints";
+      const login = async (account: { id: string }) => {
+        const session = await authSessions.issue(account.id);
+        issued.set(account.id, session);
+        refreshTokens.push(session.refreshToken);
+        return account.id;
+      };
+      const data = (response: { body: unknown }) =>
+        record(record(response.body).data);
+      const province = await db.location.create({
+        data: {
+          code: `P-AC-${randomUUID()}`,
+          name: "Tỉnh AC",
+          type: "PROVINCE",
+          level: 1,
+        },
+      });
+      const ward = await db.location.create({
+        data: {
+          code: `W-AC-${randomUUID()}`,
+          name: "Phường AC",
+          type: "WARD",
+          level: 2,
+          parentId: province.id,
+        },
+      });
+      const school = await db.school.create({
+        data: { name: "Authority complaint school", locationId: ward.id },
+      });
+      const unmappedSchool = await db.school.create({
+        data: { name: "Unmapped school" },
+      });
+      const admin = await login(await user("SYSTEM_ADMIN"));
+      const parent = await login(
+        await user("PARENTS_COMMITTEE", { schoolId: school.id }),
+      );
+      const otherParent = await login(
+        await user("PARENTS_COMMITTEE", { schoolId: school.id }),
+      );
+      const unmappedParent = await login(
+        await user("PARENTS_COMMITTEE", { schoolId: unmappedSchool.id }),
+      );
+      const board = await login(
+        await user("SCHOOL_MANAGEMENT_BOARD", { schoolId: school.id }),
+      );
+      // Mỗi đơn vị ATTP chỉ có một cán bộ: dùng tài khoản fixture đã đăng nhập.
+      const officer = officerA.id;
+      const foreignOfficer = officerB.id;
+
+      // US4: gắn địa bàn — chỉ System Admin, chỉ cấp phường/xã, mỗi phường/xã một đơn vị.
+      const assign = (unitId: string, actor: string, locationId: string) =>
+        request(
+          `/api/commune-food-safety-units/${unitId}/location`,
+          actor,
+          "PUT",
+          { locationId },
+        );
+      assert.equal((await assign(unitA.id, officer, ward.id)).status, 403);
+      assert.equal((await assign(unitA.id, admin, province.id)).status, 400);
+      assert.equal((await assign(randomUUID(), admin, ward.id)).status, 404);
+      const assigned = await assign(unitA.id, admin, ward.id);
+      assert.equal(assigned.status, 200);
+      assert.deepEqual(record(data(assigned).location).id, ward.id);
+      assert.equal((await assign(unitA.id, admin, ward.id)).status, 200);
+      assert.equal((await assign(unitB.id, admin, ward.id)).status, 409);
+
+      // C03 của phụ huynh đã được BGH báo đã xử lý (dựng trực tiếp trong DB).
+      const classroom = await db.class.create({
+        data: { schoolId: school.id, name: "AC 1A" },
+      });
+      const portion = await db.dailyMealPortion.create({
+        data: {
+          classId: classroom.id,
+          confirmedByUserId: parent,
+          mealDate: new Date("2026-11-20T00:00:00.000Z"),
+          mealType: "LUNCH",
+          totalPortions: 30,
+        },
+      });
+      let sequence = 70000;
+      const mealComplaint = async (
+        sender: string,
+        senderRoleCode: string,
+        schoolId: string,
+        resolvedAt: Date | null,
+      ) => {
+        const created = await db.complaint.create({
+          data: {
+            kind: "MEAL",
+            code: `FP-MC-${++sequence}`,
+            title: "Khiếu nại suất ăn lớp AC 1A",
+            description: "Cơm bị sống, nhiều học sinh không ăn được.",
+            senderUserId: sender,
+            senderRoleCode,
+            senderSchoolId: schoolId,
+            status: resolvedAt ? "RESOLVED" : "IN_PROGRESS",
+            lastResolvedAt: resolvedAt,
+            resolvedCount: resolvedAt ? 1 : 0,
+            mealComplaint: {
+              create: {
+                schoolId,
+                dailyMealPortionId: portion.id,
+                complaintType: "MEAL_QUALITY",
+              },
+            },
+            comments: {
+              create: {
+                authorUserId: board,
+                authorRoleCode: "SCHOOL_MANAGEMENT_BOARD",
+                authorSide: "HANDLER",
+                commentType: "RESOLUTION",
+                content: "Đã nhắc bếp nấu kỹ hơn.",
+              },
+            },
+          },
+        });
+        return created.id;
+      };
+      const now = new Date();
+      const c03 = await mealComplaint(
+        parent,
+        "PARENTS_COMMITTEE",
+        school.id,
+        now,
+      );
+      const inProgress = await mealComplaint(
+        parent,
+        "PARENTS_COMMITTEE",
+        school.id,
+        null,
+      );
+      const expired = await mealComplaint(
+        parent,
+        "PARENTS_COMMITTEE",
+        school.id,
+        new Date(now.getTime() - 49 * 3600 * 1000),
+      );
+      const unmappedClass = await db.class.create({
+        data: { schoolId: unmappedSchool.id, name: "U 1A" },
+      });
+      const unmappedPortion = await db.dailyMealPortion.create({
+        data: {
+          classId: unmappedClass.id,
+          confirmedByUserId: unmappedParent,
+          mealDate: new Date("2026-11-20T00:00:00.000Z"),
+          mealType: "LUNCH",
+          totalPortions: 30,
+        },
+      });
+      const unmappedC03 = (
+        await db.complaint.create({
+          data: {
+            kind: "MEAL",
+            code: `FP-MC-${++sequence}`,
+            title: "Khiếu nại suất ăn",
+            description: "Thức ăn bị nguội.",
+            senderUserId: unmappedParent,
+            senderRoleCode: "PARENTS_COMMITTEE",
+            senderSchoolId: unmappedSchool.id,
+            status: "RESOLVED",
+            lastResolvedAt: now,
+            resolvedCount: 1,
+            mealComplaint: {
+              create: {
+                schoolId: unmappedSchool.id,
+                dailyMealPortionId: unmappedPortion.id,
+                complaintType: "OTHER",
+              },
+            },
+          },
+        })
+      ).id;
+
+      // C03 cho phụ huynh thấy nút Chuyển ATTP.
+      const c03Detail = await request(`/api/meal-complaints/${c03}`, parent);
+      assert.equal(c03Detail.status, 200);
+      assert.deepEqual(data(c03Detail).allowedActions, [
+        "SATISFY",
+        "REOPEN",
+        "ESCALATE",
+      ]);
+      assert.equal(data(c03Detail).escalatedAuthorityComplaint, null);
+
+      // Các điều kiện sai: không tạo C05, không đổi C03.
+      for (const [actor, body, status] of [
+        [parent, { mealComplaintId: inProgress }, 409],
+        [parent, { mealComplaintId: expired }, 409],
+        [otherParent, { mealComplaintId: c03 }, 404],
+        [board, { mealComplaintId: c03 }, 403],
+        [officer, { mealComplaintId: c03 }, 403],
+        [unmappedParent, { mealComplaintId: unmappedC03 }, 409],
+        [
+          parent,
+          { mealComplaintId: c03, recipientCommuneFoodSafetyUnitId: unitB.id },
+          400,
+        ],
+      ] as const) {
+        const response = await request(route, actor, "POST", body);
+        assert.equal(response.status, status, JSON.stringify(body));
+      }
+      assert.equal(await db.authorityComplaint.count(), 0);
+
+      // Hai lần chuyển đồng thời: đúng một thành công.
+      const race = await Promise.all(
+        [0, 1].map(() =>
+          request(route, parent, "POST", {
+            mealComplaintId: c03,
+            reason: "BGH chưa xử lý triệt để",
+          }),
+        ),
+      );
+      assert.deepEqual(race.map((r) => r.status).sort(), [201, 409]);
+      const createdResponse = race.find((r) => r.status === 201);
+      assert(createdResponse);
+      const c05 = data(createdResponse);
+      const c05Id = String(c05.id);
+      assert.match(String(c05.code), /^FP-AC-\d{5}$/);
+      assert.equal(c05.status, "NEW");
+      assert.equal(c05.displayStatus, "IN_PROGRESS");
+      assert.match(String(c05.title), /^Khiếu nại chuyển ATTP từ đơn FP-MC-/);
+      assert.equal(
+        c05.description,
+        "Cơm bị sống, nhiều học sinh không ăn được.\n\nLý do chuyển ATTP: BGH chưa xử lý triệt để",
+      );
+      assert.equal(record(c05.recipientUnit).id, unitA.id);
+      assert.equal(record(c05.escalatedFrom).id, c03);
+      const source = await db.complaint.findUniqueOrThrow({
+        where: { id: c03 },
+        include: { comments: true, statusHistories: true },
+      });
+      assert.equal(source.status, "CLOSED");
+      assert.equal(source.closeReason, "ESCALATED");
+      assert.deepEqual(source.comments.map((c) => c.commentType).sort(), [
+        "ESCALATION_NOTE",
+        "RESOLUTION",
+      ]);
+      assert.deepEqual(
+        source.statusHistories.map((h) => [
+          h.fromStatus,
+          h.toStatus,
+          h.closeReason,
+        ]),
+        [["RESOLVED", "CLOSED", "ESCALATED"]],
+      );
+      assert.deepEqual(
+        record(
+          data(await request(`/api/meal-complaints/${c03}`, parent))
+            .escalatedAuthorityComplaint,
+        ),
+        { id: c05Id, code: c05.code },
+      );
+
+      // Phạm vi đọc: ATTP đơn vị nhận, BGH trường, phụ huynh gửi; ATTP khác/phụ huynh khác không thấy.
+      const ids = (response: { body: unknown }) =>
+        rows(response.body).map((item) => item.id);
+      assert.deepEqual(ids(await request(route, officer)), [c05Id]);
+      assert.deepEqual(ids(await request(route, board)), [c05Id]);
+      assert.deepEqual(ids(await request(route, parent)), [c05Id]);
+      assert.deepEqual(ids(await request(route, foreignOfficer)), []);
+      assert.deepEqual(ids(await request(route, otherParent)), []);
+      assert.equal(
+        (await request(`${route}/${c05Id}`, foreignOfficer)).status,
+        404,
+      );
+      assert.equal((await request(route, admin)).status, 403);
+      const officerView = await request(`${route}/${c05Id}`, officer);
+      assert.equal(officerView.status, 200);
+      assert.deepEqual(data(officerView).allowedActions, ["ACCEPT"]);
+      const sourceView = record(data(officerView).escalatedFrom);
+      assert.equal(
+        sourceView.description,
+        "Cơm bị sống, nhiều học sinh không ăn được.",
+      );
+      assert.deepEqual(
+        (sourceView.comments as Record<string, unknown>[]).map(
+          (c) => c.commentType,
+        ),
+        ["RESOLUTION", "ESCALATION_NOTE"],
+      );
+
+      // BGH chỉ xem: mọi thao tác ghi bị từ chối.
+      for (const [path, body] of [
+        ["accept", {}],
+        ["comments", { content: "BGH bình luận" }],
+        ["resolve", { content: "BGH xử lý" }],
+        ["satisfy", {}],
+      ] as const)
+        assert.equal(
+          (await request(`${route}/${c05Id}/${path}`, board, "POST", body))
+            .status,
+          403,
+          path,
+        );
+
+      // ATTP tiếp nhận, trao đổi, đã xử lý; phụ huynh yêu cầu xử lý lại rồi hài lòng.
+      assert.equal(
+        (await request(`${route}/${c05Id}/accept`, officer, "POST", {})).status,
+        200,
+      );
+      assert.equal(
+        (
+          await request(`${route}/${c05Id}/comments`, parent, "POST", {
+            content: "Mong ATTP kiểm tra sớm.",
+          })
+        ).status,
+        201,
+      );
+      const resolve = (content: string) =>
+        request(`${route}/${c05Id}/resolve`, officer, "POST", { content });
+      assert.equal(
+        (await resolve("Đã kiểm tra bếp, yêu cầu khắc phục.")).status,
+        200,
+      );
+      const reopened = await request(
+        `${route}/${c05Id}/reopen`,
+        parent,
+        "POST",
+        { reason: "Vẫn chưa ổn" },
+      );
+      assert.equal(reopened.status, 200);
+      assert.equal(data(reopened).status, "REOPENED");
+      assert.equal(
+        (await request(`${route}/${c05Id}/accept`, officer, "POST", {})).status,
+        200,
+      );
+      assert.equal(
+        (await resolve("Đã tái kiểm tra, bếp đã khắc phục.")).status,
+        200,
+      );
+      const satisfied = await request(
+        `${route}/${c05Id}/satisfy`,
+        parent,
+        "POST",
+        {},
+      );
+      assert.equal(satisfied.status, 200);
+      assert.equal(data(satisfied).closeReason, "SATISFIED");
+      assert.equal(data(satisfied).resolvedCount, 2);
+      const boardView = await request(`${route}/${c05Id}`, board);
+      assert.deepEqual(data(boardView).allowedActions, []);
+      assert.equal((data(boardView).comments as unknown[]).length, 4);
     },
   );
 });

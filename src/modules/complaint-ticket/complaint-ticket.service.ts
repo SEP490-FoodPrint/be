@@ -4,6 +4,7 @@ import {
   feedbackDeadline,
   hasNewMessage,
   toTicketStatus,
+  type TicketActionOptions,
   type TicketViewer,
 } from "./complaint-ticket.lifecycle";
 import type { TicketCommentRow } from "./complaint-ticket.repository";
@@ -27,6 +28,7 @@ export function mapTicketFields(
   row: TicketRowFields,
   latestCommentSide: "REQUESTER" | "HANDLER" | null,
   now: Date,
+  options: TicketActionOptions = {},
 ): TicketFieldsDTO {
   const status = toTicketStatus(row.status);
   const state = { status, lastResolvedAt: row.lastResolvedAt };
@@ -39,7 +41,7 @@ export function mapTicketFields(
     resolvedCount: row.resolvedCount,
     feedbackDeadlineAt: feedbackDeadline(state)?.toISOString() ?? null,
     closedAt: row.closedAt?.toISOString() ?? null,
-    allowedActions: allowedTicketActions(viewer, state, now),
+    allowedActions: allowedTicketActions(viewer, state, now, options),
   };
 }
 

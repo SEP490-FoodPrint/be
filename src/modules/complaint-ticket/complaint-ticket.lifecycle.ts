@@ -14,7 +14,12 @@ export const TICKET_STATUSES = [
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
 
 export type TicketAction =
-  "ACCEPT" | "COMMENT" | "RESOLVE" | "SATISFY" | "REOPEN";
+  "ACCEPT" | "COMMENT" | "RESOLVE" | "SATISFY" | "REOPEN" | "ESCALATE";
+
+/** Tùy chọn theo loại đơn: chỉ C03 (phụ huynh gửi) có "Chuyển ATTP" (specs/authority-complaints). */
+export interface TicketActionOptions {
+  canEscalate?: boolean;
+}
 
 /** Người xem đơn: người gửi, bên xử lý, hay chỉ được xem (ví dụ System Admin, BGH không có quyền xử lý). */
 export type TicketViewer = "REQUESTER" | "HANDLER" | "OBSERVER";
@@ -57,10 +62,14 @@ export function allowedTicketActions(
   viewer: TicketViewer,
   state: TicketState,
   now: Date,
+  options: TicketActionOptions = {},
 ): TicketAction[] {
   if (viewer === "REQUESTER") {
     if (REQUESTER_COMMENT_STATUSES.includes(state.status)) return ["COMMENT"];
-    if (isWithinFeedbackWindow(state, now)) return ["SATISFY", "REOPEN"];
+    if (isWithinFeedbackWindow(state, now))
+      return options.canEscalate
+        ? ["SATISFY", "REOPEN", "ESCALATE"]
+        : ["SATISFY", "REOPEN"];
     return [];
   }
   if (viewer === "HANDLER") {
@@ -78,6 +87,7 @@ const CONFLICT_MESSAGES: Record<TicketAction, string> = {
   SATISFY: "Chỉ đánh giá được trong 48 giờ sau khi đơn được báo đã xử lý",
   REOPEN:
     "Chỉ yêu cầu xử lý lại được trong 48 giờ sau khi đơn được báo đã xử lý",
+  ESCALATE: "Chỉ chuyển ATTP được trong 48 giờ sau khi đơn được báo đã xử lý",
 };
 
 export function ticketConflictMessage(action: TicketAction): string {
@@ -90,8 +100,9 @@ export function assertTicketAction(
   state: TicketState,
   action: TicketAction,
   now: Date,
+  options: TicketActionOptions = {},
 ): void {
-  if (!allowedTicketActions(viewer, state, now).includes(action))
+  if (!allowedTicketActions(viewer, state, now, options).includes(action))
     throw new HttpError(409, CONFLICT_MESSAGES[action]);
 }
 
@@ -101,6 +112,7 @@ export const TICKET_TRANSITIONS = {
   RESOLVE: { to: "RESOLVED" },
   SATISFY: { to: "CLOSED", closeReason: "SATISFIED" },
   REOPEN: { to: "REOPENED" },
+  ESCALATE: { to: "CLOSED", closeReason: "ESCALATED" },
 } as const satisfies Record<
   Exclude<TicketAction, "COMMENT">,
   { to: TicketStatus; closeReason?: string }
@@ -192,6 +204,11 @@ export function systemComplaintTitle(
   category: SystemComplaintCategory,
 ): string {
   return `Khiếu nại hệ thống - ${SYSTEM_COMPLAINT_CATEGORY_LABELS[category]}`;
+}
+
+/** Tiêu đề tự sinh cho C05 theo mã C03 gốc. */
+export function authorityComplaintTitle(mealComplaintCode: string): string {
+  return `Khiếu nại chuyển ATTP từ đơn ${mealComplaintCode}`;
 }
 
 function truncateTitle(value: string): string {
