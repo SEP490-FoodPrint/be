@@ -105,6 +105,7 @@ export const RESOURCE_PERMISSIONS = {
     "ingredient_quality_feedback.view_details",
   ],
   reporting: ["food_safety_report.view"],
+  "system-complaint": ["system_complaint.view", "system_complaint.submit"],
   "food-analysis": ["food_analysis_result.view"],
   "school-alert": ["school_alert.view"],
   "menu-review": ["menu.view", "menu.review", "menu.approve"],
@@ -255,6 +256,18 @@ export const listScopes = {
         senderUserId: p.id,
       };
     throw new HttpError(403, "Vai trò không được phép xem khiếu nại");
+  },
+  /** Khiếu nại gửi System Admin (kind SYSTEM): admin xem toàn bộ, người gửi chỉ xem đơn của mình. */
+  "system-complaint": (p: AuthPrincipal): Prisma.ComplaintWhereInput => {
+    assertPermission(p, ...RESOURCE_PERMISSIONS["system-complaint"]);
+    if (p.orgType === "SYSTEM") {
+      if (p.role !== ROLES.SYSTEM_ADMIN)
+        throw new HttpError(403, "Vai trò không được phép xem khiếu nại");
+      assertPermission(p, "system_complaint.view");
+      return { kind: "SYSTEM" };
+    }
+    assertPermission(p, "system_complaint.submit");
+    return { kind: "SYSTEM", senderUserId: p.id };
   },
   inspection: (p: AuthPrincipal): Prisma.FoodSafetyIncidentWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["inspection"]);

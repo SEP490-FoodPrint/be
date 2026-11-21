@@ -165,6 +165,35 @@ export function ingredientFeedbackTitle(deliveryNo: string): string {
   );
 }
 
+/** Phân loại khiếu nại gửi System Admin (C06). */
+export const SYSTEM_COMPLAINT_CATEGORIES = [
+  "ACCOUNT",
+  "PERMISSION",
+  "DATA",
+  "TECHNICAL",
+  "OTHER",
+] as const;
+export type SystemComplaintCategory =
+  (typeof SYSTEM_COMPLAINT_CATEGORIES)[number];
+
+const SYSTEM_COMPLAINT_CATEGORY_LABELS: Record<
+  SystemComplaintCategory,
+  string
+> = {
+  ACCOUNT: "Tài khoản và đăng nhập",
+  PERMISSION: "Phân quyền",
+  DATA: "Dữ liệu sai lệch",
+  TECHNICAL: "Lỗi kỹ thuật",
+  OTHER: "Vấn đề khác",
+};
+
+/** Tiêu đề tự sinh cho khiếu nại gửi System Admin theo phân loại. */
+export function systemComplaintTitle(
+  category: SystemComplaintCategory,
+): string {
+  return `Khiếu nại hệ thống - ${SYSTEM_COMPLAINT_CATEGORY_LABELS[category]}`;
+}
+
 function truncateTitle(value: string): string {
   const chars = Array.from(value);
   return chars.length <= 255 ? value : chars.slice(0, 255).join("");
