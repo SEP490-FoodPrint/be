@@ -40,12 +40,16 @@ import type {
   CookingBatchPreviewDTO,
   CookingBatchListResponseDTO,
   CookingBatchStatsResponseDTO,
+  KitchenDayProgressMealDTO,
+  KitchenDayProgressResponseDTO,
+  KitchenProgressStatus,
   SchoolContextResponseDTO,
 } from "./kitchen.response.dto";
 import {
   kitchenRepository as repository,
   readFromDatabase,
   type KitchenListReader,
+  type KitchenDayProgressRow,
   type KitchenDetailRow,
   kitchenDetailSelect as detailSelect,
   kitchenSummarySelect as select,
@@ -67,6 +71,8 @@ export interface PlanningLot {
   availableQuantity: string;
   reservedQuantity: string;
   unit: string;
+  /** Cơ sở nguồn của lô; nấu riêng gộp các lô cùng nguyên liệu + cùng cơ sở nguồn vào một mẻ. */
+  sourceFacilityId?: string | null;
 }
 export interface BatchPlan {
   plannedPortions: number;
@@ -205,6 +211,20 @@ export function planCookingBatches(
   }
   if (mode !== "SEPARATE_BY_LOT")
     throw new HttpError(409, "Chưa cấu hình chế độ chế biến hợp lệ");
+  // Nấu riêng theo nguồn: các lô cùng nguyên liệu và cùng cơ sở nguồn (vd. hai đợt giao của
+  // cùng một nông trại) gộp chung một mẻ; lô không rõ cơ sở nguồn vẫn tách riêng từng lô.
+  const sourceGroup = (
+    lot: (typeof lots)[number],
+    ingredientEntryId: string,
+  ) =>
+    lot.sourceFacilityId
+      ? lots.filter(
+          (row) =>
+            row.ingredientEntryId === ingredientEntryId &&
+            row.sourceFacilityId === lot.sourceFacilityId &&
+            row.free.gt(0),
+        )
+      : [lot];
   const plans: BatchPlan[] = [];
   let remaining = portions;
   while (remaining > 0) {
@@ -214,29 +234,44 @@ export function planCookingBatches(
           row.ingredientEntryId === ingredient.ingredientEntryId &&
           row.free.gt(0),
       )) {
-        const perPortion = convertQuantity(
-          ingredient.perPortion,
-          ingredient.unit,
-          lot.unit,
+        const group = sourceGroup(lot, ingredient.ingredientEntryId);
+        const free = group.reduce(
+          (sum, row) =>
+            sum.add(convertQuantity(row.free, row.unit, ingredient.unit)),
+          new Decimal(0),
         );
-        if (lot.free.gte(perPortion)) return { lot, perPortion };
+        if (free.gte(ingredient.perPortion)) return { ingredient, group, free };
       }
       throw new HttpError(
         409,
-        "Không đủ nguyên liệu để nấu riêng từng lô theo số suất nguyên",
+        `Không đủ nguyên liệu để nấu riêng từng lô theo số suất nguyên${ingredient.ingredientName ? `: ${ingredient.ingredientName}` : ""}`,
       );
     });
     const count = Math.min(
       remaining,
-      ...selected.map(({ lot, perPortion }) =>
-        lot.free.div(perPortion).floor().toNumber(),
+      ...selected.map(({ ingredient, free }) =>
+        free.div(ingredient.perPortion).floor().toNumber(),
       ),
     );
     plans.push({
       plannedPortions: count,
-      lots: selected.map(({ lot, perPortion }) =>
-        take(lot, perPortion.mul(count)),
-      ),
+      lots: selected.flatMap(({ ingredient, group }) => {
+        let needed = ingredient.perPortion.mul(count);
+        const taken: BatchPlan["lots"] = [];
+        for (const lot of group) {
+          if (needed.isZero()) break;
+          const allocated = Decimal.min(
+            convertQuantity(lot.free, lot.unit, ingredient.unit),
+            needed,
+          );
+          if (allocated.isZero()) continue;
+          taken.push(
+            take(lot, convertQuantity(allocated, ingredient.unit, lot.unit)),
+          );
+          needed = needed.sub(allocated);
+        }
+        return taken;
+      }),
     });
     remaining -= count;
   }
@@ -376,9 +411,11 @@ export async function readPlanningStock(
       unit: true,
       availableQuantity: true,
       lotCode: true,
+      sourceFacilityId: true,
       DeliveryItem: {
         select: {
           ingredientEntryId: true,
+          sourceFacilityId: true,
           Ingredient: { select: { name: true } },
           IngredientEntry: {
             select: { Ingredient: { select: { name: true } } },
@@ -424,6 +461,8 @@ export async function readPlanningStock(
       ingredientEntryId,
       availableQuantity: lot.availableQuantity.toString(),
       reservedQuantity: reserved.get(lot.id)!.toString(),
+      sourceFacilityId:
+        lot.sourceFacilityId ?? lot.DeliveryItem.sourceFacilityId ?? null,
     };
   });
 }
@@ -612,11 +651,17 @@ export async function readMealPortionDemand(
   return { totalPortions, dishPortions, groups, groupTotals, daily };
 }
 
-/** Legacy batches keep their recorded plan; new standards may not drift from finalized demand. */
+/**
+ * Legacy batches keep their recorded plan; new standards may not drift from finalized demand.
+ * Lô chạy song song: khi `batchId` được truyền (xác nhận / nấu xong một lô), chỉ đối chiếu các món
+ * của chính lô đó; món khác của bữa chưa lập lô không chặn. Với mỗi món được đối chiếu, tổng suất
+ * của mọi lô của món đó phải bằng số suất các lớp đã chốt.
+ */
 export async function assertMealPortions(
   tx: StockTx,
   meal: Meal,
   schoolId: string,
+  batchId?: string,
 ) {
   if (!(await tx.menuDayDishIngredient.count({ where: mealKey(meal) }))) return;
   const day = await tx.menuDay.findUniqueOrThrow({
@@ -626,26 +671,41 @@ export async function assertMealPortions(
   const demand = await readMealPortionDemand(tx, meal, schoolId, day.menuDate);
   const portions = demand.totalPortions;
   const batches = await repository.findMealDishPlans(tx, mealKey(meal));
-  if (
-    portions <= 0 ||
-    batches.some((batch) => !batch.plannedPortions) ||
-    [
-      ...new Set([
-        ...batches.map((batch) => batch.dishId),
-        ...demand.dishPortions.keys(),
-      ]),
-    ].some(
-      (dishId) =>
-        batches
-          .filter((batch) => batch.dishId === dishId)
-          .reduce((sum, batch) => sum + (batch.plannedPortions ?? 0), 0) !==
-        (demand.dishPortions.get(dishId) ?? 0),
-    )
-  )
+  const scopeDishIds = batchId
+    ? (
+        await tx.cookingBatchDish.findMany({
+          where: { cookingBatchId: batchId },
+          select: { dishId: true },
+        })
+      ).map((row) => row.dishId)
+    : [
+        ...new Set([
+          ...batches.map((batch) => batch.dishId),
+          ...demand.dishPortions.keys(),
+        ]),
+      ];
+  const scoped = batches.filter((batch) => scopeDishIds.includes(batch.dishId));
+  if (portions <= 0 || scoped.some((batch) => !batch.plannedPortions))
     throw new HttpError(
       409,
       "Số suất đã thay đổi sau khi lập mẻ; cần đối chiếu, không tự đổi kế hoạch",
     );
+  for (const dishId of scopeDishIds) {
+    const planned = scoped
+      .filter((batch) => batch.dishId === dishId)
+      .reduce((sum, batch) => sum + (batch.plannedPortions ?? 0), 0);
+    const finalized = demand.dishPortions.get(dishId) ?? 0;
+    if (planned !== finalized) {
+      const dish = await tx.dish.findUnique({
+        where: { id: dishId },
+        select: { name: true },
+      });
+      throw new HttpError(
+        409,
+        `Số suất món "${dish?.name ?? "món ăn"}" trong lô (${planned}) khác số suất các lớp đã chốt (${finalized}); cần đối chiếu, không tự đổi kế hoạch`,
+      );
+    }
+  }
 }
 
 export async function reserveMealSeasonings(
@@ -678,7 +738,7 @@ export async function reserveMealSeasonings(
         s.ingredientEntry.handlingType !== "DRY_STOCK",
     )
   )
-    throw new HttpError(409, "Gia vị không thuộc kho khô của trường");
+    throw new HttpError(409, "Gia vị không thuộc đồ lưu kho của trường");
   const entryIds = standards.map((s) => s.ingredientEntryId);
   if (
     await tx.dailyAllergyPortion.findFirst({
@@ -843,7 +903,7 @@ export async function checkMealSeasoningStock(
     throw new HttpError(409, "Lô gia vị không còn hợp lệ trong kho trường");
   const reserved = await reservedQuantities(tx, lots);
   if (lots.some((lot) => lot.availableQuantity.lt(reserved.get(lot.id)!)))
-    throw new HttpError(409, "Tồn kho không đủ cho gia vị đã giữ");
+    throw new HttpError(409, "Tồn đồ lưu khong đủ cho gia vị đã giữ");
   return allocations;
 }
 
@@ -1109,6 +1169,77 @@ export async function readSchoolContext(
   };
 }
 
+/**
+ * Trạng thái của một món trong ngày: chưa lập lô → đang nấu (còn lô chưa nấu xong) →
+ * nấu xong nhưng còn lô chưa lưu mẫu → xong.
+ */
+function dishProgress(
+  batches: {
+    CookingBatch: { status: string };
+    retainedFoodSamples: unknown[];
+  }[],
+): KitchenProgressStatus {
+  if (!batches.length) return "NOT_STARTED";
+  if (batches.some((batch) => batch.CookingBatch.status !== "COMPLETED"))
+    return "IN_PROGRESS";
+  if (batches.some((batch) => !batch.retainedFoodSamples.length))
+    return "COOKED_NO_SAMPLE";
+  return "DONE";
+}
+
+/** Gom tiến độ chế biến theo thực đơn (khối) và bữa; bữa không có món thì bỏ qua. */
+export function summarizeDayProgress(
+  rows: KitchenDayProgressRow[],
+  date: string,
+): KitchenDayProgressResponseDTO {
+  return {
+    date,
+    menus: rows.map((row) => ({
+      menuId: row.WeeklyMenu.id,
+      menuDayId: row.id,
+      isSchoolWide: row.WeeklyMenu.isSchoolWide,
+      grades: row.WeeklyMenu.grades.map(({ grade }) => ({
+        id: grade.id,
+        name: grade.name,
+      })),
+      meals: (["LUNCH", "AFTERNOON"] as const).flatMap((mealType) => {
+        const dishes = row.menuDayDishes.filter(
+          (dish) => dish.mealType === mealType,
+        );
+        if (!dishes.length) return [];
+        const statuses = dishes.map((dish) =>
+          dishProgress(dish.cookingBatchDishes),
+        );
+        const count = (status: KitchenProgressStatus) =>
+          statuses.filter((item) => item === status).length;
+        const meal: KitchenDayProgressMealDTO = {
+          mealType,
+          status: "DONE",
+          dishCount: dishes.length,
+          notStarted: count("NOT_STARTED"),
+          cooking: count("IN_PROGRESS"),
+          cookedNoSample: count("COOKED_NO_SAMPLE"),
+          done: count("DONE"),
+          pendingDishes: dishes.flatMap((dish, index) =>
+            statuses[index] === "DONE"
+              ? []
+              : [{ name: dish.Dish.name, status: statuses[index] }],
+          ),
+        };
+        meal.status =
+          meal.notStarted === meal.dishCount
+            ? "NOT_STARTED"
+            : meal.notStarted || meal.cooking
+              ? "IN_PROGRESS"
+              : meal.cookedNoSample
+                ? "COOKED_NO_SAMPLE"
+                : "DONE";
+        return [meal];
+      }),
+    })),
+  };
+}
+
 /** All kitchen writes lock the trusted school first, then batch/lots by UUID. */
 /** Ngày hôm nay theo giờ Việt Nam (UTC+7), dạng YYYY-MM-DD. */
 function vietnamToday() {
@@ -1207,7 +1338,7 @@ export function createKitchenLifecycle(
       )
         throw new HttpError(
           409,
-          "Tồn kho không đủ cho các mẻ đang giữ nguyên liệu; cần đối chiếu",
+          "Tồn đồ lưu khong đủ cho các mẻ đang giữ nguyên liệu; cần đối chiếu",
         );
     }
     return new Map(lots.map((lot) => [lot.id, lot]));
@@ -1322,6 +1453,11 @@ export function createKitchenLifecycle(
             409,
             "Bữa đã có các chế độ chế biến khác nhau; cần đối chiếu",
           );
+        // Gia vị của bữa gộp thành gia vị dùng chung (giữ kho qua reserveMealSeasonings),
+        // nên bỏ các gia vị đó khỏi công thức từng món để không giữ kho hai lần.
+        const sharedSeasoningIds = new Set(
+          (menu.mealSeasonings ?? []).map((row) => row.ingredientEntryId),
+        );
         const recipes = menu.menuDayDishes
           .filter((dish) => !input.dishId || dish.dishId === input.dishId)
           .flatMap((dish) => {
@@ -1329,7 +1465,7 @@ export function createKitchenLifecycle(
               (demand.dishPortions.get(dish.dishId) ?? 0) -
               (planned.get(dish.dishId) ?? 0);
             if (!portions) return [];
-            const recipe = dish.ingredients.map((row) => {
+            const fullRecipe = dish.ingredients.map((row) => {
               const entries = row.ingredient.ingredientEntries;
               if (entries.length !== 1)
                 throw new HttpError(
@@ -1343,11 +1479,16 @@ export function createKitchenLifecycle(
                 unit: row.unit,
               };
             });
-            if (!recipe.length)
+            if (!fullRecipe.length)
               throw new HttpError(
                 409,
                 "Thiếu định mức chính thức của món trong thực đơn",
               );
+            const ownRecipe = fullRecipe.filter(
+              (row) => !sharedSeasoningIds.has(row.ingredientEntryId),
+            );
+            // Món chỉ gồm gia vị chung (hiếm): giữ nguyên công thức để vẫn lập được lô
+            const recipe = ownRecipe.length ? ownRecipe : fullRecipe;
             return [{ dishId: dish.dishId, portions, recipe }];
           });
         if (!recipes.length && preview)
@@ -1718,7 +1859,7 @@ export function createKitchenLifecycle(
         async (tx, actor, schoolId) => {
           const batch = await lockedBatch(tx, id, schoolId);
           if (batch.status !== "UNCONFIRMED") return dto(batch);
-          await assertMealPortions(tx, batch, schoolId);
+          await assertMealPortions(tx, batch, schoolId, batch.id);
           await checkReservedStock(tx, batch, schoolId);
           await checkMealSeasoningStock(tx, batch, schoolId);
           return dto(
@@ -1752,7 +1893,7 @@ export function createKitchenLifecycle(
           }
           if (batch.status !== "CONFIRMED")
             throw new HttpError(409, "Phải xác nhận nấu trước khi hoàn thành");
-          await assertMealPortions(tx, batch, schoolId);
+          await assertMealPortions(tx, batch, schoolId, batch.id);
           const stock = await checkReservedStock(tx, batch, schoolId);
           if (
             await tx.inventoryTransaction.count({
@@ -1850,6 +1991,21 @@ export function createKitchenService(
         principal,
         "cooking_batch.view",
       );
+    },
+    /** Tiến độ chế biến hôm nay của mọi khối (thực đơn) để cảnh báo khối/bữa chưa xong. */
+    async dayProgress(
+      principal: AuthPrincipal,
+    ): Promise<KitchenDayProgressResponseDTO> {
+      assertPermission(principal, "cooking_batch.view");
+      if (principal.orgType !== "SCHOOL" || !principal.schoolId)
+        throw new HttpError(403, "Cần phạm vi trường");
+      const date = today();
+      const rows = await repository.findDayProgress(
+        await connect(),
+        principal.schoolId,
+        new Date(date + "T00:00:00.000Z"),
+      );
+      return summarizeDayProgress(rows, date);
     },
     async list(
       query: KitchenFilters,

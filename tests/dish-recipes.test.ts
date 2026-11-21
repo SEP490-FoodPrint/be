@@ -121,6 +121,36 @@ void test("plan common and separate batches using ml recipes with lots measured 
   );
 });
 
+void test("separate mode groups lots from the same source facility into one batch", () => {
+  const recipe = [
+    { ingredientEntryId: "yogurt", quantityPerPortion: "1", unit: "hộp" },
+  ];
+  const lot = (id: string, quantity: string, sourceFacilityId: string) => ({
+    id,
+    ingredientEntryId: "yogurt",
+    availableQuantity: quantity,
+    reservedQuantity: "0",
+    unit: "hộp",
+    sourceFacilityId,
+  });
+  const plans = planCookingBatches(617, "SEPARATE_BY_LOT", recipe, [
+    lot("fruit-300", "300", "fruit"),
+    lot("farm-8", "8", "farm"),
+    lot("farm-309", "309", "farm"),
+  ]);
+  assert.deepEqual(
+    plans.map((batch) => batch.plannedPortions),
+    [300, 317],
+  );
+  assert.deepEqual(
+    plans[1].lots.map((row) => [row.ingredientLotId, row.quantityUsed]),
+    [
+      ["farm-8", "8.000"],
+      ["farm-309", "309.000"],
+    ],
+  );
+});
+
 void test("combined kitchen plan identifies the ingredient and shortage", () => {
   assert.throws(
     () =>

@@ -127,7 +127,7 @@ function assertRecipeEntry(
       "Nguyên liệu không còn hoạt động hoặc không thuộc trường",
     );
   if (role === "SEASONING" && row.handlingType !== "DRY_STOCK")
-    throw new HttpError(422, "Gia vị phải được chọn từ kho khô của trường");
+    throw new HttpError(422, "Gia vị phải được chọn từ đồ lưu kho của trường");
   if (
     role === "MAIN" &&
     (row.Ingredient.Supplier.status !== "ACTIVE" ||

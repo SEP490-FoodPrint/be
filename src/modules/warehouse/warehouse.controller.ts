@@ -8,6 +8,9 @@ export function createWarehouseController(
   service: WarehouseService = warehouseService,
 ) {
   return {
+    stockAlerts: asyncHandler(async (req, res) => {
+      sendSuccess(res, await service.stockAlerts(requirePrincipal(req)));
+    }),
     getAll: asyncHandler(async (req, res) => {
       const query = validateWarehouseListQuery(req.query);
       const result = await service.getAll(query, requirePrincipal(req));

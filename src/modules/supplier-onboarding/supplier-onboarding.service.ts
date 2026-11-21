@@ -1079,7 +1079,7 @@ export function createOrderIntakeService(
         if (mismatched)
           throw new HttpError(
             400,
-            `Nguyên liệu ${mismatched.Ingredient.name} không thuộc loại ${body.orderType === "DRY_STOCK" ? "Đồ khô" : "Đồ tươi"} của đơn`,
+            `Nguyên liệu ${mismatched.Ingredient.name} không thuộc loại ${body.orderType === "DRY_STOCK" ? "Đồ lưu kho" : "Đồ tươi"} của đơn`,
           );
         if (body.orderType === "DIRECT_USE" && body.batchNo === 2) {
           const notFinalized = await tx.class.findMany({

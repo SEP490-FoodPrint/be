@@ -11,6 +11,12 @@ export function createWarehouseRouter(
 ) {
   const router = Router();
   const controller = createWarehouseController(service);
+  router.get(
+    "/stock-alerts",
+    authHandler,
+    requireResource("warehouse"),
+    controller.stockAlerts,
+  );
   router.get("/", authHandler, requireResource("warehouse"), controller.getAll);
   return router;
 }

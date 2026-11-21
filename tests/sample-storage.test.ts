@@ -101,6 +101,22 @@ void test("validateSampleStorageWrite enforces required fields, code uppercase, 
   assert.equal(valid.currentTemperature, 4.2);
   assert.equal(valid.temperatureRange, "2°C - 8°C");
 
+  // Mỗi mẫu một ngăn: số ngăn bằng sức chứa thì hợp lệ, vượt sức chứa thì bị từ chối
+  const base = { code: "TU-02", name: "Tủ nhỏ", location: "Bếp" };
+  assert.equal(
+    validateSampleStorageWrite({ ...base, capacity: 5, compartmentCount: 5 })
+      .compartmentCount,
+    5,
+  );
+  assert.throws(
+    () =>
+      validateSampleStorageWrite({ ...base, capacity: 2, compartmentCount: 3 }),
+    (error: unknown) =>
+      JSON.stringify((error as { fields?: unknown }).fields).includes(
+        "Số ngăn phải nhỏ hơn hoặc bằng sức chứa",
+      ),
+  );
+
   // Invalid: missing name
   assert.throws(() => {
     validateSampleStorageWrite({
