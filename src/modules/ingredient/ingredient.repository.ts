@@ -44,6 +44,7 @@ export type LegacyIngredientRow = Prisma.IngredientGetPayload<{
   select: typeof ingredientLegacySelect;
 }>;
 interface Editable {
+  unitId?: string;
   name?: string;
   defaultUnit?: string;
   description?: string | null;

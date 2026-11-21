@@ -1,3 +1,4 @@
+import { resolveMeasurementUnit } from "../measurement-unit/measurement-unit.service";
 import { allergenMatches, avoidanceCovers } from "../../utils/allergy-match";
 import { kitchenRepository } from "../kitchen/kitchen.repository";
 import { Prisma, type PrismaClient } from "../../generated/prisma/client";
@@ -192,7 +193,34 @@ async function validateIngredientSources(
   input: Pick<MenuStandardsInput, "dishes" | "seasonings">,
 
   schoolId: string,
+  menuDayId?: string,
+  mealType?: "LUNCH" | "AFTERNOON",
 ) {
+  const previous = menuDayId
+    ? await repository.existingUnitNorms(tx, schoolId, menuDayId, mealType)
+    : { ingredients: [], seasonings: [] };
+  for (const dish of input.dishes)
+    for (const row of dish.ingredients)
+      await resolveMeasurementUnit(
+        tx,
+        row.unit,
+        previous.ingredients.some(
+          (old) =>
+            old.dishId === dish.dishId &&
+            old.ingredientId === row.ingredientId &&
+            old.unit === row.unit,
+        ),
+      );
+  for (const row of input.seasonings)
+    await resolveMeasurementUnit(
+      tx,
+      row.unit,
+      previous.seasonings.some(
+        (old) =>
+          old.ingredientEntryId === row.ingredientEntryId &&
+          old.unit === row.unit,
+      ),
+    );
   const ingredientIds = [
     ...new Set(
       input.dishes.flatMap((dish) =>
@@ -610,7 +638,13 @@ function createIngredientOperations(
               "Phải khai báo đúng các món đang hoạt động trong bữa",
             );
 
-          await validateIngredientSources(tx, input, schoolId);
+          await validateIngredientSources(
+            tx,
+            input,
+            schoolId,
+            meal.menuDayId,
+            meal.mealType,
+          );
 
           await repository.deleteMealIngredients(tx, meal);
 
@@ -1474,7 +1508,13 @@ function createMenuOperations(
 
         const norms = { dishes, seasonings: meal.seasonings };
 
-        await validateIngredientSources(tx, norms, schoolId);
+        await validateIngredientSources(
+          tx,
+          norms,
+          schoolId,
+          saved.id,
+          meal.mealType,
+        );
 
         const ingredients = dishes.flatMap((d) =>
           d.ingredients.map((i) => ({
@@ -1653,6 +1693,8 @@ function createMenuOperations(
           },
 
           schoolId,
+          day.id,
+          mealType,
         );
 
       for (const mealType of new Set(

@@ -11,8 +11,15 @@ import { bootstrapAuthorization } from "../utils/authorization-bootstrap";
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
-  if (args.some((arg) => arg !== "--azure"))
-    throw new Error("Chỉ hỗ trợ tùy chọn --azure");
+  if (
+    args.some(
+      (arg) => arg !== "--azure" && !arg.startsWith("--permission-code="),
+    )
+  )
+    throw new Error("Chỉ hỗ trợ --azure và --permission-code=<mã quyền>");
+  const permissionCodes = args
+    .filter((arg) => arg.startsWith("--permission-code="))
+    .map((arg) => arg.slice("--permission-code=".length));
   const url = requireDatabaseUrl();
   if (args.includes("--azure"))
     assertAzureMigrationTarget(url, process.env.AZURE_DATABASE_HOST);
@@ -24,7 +31,10 @@ async function main(): Promise<void> {
     );
     if (pendingDeploymentMigrations(await readMigrationFiles(), history).length)
       throw new Error("Cần áp dụng đủ migration trước khi bootstrap");
-    const result = await bootstrapAuthorization(db);
+    const result = await bootstrapAuthorization(
+      db,
+      permissionCodes.length ? { permissionCodes } : undefined,
+    );
     console.log(
       `Bootstrap hoàn tất: ${result.assignmentsCreated} liên kết role-permission được thêm. Không tạo tài khoản hoặc mock data.`,
     );

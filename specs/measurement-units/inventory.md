@@ -1,0 +1,1 @@
+DB cloud read-only inventory: cái107, chai10, g3723, hộp242, kg202, lít19, miếng28, ml1066, phần67, quả181, suất14. Normalize lít→l alias; giữ nguyên text các dòng cũ. Không có đơn vị ngoài danh sách trong lần kiểm kê này. Migration vẫn tự bảo toàn giá trị chưa biết khi triển khai.

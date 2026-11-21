@@ -1,3 +1,4 @@
+import { createMeasurementUnitRouter } from "../modules/measurement-unit/measurement-unit.routes";
 import { createSupplierStaffRouter } from "../modules/supplier-staff/supplier-staff.routes";
 import { createSupplierSchoolRouter } from "../modules/supplier-school/supplier-school.routes";
 import { createClassSchoolRouter } from "../modules/class/class.routes";
@@ -61,6 +62,7 @@ export function createApiRouter(
   apiServices?: ApiRouterServices,
 ) {
   const router = Router();
+  router.use("/measurement-units", createMeasurementUnitRouter(authHandler));
 
   // Health check endpoint
   router.get("/health", (req, res) => {

@@ -1,3 +1,4 @@
+import { resolveMeasurementUnit } from "../measurement-unit/measurement-unit.service";
 import type { AuthPrincipal } from "../../types/auth";
 import { Prisma as RecipePrisma } from "../../generated/prisma/client";
 import { withSchoolTransaction } from "../../utils/authorization";
@@ -476,6 +477,36 @@ export function createDishRecipeService(
               422,
               "Nguyên liệu phải thuộc kho trường và đang hoạt động",
             );
+          const previous = id
+            ? (await recipes.recipes(tx, schoolId, [id]))[0]
+            : undefined;
+          for (const line of input.lines) {
+            await resolveMeasurementUnit(
+              tx,
+              line.unit,
+              (previous?.dishIngredientEntries ?? []).some(
+                (old) =>
+                  old.ingredientEntryId === line.ingredientEntryId &&
+                  old.unit === line.unit,
+              ),
+            );
+          }
+          for (const profile of input.gradeRecipes ?? []) {
+            const existing =
+              previous?.gradeRecipes?.find(
+                (old) => old.gradeId === profile.gradeId,
+              )?.lines ?? [];
+            for (const line of profile.lines)
+              await resolveMeasurementUnit(
+                tx,
+                line.unit,
+                existing.some(
+                  (old) =>
+                    old.ingredientEntryId === line.ingredientEntryId &&
+                    old.unit === line.unit,
+                ),
+              );
+          }
           for (const line of allLines) {
             const entry = entries.find((e) => e.id === line.ingredientEntryId)!;
             assertRecipeEntry(entry, line.ingredientRole, schoolId);

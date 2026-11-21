@@ -1,3 +1,4 @@
+import { resolveMeasurementUnit } from "../measurement-unit/measurement-unit.service";
 import { cloudinaryUpload } from "../../utils/cloudinary-upload";
 import type { ImageAsset } from "../../utils/cloudinary-upload.types";
 import type { Prisma } from "../../generated/prisma/client";
@@ -228,7 +229,14 @@ export function createIngredientService(
     create(input: IngredientCreateRequest, principal: AuthPrincipal) {
       return write(principal, async (tx, access) => {
         await checkCategory(input.categoryId, tx);
-        return dto(await repo.create(access, input, tx));
+        const unit = await resolveMeasurementUnit(tx, input.defaultUnit);
+        return dto(
+          await repo.create(
+            access,
+            { ...input, unitId: unit.id, defaultUnit: unit.symbol },
+            tx,
+          ),
+        );
       });
     },
     update(
@@ -238,10 +246,26 @@ export function createIngredientService(
     ) {
       return write(principal, async (tx, access) => {
         await repo.lockTarget(access, params.ingredientId, tx);
-        found(await repo.find(access, params.ingredientId, tx));
+        const previous = found(
+          await repo.find(access, params.ingredientId, tx),
+        );
+        const value = input.defaultUnit ?? previous.defaultUnit;
+        const unit = await resolveMeasurementUnit(
+          tx,
+          value,
+          value.trim().normalize("NFC").toLowerCase() ===
+            previous.defaultUnit.trim().normalize("NFC").toLowerCase(),
+        );
         await checkCategory(input.categoryId, tx);
         return dto(
-          found(await repo.update(access, params.ingredientId, input, tx)),
+          found(
+            await repo.update(
+              access,
+              params.ingredientId,
+              { ...input, unitId: unit.id, defaultUnit: unit.symbol },
+              tx,
+            ),
+          ),
         );
       });
     },

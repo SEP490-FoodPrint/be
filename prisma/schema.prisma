@@ -734,6 +734,9 @@ model IngredientCategory {
 }
 
 model Ingredient {
+  unitId String? @map("unit_id") @db.Uuid
+  measurementUnit MeasurementUnit? @relation(fields: [unitId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  @@index([unitId])
   id                  String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   supplierId          String                  @map("supplier_id") @db.Uuid
   name                String                  @db.VarChar(255)
@@ -2221,5 +2224,29 @@ model MealAllocationMaterial {
   source CookingBatchLot @relation(fields: [cookingBatchId, dishId, ingredientLotId], references: [cookingBatchId, dishId, ingredientLotId], onDelete: Restrict, onUpdate: NoAction)
   @@id([mealAllocationId, cookingBatchId, dishId, ingredientLotId])
   @@map("meal_allocation_materials")
+  @@schema("foodprint")
+}
+
+model MeasurementUnit {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code String @unique @db.VarChar(30)
+  name String @db.VarChar(100)
+  symbol String @unique @db.VarChar(30)
+  group String @db.VarChar(10)
+  recommendedStep Decimal @map("recommended_step") @db.Decimal(14,3)
+  status EntityStatus @default(ACTIVE)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  aliases MeasurementUnitAlias[]
+  ingredients Ingredient[]
+  @@map("measurement_units")
+  @@schema("foodprint")
+}
+model MeasurementUnitAlias {
+  alias String @id @db.VarChar(30)
+  unitId String @map("unit_id") @db.Uuid
+  unit MeasurementUnit @relation(fields: [unitId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  @@index([unitId])
+  @@map("measurement_unit_aliases")
   @@schema("foodprint")
 }
