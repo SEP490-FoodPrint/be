@@ -6,7 +6,7 @@
 4. Mở rộng truy vấn `select` và response DTO cho danh sách đợt giao nhận `GET /api/deliveries` phục vụ màn hình Phiếu nhập hàng.
 5. Kiểm thử kết nối dữ liệu danh mục nguyên liệu và phiếu giao nhận với frontend.
 6. Cho phép quyền `supply_request.create` truy cập API tổng hợp suất ăn `GET /api/v1/daily-meal-portions`.
-7. Mở rộng truy vấn `select` cho API lô hàng tồn kho `GET /api/ingredient-lots` phục vụ màn hình Quản lý đồ lưu kho.
+7. Mở rộng truy vấn `select` cho API lô hàng tồn kho `GET /api/ingredient-lots` phục vụ màn hình Quản lý Kho đồ khô.
 8. Mở rộng thông tin liên hệ nhà cung cấp và ngày hẹn giao trong API `GET /api/deliveries` phục vụ màn hình Theo dõi đơn hàng & Vận chuyển.
 9. Bổ sung trường `note` trong `orderDraftSchema`, lưu thông tin lịch hẹn giao vào `tx.supplyRequest.create` trong `src/modules/supplier-onboarding/`.
 10. Bảo toàn projection 8 trường trong `listSelect` và mapper `getAll` tại `src/modules/supply-order/` để bảo đảm tương thích ngược cho danh sách đơn hàng legacy.

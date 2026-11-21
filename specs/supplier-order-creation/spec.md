@@ -43,7 +43,7 @@
 
 ### Amendment 2026-11-21 — Chia nguồn cung trên giao diện và giờ dự kiến đến
 
-- Giao diện đơn theo yêu cầu MUST cho một nguyên liệu chọn nhiều cơ sở nguồn cung, mỗi cơ sở nhập khối lượng giao riêng (mỗi phần là một lô `ingredient_lots` riêng, đồ lưu kho nhập NSX/HSD theo từng lô); hiển thị cột tổng khối lượng và khoá nút hoàn tất nguyên liệu khi tổng của bất kỳ nguyên liệu nào khác khối lượng trường yêu cầu. Backend đã đáp ứng (FR-032/FR-033), không đổi API tạo đơn. Màn tạo đơn thủ công giữ nguyên.
+- Giao diện đơn theo yêu cầu MUST cho một nguyên liệu chọn nhiều cơ sở nguồn cung, mỗi cơ sở nhập khối lượng giao riêng (mỗi phần là một lô `ingredient_lots` riêng, đồ khô nhập NSX/HSD theo từng lô); hiển thị cột tổng khối lượng và khoá nút hoàn tất nguyên liệu khi tổng của bất kỳ nguyên liệu nào khác khối lượng trường yêu cầu. Backend đã đáp ứng (FR-032/FR-033), không đổi API tạo đơn. Màn tạo đơn thủ công giữ nguyên.
 - Giờ dự kiến đến chỉ chọn giờ trong ngày hôm nay theo giờ Việt Nam (+07:00) và MUST sau thời điểm hiện tại. Backend từ chối lần bắt đầu giao đầu tiên có `expectedArrivalAt` nhỏ hơn hoặc bằng thời điểm hiện tại bằng HTTP 422; replay idempotent với đúng giờ và biển số đã lưu vẫn trả kết quả hiện có dù giờ đó đã qua. Thay thế câu "Không tự suy diễn thêm điều kiện thời gian phải ở tương lai" của FR-027.
 
 ## User Scenarios & Testing _(mandatory)_
