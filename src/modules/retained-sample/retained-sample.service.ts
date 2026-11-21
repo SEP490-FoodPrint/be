@@ -1,5 +1,6 @@
 ﻿import type { PrismaClient } from "../../generated/prisma/client";
 import type { AuthPrincipal } from "../../types/auth";
+import { queueAllocationDraft } from "../meal-allocation/material-allocation-runtime";
 import { recordPhotoUrl, type RecordPhoto } from "../../utils/record-photo";
 import {
   assertPermission,
@@ -195,6 +196,13 @@ export function createRetainedSampleService(
             storageLocation,
             dishId,
           });
+          if (batch.MenuDay)
+            await queueAllocationDraft(
+              tx,
+              schoolId,
+              batch.MenuDay.menuDate,
+              batch.mealType,
+            );
           proof = await proofs.prepareSampleStored(tx, sample.id, actor.id);
           return { ...mapSample(sample), created: true };
         },

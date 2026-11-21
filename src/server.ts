@@ -1,3 +1,4 @@
+import { startAllocationDraftRuntime } from "./modules/meal-allocation/material-allocation-runtime";
 import { createApp } from "./app";
 import { connectDB, prisma } from "./config/prisma";
 import {
@@ -16,12 +17,14 @@ let emailRuntime: Awaited<ReturnType<typeof startEmailRuntime>> | undefined;
 let autoCloseRuntime:
   ReturnType<typeof startComplaintAutoCloseRuntime> | undefined;
 let stopMenuReminders: (() => void) | undefined;
+let stopAllocationDrafts: (() => Promise<void>) | undefined;
 let closing: Promise<void> | undefined;
 
 const closeConnections = (): Promise<void> => {
   closing ??= (async () => {
     stopMenuReminders?.();
     const workerResults = await Promise.allSettled([
+      stopAllocationDrafts?.(),
       emailRuntime?.stop(),
       autoCloseRuntime?.stop(),
     ]);
@@ -51,6 +54,7 @@ const startServer = async () => {
   );
 
   emailRuntime = await startEmailRuntime(prisma);
+  stopAllocationDrafts = startAllocationDraftRuntime(prisma);
   autoCloseRuntime = startComplaintAutoCloseRuntime(prisma);
   // Nhắc tạo / hoàn thành thực đơn tuần tới qua email (Thứ Sáu → Chủ nhật, sau 8 giờ sáng)
   stopMenuReminders = startMenuReminderScheduler();

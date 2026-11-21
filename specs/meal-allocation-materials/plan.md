@@ -1,5 +1,9 @@
 # Kế hoạch
 
+TASK-07 lưu trạng thái tác vụ và nháp theo trường, ngày, bữa. Xử lý tác vụ GLPK ngoài luồng HTTP, kiểm tra revision khi ghi phương án và tách dữ liệu làm việc khỏi bản đã áp dụng. Cập nhật GET, API lưu và áp dụng, rồi nối trình sửa lớp vào các lô.
+
+TASK-06 dùng nhu cầu theo lớp và món xuyên suốt dự báo, áp dụng và xác nhận giao. Đối chiếu nguyên liệu từ lô và định mức đã duyệt. Dùng số suất theo món trong các trường số hiện có và giữ nguyên bố cục cùng số đã chốt. Thực hiện bằng các bảng hiện có.
+
 Thêm migration Decimal, snapshot công thức và chi tiết nguồn cấp. Bộ lập phương án độc lập dùng Decimal, solver mixed-integer và kiểm tra lại. GET hiện hữu tự lập phương án theo bữa chưa phân bổ; PUT hiện hữu lưu với revision/plan hash bao trùm nguồn và định lượng. FE hiển thị phương án do server tính.
 
 ## Constitution Check

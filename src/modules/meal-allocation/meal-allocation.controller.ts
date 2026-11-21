@@ -3,7 +3,11 @@ import {
   materialAllocationService,
   type MaterialAllocationService,
 } from "./material-allocation.service";
-import { validateMaterialApply } from "./meal-allocation.validation";
+import {
+  validateMaterialApply,
+  validateAllocationDraft,
+} from "./meal-allocation.validation";
+import { HttpError } from "../../utils/http-error";
 import { asyncHandler } from "../../utils/async-handler";
 import { requirePrincipal } from "../../utils/authorization";
 import { sendSuccess } from "../../utils/response";
@@ -28,7 +32,38 @@ export function createMealAllocationController(
         ),
       );
     }),
+    saveDraft: asyncHandler(async (req, res) => {
+      sendSuccess(
+        res,
+        await materials.writeDraft(
+          validateAllocationDraft(req.body),
+          requirePrincipal(req),
+          false,
+        ),
+      );
+    }),
+    retryDraft: asyncHandler(async (req, res) => {
+      const { mealType } = validateAllocationQuery(req.body);
+      if (!mealType) throw new HttpError(400, "Cần chọn bữa ăn");
+      sendSuccess(res, await materials.retry(mealType, requirePrincipal(req)));
+    }),
     apply: asyncHandler(async (req, res) => {
+      if (
+        req.body &&
+        typeof req.body === "object" &&
+        !("batches" in req.body) &&
+        !("planId" in req.body)
+      ) {
+        sendSuccess(
+          res,
+          await materials.writeDraft(
+            validateAllocationDraft(req.body),
+            requirePrincipal(req),
+            true,
+          ),
+        );
+        return;
+      }
       if (req.body && typeof req.body === "object" && "planId" in req.body) {
         const input = validateMaterialApply(req.body);
         sendSuccess(

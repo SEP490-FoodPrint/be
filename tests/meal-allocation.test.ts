@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readAllocationDay } from "../src/modules/meal-allocation/meal-allocation.repository";
+import { queueAllocationDraft } from "../src/modules/meal-allocation/material-allocation-runtime";
 import type { Prisma } from "../src/generated/prisma/client";
 import type { AllocationDay } from "../src/modules/meal-allocation/meal-allocation.repository";
 import {
@@ -62,6 +63,36 @@ function fixture(): AllocationDay {
     ),
   };
 }
+
+void test("draft is queued only when all batch dishes in the meal are sampled", async () => {
+  const day = fixture();
+  const dish = day.batches[0].dishes[0];
+  const samples = dish.retainedFoodSamples;
+  dish.retainedFoodSamples = [];
+  let queued = 0;
+  let current: { state: string } | null = null;
+  const tx = {
+    menuDay: { findMany: () => Promise.resolve(day.menus) },
+    cookingBatch: { findMany: () => Promise.resolve(day.batches) },
+    dailyMealPortion: { findMany: () => Promise.resolve(day.demands) },
+    mealAllocationDraft: {
+      findUnique: () => Promise.resolve(current),
+      createMany: () => {
+        queued += 1;
+        current = { state: "PENDING" };
+        return Promise.resolve({ count: 1 });
+      },
+    },
+  } as unknown as Prisma.TransactionClient;
+  const queue = () =>
+    queueAllocationDraft(tx, "school", new Date(date), "LUNCH");
+  await queue();
+  assert.equal(queued, 0);
+  dish.retainedFoodSamples = samples;
+  await queue();
+  await queue();
+  assert.equal(queued, 1);
+});
 
 function gradeFixture(): AllocationDay {
   // 2 khối, mỗi khối 1 thực đơn riêng, 1 món riêng, 1 lô riêng.
@@ -252,6 +283,69 @@ void test("không bù số suất giữa hai bữa và không đoán số suất
     ingredientEntryId: "allergen",
   });
   assert.equal(projectAllocationDay(withAllergy, date).status, "RECONCILE");
+});
+
+void test("chỉ trừ suất dị ứng ở món khớp và không trừ lặp", () => {
+  const data = fixture();
+  data.menus[0].menuDayDishes.forEach((dish) => {
+    dish.ingredients =
+      dish.dishId === "main"
+        ? [
+            { ingredientId: "bean", ingredient: { name: "Đậu xanh hạt" } },
+            { ingredientId: "shrimp", ingredient: { name: "Tôm nõn" } },
+          ]
+        : [{ ingredientId: "rice", ingredient: { name: "Gạo" } }];
+  });
+  data.demands[0].dailyAllergyPortions = [
+    ["bean", "Đậu xanh"],
+    ["shrimp", "Tôm"],
+  ].map(([ingredientId, name]) => ({
+    ingredientEntryId: ingredientId,
+    portionCount: 2,
+    ClassAllergy: { IngredientEntry: { ingredientId, Ingredient: { name } } },
+  }));
+  const view = projectAllocationDay(data, date);
+  assert.equal(view.status, "READY");
+  assert.equal(view.totals.finalized, 100);
+  assert.equal(
+    view.grades?.flatMap((g) => g.dishes).find((d) => d.dishId === "main")
+      ?.totalRequiredPortions,
+    98,
+  );
+  assert.equal(
+    view.grades?.flatMap((g) => g.dishes).find((d) => d.dishId === "rice")
+      ?.totalRequiredPortions,
+    100,
+  );
+  assert.throws(
+    () =>
+      prepareChanges(data, view, {
+        revision: view.revision,
+        batches: [
+          {
+            cookingBatchId: "b0-main",
+            dishId: "main",
+            entries: [{ dailyMealPortionId: "d0", allocatedPortions: 39 }],
+          },
+        ],
+      }),
+    /vượt nhu cầu món/,
+  );
+  data.demands.forEach((demand, index) => {
+    demand.MealAllocation = {
+      id: demand.id,
+      status: "ALLOCATED",
+      mealAllocationBatches: ["main", "rice"].map((dishId) => ({
+        cookingBatchId: `b${index ? 0 : 1}-${dishId}`,
+        dishId,
+        allocatedPortions:
+          demand.totalPortions - (index === 0 && dishId === "main" ? 2 : 0),
+      })),
+    };
+  });
+  const saved = projectAllocationDay(data, date);
+  assert.equal(saved.status, "READY");
+  assert.equal(saved.distribution.status, "READY");
 });
 
 void test("gộp dòng món thành suất, giữ khóa và chặn lịch sử thiếu món", () => {

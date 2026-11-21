@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { MaterialPlanResponseDTO } from "./material-allocation.response.dto";
 import { z } from "zod";
 import { readMealPortionDemand } from "../kitchen/kitchen.service";
@@ -11,12 +11,18 @@ import {
   withSchoolTransaction,
 } from "../../utils/authorization";
 import { HttpError } from "../../utils/http-error";
+import {
+  projectAllocationDay,
+  buildGradeAllocationGroups,
+} from "./meal-allocation.service";
 import type { AuthPrincipal } from "../../types/auth";
 import type {
   MaterialPlanRequest,
   MaterialApplyRequest,
+  AllocationDraftRequest,
 } from "./meal-allocation.request.dto";
 import {
+  readAllocationDay,
   readMaterialAllocationData,
   writeMaterialAllocation,
 } from "./meal-allocation.repository";
@@ -25,6 +31,7 @@ import {
   canonicalAmount,
   type MaterialDemand,
   type MaterialSource,
+  type MaterialEntry,
 } from "./material-allocation";
 
 const line = z.object({
@@ -44,7 +51,7 @@ const snapshot = z.object({
   fallback: z.array(line).min(1),
 });
 
-async function readValidatedMaterialData(
+export async function readValidatedMaterialData(
   tx: Prisma.TransactionClient,
   schoolId: string,
   date: Date,
@@ -62,10 +69,10 @@ async function readValidatedMaterialData(
   }
   return data;
 }
-const dateFormat = new Intl.DateTimeFormat("sv-SE", {
+export const allocationDateFormat = new Intl.DateTimeFormat("sv-SE", {
   timeZone: "Asia/Ho_Chi_Minh",
 });
-const hash = (value: unknown) =>
+export const allocationHash = (value: unknown) =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
 function scope(principal: AuthPrincipal) {
   if (principal.orgType !== "SCHOOL" || !principal.schoolId)
@@ -73,13 +80,152 @@ function scope(principal: AuthPrincipal) {
   return principal.schoolId;
 }
 
+export interface AllocationEditRow {
+  demandId: string;
+  dishId: string;
+  batchId: string;
+  allocatedPortions: string;
+}
+
+function allocateEditedRows(
+  demands: MaterialDemand[],
+  sources: MaterialSource[],
+  edit: {
+    rows: AllocationEditRow[];
+    previous: MaterialEntry[];
+    complete: boolean;
+  },
+  dishId: string,
+) {
+  const D = Prisma.Decimal;
+  const remaining = sources.map((s) => ({ ...s, quantity: new D(s.quantity) }));
+  const totals = new Map<string, Prisma.Decimal>();
+  const seen = new Set<string>();
+  const prepared = edit.rows
+    .filter((row) => row.dishId === dishId)
+    .map((row) => {
+      const demand = demands.find((item) => item.id === row.demandId);
+      const recipe = demand?.recipes.find(
+        (item) => item.batchId === row.batchId,
+      );
+      const key = row.demandId + ":" + row.batchId;
+      if (!demand || !recipe || seen.has(key))
+        throw new HttpError(409, "Lớp, món hoặc lô không hợp lệ hay bị trùng");
+      seen.add(key);
+      const portions = new D(row.allocatedPortions);
+      totals.set(
+        row.demandId,
+        (totals.get(row.demandId) ?? new D(0)).add(portions),
+      );
+      const previous = edit.previous.find(
+        (item) =>
+          item.dishId === dishId &&
+          item.demandId === row.demandId &&
+          item.batchId === row.batchId &&
+          portions.eq(item.allocatedPortions),
+      );
+      return { row, recipe, portions, previous };
+    });
+  for (const demand of demands) {
+    const total = totals.get(demand.id) ?? new D(0);
+    if (
+      total.gt(demand.portions) ||
+      (edit.complete && !total.eq(demand.portions))
+    )
+      throw new HttpError(
+        409,
+        "Số suất món chưa khớp nhu cầu của lớp " + demand.className,
+      );
+  }
+
+  // Reserve the original exact quantities before distributing changed rows.
+  const entries: MaterialEntry[] = [];
+  for (const { previous } of prepared) {
+    if (!previous) continue;
+    for (const material of previous.materials) {
+      const source = remaining.find(
+        (item) =>
+          item.batchId === previous.batchId &&
+          item.ingredientLotId === material.ingredientLotId &&
+          item.ingredientId === material.ingredientId,
+      );
+      const quantity = new D(material.quantity);
+      if (
+        !source ||
+        source.unit !== material.unit ||
+        source.quantity.lt(quantity)
+      )
+        throw new HttpError(409, "Lượng nguyên liệu của phương án đã thay đổi");
+      source.quantity = source.quantity.sub(quantity);
+    }
+    entries.push(previous);
+  }
+
+  for (const { row, recipe, portions, previous } of prepared) {
+    if (previous) continue;
+    if (!portions.gt(0)) throw new HttpError(409, "Số suất phải lớn hơn 0");
+    const materials: MaterialEntry["materials"] = [];
+    for (const line of recipe.lines) {
+      const standard = canonicalAmount(line.quantityPerPortion, line.unit);
+      let required = standard.quantity.mul(portions).toDecimalPlaces(9);
+      for (const source of remaining) {
+        if (
+          source.batchId !== row.batchId ||
+          source.ingredientId !== line.ingredientId ||
+          source.unit !== standard.unit ||
+          source.quantity.lte(0) ||
+          required.lte(0)
+        )
+          continue;
+        const used = D.min(source.quantity, required);
+        materials.push({
+          ingredientLotId: source.ingredientLotId,
+          ingredientId: source.ingredientId,
+          quantity: used.toFixed(9),
+          quantityPerPortion: standard.quantity.toFixed(9),
+          unit: standard.unit,
+        });
+        source.quantity = source.quantity.sub(used);
+        required = required.sub(used);
+      }
+      if (required.gt(0))
+        throw new HttpError(
+          409,
+          "Lô không đủ nguyên liệu cho số suất đã chỉnh",
+        );
+    }
+    if (!materials.length)
+      throw new HttpError(409, "Lượng cấp nhỏ hơn độ chính xác lưu trữ");
+    entries.push({
+      ...row,
+      allocatedPortions: portions.toFixed(2),
+      theoreticalPortions: portions.toFixed(12),
+      materials,
+    });
+  }
+
+  return {
+    entries,
+    optimal: false,
+    remaining: remaining.map((item) => ({
+      ...item,
+      quantity: item.quantity.toFixed(9),
+    })),
+  };
+}
+
 export function buildMaterialPlan(
   data: Awaited<ReturnType<typeof readMaterialAllocationData>>,
   date: string,
   input: MaterialPlanRequest,
+  edit?: {
+    rows: AllocationEditRow[];
+    previous: MaterialEntry[];
+    complete: boolean;
+  },
 ): MaterialPlanResponseDTO {
   const { day, batches, allocations } = data;
-  const revision = hash({ date, input, data });
+  const revision = allocationHash({ date, input, data });
   if (day.demands.some((d) => d.status !== "FINALIZED"))
     throw new HttpError(409, "Các lớp chưa chốt đủ suất ăn");
   if (
@@ -178,17 +324,23 @@ export function buildMaterialPlan(
             (g) => g.gradeId === demand.Class.gradeId,
           )),
     );
-    if (
-      menus.length !== 1 ||
-      !demand.Class.gradeId ||
-      (demand.dailyAllergyPortions.length > 0 && !menus[0].portionGroups.length)
-    )
+    if (menus.length !== 1 || !demand.Class.gradeId)
       throw new HttpError(
         409,
         "Nhu cầu cần đối soát thực đơn, khối hoặc nhóm dị ứng trước khi tự phân bổ",
       );
-    for (const dish of menus[0].menuDayDishes) {
-      const portions = materialDishDemand(menus[0], demand, dish.dishId);
+    const dishDemands = menus[0].menuDayDishes
+      .filter((dish) => dish.mealType === demand.mealType)
+      .map((dish) => ({
+        dish,
+        portions: materialDishDemand(menus[0], demand, dish.dishId, day),
+      }));
+    if (!dishDemands.some(({ portions }) => portions > 0))
+      throw new HttpError(
+        409,
+        "Lớp " + demand.Class.name + " không còn món có thể phục vụ.",
+      );
+    for (const { dish, portions } of dishDemands) {
       if (portions <= 0) continue;
       const recipes = batches
         .filter((b) => b.menuDayId === menus[0].id)
@@ -261,8 +413,22 @@ export function buildMaterialPlan(
   }
   if (!demands.length)
     throw new HttpError(409, "Không còn nhu cầu có thể chỉnh để phân bổ");
+  if (
+    edit?.rows.some(
+      (row) =>
+        !demands.some((d) => d.dishId === row.dishId && d.id === row.demandId),
+    )
+  )
+    throw new HttpError(409, "Món hoặc lớp không có nhu cầu phân bổ");
   const deadline = Date.now() + 10000;
   const results = [...new Set(demands.map((d) => d.dishId))].map((dishId) => {
+    if (edit)
+      return allocateEditedRows(
+        demands.filter((d) => d.dishId === dishId),
+        sources.filter((s) => s.dishId === dishId),
+        edit,
+        dishId,
+      );
     if (Date.now() >= deadline)
       throw new HttpError(
         409,
@@ -359,6 +525,7 @@ export function buildMaterialPlan(
             .filter(
               (r) =>
                 r.batchId === recipe.batchId &&
+                r.dishId === first.dishId &&
                 r.ingredientId === l.ingredientId,
             )
             .reduce((sum, r) => sum.add(r.quantity), new Prisma.Decimal(0));
@@ -380,15 +547,43 @@ export function buildMaterialPlan(
     date,
     mealType: input.mealType,
     revision,
-    planId: hash({ revision, entries }),
+    planId: allocationHash({ revision, entries }),
     algorithmVersion: 2,
     status: "READY",
     optimal: results.every((r) => r.optimal),
+    origin: edit ? "MANUAL" : "GLPK",
     entries: rows,
     totals,
     groups,
     remaining,
   };
+}
+
+export const draftRevision = () => randomBytes(32).toString("hex");
+
+function persistedEntries(
+  data: Awaited<ReturnType<typeof readMaterialAllocationData>>,
+): MaterialEntry[] {
+  return data.allocations
+    .filter((item) => item.status === "ALLOCATED")
+    .flatMap((item) =>
+      item.mealAllocationBatches
+        .filter((row) => row.allocationVersion === 2)
+        .map((row) => ({
+          demandId: item.dailyMealPortionId,
+          dishId: row.dishId,
+          batchId: row.cookingBatchId,
+          allocatedPortions: row.allocatedPortions.toString(),
+          theoreticalPortions: row.theoreticalPortions!.toString(),
+          materials: row.materials.map((line) => ({
+            ingredientLotId: line.ingredientLotId,
+            ingredientId: line.ingredientId,
+            quantity: line.quantity.toString(),
+            quantityPerPortion: line.quantityPerPortion.toString(),
+            unit: line.unit,
+          })),
+        })),
+    );
 }
 
 export function createMaterialAllocationService(
@@ -402,30 +597,93 @@ export function createMaterialAllocationService(
       service: import("./meal-allocation.service").MealAllocationService,
     ): Promise<import("./meal-allocation.response.dto").AllocationDayResponse> {
       const day = await service.getToday(principal, query);
-      const hasSaved = day.distribution.demands.some(
-        (demand) => demand.batches.length > 0,
-      );
-      if (!query.mealType || day.status !== "READY" || hasSaved) return day;
-      try {
-        const materialPlan = await this.preview(
-          { mealType: query.mealType, priorityClassIds: [] },
-          principal,
+      if (!query.mealType) {
+        if (!day.distribution.canConfirmDistribution) return day;
+        const schoolId = scope(principal);
+        return withReadTransaction(
+          async (tx) => ({
+            ...day,
+            hasUnappliedDrafts:
+              (await tx.mealAllocationDraft.count({
+                where: {
+                  schoolId,
+                  mealDate: new Date(day.date),
+                  state: "DRAFT",
+                },
+              })) > 0,
+          }),
+          connect,
         );
-        return { ...day, supportsMaterialAllocation: true, materialPlan };
-      } catch (error) {
-        if (!(error instanceof HttpError) || error.statusCode !== 409)
-          throw error;
+      }
+      if (day.status !== "READY") return day;
+      const mealType = query.mealType;
+      const schoolId = scope(principal);
+      return withReadTransaction(async (tx) => {
+        const mealDate = new Date(day.date);
+        const draft = await tx.mealAllocationDraft.findUnique({
+          where: {
+            schoolId_mealDate_mealType: { schoolId, mealDate, mealType },
+          },
+        });
+        const current = await readMaterialAllocationData(
+          tx,
+          schoolId,
+          mealDate,
+          mealType,
+        );
+        const locked = current.allocations.some(
+          (item) =>
+            item.status === "DISTRIBUTED" || item.status === "FINALIZED",
+        );
+        if (locked) return { ...day, materialEditing: false };
+        if (
+          !day.supportsMaterialAllocation &&
+          !draft &&
+          !current.batches.some((batch) => batch.cookingBatchLots.length)
+        )
+          return day;
+        const editorGrades = buildGradeAllocationGroups(current.day, true);
+        const revision = allocationHash({
+          date: day.date,
+          input: { mealType, priorityClassIds: [] },
+          data: current,
+        });
+        if (draft?.state === "DRAFT")
+          return {
+            ...day,
+            supportsMaterialAllocation: true,
+            materialEditing: true,
+            editorGrades,
+            materialPlan: draft.plan as unknown as MaterialPlanResponseDTO,
+            draftRevision: allocationHash({
+              draft: draft.revision,
+              source: revision,
+            }),
+            ...(draft.sourceRevision !== revision && {
+              materialDraftStale: true,
+            }),
+          };
+        if (current.allocations.some((item) => item.status === "ALLOCATED"))
+          return {
+            ...day,
+            materialEditing: true,
+            editorGrades,
+            draftRevision: revision,
+          };
         return {
           ...day,
           supportsMaterialAllocation: true,
-          materialPlanError: error.message,
+          materialPlanPending: draft?.state !== "FAILED",
+          ...(draft?.state === "FAILED" && {
+            materialPlanError: draft.error ?? "Không thể tạo đề xuất phân bổ",
+          }),
         };
-      }
+      }, connect);
     },
     preview(input: MaterialPlanRequest, principal: AuthPrincipal) {
       assertPermission(principal, "meal_allocation.view");
       const schoolId = scope(principal),
-        date = dateFormat.format(now());
+        date = allocationDateFormat.format(now());
       return withReadTransaction(
         async (tx) =>
           buildMaterialPlan(
@@ -441,6 +699,140 @@ export function createMaterialAllocationService(
         connect,
       );
     },
+    async writeDraft(
+      input: AllocationDraftRequest,
+      principal: AuthPrincipal,
+      apply: boolean,
+    ) {
+      assertPermission(principal, "meal_allocation.update");
+      scope(principal);
+      return withSchoolTransaction(
+        await connect(),
+        principal,
+        "meal_allocation.update",
+        async (tx, actor, schoolId) => {
+          const date = allocationDateFormat.format(now());
+          const mealDate = new Date(date);
+          const mealType = input.mealType;
+          const key = { schoolId, mealDate, mealType };
+          const where = { schoolId_mealDate_mealType: key };
+          const draft = await tx.mealAllocationDraft.findUnique({ where });
+          const data = await readValidatedMaterialData(
+            tx,
+            schoolId,
+            mealDate,
+            mealType,
+          );
+          if (
+            data.allocations.some(
+              (item) =>
+                item.status === "DISTRIBUTED" || item.status === "FINALIZED",
+            )
+          )
+            throw new HttpError(409, "Bữa đã xác nhận giao hoặc đã khóa");
+          const day = projectAllocationDay(data.day, date, mealType);
+          if (day.status !== "READY")
+            throw new HttpError(409, day.message, day.status);
+          const parameters = { mealType, priorityClassIds: [] };
+          const sourceRevision = allocationHash({
+            date,
+            input: parameters,
+            data,
+          });
+          const working = draft?.state === "DRAFT" ? draft : null;
+          const staleSource =
+            working !== null && working.sourceRevision !== sourceRevision;
+          const revisionToken = working
+            ? allocationHash({
+                draft: working.revision,
+                source: sourceRevision,
+              })
+            : sourceRevision;
+          if (input.revision !== revisionToken || (staleSource && !input.rows))
+            throw new HttpError(
+              409,
+              "Dữ liệu đã thay đổi. Tải lại để đối chiếu bản nháp.",
+              "ALLOCATION_STALE",
+            );
+          const previous = working
+            ? (working.plan as unknown as MaterialPlanResponseDTO).entries
+            : persistedEntries(data);
+          const changed = input.rows === undefined ? previous : input.rows;
+          if (!apply && !input.rows)
+            throw new HttpError(400, "Cần gửi các dòng phân bổ đã chỉnh");
+          const plan = buildMaterialPlan(data, date, parameters, {
+            rows: changed,
+            previous: staleSource ? [] : previous,
+            complete: apply,
+          });
+          if (apply) {
+            if (
+              plan.entries.some(
+                (entry) =>
+                  !data.allocations.some(
+                    (item) => item.dailyMealPortionId === entry.demandId,
+                  ),
+              )
+            )
+              assertPermission(actor, "meal_allocation.create");
+            await writeMaterialAllocation(
+              tx,
+              schoolId,
+              mealDate,
+              actor.id,
+              plan.entries,
+              data.allocations,
+            );
+            await tx.mealAllocationDraft.deleteMany({ where: key });
+            return { date, mealType, applied: true };
+          }
+          const revision = draftRevision();
+          const values = {
+            state: "DRAFT",
+            revision,
+            sourceRevision,
+            plan: JSON.parse(JSON.stringify(plan)) as Prisma.InputJsonValue,
+            error: null,
+          };
+          await tx.mealAllocationDraft.upsert({
+            where,
+            update: values,
+            create: { ...key, ...values },
+          });
+          return {
+            date,
+            mealType,
+            draftRevision: allocationHash({
+              draft: revision,
+              source: sourceRevision,
+            }),
+            materialPlan: plan,
+          };
+        },
+      );
+    },
+    async retry(mealType: "LUNCH" | "AFTERNOON", principal: AuthPrincipal) {
+      return withSchoolTransaction(
+        await connect(),
+        principal,
+        "meal_allocation.update",
+        async (tx, _actor, schoolId) => {
+          const date = allocationDateFormat.format(now());
+          const mealDate = new Date(date);
+          const view = projectAllocationDay(
+            await readAllocationDay(tx, schoolId, mealDate, mealType),
+            date,
+            mealType,
+          );
+          if (view.status !== "READY") throw new HttpError(409, view.message);
+          await tx.mealAllocationDraft.updateMany({
+            where: { schoolId, mealDate, mealType, state: "FAILED" },
+            data: { state: "PENDING", revision: draftRevision(), error: null },
+          });
+          return { mealType, queued: true };
+        },
+      );
+    },
     async apply(input: MaterialApplyRequest, principal: AuthPrincipal) {
       assertPermission(principal, "meal_allocation.update");
       scope(principal);
@@ -449,18 +841,40 @@ export function createMaterialAllocationService(
         principal,
         "meal_allocation.update",
         async (tx, actor, schoolId) => {
-          const date = dateFormat.format(now());
+          const date = allocationDateFormat.format(now());
           const data = await readValidatedMaterialData(
             tx,
             schoolId,
             new Date(date),
             input.mealType,
           );
-          const plan = buildMaterialPlan(data, date, {
-            mealType: input.mealType,
-            priorityClassIds: input.priorityClassIds,
+          const draft = await tx.mealAllocationDraft.findUnique({
+            where: {
+              schoolId_mealDate_mealType: {
+                schoolId,
+                mealDate: new Date(date),
+                mealType: input.mealType,
+              },
+            },
           });
-          if (plan.revision !== input.revision || plan.planId !== input.planId)
+          const plan = draft?.plan as unknown as MaterialPlanResponseDTO | null;
+          if (
+            !plan ||
+            input.priorityClassIds.length ||
+            draft?.state !== "DRAFT" ||
+            draft.sourceRevision !==
+              allocationHash({
+                date,
+                input: { mealType: input.mealType, priorityClassIds: [] },
+                data,
+              }) ||
+            data.allocations.some(
+              (item) =>
+                item.status === "DISTRIBUTED" || item.status === "FINALIZED",
+            ) ||
+            plan.revision !== input.revision ||
+            plan.planId !== input.planId
+          )
             throw new HttpError(
               409,
               "Phương án đã thay đổi; vui lòng tính lại",
@@ -483,6 +897,13 @@ export function createMaterialAllocationService(
             plan.entries,
             data.allocations,
           );
+          await tx.mealAllocationDraft.deleteMany({
+            where: {
+              schoolId,
+              mealDate: new Date(date),
+              mealType: input.mealType,
+            },
+          });
           return { date, mealType: input.mealType, applied: true };
         },
       );

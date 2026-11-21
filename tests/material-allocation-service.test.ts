@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { solveInWorker } from "../src/modules/meal-allocation/material-allocation-runtime";
 import { projectAllocationDay } from "../src/modules/meal-allocation/meal-allocation.service";
 import type { AllocationDay } from "../src/modules/meal-allocation/meal-allocation.repository";
 import { createMaterialAllocationService } from "../src/modules/meal-allocation/material-allocation.service";
@@ -126,6 +127,60 @@ void test("preview serves scope-local classes, source totals and stable plan ide
     buildMaterialPlan(data, "2026-11-20", input).revision,
   );
 });
+void test("draft worker solves off the API thread using serialized quantities", async () => {
+  const plan = await solveInWorker(fixture(), "2026-11-20", "LUNCH");
+  assert.equal(plan.groups[0].allocatedPortions, "50.00");
+  assert.equal(plan.groups[0].allocatedMassKg, "3.000000000");
+});
+
+void test("editable draft preserves exact GLPK quantities and rejects invalid apply", () => {
+  const data = fixture();
+  const input = { mealType: "LUNCH" as const, priorityClassIds: [] };
+  const date = "2026-11-20";
+  const proposed = buildMaterialPlan(data, date, input);
+  const first = proposed.entries[0];
+  const second = proposed.entries[1];
+  const edited = { ...second, allocatedPortions: "30.00" };
+  const saved = buildMaterialPlan(data, date, input, {
+    rows: [first, edited],
+    previous: proposed.entries,
+    complete: false,
+  });
+  assert.equal(saved.entries[0].theoreticalPortions, first.theoreticalPortions);
+  assert.equal(
+    saved.entries[0].materials[0].quantity,
+    first.materials[0].quantity,
+  );
+  assert.equal(saved.entries[1].materials[0].quantity, "1800.000000000");
+  assert.throws(
+    () =>
+      buildMaterialPlan(data, date, input, {
+        rows: [first, edited],
+        previous: saved.entries,
+        complete: true,
+      }),
+    /chưa khớp nhu cầu/,
+  );
+  assert.throws(
+    () =>
+      buildMaterialPlan(data, date, input, {
+        rows: [{ ...second, allocatedPortions: "34.00" }],
+        previous: proposed.entries,
+        complete: false,
+      }),
+    /không đủ nguyên liệu/,
+  );
+  assert.throws(
+    () =>
+      buildMaterialPlan(data, date, input, {
+        rows: [first, first],
+        previous: proposed.entries,
+        complete: false,
+      }),
+    /bị trùng/,
+  );
+});
+
 void test("legacy batch uses approved menu ingredients when snapshot is absent", () => {
   const data = fixture();
   for (const batch of data.batches) {

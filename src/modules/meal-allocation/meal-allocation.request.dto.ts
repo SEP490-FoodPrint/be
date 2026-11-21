@@ -14,6 +14,9 @@ export type ConfirmDistributionRequest = z.infer<
 export type MaterialPlanRequest = z.infer<
   typeof import("./meal-allocation.validation").materialPlanSchema
 >;
+export type AllocationDraftRequest = z.infer<
+  typeof import("./meal-allocation.validation").allocationDraftSchema
+>;
 export type MaterialApplyRequest = z.infer<
   typeof import("./meal-allocation.validation").materialApplySchema
 >;

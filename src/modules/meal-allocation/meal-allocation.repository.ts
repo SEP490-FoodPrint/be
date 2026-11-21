@@ -25,12 +25,30 @@ export async function readAllocationDay(
             },
           },
         },
+        mealSeasonings: {
+          where: { mealType },
+          select: {
+            mealType: true,
+            ingredientEntry: {
+              select: {
+                ingredientId: true,
+                Ingredient: { select: { name: true } },
+              },
+            },
+          },
+        },
         menuDayDishes: {
           where: { mealType },
           select: {
             dishId: true,
             mealType: true,
             Dish: { select: { name: true } },
+            ingredients: {
+              select: {
+                ingredientId: true,
+                ingredient: { select: { name: true } },
+              },
+            },
           },
           orderBy: [{ mealType: "asc" }, { dishId: "asc" }],
         },
@@ -68,6 +86,16 @@ export async function readAllocationDay(
             dishId: true,
             ingredientLotId: true,
             quantityUsed: true,
+            IngredientLot: {
+              select: {
+                DeliveryItem: {
+                  select: {
+                    ingredientId: true,
+                    Ingredient: { select: { name: true } },
+                  },
+                },
+              },
+            },
             unit: true,
           },
         },
@@ -110,8 +138,21 @@ export async function readAllocationDay(
         },
         dailyAllergyPortions: {
           where: { portionCount: { gt: 0 } },
-          take: 1,
-          select: { ingredientEntryId: true },
+          orderBy: { ingredientEntryId: "asc" },
+          select: {
+            ingredientEntryId: true,
+            portionCount: true,
+            ClassAllergy: {
+              select: {
+                IngredientEntry: {
+                  select: {
+                    ingredientId: true,
+                    Ingredient: { select: { name: true } },
+                  },
+                },
+              },
+            },
+          },
         },
         MealAllocation: {
           select: {
@@ -172,7 +213,16 @@ export type AllocationDay = Omit<
     RawAllocationDay["batches"][number],
     "cookingBatchLots" | "dishes"
   > & {
-    cookingBatchLots?: RawAllocationDay["batches"][number]["cookingBatchLots"];
+    cookingBatchLots?: (Omit<
+      RawAllocationDay["batches"][number]["cookingBatchLots"][number],
+      "IngredientLot"
+    > &
+      Partial<
+        Pick<
+          RawAllocationDay["batches"][number]["cookingBatchLots"][number],
+          "IngredientLot"
+        >
+      >)[];
     dishes: (Omit<
       RawAllocationDay["batches"][number]["dishes"][number],
       "allocationRecipeSnapshot"
@@ -180,8 +230,15 @@ export type AllocationDay = Omit<
   })[];
   menus: (Omit<
     RawAllocationDay["menus"][number],
-    "WeeklyMenu" | "portionGroups"
+    "WeeklyMenu" | "portionGroups" | "mealSeasonings" | "menuDayDishes"
   > & {
+    mealSeasonings?: RawAllocationDay["menus"][number]["mealSeasonings"];
+    menuDayDishes: (Omit<
+      RawAllocationDay["menus"][number]["menuDayDishes"][number],
+      "ingredients"
+    > & {
+      ingredients?: RawAllocationDay["menus"][number]["menuDayDishes"][number]["ingredients"];
+    })[];
     WeeklyMenu?: RawAllocationDay["menus"][number]["WeeklyMenu"];
     portionGroups: (Omit<
       RawAllocationDay["menus"][number]["portionGroups"][number],
@@ -190,8 +247,13 @@ export type AllocationDay = Omit<
   })[];
   demands: (Omit<
     RawAllocationDay["demands"][number],
-    "Class" | "MealAllocation"
+    "Class" | "MealAllocation" | "dailyAllergyPortions"
   > & {
+    dailyAllergyPortions: (Pick<
+      RawDemand["dailyAllergyPortions"][number],
+      "ingredientEntryId"
+    > &
+      Partial<RawDemand["dailyAllergyPortions"][number]>)[];
     MealAllocation:
       | (Omit<
           NonNullable<RawDemand["MealAllocation"]>,

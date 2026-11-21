@@ -1,5 +1,9 @@
 import { verifyStoredMaterialAllocations } from "./material-allocation";
-import { projectMaterialHistory } from "./material-allocation-history";
+import { allergyDishDemand } from "./allergy-dish-demand";
+import {
+  materialDishDemand,
+  projectMaterialHistory,
+} from "./material-allocation-history";
 import { Prisma } from "../../generated/prisma/client";
 import { createHash } from "node:crypto";
 import { ROLES } from "../../constants/roles";
@@ -80,6 +84,35 @@ function batchAcceptsDemand(
   );
 }
 
+function mealDishDetails(
+  data: AllocationDay,
+  menu: AllocationDay["menus"][number],
+  demand: AllocationDay["demands"][number],
+  dishId: string,
+) {
+  if (menu.portionGroups.some((group) => group.mealType === demand.mealType))
+    return {
+      required: materialDishDemand(menu, demand, dishId, data),
+      allergens: [] as string[],
+    };
+  return allergyDishDemand(data, menu, demand, dishId);
+}
+
+function dishRequirement(
+  data: AllocationDay,
+  demand: AllocationDay["demands"][number],
+  dishId: string,
+) {
+  const menu = data.menus.find((menu) => menuAcceptsDemand(menu, demand));
+  if (!menu) return demand.totalPortions;
+  try {
+    return mealDishDetails(data, menu, demand, dishId).required;
+  } catch (error) {
+    if (!(error instanceof HttpError) || error.statusCode !== 409) throw error;
+    return demand.totalPortions;
+  }
+}
+
 function projectDistribution(
   data: AllocationDay,
 ): AllocationDayResponse["distribution"] {
@@ -157,8 +190,31 @@ function projectDistribution(
         (dish) => dish.mealType === demand.mealType,
       ) ?? [];
 
-    const allocatedPortions =
-      menuDishes.length > 0
+    const requirements = menuDishes.map((dish) => ({
+      dishId: dish.dishId,
+      required: dishRequirement(data, demand, dish.dishId),
+    }));
+    const adjusted = requirements.some(
+      ({ required }) => required !== demand.totalPortions,
+    );
+    const complete =
+      requirements.some(({ required }) => required > 0) &&
+      requirements.every(
+        ({ dishId, required }) =>
+          (allocatedByDish.get(dishId) ?? 0) === required,
+      );
+    if (
+      allocation?.status !== "DISTRIBUTED" &&
+      requirements.some(
+        ({ dishId, required }) => (allocatedByDish.get(dishId) ?? 0) > required,
+      )
+    )
+      invalid = true;
+    const allocatedPortions = adjusted
+      ? complete || allocation?.status === "DISTRIBUTED"
+        ? demand.totalPortions
+        : 0
+      : menuDishes.length > 0
         ? Math.min(
             ...menuDishes.map((dish) => allocatedByDish.get(dish.dishId) ?? 0),
           )
@@ -331,14 +387,13 @@ export function projectAllocationDay(
           (group) => group.portionGroupId === common?.id,
         )?.portionCount;
         if (
-          demand.dailyAllergyPortions.length ||
-          (groups.length
+          groups.length
             ? commonCount !== demand.totalPortions ||
               demand.portionGroups.some(
                 (group) =>
                   group.portionGroupId !== common?.id && group.portionCount > 0,
               )
-            : demand.portionGroups.length > 0)
+            : demand.portionGroups.length > 0
         )
           issue ??= "Chưa xác định được số suất nhóm chung riêng cho từng lô.";
         finalized += commonCount ?? demand.totalPortions;
@@ -389,18 +444,75 @@ export function projectAllocationDay(
             acc.sampled += portions;
         }
       }
-      const dishStats = [...portionsByDish.values()];
+      for (const demand of daily.filter(
+        (row) =>
+          row.status === "FINALIZED" &&
+          row.totalPortions > 0 &&
+          row.dailyAllergyPortions.length > 0,
+      )) {
+        if (groups.length) continue;
+        try {
+          const requirements = mealDishes.map((dish) =>
+            allergyDishDemand(data, menu, demand, dish.dishId),
+          );
+          if (
+            requirements.length &&
+            requirements.every((row) => row.required === 0)
+          )
+            issue ??=
+              "Lớp " +
+              demand.Class.name +
+              " không còn món có thể phục vụ do dị ứng.";
+        } catch (error) {
+          if (!(error instanceof HttpError) || error.statusCode !== 409)
+            throw error;
+          issue ??= error.message;
+        }
+      }
+      const dishStats = [...portionsByDish].map(([dishId, stats]) => {
+        const excluded = groups.length
+          ? 0
+          : daily
+              .filter((row) => row.status === "FINALIZED")
+              .reduce(
+                (sum, row) =>
+                  sum + row.totalPortions - dishRequirement(data, row, dishId),
+                0,
+              );
+        const cover = (value: number) =>
+          value > finalized ? value : Math.min(finalized, value + excluded);
+        return {
+          planned: cover(stats.planned),
+          cooked: cover(stats.cooked),
+          sampled: cover(stats.sampled),
+        };
+      });
+      if (
+        [...portionsByDish.values()].some((row) => row.planned > finalized) &&
+        !demandPending
+      )
+        issue ??= "Số suất của lô vượt số suất giáo viên đã chốt.";
       const planned = dishStats.length
         ? Math.min(...dishStats.map((d) => d.planned))
         : 0;
-      const cooked = dishStats.length
-        ? Math.min(...dishStats.map((d) => d.cooked))
-        : 0;
-      const sampled = dishStats.length
+      const sampledCoverage = dishStats.length
         ? Math.min(...dishStats.map((d) => d.sampled))
         : 0;
+      const actual = [...portionsByDish.values()];
+      const minimum = (key: "planned" | "cooked" | "sampled") =>
+        actual.length ? Math.min(...actual.map((row) => row[key])) : 0;
       if (!finalized) demandPending = true;
-      return [{ mealType, finalized, planned, cooked, sampled }];
+      return [
+        {
+          mealType,
+          finalized,
+          plannedCoverage: planned,
+          sampledCoverage,
+          planned: minimum("planned"),
+          cooked: minimum("cooked"),
+          sampled: minimum("sampled"),
+        },
+      ];
     });
   const meals = mealTypes.flatMap((mealType) => {
     const stats = menuStats.filter((row) => row.mealType === mealType);
@@ -490,14 +602,14 @@ export function projectAllocationDay(
       "Chưa có đủ số suất giáo viên đã chốt.",
       "RETRY",
     );
-  if (menuStats.some((meal) => meal.planned > meal.finalized))
+  if (menuStats.some((meal) => meal.plannedCoverage > meal.finalized))
     return locked(
       "RECONCILE",
       "Số suất của lô vượt số suất giáo viên đã chốt.",
       "COOKING",
     );
   if (
-    menuStats.some((meal) => meal.planned < meal.finalized) ||
+    menuStats.some((meal) => meal.plannedCoverage < meal.finalized) ||
     batches.some((batch) => batch.status !== "COMPLETED")
   )
     return locked(
@@ -507,7 +619,7 @@ export function projectAllocationDay(
     );
   if (
     missingSampleBatches ||
-    menuStats.some((meal) => meal.sampled !== meal.finalized)
+    menuStats.some((meal) => meal.sampledCoverage !== meal.finalized)
   )
     return locked(
       "SAMPLES_PENDING",
@@ -559,17 +671,25 @@ export function projectAllocationDay(
         return historyError();
       // Mỗi dòng phân bổ phải ứng với 1 món có trong lô, số suất > 0,
       // và tất cả các món trong lô phải có dòng phân bổ cùng số suất.
-      const count = rows[0].allocatedPortions;
+      const hasAllergy = data.demands
+        .find((row) => row.id === demand.id)
+        ?.dailyAllergyPortions.some((row) => (row.portionCount ?? 0) > 0);
+      const count = Math.max(...rows.map((row) => row.allocatedPortions));
       if (
         (count <= 0 && rows[0].allocationVersion !== 2) ||
-        rows.length !== raw.dishes.length ||
-        raw.dishes.some(
-          (dish) =>
-            !rows.some(
-              (item) =>
-                item.dishId === dish.dishId && item.allocatedPortions === count,
-            ),
-        )
+        (hasAllergy
+          ? rows.some(
+              (row) => !raw.dishes.some((dish) => dish.dishId === row.dishId),
+            )
+          : rows.length !== raw.dishes.length ||
+            raw.dishes.some(
+              (dish) =>
+                !rows.some(
+                  (item) =>
+                    item.dishId === dish.dishId &&
+                    item.allocatedPortions === count,
+                ),
+            ))
       )
         return historyError();
       batch.entries.push({
@@ -601,7 +721,16 @@ export function projectAllocationDay(
           (dish) =>
             allocatedByDemandDish.get(`${demand.id}:${dish.dishId}`) ?? 0,
         );
-        if (counts.some((c) => c > 0) && counts.some((c) => c !== counts[0])) {
+        const adjusted = menuDishes.some(
+          (dish) =>
+            dishRequirement(data, rawDemand, dish.dishId) !==
+            rawDemand.totalPortions,
+        );
+        if (
+          !adjusted &&
+          counts.some((c) => c > 0) &&
+          counts.some((c) => c !== counts[0])
+        ) {
           return historyError();
         }
       }
@@ -627,20 +756,22 @@ export function projectAllocationDay(
       if (!menuDishes.length) return false;
       return menuDishes.some((dish) => {
         const key = `${demand.id}:${dish.dishId}`;
-        return (allocatedByDemandDish.get(key) ?? 0) > demand.totalPortions;
+        return (
+          (allocatedByDemandDish.get(key) ?? 0) >
+          dishRequirement(data, rawDemand, dish.dishId)
+        );
       });
     })
   )
     return historyError();
 
-  const gradeGroups = buildGradeAllocationGroups(data, batches, demands);
+  const gradeGroups = buildGradeAllocationGroups(data);
   return { ...response, demands, grades: gradeGroups };
 }
 
-function buildGradeAllocationGroups(
+export function buildGradeAllocationGroups(
   data: AllocationDay,
-  _batches: AllocationDayResponse["batches"],
-  _demands: AllocationDayResponse["demands"],
+  editing = false,
 ): import("./meal-allocation.response.dto").GradeAllocationGroup[] {
   const demandsByGrade = new Map<string, typeof data.demands>();
 
@@ -699,8 +830,29 @@ function buildGradeAllocationGroups(
       const relevantDemands = gradeDemands.filter(
         (d) => d.mealType === dishInfo.mealType,
       );
-      const totalRequiredPortions = relevantDemands.reduce(
-        (sum, d) => sum + d.totalPortions,
+      const classRequirements = relevantDemands.map((d) => {
+        const requiredPortions = dishRequirement(data, d, dishId);
+        const menu = data.menus.find((item) => menuAcceptsDemand(item, d));
+        const grouped = menu?.portionGroups.some(
+          (group) => group.mealType === d.mealType,
+        );
+        const excludedPortions = grouped
+          ? 0
+          : d.totalPortions - requiredPortions;
+        const allergens =
+          menu && excludedPortions > 0
+            ? mealDishDetails(data, menu, d, dishId).allergens
+            : [];
+        return {
+          demandId: d.id,
+          className: d.Class.name,
+          requiredPortions,
+          excludedPortions,
+          allergens,
+        };
+      });
+      const totalRequiredPortions = classRequirements.reduce(
+        (sum, d) => sum + d.requiredPortions,
         0,
       );
 
@@ -725,7 +877,11 @@ function buildGradeAllocationGroups(
           const allocBatch = demand.MealAllocation?.mealAllocationBatches.find(
             (b) => b.cookingBatchId === rawBatch.id && b.dishId === dishId,
           );
-          if (allocBatch && allocBatch.allocatedPortions > 0) {
+          if (
+            allocBatch &&
+            (allocBatch.allocatedPortions > 0 ||
+              (editing && allocBatch.allocationVersion === 2))
+          ) {
             entries.push({
               dailyMealPortionId: demand.id,
               className: demand.Class.name,
@@ -740,9 +896,10 @@ function buildGradeAllocationGroups(
         }
 
         const materialMode = hasMaterials(data, rawBatch.id);
-        const batchCapacity = materialMode
-          ? allocatedCount
-          : (dishInBatch.plannedPortions ?? rawBatch.plannedPortions ?? 0);
+        const batchCapacity =
+          materialMode && !editing
+            ? allocatedCount
+            : (dishInBatch.plannedPortions ?? rawBatch.plannedPortions ?? 0);
         const availablePortions = Prisma.Decimal.max(
           0,
           new Prisma.Decimal(batchCapacity).sub(allocatedCount),
@@ -772,6 +929,7 @@ function buildGradeAllocationGroups(
         dishBatches[0].plannedPortions >= totalRequiredPortions;
 
       const autoAssigned =
+        !editing &&
         isSingleBatch &&
         canCoverAll &&
         !dishBatches.some((batch) => batch.allocationVersion === 2);
@@ -779,12 +937,14 @@ function buildGradeAllocationGroups(
       if (autoAssigned && dishBatches.length === 1) {
         dishBatches[0].autoAssigned = true;
         if (dishBatches[0].entries.length === 0 && totalRequiredPortions > 0) {
-          dishBatches[0].entries = relevantDemands.map((d) => ({
-            dailyMealPortionId: d.id,
-            className: d.Class.name,
-            allocatedPortions: d.totalPortions,
-            locked: false,
-          }));
+          dishBatches[0].entries = relevantDemands
+            .filter((d) => dishRequirement(data, d, dishId) > 0)
+            .map((d) => ({
+              dailyMealPortionId: d.id,
+              className: d.Class.name,
+              allocatedPortions: dishRequirement(data, d, dishId),
+              locked: false,
+            }));
           dishBatches[0].availablePortions = Math.max(
             0,
             dishBatches[0].plannedPortions - totalRequiredPortions,
@@ -797,6 +957,7 @@ function buildGradeAllocationGroups(
         dishName: dishInfo.dishName,
         mealType: dishInfo.mealType,
         totalRequiredPortions,
+        classRequirements,
         autoAssigned,
         batches: dishBatches,
       });
@@ -833,6 +994,15 @@ export function prepareChanges(
   );
 
   const isPerDishMode = input.batches.some((b) => b.dishId);
+  if (
+    view.grades?.some((grade) =>
+      grade.dishes.some((dish) =>
+        dish.classRequirements?.some((row) => row.excludedPortions > 0),
+      ),
+    ) &&
+    input.batches.some((batch) => !batch.dishId)
+  )
+    throw new HttpError(400, "Cần chỉ rõ món khi phân bổ suất có dị ứng");
   const demandById = new Map(view.demands.map((demand) => [demand.id, demand]));
   const rowsByDemand = new Map<
     string,
@@ -1000,6 +1170,13 @@ export function prepareChanges(
     const allocation = demand.MealAllocation;
     if (allocation && allocation.status !== "ALLOCATED") return [];
     const rows = rowsByDemand.get(demand.id) ?? [];
+    for (const dishId of new Set(rows.map((row) => row.dishId))) {
+      const total = rows
+        .filter((row) => row.dishId === dishId)
+        .reduce((sum, row) => addPortions(sum, row.allocatedPortions), 0);
+      if (total > dishRequirement(data, demand, dishId))
+        throw new HttpError(409, "Số suất vượt nhu cầu món của lớp");
+    }
     const previous = allocation?.mealAllocationBatches ?? [];
     if (
       rows.length === previous.length &&
