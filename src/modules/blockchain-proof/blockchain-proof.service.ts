@@ -1063,7 +1063,11 @@ export function createBlockchainProofService(
     if (!subjects)
       throw new HttpError(404, "Không tìm thấy bữa ăn trong phạm vi");
     const rows = await repo.listChain(db, subjects);
-    const links = linkChecks(rows, subjects.lotDeliveries);
+    const links = linkChecks(
+      rows,
+      subjects.lotDeliveries,
+      new Set(subjects.cookingBatchIds),
+    );
     const nodes: BlockchainProofChainResponseDTO["nodes"] = [];
     for (const row of rows) {
       let checked = toDTO(row);
@@ -1270,9 +1274,15 @@ const objects = (value: unknown): ProofPayload[] =>
  * Each reference hash a proof carries must equal the data hash of the proof it
  * points to; a null reference (record older than anchoring) is not linked.
  */
+/**
+ * `cookingBatchScope` limits the batch links of a school-day distribution proof
+ * to the batches of the chain: the proof also covers other meals and grades,
+ * whose batches are not chain nodes and must not count as broken links.
+ */
 export function linkChecks(
   rows: VersionRow[],
   lotDeliveries: Map<string, string>,
+  cookingBatchScope?: ReadonlySet<string>,
 ): Map<string, ProofLinkCheckDTO[]> {
   const latest = (kind: ProofKind, recordId: string) =>
     rows.filter((row) => row.kind === kind && row.recordId === recordId).at(-1)
@@ -1341,17 +1351,28 @@ export function linkChecks(
           ),
         );
     }
-    if (row.kind === "meal-distributions")
-      for (const batch of objects(snapshot.batches))
-        links.push(
-          check(
-            `batches.${show(batch.cookingBatchId)}.cookingCompletedHash`,
-            typeof batch.cookingBatchId === "string"
-              ? latest("cooking-batches", batch.cookingBatchId)
-              : null,
-            batch.cookingCompletedHash,
-          ),
+    if (row.kind === "meal-distributions") {
+      // The snapshot repeats a batch once per class; keep one link per batch.
+      const byField = new Map<string, ProofLinkCheckDTO>();
+      for (const batch of objects(snapshot.batches)) {
+        if (
+          cookingBatchScope &&
+          typeof batch.cookingBatchId === "string" &&
+          !cookingBatchScope.has(batch.cookingBatchId)
+        )
+          continue;
+        const link = check(
+          `batches.${show(batch.cookingBatchId)}.cookingCompletedHash`,
+          typeof batch.cookingBatchId === "string"
+            ? latest("cooking-batches", batch.cookingBatchId)
+            : null,
+          batch.cookingCompletedHash,
         );
+        if (byField.get(link.field)?.status !== "MISMATCH")
+          byField.set(link.field, link);
+      }
+      links.push(...byField.values());
+    }
     result.set(row.id, links);
   }
   return result;

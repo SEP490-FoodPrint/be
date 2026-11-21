@@ -23,6 +23,8 @@
 - Migration tự dừng nếu bảng cũ có dữ liệu, thay vì backfill. Azure đã được kiểm tra rỗng; nếu có môi trường khác có dữ liệu thì cần làm backfill riêng.
 - `payload_version` của kiểm nhận tăng lên 2 vì thêm `declarationHash`. Không có dữ liệu v1 cần giữ tương thích.
 
+- (22/11/2026) `linkChecks(rows, lotDeliveries, cookingBatchScope?)`: `buildChain` truyền `subjects.cookingBatchIds`. Liên kết mẻ của nút phân phối chỉ kiểm tra mẻ trong phạm vi và gộp theo `field`. Không đổi payload, hash, schema hay response DTO.
+
 ## Rủi ro
 
 - Đổi cấu trúc ngay sau PR #122 và #137: các nhánh đang mở có đụng module `blockchain-proof` phải rebase.
