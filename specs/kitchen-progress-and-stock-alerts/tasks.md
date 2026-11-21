@@ -7,4 +7,3 @@
 - [x] T007 Delivery: hoàn tất đơn cung ứng khi không còn chuyến đang chạy (FR-007)
 - [x] T008 Đổi chữ "đồ khô" → "đồ lưu kho" (FR-008)
 - [x] T009 Unit test mới + cập nhật test cũ; `npm run test:unit`, typecheck, lint
-- [x] T010 Cảnh báo đồ lưu kho: yêu cầu nhập đã gửi bù mọi ngày (không chờ ngày giao), đơn bị hủy thì cảnh báo hiện lại (FR-002)

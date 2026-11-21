@@ -29,9 +29,9 @@
   - Số suất: lớp đã chốt suất dùng số đã chốt (kể cả nhóm suất), lớp chưa chốt ước tính bằng `registered_meal_portions`. Món thay thế chỉ tính cho nhóm suất có món đó. Khi lớp chốt suất nhiều hơn ước tính, phần chênh hiện thành lượng cần nhập thêm.
   - Phần đã phân bổ cho bữa (lô nấu mọi trạng thái, lô gia vị chung) được trừ vào nhu cầu của bữa đó.
   - Tồn kho còn trống = lô `AVAILABLE` của chuyến đã `RECEIVED`, trừ phần đang giữ (lô nấu `UNCONFIRMED`/`CONFIRMED`, gia vị chưa dùng). Lô hết hạn trước ngày dùng không được tính.
-  - Yêu cầu nhập đồ lưu kho ở trạng thái `SENT | ACCEPTED | IN_PROGRESS`, phần chưa nhận, được tính là "đã đặt" và bù được mọi ngày thiếu, kể cả ngày trước ngày giao yêu cầu. Lô trong kho được dùng trước phần đã đặt.
+  - Yêu cầu nhập đồ lưu kho ở trạng thái `SENT | ACCEPTED | IN_PROGRESS`, phần chưa nhận, được tính là "đã đặt" từ ngày giao yêu cầu.
   - Mô phỏng theo từng ngày (hạn sớm dùng trước). Trả về: nhu cầu, tồn còn trống, đã đặt, **lượng cần nhập thêm**, ngày bắt đầu thiếu, mức `URGENT` (ngày thiếu là hôm nay hoặc ngày mai) hoặc `UPCOMING`.
-  - Cảnh báo (cả `URGENT`) tự hết ngay khi đã lập yêu cầu nhập đủ (hoặc nhiều hơn) lượng cần, không phụ thuộc ngày giao. Khi yêu cầu bị hủy (`CANCELLED`, NCC không nhận phần còn lại) thì không còn tính là đã đặt và cảnh báo hiện lại. Tính lại ở mỗi lần đọc, không lưu trạng thái.
+  - Cảnh báo tự hết khi yêu cầu nhập đã gửi đủ (hoặc nhiều hơn) lượng cần, giao kịp ngày thiếu. Tính lại ở mỗi lần đọc, không lưu trạng thái.
 
 ### Chỉnh sửa bếp / kho / cung ứng
 

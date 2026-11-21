@@ -22,7 +22,6 @@
 - FR-026 keeps the kitchen list and stats `RepeatableRead` transactions, and sets their Prisma interactive transaction timeout to 20 seconds. This exceeds the existing 15-second PostgreSQL statement timeout without changing the list queries, tenant scope, or response DTOs.
 - FR-028 selects the ingredient name alongside each menu-day recipe line and carries it only to the kitchen planning error. The plan allocations and `planVersion` hash remain unchanged. A focused unit test covers the named shortage.
 - FR-029 makes the compartment request mandatory and canonical. After locking the unit row and checking for an idempotent replay, the retained-sample service checks the unit's compartment count and queries only `STORED` samples in the chosen compartment. Match by compartment suffix so renaming a unit does not free an occupied compartment. The existing unit-detail response supplies occupied locations to both frontend forms; no database migration or additional endpoint is needed.
-- FR-030 keeps the existing tables and adds `group_no` to `class_allergies` (PK class, group, entry) and `daily_allergy_portions` (PK demand, class, group, entry). The daily table drops its foreign key to `class_allergies` and references `ingredient_entries`, keeping a per-day snapshot. `utils/allergy-match.ts` groups rows by `groupNo` (missing = group 1) so single-list behaviour is unchanged.
 
 ## Approach
 
