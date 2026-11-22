@@ -202,6 +202,19 @@ Theo [specs/food-safety-incident-workflow](../specs/food-safety-incident-workflo
 
 PR5b ([specs/food-safety-incident-trace-snapshots](../specs/food-safety-incident-trace-snapshots/spec.md)): `forward`/`direct` tạo snapshot truy xuất v1; `allocations` sau khi đã gửi ATTP tạo snapshot mới + bản chuyển bổ sung tới đơn vị đang nhận (đơn vị không `ACTIVE` hoặc không có cán bộ `ACTIVE` → `409`). Không có quyền mới.
 
+## Đợt kiểm tra ATTP (`food-safety-inspection`, PR6a)
+
+Theo [specs/food-safety-inspections](../specs/food-safety-inspections/spec.md). Quyền mới `food_safety_inspection.manage` (gán mặc định `COMMUNE_FOOD_SAFETY_OFFICER`); trên DB đã có vai trò, bootstrap chỉ tạo quyền, System Admin cấp cho cán bộ ATTP qua API quản trị quyền. Mọi thao tác chỉ cho cán bộ ATTP thuộc đơn vị đang nhận hồ sơ (khác → `404`), nạp lại actor và khóa dòng hồ sơ.
+
+| Method | Path                                                              | Nhóm được gọi    | Quyền và phạm vi                                                                                                                          |
+| ------ | ----------------------------------------------------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/food-safety-incidents/:id/inspection-suppliers`             | Cán bộ ATTP nhận | `food_safety_inspection.manage`; NCC trong snapshot truy xuất, hoặc NCC có quan hệ với trường (khác `UNLINKED`) khi snapshot không có NCC |
+| POST   | `/api/food-safety-incidents/:id/inspections`                      | Cán bộ ATTP nhận | `manage`; chỉ `AUTHORITY_ACKNOWLEDGED` (→ `UNDER_INSPECTION`) hoặc `UNDER_INSPECTION`; khác → `409`                                       |
+| POST   | `/api/food-safety-incidents/:id/inspections/:inspectionId/result` | Cán bộ ATTP nhận | `manage`; ghi một lần (`409` nếu đã có); NCC ngoài danh sách trên → `400`; hết đợt `PLANNED` → `INSPECTION_COMPLETED`                     |
+| POST   | `/api/food-safety-incidents/:id/close`                            | Cán bộ ATTP nhận | `manage`; chỉ `INSPECTION_COMPLETED`, mọi đợt đã có kết quả và ≥ 1 đợt (trừ `LEGACY_IMPORT`)                                              |
+
+Chi tiết hồ sơ (`GET /api/food-safety-incidents/:id`) thêm `inspections`: người báo (PH/GVCN) thấy trạng thái, kết quả, kết luận từng NCC và tên/vai trò người ghi, không thấy `teamDescription` (Q23).
+
 ## Khiếu nại leo thang lên ATTP (`authority-complaint`, C05)
 
 Theo [specs/authority-complaints](../specs/authority-complaints/spec.md). Quyền mới: `authority_complaint.submit` (`PARENTS_COMMITTEE`), `authority_complaint.view` (`PARENTS_COMMITTEE`, `SCHOOL_MANAGEMENT_BOARD`, `COMMUNE_FOOD_SAFETY_OFFICER`), `authority_complaint.respond` (`COMMUNE_FOOD_SAFETY_OFFICER`), `authority.manage` (+ `authority.view`) cho `SYSTEM_ADMIN`. `SCHOOL_ADMINISTRATION` nằm ngoài luồng (Q24). Trên DB đã có vai trò, bootstrap chỉ thêm grant cho `SYSTEM_ADMIN`; quyền C05 của vai trò khác do System Admin gán qua API quản trị quyền.

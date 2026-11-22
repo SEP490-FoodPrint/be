@@ -24,6 +24,7 @@ import { createFeedbackRouter } from "../modules/feedback/feedback.routes";
 import { createSystemComplaintRouter } from "../modules/system-complaint/system-complaint.routes";
 import { createAuthorityComplaintRouter } from "../modules/authority-complaint/authority-complaint.routes";
 import { createFoodSafetyIncidentRouter } from "../modules/food-safety-incident/food-safety-incident.routes";
+import { createFoodSafetyInspectionRouter } from "../modules/food-safety-inspection/food-safety-inspection.routes";
 import { createSupplierRouter } from "../modules/supplier/supplier.routes";
 import { createAuthorityRouter } from "../modules/authority/authority.routes";
 import { createClassRouter } from "../modules/class/class.routes";
@@ -141,6 +142,10 @@ export function createApiRouter(
   router.use(
     "/food-safety-incidents",
     createFoodSafetyIncidentRouter(undefined, authHandler),
+  );
+  router.use(
+    "/food-safety-incidents",
+    createFoodSafetyInspectionRouter(undefined, authHandler),
   );
   router.use("/suppliers", createSupplierRouter(undefined, authHandler));
   router.use(

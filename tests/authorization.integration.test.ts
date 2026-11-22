@@ -12312,6 +12312,179 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       assert.ok(inbox.includes(parentIncident));
       assert.ok(inbox.includes(data(direct).id));
       assert.ok(!inbox.includes(teacherIncident));
+
+      // PR6a: ATTP lập đợt kiểm tra, ghi kết quả theo NCC, đóng hồ sơ; người báo xem kết luận.
+      await db.schoolSupplierRelationship.create({
+        data: {
+          schoolId: school.id,
+          supplierId: supplierA.id,
+          linkedByUserId: board,
+        },
+      });
+      await db.schoolSupplierRelationship.create({
+        data: {
+          schoolId: school.id,
+          supplierId: supplierB.id,
+          linkedByUserId: board,
+          status: "UNLINKED",
+          unlinkedAt: new Date(),
+          unlinkReason: "Ngừng hợp tác",
+        },
+      });
+      const options = await request(
+        `${route}/${parentIncident}/inspection-suppliers`,
+        receiver,
+      );
+      assert.equal(options.status, 200);
+      assert.equal(data(options).source, "SCHOOL_RELATIONSHIP");
+      assert.deepEqual(
+        (data(options).items as Record<string, unknown>[]).map(
+          (item) => item.id,
+        ),
+        [supplierA.id],
+      );
+      assert.equal(
+        (
+          await request(
+            `${route}/${parentIncident}/inspection-suppliers`,
+            foreignOfficer,
+          )
+        ).status,
+        404,
+      );
+      assert.deepEqual(
+        data(await request(`${route}/${parentIncident}`, receiver))
+          .allowedActions,
+        ["PLAN_INSPECTION"],
+      );
+      const planInspection = (id: string, actor = receiver) =>
+        request(`${route}/${id}/inspections`, actor, "POST", {
+          teamDescription: "Đoàn kiểm tra liên ngành phường IC",
+          scheduledAt: "2026-11-23T08:00:00+07:00",
+        });
+      assert.equal((await planInspection(parentIncident, board)).status, 403);
+      assert.equal(
+        (await planInspection(parentIncident, foreignOfficer)).status,
+        404,
+      );
+      assert.equal(
+        (await planInspection(String(data(direct).id))).status,
+        409,
+        "phải tiếp nhận trước",
+      );
+      const first = await planInspection(parentIncident);
+      assert.equal(first.status, 201);
+      assert.equal(data(first).incidentStatus, "UNDER_INSPECTION");
+      const second = await planInspection(parentIncident);
+      assert.equal(second.status, 201);
+      const inspectionIds = [first, second].map((response) =>
+        String(record(data(response).inspection).id),
+      );
+      const closeIncident = () =>
+        request(`${route}/${parentIncident}/close`, receiver, "POST", {
+          note: "Đã hoàn tất xử lý",
+        });
+      assert.equal((await closeIncident()).status, 409);
+      const recordResult = (
+        inspectionId: string,
+        supplierId: string,
+        overallConclusion = "SUPPLIER_AT_FAULT",
+      ) =>
+        request(
+          `${route}/${parentIncident}/inspections/${inspectionId}/result`,
+          receiver,
+          "POST",
+          {
+            resultSummary: "Phát hiện thịt quá hạn sử dụng tại bếp",
+            overallConclusion,
+            findings: [
+              {
+                supplierId,
+                finding:
+                  overallConclusion === "SUPPLIER_AT_FAULT"
+                    ? "AT_FAULT"
+                    : "CLEARED",
+                evidenceNote: "Biên bản lấy mẫu số 12",
+              },
+            ],
+          },
+        );
+      assert.equal(
+        (await recordResult(inspectionIds[0], supplierB.id)).status,
+        400,
+        "NCC đã gỡ liên kết không được kết luận",
+      );
+      const recorded = await recordResult(inspectionIds[0], supplierA.id);
+      assert.equal(recorded.status, 200);
+      assert.equal(data(recorded).incidentStatus, "UNDER_INSPECTION");
+      assert.equal(
+        (await recordResult(inspectionIds[0], supplierA.id)).status,
+        409,
+      );
+      const raced = await Promise.all([
+        recordResult(inspectionIds[1], supplierA.id, "INCONCLUSIVE"),
+        recordResult(inspectionIds[1], supplierA.id, "INCONCLUSIVE"),
+      ]);
+      assert.deepEqual(raced.map((r) => r.status).sort(), [200, 409]);
+      assert.equal(
+        await db.foodSafetyInspectionSupplierFinding.count({
+          where: { inspectionId: inspectionIds[1] },
+        }),
+        1,
+      );
+      assert.equal(
+        (await planInspection(parentIncident)).status,
+        409,
+        "đã có kết quả thì không lập thêm",
+      );
+      const reporterInspections = data(
+        await request(`${route}/${parentIncident}`, parent),
+      );
+      assert.equal(reporterInspections.status, "INSPECTION_COMPLETED");
+      const shown = reporterInspections.inspections as Record<
+        string,
+        unknown
+      >[];
+      assert.equal(shown.length, 2);
+      assert.equal("teamDescription" in shown[0], false);
+      assert.equal(shown[0].overallConclusion, "SUPPLIER_AT_FAULT");
+      assert.deepEqual(
+        (shown[0].findings as Record<string, unknown>[]).map((item) => [
+          record(item.supplier).id,
+          item.finding,
+        ]),
+        [[supplierA.id, "AT_FAULT"]],
+      );
+      assert.equal("id" in record(shown[0].recordedBy), false);
+      assert.deepEqual(
+        data(await request(`${route}/${parentIncident}`, receiver))
+          .allowedActions,
+        ["CLOSE"],
+      );
+      assert.equal((await closeIncident()).status, 200);
+      assert.equal((await closeIncident()).status, 409);
+      const closedView = data(
+        await request(`${route}/${parentIncident}`, parent),
+      );
+      assert.equal(closedView.status, "CLOSED");
+      assert.deepEqual(
+        (closedView.histories as Record<string, unknown>[])
+          .slice(-3)
+          .map((item) => item.toStatus),
+        ["UNDER_INSPECTION", "INSPECTION_COMPLETED", "CLOSED"],
+      );
+      await assert.rejects(
+        db.foodSafetyInspection.create({
+          data: {
+            incidentId: parentIncident,
+            teamDescription: "Đoàn",
+            scheduledAt: new Date(),
+            status: "COMPLETED",
+            createdByUserId: receiver,
+          },
+        }),
+        "CHECK: COMPLETED cần đủ kết quả",
+      );
     },
   );
 });
