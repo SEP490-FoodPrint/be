@@ -615,6 +615,8 @@ void test("account lifecycle respects scope and intake state on disposable Postg
             const forwardActor = await loadPrincipal(forwarder.id, db);
             const incident = await db.foodSafetyIncident.create({
               data: {
+                status: "SUBMITTED_TO_AUTHORITY",
+                source: "LEGACY_IMPORT",
                 schoolId: fixture.school.id,
                 title: label,
                 description: "Disposable race fixture",
@@ -760,6 +762,8 @@ void test("account lifecycle respects scope and intake state on disposable Postg
         const actor = await loadPrincipal(forwarder.id, db);
         const incident = await db.foodSafetyIncident.create({
           data: {
+            status: "SUBMITTED_TO_AUTHORITY",
+            source: "LEGACY_IMPORT",
             schoolId: fixture.school.id,
             title: label,
             description: label,
@@ -1157,6 +1161,8 @@ void test("account lifecycle respects scope and intake state on disposable Postg
       });
       const incident = await db.foodSafetyIncident.create({
         data: {
+          status: "SUBMITTED_TO_AUTHORITY",
+          source: "LEGACY_IMPORT",
           schoolId: school.id,
           title: "Blocker matrix",
           description: "Disposable fixture",
@@ -1170,7 +1176,11 @@ void test("account lifecycle respects scope and intake state on disposable Postg
           recipientCommuneFoodSafetyUnitId: selected.unit.id,
         },
       });
-      for (const status of ["OPEN", "INVESTIGATING", "RESOLVED"] as const) {
+      for (const status of [
+        "SUBMITTED_TO_AUTHORITY",
+        "UNDER_INSPECTION",
+        "INSPECTION_COMPLETED",
+      ] as const) {
         await db.foodSafetyIncident.update({
           where: { id: incident.id },
           data: { status },
@@ -1211,6 +1221,8 @@ void test("account lifecycle respects scope and intake state on disposable Postg
       });
       const unrelatedIncident = await db.foodSafetyIncident.create({
         data: {
+          status: "SUBMITTED_TO_AUTHORITY",
+          source: "LEGACY_IMPORT",
           schoolId: school.id,
           title: "Another officer request",
           description: "Not in selected recipient scope",
@@ -1792,7 +1804,13 @@ void test("account lifecycle respects scope and intake state on disposable Postg
         { communeFoodSafetyUnitId: unit.id },
       );
       const incident = await db.foodSafetyIncident.create({
-        data: { schoolId: school.id, title: "Incident", description: "Test" },
+        data: {
+          schoolId: school.id,
+          title: "Incident",
+          description: "Test",
+          status: "SUBMITTED_TO_AUTHORITY",
+          source: "LEGACY_IMPORT",
+        },
         select: { id: true },
       });
       const report = await db.foodSafetyReportForwarding.create({

@@ -72,6 +72,7 @@ model Class {
   dailyMealPortions      DailyMealPortion[]        @relation("daily_meal_portions_class_id__classes")
   classAllergies         ClassAllergy[]            @relation("class_allergies_class_id__classes")
   homeroomAssignments    ClassHomeroomAssignment[]
+  foodSafetyIncidents    FoodSafetyIncident[]      @relation("food_safety_incidents_reported_class")
 
   @@unique([schoolId, name, academicYear])
   @@index([schoolId], map: "idx_classes_school_id")
@@ -115,6 +116,7 @@ model CommuneFoodSafetyUnit {
   locationId                  String?                      @map("location_id") @db.Uuid
   location                    Location?                    @relation(fields: [locationId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "commune_food_safety_units_location_id_fkey")
   authorityComplaints         AuthorityComplaint[]         @relation("authority_complaints_recipient_unit")
+  foodSafetyIncidents         FoodSafetyIncident[]         @relation("food_safety_incidents_recipient_unit")
 
   @@unique([code])
   @@unique([locationId], map: "uq_commune_food_safety_units_location_id", where: raw("(location_id IS NOT NULL)"))
@@ -571,28 +573,68 @@ model FoodSafetyIncidentAllocation {
 }
 
 /// Food-safety incident header at School level. Affected class meals are linked through food_safety_incident_allocations for traceability to Class, CookingBatch and IngredientLot.
+/// Luồng B (specs/food-safety-incident-workflow): PH/GVCN báo cáo → BGH xác minh sơ bộ → chuyển ATTP; BGH tự lập hồ sơ (SCHOOL_DIRECT).
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
 model FoodSafetyIncident {
-  id                            String                         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  /// Mã nghiệp vụ FP-IC-NNNNN (hậu tố Feistel). Tạm nullable tới khi backfill bản ghi cũ xong; CHECK định dạng nằm trong SQL migration.
-  code                          String?                        @unique(map: "food_safety_incidents_code_key") @db.VarChar(20)
-  schoolId                      String                         @map("school_id") @db.Uuid
-  reportedByUserId              String?                        @map("reported_by_user_id") @db.Uuid
-  title                         String                         @db.VarChar(255)
-  description                   String                         @db.Text
-  status                        IncidentStatus                 @default(OPEN)
-  occurredAt                    DateTime?                      @map("occurred_at") @db.Timestamptz(6)
-  resolvedAt                    DateTime?                      @map("resolved_at") @db.Timestamptz(6)
-  createdAt                     DateTime                       @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt                     DateTime                       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  School                        School                         @relation("food_safety_incidents_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  User                          User?                          @relation("food_safety_incidents_reported_by_user_id__users", fields: [reportedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-  foodSafetyIncidentAllocations FoodSafetyIncidentAllocation[] @relation("food_safety_incident_allocations_incident_id__food_safety_incidents")
-  foodSafetyReportForwardings   FoodSafetyReportForwarding[]   @relation("food_safety_report_forwardings_incident_id__food_safety_incidents")
-  foodAnalysisResults           FoodAnalysisResult[]           @relation("food_analysis_results_incident_id__food_safety_incidents")
-  incidentSchoolAlerts          IncidentSchoolAlert[]          @relation("incident_school_alerts_incident_id__food_safety_incidents")
+  id                               String                                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Mã nghiệp vụ FP-IC-NNNNN (hậu tố Feistel). Chỉ dòng LEGACY_IMPORT được NULL tới khi backfill xong; CHECK nằm trong SQL migration.
+  code                             String?                               @unique(map: "food_safety_incidents_code_key") @db.VarChar(20)
+  schoolId                         String                                @map("school_id") @db.Uuid
+  reportedByUserId                 String?                               @map("reported_by_user_id") @db.Uuid
+  title                            String                                @db.VarChar(255)
+  description                      String                                @db.Text
+  status                           FoodSafetyIncidentStatus
+  source                           FoodSafetyIncidentSource
+  reportedRoleCode                 String?                               @map("reported_role_code") @db.VarChar(60)
+  reportedClassId                  String?                               @map("reported_class_id") @db.Uuid
+  reportedSymptomaticCount         Int?                                  @map("reported_symptomatic_count")
+  symptomDescription               String?                               @map("symptom_description") @db.Text
+  schoolPreliminaryAssessment      SchoolPreliminaryAssessment?          @map("school_preliminary_assessment")
+  schoolPreliminaryNote            String?                               @map("school_preliminary_note") @db.Text
+  schoolReviewedByUserId           String?                               @map("school_reviewed_by_user_id") @db.Uuid
+  schoolReviewedAt                 DateTime?                             @map("school_reviewed_at") @db.Timestamptz(6)
+  cancellationReason               FoodSafetyIncidentCancellationReason? @map("cancellation_reason")
+  cancellationNote                 String?                               @map("cancellation_note") @db.Text
+  recipientCommuneFoodSafetyUnitId String?                               @map("recipient_commune_food_safety_unit_id") @db.Uuid
+  occurredAt                       DateTime?                             @map("occurred_at") @db.Timestamptz(6)
+  resolvedAt                       DateTime?                             @map("resolved_at") @db.Timestamptz(6)
+  createdAt                        DateTime                              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                        DateTime                              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  School                           School                                @relation("food_safety_incidents_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  User                             User?                                 @relation("food_safety_incidents_reported_by_user_id__users", fields: [reportedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  ReportedRole                     Role?                                 @relation("food_safety_incidents_reported_role", fields: [reportedRoleCode], references: [code], onDelete: Restrict, onUpdate: NoAction, map: "food_safety_incidents_reported_role_code_fkey")
+  ReportedClass                    Class?                                @relation("food_safety_incidents_reported_class", fields: [reportedClassId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "food_safety_incidents_reported_class_id_fkey")
+  SchoolReviewedBy                 User?                                 @relation("food_safety_incidents_school_reviewed_by", fields: [schoolReviewedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "food_safety_incidents_school_reviewed_by_user_id_fkey")
+  RecipientUnit                    CommuneFoodSafetyUnit?                @relation("food_safety_incidents_recipient_unit", fields: [recipientCommuneFoodSafetyUnitId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "food_safety_incidents_recipient_unit_fkey")
+  foodSafetyIncidentAllocations    FoodSafetyIncidentAllocation[]        @relation("food_safety_incident_allocations_incident_id__food_safety_incidents")
+  foodSafetyReportForwardings      FoodSafetyReportForwarding[]          @relation("food_safety_report_forwardings_incident_id__food_safety_incidents")
+  foodAnalysisResults              FoodAnalysisResult[]                  @relation("food_analysis_results_incident_id__food_safety_incidents")
+  incidentSchoolAlerts             IncidentSchoolAlert[]                 @relation("incident_school_alerts_incident_id__food_safety_incidents")
+  statusHistories                  FoodSafetyIncidentStatusHistory[]
 
   @@index([schoolId, status], map: "idx_food_safety_incidents_school_status")
+  @@index([reportedByUserId, createdAt], map: "idx_food_safety_incidents_reporter", where: raw("(reported_by_user_id IS NOT NULL)"))
+  @@index([recipientCommuneFoodSafetyUnitId], map: "idx_food_safety_incidents_recipient", where: raw("(recipient_commune_food_safety_unit_id IS NOT NULL)"))
   @@map("food_safety_incidents")
+  @@schema("foodprint")
+}
+
+/// Lịch sử trạng thái sự cố, append-only. CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model FoodSafetyIncidentStatusHistory {
+  id            String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  incidentId    String                    @map("incident_id") @db.Uuid
+  fromStatus    FoodSafetyIncidentStatus? @map("from_status")
+  toStatus      FoodSafetyIncidentStatus  @map("to_status")
+  actorUserId   String?                   @map("actor_user_id") @db.Uuid
+  actorRoleCode String?                   @map("actor_role_code") @db.VarChar(60)
+  note          String?                   @db.Text
+  createdAt     DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+  Incident      FoodSafetyIncident        @relation(fields: [incidentId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  actorUser     User?                     @relation("food_safety_incident_status_histories_actor_user", fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  actorRole     Role?                     @relation("food_safety_incident_status_histories_actor_role", fields: [actorRoleCode], references: [code], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([incidentId, createdAt, id], map: "idx_food_safety_incident_status_histories_incident")
+  @@map("food_safety_incident_status_histories")
   @@schema("foodprint")
 }
 
@@ -1170,6 +1212,8 @@ model Role {
   complaintsAsSenderRole        Complaint[]                    @relation("complaints_sender_role_code__roles")
   complaintComments             ComplaintComment[]             @relation("complaint_comments_author_role_code__roles")
   complaintStatusHistories      ComplaintStatusHistory[]       @relation("complaint_status_histories_actor_role_code__roles")
+  foodSafetyIncidentsAsReporter FoodSafetyIncident[]           @relation("food_safety_incidents_reported_role")
+  foodSafetyIncidentHistories   FoodSafetyIncidentStatusHistory[] @relation("food_safety_incident_status_histories_actor_role")
 
   @@unique([code])
   @@unique([id, code], map: "uq_roles_id_code")
@@ -1532,6 +1576,8 @@ model User {
   complaintComments                            ComplaintComment[]           @relation("complaint_comments_author_user_id__users")
   complaintStatusHistories                     ComplaintStatusHistory[]     @relation("complaint_status_histories_actor_user_id__users")
   foodSafetyIncidents                          FoodSafetyIncident[]         @relation("food_safety_incidents_reported_by_user_id__users")
+  foodSafetyIncidentsReviewed                  FoodSafetyIncident[]         @relation("food_safety_incidents_school_reviewed_by")
+  foodSafetyIncidentHistories                  FoodSafetyIncidentStatusHistory[] @relation("food_safety_incident_status_histories_actor_user")
   foodSafetyReportForwardings                  FoodSafetyReportForwarding[] @relation("food_safety_report_forwardings_forwarded_by_user_id__users")
   foodAnalysisResults                          FoodAnalysisResult[]         @relation("food_analysis_results_recorded_by_user_id__users")
   incidentSchoolAlerts                         IncidentSchoolAlert[]        @relation("incident_school_alerts_sent_by_user_id__users")
@@ -1918,13 +1964,43 @@ enum EntityStatus {
   @@schema("foodprint")
 }
 
-enum IncidentStatus {
-  OPEN
-  INVESTIGATING
-  RESOLVED
+enum FoodSafetyIncidentStatus {
+  PENDING_SCHOOL_REVIEW
+  SUBMITTED_TO_AUTHORITY
+  AUTHORITY_ACKNOWLEDGED
+  UNDER_INSPECTION
+  INSPECTION_COMPLETED
   CLOSED
+  CANCELLED_BY_SCHOOL
 
-  @@map("incident_status")
+  @@map("food_safety_incident_status")
+  @@schema("foodprint")
+}
+
+enum FoodSafetyIncidentSource {
+  PARENT_REPORT
+  TEACHER_REPORT
+  SCHOOL_DIRECT
+  LEGACY_IMPORT
+
+  @@map("food_safety_incident_source")
+  @@schema("foodprint")
+}
+
+enum SchoolPreliminaryAssessment {
+  SCHOOL_MEAL_SUSPECTED
+  OUTSIDE_MEAL
+  UNDETERMINED
+
+  @@map("school_preliminary_assessment")
+  @@schema("foodprint")
+}
+
+enum FoodSafetyIncidentCancellationReason {
+  DUPLICATE_REPORT
+  DATA_ENTRY_ERROR
+
+  @@map("food_safety_incident_cancellation_reason")
   @@schema("foodprint")
 }
 

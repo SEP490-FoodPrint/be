@@ -265,6 +265,8 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   });
   const incidentA = await db.foodSafetyIncident.create({
     data: {
+      status: "SUBMITTED_TO_AUTHORITY",
+      source: "LEGACY_IMPORT",
       schoolId: schoolA.id,
       title: "Incident A",
       description: "Incident A test",
@@ -272,6 +274,8 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   });
   const incidentB = await db.foodSafetyIncident.create({
     data: {
+      status: "SUBMITTED_TO_AUTHORITY",
+      source: "LEGACY_IMPORT",
       schoolId: schoolB.id,
       title: "Incident B",
       description: "Incident B test",
@@ -11845,6 +11849,361 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       const boardView = await request(`${route}/${c05Id}`, board);
       assert.deepEqual(data(boardView).allowedActions, []);
       assert.equal((data(boardView).comments as unknown[]).length, 4);
+    },
+  );
+
+  await context.test(
+    "food-safety incidents (PR5): parent/teacher report, BGH attaches meals, forwards once or cancels, ATTP acknowledges, BGH files directly",
+    async () => {
+      const route = "/api/food-safety-incidents";
+      const login = async (account: { id: string }) => {
+        const session = await authSessions.issue(account.id);
+        issued.set(account.id, session);
+        refreshTokens.push(session.refreshToken);
+        return account.id;
+      };
+      const data = (response: { body: unknown }) =>
+        record(record(response.body).data);
+      const ids = (response: { body: unknown }) =>
+        rows(response.body).map((item) => item.id);
+      const province = await db.location.create({
+        data: {
+          code: `P-IC-${randomUUID()}`,
+          name: "Tỉnh IC",
+          type: "PROVINCE",
+          level: 1,
+        },
+      });
+      const ward = await db.location.create({
+        data: {
+          code: `W-IC-${randomUUID()}`,
+          name: "Phường IC",
+          type: "WARD",
+          level: 2,
+          parentId: province.id,
+        },
+      });
+      const school = await db.school.create({
+        data: { name: "Incident workflow school", locationId: ward.id },
+      });
+      const otherSchool = await db.school.create({
+        data: { name: "Incident other school" },
+      });
+      const parent = await login(
+        await user("PARENTS_COMMITTEE", { schoolId: school.id }),
+      );
+      const otherParent = await login(
+        await user("PARENTS_COMMITTEE", { schoolId: school.id }),
+      );
+      const teacher = await login(
+        await user("HOMEROOM_TEACHER", { schoolId: school.id }),
+      );
+      const board = await login(
+        await user("SCHOOL_MANAGEMENT_BOARD", { schoolId: school.id }),
+      );
+      const schoolAdmin = await login(
+        await user("SCHOOL_ADMINISTRATION", { schoolId: school.id }),
+      );
+      const kitchen = await login(
+        await user("SCHOOL_KITCHEN_STAFF", { schoolId: school.id }),
+      );
+      const otherKitchen = await login(
+        await user("SCHOOL_KITCHEN_STAFF", { schoolId: otherSchool.id }),
+      );
+      // Mỗi đơn vị một cán bộ: unitB/officerB nhận hồ sơ, officerA (unitA) là đơn vị khác.
+      const receiver = officerB.id;
+      const foreignOfficer = officerA.id;
+
+      const ownClass = await db.class.create({
+        data: { schoolId: school.id, name: "IC 1A" },
+      });
+      const otherClass = await db.class.create({
+        data: { schoolId: school.id, name: "IC 1B" },
+      });
+      await db.classHomeroomAssignment.create({
+        data: {
+          classId: ownClass.id,
+          teacherUserId: teacher,
+          assignedByUserId: board,
+          assignedAt: new Date("2026-11-01T00:00:00Z"),
+        },
+      });
+      const allocation = async (
+        classId: string,
+        status: "ALLOCATED" | "FINALIZED",
+        mealType: "LUNCH" | "AFTERNOON",
+        by: string,
+      ) => {
+        const portion = await db.dailyMealPortion.create({
+          data: {
+            classId,
+            confirmedByUserId: by,
+            mealDate: new Date("2026-11-20T00:00:00.000Z"),
+            mealType,
+            totalPortions: 30,
+          },
+        });
+        const served = status === "FINALIZED" ? new Date() : null;
+        return (
+          await db.mealAllocation.create({
+            data: {
+              dailyMealPortionId: portion.id,
+              createdByUserId: by,
+              status,
+              distributedAt: served,
+              distributedByUserId: served ? by : null,
+              finalizedAt: served,
+            },
+          })
+        ).id;
+      };
+      const served = await allocation(
+        ownClass.id,
+        "FINALIZED",
+        "LUNCH",
+        kitchen,
+      );
+      const pending = await allocation(
+        ownClass.id,
+        "ALLOCATED",
+        "AFTERNOON",
+        kitchen,
+      );
+      const otherClassB = await db.class.create({
+        data: { schoolId: otherSchool.id, name: "OTHER 1A" },
+      });
+      const foreign = await allocation(
+        otherClassB.id,
+        "FINALIZED",
+        "LUNCH",
+        otherKitchen,
+      );
+
+      const body = {
+        title: "Học sinh đau bụng sau bữa trưa",
+        description: "Năm học sinh lớp 1A đau bụng sau bữa trưa ngày 20/11.",
+        reportedSymptomaticCount: 5,
+        occurredAt: "2026-11-20T06:00:00.000Z",
+      };
+
+      // US1: phụ huynh và GVCN báo cáo; vai trò khác bị chặn.
+      const parentReport = await request(route, parent, "POST", body);
+      assert.equal(parentReport.status, 201);
+      const parentIncident = String(data(parentReport).id);
+      assert.match(String(data(parentReport).code), /^FP-IC-\d{5}$/);
+      assert.equal(data(parentReport).status, "PENDING_SCHOOL_REVIEW");
+      assert.equal(data(parentReport).source, "PARENT_REPORT");
+      assert.equal(data(parentReport).view, "REPORTER");
+      assert.equal(
+        (await request(route, teacher, "POST", body)).status,
+        400,
+        "GVCN phải chọn lớp",
+      );
+      assert.equal(
+        (
+          await request(route, teacher, "POST", {
+            ...body,
+            classId: otherClass.id,
+          })
+        ).status,
+        403,
+      );
+      const teacherReport = await request(route, teacher, "POST", {
+        ...body,
+        classId: ownClass.id,
+      });
+      assert.equal(teacherReport.status, 201);
+      const teacherIncident = String(data(teacherReport).id);
+      assert.equal(data(teacherReport).source, "TEACHER_REPORT");
+      for (const actor of [board, kitchen, schoolAdmin, receiver, system.id])
+        assert.equal((await request(route, actor, "POST", body)).status, 403);
+      assert.equal(
+        (
+          await request(route, parent, "POST", {
+            ...body,
+            occurredAt: new Date(Date.now() + 3_600_000).toISOString(),
+          })
+        ).status,
+        400,
+      );
+
+      // US5: người báo chỉ thấy hồ sơ mình báo, projection rút gọn.
+      assert.deepEqual(ids(await request(route, parent)), [parentIncident]);
+      assert.deepEqual(ids(await request(route, teacher)), [teacherIncident]);
+      assert.deepEqual(ids(await request(route, otherParent)), []);
+      assert.deepEqual(
+        ids(await request(route, board)).sort(),
+        [parentIncident, teacherIncident].sort(),
+      );
+      assert.equal((await request(route, schoolAdmin)).status, 403);
+      const mine = (response: { body: unknown }) =>
+        ids(response).filter((id) =>
+          [parentIncident, teacherIncident].includes(String(id)),
+        );
+      assert.deepEqual(mine(await request(route, receiver)), []);
+      assert.equal(
+        (await request(`${route}/${parentIncident}`, teacher)).status,
+        404,
+      );
+      const parentView = data(
+        await request(`${route}/${parentIncident}`, parent),
+      );
+      assert.equal(parentView.view, "REPORTER");
+      assert.equal("preliminaryAssessment" in parentView, false);
+      assert.equal("forwardings" in parentView, false);
+      const overview = data(await request("/api/school-overview", parent));
+      assert.deepEqual(
+        (overview.incidents as Record<string, unknown>[]).map(
+          (item) => item.id,
+        ),
+        [parentIncident],
+      );
+
+      // US4: BGH gắn suất ăn đã phát của trường.
+      const attach = (mealAllocationIds: string[]) =>
+        request(`${route}/${parentIncident}/allocations`, board, "POST", {
+          mealAllocationIds,
+        });
+      const attached = await attach([served]);
+      assert.equal(attached.status, 200);
+      assert.equal(data(attached).added, 1);
+      assert.equal(data(await attach([served])).added, 0);
+      assert.equal((await attach([pending])).status, 409);
+      assert.equal((await attach([foreign])).status, 404);
+      assert.equal(
+        (
+          await request(
+            `${route}/${parentIncident}/allocations`,
+            parent,
+            "POST",
+            {
+              mealAllocationIds: [served],
+            },
+          )
+        ).status,
+        403,
+      );
+
+      // US2: chưa có đơn vị ATTP cho phường/xã → 409, không đổi gì.
+      const forward = (id: string, actor = board) =>
+        request(`${route}/${id}/forward`, actor, "POST", {
+          preliminaryAssessment: "OUTSIDE_MEAL",
+          preliminaryNote: "Có thể do đồ ăn mang từ nhà",
+        });
+      assert.equal((await forward(parentIncident)).status, 409);
+      assert.equal(
+        await db.foodSafetyReportForwarding.count({
+          where: { incidentId: parentIncident },
+        }),
+        0,
+      );
+      await db.communeFoodSafetyUnit.update({
+        where: { id: unitB.id },
+        data: { locationId: ward.id },
+      });
+      assert.equal((await forward(parentIncident, parent)).status, 403);
+      const race = await Promise.all([
+        forward(parentIncident),
+        forward(parentIncident),
+      ]);
+      assert.deepEqual(race.map((r) => r.status).sort(), [200, 409]);
+      const forwarded = await db.foodSafetyIncident.findUniqueOrThrow({
+        where: { id: parentIncident },
+        include: { foodSafetyReportForwardings: true, statusHistories: true },
+      });
+      assert.equal(forwarded.status, "SUBMITTED_TO_AUTHORITY");
+      assert.equal(forwarded.schoolPreliminaryAssessment, "OUTSIDE_MEAL");
+      assert.equal(forwarded.recipientCommuneFoodSafetyUnitId, unitB.id);
+      assert.equal(forwarded.foodSafetyReportForwardings.length, 1);
+      const forwarding = forwarded.foodSafetyReportForwardings[0];
+      assert.equal(forwarding.recipientUserId, receiver);
+      assert.equal(forwarding.status, "SENT");
+      assert.equal(forwarded.statusHistories.length, 2);
+
+      // Hủy chỉ từ PENDING_SCHOOL_REVIEW.
+      const cancel = (id: string) =>
+        request(`${route}/${id}/cancel`, board, "POST", {
+          reason: "DUPLICATE_REPORT",
+          note: "Trùng với hồ sơ của phụ huynh",
+        });
+      assert.equal((await cancel(parentIncident)).status, 409);
+      const cancelled = await cancel(teacherIncident);
+      assert.equal(cancelled.status, 200);
+      assert.equal(data(cancelled).status, "CANCELLED_BY_SCHOOL");
+      assert.equal((await cancel(teacherIncident)).status, 409);
+      assert.equal((await forward(teacherIncident)).status, 409);
+      const teacherView = data(
+        await request(`${route}/${teacherIncident}`, teacher),
+      );
+      assert.equal(teacherView.cancellationReason, "DUPLICATE_REPORT");
+      assert.equal(
+        teacherView.cancellationNote,
+        "Trùng với hồ sơ của phụ huynh",
+      );
+
+      // US6: ATTP của đơn vị nhận thấy và tiếp nhận; đơn vị khác không thấy.
+      assert.deepEqual(mine(await request(route, receiver)), [parentIncident]);
+      assert.deepEqual(mine(await request(route, foreignOfficer)), []);
+      assert.equal(
+        (await request(`${route}/${parentIncident}`, foreignOfficer)).status,
+        404,
+      );
+      const officerView = data(
+        await request(`${route}/${parentIncident}`, receiver),
+      );
+      assert.equal(officerView.view, "FULL");
+      assert.equal((officerView.allocations as unknown[]).length, 1);
+      assert.deepEqual(officerView.allowedActions, []);
+      const received = await request(
+        `/api/food-safety-reports/${forwarding.id}/receive`,
+        receiver,
+        "POST",
+        {},
+      );
+      assert.equal(received.status, 200);
+      const acknowledged = data(
+        await request(`${route}/${parentIncident}`, parent),
+      );
+      assert.equal(acknowledged.status, "AUTHORITY_ACKNOWLEDGED");
+      assert.deepEqual(
+        (acknowledged.histories as Record<string, unknown>[]).map(
+          (item) => item.toStatus,
+        ),
+        [
+          "PENDING_SCHOOL_REVIEW",
+          "SUBMITTED_TO_AUTHORITY",
+          "AUTHORITY_ACKNOWLEDGED",
+        ],
+      );
+
+      // US3: BGH tự lập hồ sơ gửi thẳng ATTP; người báo khác không thấy.
+      const direct = await request(`${route}/direct`, board, "POST", {
+        ...body,
+        classId: ownClass.id,
+        preliminaryAssessment: "SCHOOL_MEAL_SUSPECTED",
+      });
+      assert.equal(direct.status, 201);
+      assert.equal(data(direct).source, "SCHOOL_DIRECT");
+      assert.equal(data(direct).status, "SUBMITTED_TO_AUTHORITY");
+      assert.equal(record(data(direct).recipientUnit).id, unitB.id);
+      assert.equal(
+        (
+          await request(`${route}/direct`, parent, "POST", {
+            ...body,
+            preliminaryAssessment: "UNDETERMINED",
+          })
+        ).status,
+        403,
+      );
+      assert.deepEqual(ids(await request(route, parent)), [parentIncident]);
+      assert.deepEqual(
+        ids(await request(`${route}?status=SUBMITTED_TO_AUTHORITY`, board)),
+        [data(direct).id],
+      );
+      const inbox = ids(await request(route, receiver));
+      assert.ok(inbox.includes(parentIncident));
+      assert.ok(inbox.includes(data(direct).id));
+      assert.ok(!inbox.includes(teacherIncident));
     },
   );
 });

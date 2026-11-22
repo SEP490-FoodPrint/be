@@ -41,9 +41,10 @@ function setup() {
     recipientUserId: officer.id,
     recipientCommuneFoodSafetyUnitId: unitId,
     receivedAt: null,
-    FoodSafetyIncident: { status: "OPEN" },
+    FoodSafetyIncident: { status: "SUBMITTED_TO_AUTHORITY" },
   };
   let changed = 0;
+  let acknowledged = 0;
   let paused = false;
   const repository = {
     connect: () => {
@@ -74,6 +75,10 @@ function setup() {
       row = { ...row, receivedAt: time };
       return Promise.resolve(1);
     },
+    acknowledgeIncident: () => {
+      acknowledged += 1;
+      return Promise.resolve(1);
+    },
   } satisfies ReportingRepository;
   const service = createReportingService(repository, {
     transaction: (fn) => fn(tx),
@@ -91,6 +96,9 @@ function setup() {
     repository,
     get changed() {
       return changed;
+    },
+    get acknowledged() {
+      return acknowledged;
     },
     get row() {
       return row;
@@ -154,7 +162,10 @@ void test("HTTP officer receive enforces pause, strict query, ownership and pres
   actor = officer;
   f.setRow({ ...f.row, FoodSafetyIncident: { status: "CLOSED" } });
   assert.equal((await request()).status, 409);
-  f.setRow({ ...f.row, FoodSafetyIncident: { status: "OPEN" } });
+  f.setRow({
+    ...f.row,
+    FoodSafetyIncident: { status: "SUBMITTED_TO_AUTHORITY" },
+  });
   f.pause();
   assert.equal((await request()).status, 409);
   assert.equal(f.changed, 0);
@@ -183,7 +194,7 @@ void test("HTTP officer receive enforces pause, strict query, ownership and pres
       receivedAt: receipt,
     },
   });
-  assert.equal(f.row.FoodSafetyIncident.status, "OPEN");
+  assert.equal(f.row.FoodSafetyIncident.status, "SUBMITTED_TO_AUTHORITY");
   assert.equal(Reflect.get(f.row, "status"), "FAILED");
   assert.equal(Reflect.get(f.row, "forwardedAt"), null);
   assert.equal(f.changed, 1);
@@ -210,6 +221,8 @@ void test("officer receives a report once, preserving the same receipt on retry"
   f.pause();
   assert.deepEqual(await f.service.receive({ id }, officer), first);
   assert.equal(f.changed, 1);
+  // FR-008: mỗi lần tiếp nhận (kể cả gọi lại) đều gọi chuyển có điều kiện SUBMITTED_TO_AUTHORITY → AUTHORITY_ACKNOWLEDGED.
+  assert.equal(f.acknowledged, 2);
 });
 void test("paused officer, absent receive permission and different role cannot receive", async () => {
   const f = setup();
@@ -232,7 +245,7 @@ void test("closed report and report for another officer are not accepted", async
   f.setRow({
     ...f.row,
     recipientUserId: "other",
-    FoodSafetyIncident: { status: "OPEN" },
+    FoodSafetyIncident: { status: "SUBMITTED_TO_AUTHORITY" },
   });
   await assert.rejects(f.service.receive({ id }, officer), /không tìm thấy/i);
   assert.equal(f.changed, 0);

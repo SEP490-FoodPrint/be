@@ -407,7 +407,7 @@ void test("organization scope follows trusted membership and nested ownership", 
       "traceability.view",
     ],
   };
-  assert.deepEqual(listScopes.inspection(authorizedOfficer), {
+  assert.deepEqual(listScopes["food-safety-incident"](authorizedOfficer), {
     foodSafetyReportForwardings: { some: reportScope },
   });
   assert.deepEqual(listScopes["food-analysis"](authorizedOfficer), {

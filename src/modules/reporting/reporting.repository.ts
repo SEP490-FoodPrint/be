@@ -72,6 +72,30 @@ export function createReportingRepository(connect = getPrisma) {
       });
       return result.count;
     },
+    /** FR-008: lần tiếp nhận đầu chuyển hồ sơ SUBMITTED_TO_AUTHORITY → AUTHORITY_ACKNOWLEDGED và ghi lịch sử. */
+    async acknowledgeIncident(
+      tx: Prisma.TransactionClient,
+      incidentId: string,
+      actor: { id: string; roleCode: string },
+      at: Date,
+    ): Promise<number> {
+      const result = await tx.foodSafetyIncident.updateMany({
+        where: { id: incidentId, status: "SUBMITTED_TO_AUTHORITY" },
+        data: { status: "AUTHORITY_ACKNOWLEDGED" },
+      });
+      if (result.count === 1)
+        await tx.foodSafetyIncidentStatusHistory.create({
+          data: {
+            incidentId,
+            fromStatus: "SUBMITTED_TO_AUTHORITY",
+            toStatus: "AUTHORITY_ACKNOWLEDGED",
+            actorUserId: actor.id,
+            actorRoleCode: actor.roleCode,
+            createdAt: at,
+          },
+        });
+      return result.count;
+    },
   };
 }
 export type ReportingRepository = ReturnType<typeof createReportingRepository>;
