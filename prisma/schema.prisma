@@ -2533,7 +2533,7 @@ model SupplyBatch1GradePortion {
   gradeId      String      @map("grade_id") @db.Uuid
   portions     Int         @db.Integer
   createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
-  grade        SchoolGrade @relation(fields: [schoolId, gradeId], references: [schoolId, id], onDelete: Restrict, onUpdate: NoAction)
+  grade        SchoolGrade @relation(fields: [schoolId, gradeId], references: [schoolId, id], onDelete: Restrict, onUpdate: NoAction, map: "supply_batch1_grade_portions_grade_fkey")
 
   @@id([schoolId, deliveryDate, gradeId])
   @@map("supply_batch1_grade_portions")
@@ -2548,7 +2548,7 @@ model SupplyBatch1Carryover {
   quantity          Decimal         @db.Decimal(14, 3)
   unit              String          @db.VarChar(30)
   createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
-  entry             IngredientEntry @relation(fields: [ingredientEntryId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  entry             IngredientEntry @relation(fields: [ingredientEntryId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "supply_batch1_carryovers_entry_fkey")
 
   @@id([schoolId, deliveryDate, ingredientEntryId])
   @@map("supply_batch1_carryovers")
