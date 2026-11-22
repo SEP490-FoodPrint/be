@@ -12485,6 +12485,303 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         }),
         "CHECK: COMPLETED cần đủ kết quả",
       );
+
+      // PR6b: ATTP đề nghị chế tài, System Admin duyệt/thực thi; RESTORE không vượt sự cố khác.
+      const enforcementRoute = "/api/supplier-enforcement-actions";
+      const admin = await login(await user("SYSTEM_ADMIN"));
+      const supplierC = await db.supplier.create({
+        data: { name: "Supplier enforcement C" },
+      });
+      await db.schoolSupplierRelationship.create({
+        data: {
+          schoolId: school.id,
+          supplierId: supplierC.id,
+          linkedByUserId: board,
+        },
+      });
+      const supplierCAdmin = await login(
+        await user("INGREDIENT_SUPPLIER_ADMIN", { supplierId: supplierC.id }),
+      );
+      const supplierCStaff = await login(
+        await user("INGREDIENT_SUPPLIER_STAFF", { supplierId: supplierC.id }),
+      );
+      const manualLocked = await user("INGREDIENT_SUPPLIER_STAFF", {
+        supplierId: supplierC.id,
+      });
+      await db.user.update({
+        where: { id: manualLocked.id },
+        data: { status: "LOCKED" },
+      });
+      const statusOf = async (id: string) =>
+        (await db.user.findUniqueOrThrow({ where: { id } })).status;
+      const intakeOfC = async () =>
+        (await db.supplier.findUniqueOrThrow({ where: { id: supplierC.id } }))
+          .intakeState;
+      /** Hồ sơ gửi thẳng → ATTP tiếp nhận → 1 đợt kết luận NCC C AT_FAULT. */
+      const completedIncident = async () => {
+        const filed = await request(`${route}/direct`, board, "POST", {
+          ...body,
+          classId: ownClass.id,
+          preliminaryAssessment: "SCHOOL_MEAL_SUSPECTED",
+        });
+        assert.equal(filed.status, 201);
+        const incidentId = String(data(filed).id);
+        const forwardingRow =
+          await db.foodSafetyReportForwarding.findFirstOrThrow({
+            where: { incidentId },
+          });
+        assert.equal(
+          (
+            await request(
+              `/api/food-safety-reports/${forwardingRow.id}/receive`,
+              receiver,
+              "POST",
+              {},
+            )
+          ).status,
+          200,
+        );
+        const planned = await planInspection(incidentId);
+        assert.equal(planned.status, 201);
+        const inspectionId = String(record(data(planned).inspection).id);
+        const result = await request(
+          `${route}/${incidentId}/inspections/${inspectionId}/result`,
+          receiver,
+          "POST",
+          {
+            resultSummary: "Phát hiện nguyên liệu quá hạn của NCC C",
+            overallConclusion: "SUPPLIER_AT_FAULT",
+            findings: [{ supplierId: supplierC.id, finding: "AT_FAULT" }],
+          },
+        );
+        assert.equal(result.status, 200);
+        assert.equal(data(result).incidentStatus, "INSPECTION_COMPLETED");
+        return { incidentId, inspectionId };
+      };
+      const first6b = await completedIncident();
+      const second6b = await completedIncident();
+      const propose = (
+        incidentId: string,
+        actionType: string,
+        extra: Record<string, unknown> = {},
+        actor = receiver,
+      ) =>
+        request(`${route}/${incidentId}/enforcement-actions`, actor, "POST", {
+          supplierId: supplierC.id,
+          actionType,
+          reason: "Nguyên liệu quá hạn gây ngộ độc tập thể",
+          ...extra,
+        });
+      const approve = (actionId: string, actor = admin) =>
+        request(`${enforcementRoute}/${actionId}/approve`, actor, "POST", {});
+
+      assert.equal(
+        (await propose(first6b.incidentId, "PAUSE_INTAKE", {}, board)).status,
+        403,
+      );
+      assert.equal(
+        (await propose(first6b.incidentId, "PAUSE_INTAKE", {}, foreignOfficer))
+          .status,
+        404,
+      );
+      assert.equal(
+        (await propose(first6b.incidentId, "RESTORE")).status,
+        409,
+        "chưa có hạn chế để gỡ",
+      );
+      assert.equal(
+        (await propose(first6b.incidentId, "LOCK_ACCOUNT")).status,
+        400,
+        "LOCK cần căn cứ",
+      );
+      const pause = await propose(first6b.incidentId, "PAUSE_INTAKE");
+      assert.equal(pause.status, 201);
+      const pauseId = String(data(pause).id);
+      assert.equal(data(pause).decisionStatus, "PENDING");
+      assert.equal(
+        (await propose(first6b.incidentId, "PAUSE_INTAKE")).status,
+        409,
+        "một yêu cầu PENDING mỗi loại",
+      );
+      const queue = await request(
+        `${enforcementRoute}?decisionStatus=PENDING&supplierId=${supplierC.id}`,
+        admin,
+      );
+      assert.equal(queue.status, 200);
+      assert.deepEqual(ids(queue), [pauseId]);
+      assert.deepEqual(
+        ids(
+          await request(
+            `${enforcementRoute}?supplierId=${supplierC.id}`,
+            receiver,
+          ),
+        ),
+        [pauseId],
+      );
+      assert.deepEqual(
+        ids(
+          await request(
+            `${enforcementRoute}?supplierId=${supplierC.id}`,
+            foreignOfficer,
+          ),
+        ),
+        [],
+      );
+      assert.equal(
+        (await request(`${enforcementRoute}/${pauseId}`, foreignOfficer))
+          .status,
+        404,
+      );
+      assert.equal((await request(enforcementRoute, board)).status, 403);
+      assert.equal((await approve(pauseId, receiver)).status, 403);
+      const pauseRaced = await Promise.all([
+        approve(pauseId),
+        approve(pauseId),
+      ]);
+      assert.deepEqual(pauseRaced.map((r) => r.status).sort(), [200, 409]);
+      assert.equal(await intakeOfC(), "PAUSED_FOR_FOOD_SAFETY_INSPECTION");
+      const intakeBack = await request(
+        `/api/users/${supplierCAdmin}/intake-state`,
+        admin,
+        "PATCH",
+        { state: "ACTIVE" },
+      );
+      assert.equal(
+        intakeBack.status,
+        409,
+        "còn hạn chế thì không mở tiếp nhận",
+      );
+
+      // LOCK_ACCOUNT hồ sơ 1: khóa tài khoản ACTIVE, thu hồi phiên.
+      assert.equal(
+        (await request("/api/supplier-staff", supplierCAdmin)).status,
+        200,
+      );
+      const lock1 = await propose(first6b.incidentId, "LOCK_ACCOUNT", {
+        evidenceInspectionId: first6b.inspectionId,
+      });
+      assert.equal(lock1.status, 201);
+      const locked1 = await approve(String(data(lock1).id));
+      assert.equal(locked1.status, 200);
+      assert.equal(data(locked1).lockedAccountCount, 2);
+      assert.equal(record(data(locked1).action).executionStatus, "APPLIED");
+      assert.equal(await statusOf(supplierCAdmin), "LOCKED");
+      assert.equal(await statusOf(supplierCStaff), "LOCKED");
+      assert.equal(
+        (await request("/api/supplier-staff", supplierCAdmin)).status,
+        401,
+        "phiên đã bị thu hồi",
+      );
+      // LOCK_ACCOUNT hồ sơ 2: tài khoản đã LOCKED, không ghi liên kết mới.
+      const lock2 = await propose(second6b.incidentId, "LOCK_ACCOUNT", {
+        evidenceInspectionId: second6b.inspectionId,
+      });
+      const locked2 = await approve(String(data(lock2).id));
+      assert.equal(locked2.status, 200);
+      assert.equal(data(locked2).lockedAccountCount, 0);
+      const detail = data(
+        await request(`${enforcementRoute}/${String(data(lock2).id)}`, admin),
+      );
+      assert.equal((detail.activeRestrictions as unknown[]).length, 3);
+      assert.equal(
+        data(
+          await request(
+            `${enforcementRoute}/${String(data(lock2).id)}`,
+            receiver,
+          ),
+        ).activeRestrictions,
+        null,
+      );
+
+      // Từ chối cần ghi chú.
+      const pause2 = await propose(second6b.incidentId, "PAUSE_INTAKE");
+      const pause2Id = String(data(pause2).id);
+      assert.equal(
+        (
+          await request(
+            `${enforcementRoute}/${pause2Id}/reject`,
+            admin,
+            "POST",
+            {},
+          )
+        ).status,
+        400,
+      );
+      const rejected = await request(
+        `${enforcementRoute}/${pause2Id}/reject`,
+        admin,
+        "POST",
+        { note: "Đã có khóa tài khoản" },
+      );
+      assert.equal(rejected.status, 200);
+      assert.equal(data(rejected).executionStatus, "NOT_APPLIED");
+
+      // Đóng hồ sơ 1 không gỡ hạn chế; RESTORE hồ sơ 1 giữ khóa vì còn hồ sơ 2.
+      assert.equal(
+        (
+          await request(
+            `${route}/${first6b.incidentId}/close`,
+            receiver,
+            "POST",
+            {},
+          )
+        ).status,
+        200,
+      );
+      assert.equal(await statusOf(supplierCAdmin), "LOCKED");
+      const restore1 = await propose(first6b.incidentId, "RESTORE");
+      assert.equal(restore1.status, 201);
+      const restored1 = await approve(String(data(restore1).id));
+      assert.equal(restored1.status, 200);
+      assert.equal(data(restored1).unlockedAccountCount, 0);
+      assert.equal(
+        data(restored1).supplierIntakeState,
+        "PAUSED_FOR_FOOD_SAFETY_INSPECTION",
+      );
+      assert.match(
+        String(record(data(restored1).action).executionNote),
+        /Giữ khóa 2 tài khoản/,
+      );
+      assert.equal(await statusOf(supplierCAdmin), "LOCKED");
+
+      // RESTORE hồ sơ 2: mở đúng tài khoản bị khóa do sự cố, tiếp nhận ACTIVE.
+      const restored2 = await approve(
+        String(data(await propose(second6b.incidentId, "RESTORE")).id),
+      );
+      assert.equal(restored2.status, 200);
+      assert.equal(data(restored2).unlockedAccountCount, 2);
+      assert.equal(await intakeOfC(), "ACTIVE");
+      assert.equal(await statusOf(supplierCAdmin), "ACTIVE");
+      assert.equal(await statusOf(supplierCStaff), "ACTIVE");
+      assert.equal(await statusOf(manualLocked.id), "LOCKED");
+      assert.equal(
+        await db.supplierRestriction.count({
+          where: { supplierId: supplierC.id, isActive: true },
+        }),
+        0,
+      );
+      assert.deepEqual(
+        (
+          await db.accountStatusHistory.findMany({
+            where: { supplierId: supplierC.id },
+            orderBy: { createdAt: "asc" },
+            select: { toStatus: true },
+          })
+        ).map((item) => item.toStatus),
+        ["LOCKED", "LOCKED", "ACTIVE", "ACTIVE"],
+      );
+      await assert.rejects(
+        db.supplierEnforcementAction.create({
+          data: {
+            incidentId: second6b.incidentId,
+            supplierId: supplierC.id,
+            actionType: "LOCK_ACCOUNT",
+            requestedByUserId: receiver,
+            requestReason: "Thiếu căn cứ",
+          },
+        }),
+        "CHECK: LOCK_ACCOUNT cần đợt kiểm tra",
+      );
     },
   );
 });

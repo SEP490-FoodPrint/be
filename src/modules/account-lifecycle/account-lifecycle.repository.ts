@@ -66,6 +66,18 @@ export function createAccountLifecycleRepository(connect = getPrisma) {
         data: { status: "DEACTIVATED" },
       });
     },
+    /** PR6b: NCC còn hạn chế (PAUSE_INTAKE/ACCOUNT_LOCKED) hiệu lực. */
+    async hasActiveRestriction(
+      tx: Prisma.TransactionClient,
+      supplierId: string,
+    ) {
+      return Boolean(
+        await tx.supplierRestriction.findFirst({
+          where: { supplierId, isActive: true },
+          select: { id: true },
+        }),
+      );
+    },
     async setIntakeState(
       tx: Prisma.TransactionClient,
       target: LifecycleTarget,

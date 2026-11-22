@@ -221,6 +221,15 @@ export function createAccountLifecycleService(
             400,
             "Trạng thái tạm dừng không hợp lệ với loại tổ chức",
           );
+        if (
+          scope.kind === "SUPPLIER" &&
+          input.state === "ACTIVE" &&
+          (await repository.hasActiveRestriction(tx, scope.id))
+        )
+          throw new HttpError(
+            409,
+            "NCC còn hạn chế theo sự cố ATTP; cần duyệt yêu cầu khôi phục",
+          );
         if (mapLifecycle(target, scope).intakeState !== input.state) {
           await repository.setIntakeState(tx, target, input.state);
           const updated = await repository.findTarget(tx, target.id);
