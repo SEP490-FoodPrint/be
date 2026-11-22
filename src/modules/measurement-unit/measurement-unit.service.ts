@@ -29,7 +29,6 @@ function dto(r: MeasurementUnitRow): MeasurementUnitResponse {
     name: r.name,
     symbol: r.symbol,
     group: r.group,
-    recommendedStep: r.recommendedStep.toString(),
     status: r.status,
     aliases: r.aliases.map((a) => a.alias),
     createdAt: r.createdAt.toISOString(),

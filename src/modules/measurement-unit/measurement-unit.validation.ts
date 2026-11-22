@@ -15,13 +15,6 @@ const token = requiredText(30)
       ),
     "Đơn vị không hợp lệ",
   );
-const step = z
-  .union([z.string(), z.number()])
-  .transform(String)
-  .refine(
-    (v) => /^(?:0|[1-9]\d{0,10})(?:\.\d{1,3})?$/.test(v) && Number(v) > 0,
-    "Bước khuyến nghị phải dương và tối đa 3 chữ số thập phân",
-  );
 export const unitQuerySchema = z.strictObject({
   page: z.coerce.number().int().min(1).max(1000000).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
@@ -38,13 +31,11 @@ export const unitCreateSchema = z.strictObject({
   name: requiredText(100),
   symbol: token,
   group: z.enum(["MASS", "VOLUME", "COUNT", "OTHER"]),
-  recommendedStep: step,
   aliases: z.array(token).max(30).default([]),
 });
 export const unitUpdateSchema = z
   .strictObject({
     name: requiredText(100).optional(),
-    recommendedStep: step.optional(),
     status: z.enum(["ACTIVE", "INACTIVE"]).optional(),
   })
   .refine(

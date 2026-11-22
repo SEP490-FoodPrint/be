@@ -2506,7 +2506,6 @@ model MeasurementUnit {
   name String @db.VarChar(100)
   symbol String @unique @db.VarChar(30)
   group String @db.VarChar(10)
-  recommendedStep Decimal @map("recommended_step") @db.Decimal(14,3)
   status EntityStatus @default(ACTIVE)
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
