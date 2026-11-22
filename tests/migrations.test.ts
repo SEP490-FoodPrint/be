@@ -1036,7 +1036,7 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
         );
         const incident = (
           await empty.query<{ id: string }>(
-            "INSERT INTO foodprint.food_safety_incidents(school_id,title,description) VALUES ($1,'Incident','Test') RETURNING id",
+            "INSERT INTO foodprint.food_safety_incidents(school_id,title,description,status,source) VALUES ($1,'Incident','Test','SUBMITTED_TO_AUTHORITY','LEGACY_IMPORT') RETURNING id",
             [school.id],
           )
         ).rows[0].id;
@@ -1723,6 +1723,252 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
       }
     },
   );
+  await context.test(
+    "food_safety_incident_workflow: maps legacy statuses per §6.3 and enforces source, cancellation, review and recipient CHECKs",
+    async () => {
+      const name = `foodprint_migration_test_incident_${randomUUID().replaceAll("-", "")}`;
+      await db.query(`CREATE DATABASE "${name}"`);
+      recordLocalTestDatabase(name);
+      const fresh = new URL(url);
+      fresh.pathname = `/${name}`;
+      const client = new Client({ connectionString: fresh.toString() });
+      await client.connect();
+      try {
+        const migration = "20261129000100_food_safety_incident_workflow";
+        await client.query(
+          "CREATE SCHEMA IF NOT EXISTS foodprint; SET search_path = foodprint, public;",
+        );
+        for (const previous of migrationNames.filter(
+          (value) => value < migration,
+        ))
+          await client.query(
+            await readFile(
+              path.join(root, "prisma/migrations", previous, "migration.sql"),
+              "utf8",
+            ),
+          );
+        await client.query("SET search_path = public;");
+        const one = async (sql: string, values: unknown[] = []) =>
+          (await client.query<{ id: string }>(sql, values)).rows[0].id;
+        const school = await one(
+          "INSERT INTO foodprint.schools(name) VALUES ('Incident school') RETURNING id",
+        );
+        const unit = await one(
+          "INSERT INTO foodprint.commune_food_safety_units(code,name) VALUES ('INC-A','Unit A') RETURNING id",
+        );
+        const legacy = async (status: string) =>
+          one(
+            "INSERT INTO foodprint.food_safety_incidents(school_id,title,description,status) VALUES ($1,$2,'Legacy',$3::foodprint.incident_status) RETURNING id",
+            [school, status, status],
+          );
+        const openPending = await legacy("OPEN");
+        const openForwarded = await legacy("OPEN");
+        const investigating = await legacy("INVESTIGATING");
+        const resolved = await legacy("RESOLVED");
+        const closed = await legacy("CLOSED");
+        await client.query(
+          "INSERT INTO foodprint.food_safety_report_forwardings(incident_id,recipient_organization,recipient_commune_food_safety_unit_id) VALUES ($1,'Unit A',$2)",
+          [openForwarded, unit],
+        );
+        // Bản chuyển ra ngoài hệ thống (không có đơn vị) vẫn hợp lệ cho dữ liệu cũ.
+        await client.query(
+          "INSERT INTO foodprint.food_safety_report_forwardings(incident_id,recipient_organization) VALUES ($1,'Sở Y tế')",
+          [investigating],
+        );
+        await client.query(
+          await readFile(
+            path.join(root, "prisma/migrations", migration, "migration.sql"),
+            "utf8",
+          ),
+        );
+        const mapped = (
+          await client.query<{
+            id: string;
+            status: string;
+            source: string;
+            recipient: string | null;
+          }>(
+            "SELECT id,status::text,source::text,recipient_commune_food_safety_unit_id AS recipient FROM foodprint.food_safety_incidents",
+          )
+        ).rows;
+        const byId = new Map(mapped.map((row) => [row.id, row]));
+        assert.deepEqual(
+          [openPending, openForwarded, investigating, resolved, closed].map(
+            (id) => [byId.get(id)?.status, byId.get(id)?.recipient ?? null],
+          ),
+          [
+            ["PENDING_SCHOOL_REVIEW", null],
+            ["SUBMITTED_TO_AUTHORITY", unit],
+            ["UNDER_INSPECTION", null],
+            ["INSPECTION_COMPLETED", null],
+            ["CLOSED", null],
+          ],
+        );
+        assert(mapped.every((row) => row.source === "LEGACY_IMPORT"));
+        assert.equal(
+          (
+            await client.query(
+              "SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace WHERE n.nspname='foodprint' AND t.typname='incident_status'",
+            )
+          ).rowCount,
+          0,
+        );
+
+        const role = async (code: string) =>
+          one(
+            "INSERT INTO foodprint.roles(code,name,type) VALUES ($1,$1,'SCHOOL') RETURNING id",
+            [code],
+          );
+        const parentRole = await role("PARENTS_COMMITTEE");
+        await role("HOMEROOM_TEACHER");
+        await role("SCHOOL_MANAGEMENT_BOARD");
+        const parent = await one(
+          "INSERT INTO foodprint.users(role_id,role_code,school_id,username,email,password_hash,full_name,status) VALUES ($1,'PARENTS_COMMITTEE',$2,'incident-parent','incident-parent@example.test','fixture','Parent','ACTIVE') RETURNING id",
+          [parentRole, school],
+        );
+        let sequence = 10000;
+        const insert = (fields: Record<string, unknown>) => {
+          const row: Record<string, unknown> = {
+            school_id: school,
+            title: "Sự cố",
+            description: "Nhiều học sinh đau bụng",
+            status: "PENDING_SCHOOL_REVIEW",
+            source: "PARENT_REPORT",
+            reported_by_user_id: parent,
+            reported_role_code: "PARENTS_COMMITTEE",
+            reported_symptomatic_count: 3,
+            code: `FP-IC-${++sequence}`,
+            ...fields,
+          };
+          const keys = Object.keys(row);
+          return client.query<{ id: string }>(
+            `INSERT INTO foodprint.food_safety_incidents(${keys.join(",")}) VALUES (${keys.map((_, i) => `$${i + 1}`).join(",")}) RETURNING id`,
+            keys.map((key) => row[key]),
+          );
+        };
+        const rejects = async (
+          fields: Record<string, unknown>,
+          constraint: string,
+        ) =>
+          assert.rejects(insert(fields), (error) =>
+            sqlState(error, "23514", constraint),
+          );
+        await rejects({ code: null }, "food_safety_incidents_reporter");
+        await rejects(
+          { reported_symptomatic_count: null },
+          "food_safety_incidents_reporter",
+        );
+        await rejects(
+          { reported_role_code: "HOMEROOM_TEACHER" },
+          "food_safety_incidents_source_role",
+        );
+        await rejects(
+          {
+            source: "TEACHER_REPORT",
+            reported_role_code: "HOMEROOM_TEACHER",
+          },
+          "food_safety_incidents_source_role",
+        );
+        await rejects(
+          { source: "SCHOOL_DIRECT" },
+          "food_safety_incidents_source_role",
+        );
+        await rejects(
+          { reported_symptomatic_count: 0 },
+          "food_safety_incidents_symptomatic_count",
+        );
+        await rejects(
+          { status: "CANCELLED_BY_SCHOOL" },
+          "food_safety_incidents_cancellation",
+        );
+        await rejects(
+          { cancellation_reason: "DUPLICATE_REPORT", cancellation_note: "x" },
+          "food_safety_incidents_cancellation",
+        );
+        await rejects(
+          {
+            status: "CANCELLED_BY_SCHOOL",
+            cancellation_reason: "DUPLICATE_REPORT",
+          },
+          "food_safety_incidents_cancellation",
+        );
+        await rejects(
+          { school_preliminary_assessment: "OUTSIDE_MEAL" },
+          "food_safety_incidents_school_review",
+        );
+        await rejects(
+          { recipient_commune_food_safety_unit_id: unit },
+          "food_safety_incidents_recipient",
+        );
+        const reviewed = {
+          school_preliminary_assessment: "OUTSIDE_MEAL",
+          school_reviewed_by_user_id: parent,
+          school_reviewed_at: new Date(),
+        };
+        await rejects(
+          { status: "SUBMITTED_TO_AUTHORITY", ...reviewed },
+          "food_safety_incidents_recipient",
+        );
+        await rejects(
+          {
+            status: "SUBMITTED_TO_AUTHORITY",
+            recipient_commune_food_safety_unit_id: unit,
+          },
+          "food_safety_incidents_recipient",
+        );
+        await assert.rejects(insert({ code: "FP-IC-1" }), (error) =>
+          sqlState(error, "23514", "food_safety_incidents_code_format"),
+        );
+        const pending = (await insert({})).rows[0].id;
+        await insert({
+          status: "SUBMITTED_TO_AUTHORITY",
+          recipient_commune_food_safety_unit_id: unit,
+          ...reviewed,
+        });
+        await insert({
+          status: "CANCELLED_BY_SCHOOL",
+          cancellation_reason: "DATA_ENTRY_ERROR",
+          cancellation_note: "Nhập nhầm trường",
+        });
+
+        const history = (fields: string, values: unknown[]) =>
+          client.query(
+            `INSERT INTO foodprint.food_safety_incident_status_histories(incident_id,${fields}) VALUES ($1,${values.map((_, i) => `$${i + 2}`).join(",")})`,
+            [pending, ...values],
+          );
+        await history("from_status,to_status,actor_user_id,actor_role_code", [
+          null,
+          "PENDING_SCHOOL_REVIEW",
+          parent,
+          "PARENTS_COMMITTEE",
+        ]);
+        await assert.rejects(
+          history("to_status,actor_user_id", ["PENDING_SCHOOL_REVIEW", parent]),
+          (error) =>
+            sqlState(
+              error,
+              "23514",
+              "food_safety_incident_status_histories_actor",
+            ),
+        );
+        await assert.rejects(
+          history("from_status,to_status", [
+            "PENDING_SCHOOL_REVIEW",
+            "PENDING_SCHOOL_REVIEW",
+          ]),
+          (error) =>
+            sqlState(
+              error,
+              "23514",
+              "food_safety_incident_status_histories_change",
+            ),
+        );
+      } finally {
+        await client.end();
+      }
+    },
+  );
+
   await context.test(
     "authority_complaints: AUTHORITY parent with FP-AC code, one C05 per C03, one ATTP unit per ward",
     async () => {

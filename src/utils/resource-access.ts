@@ -77,7 +77,7 @@ export const RESOURCE_PERMISSIONS = {
   kitchen: ["cooking_batch.view"],
   "meal-attendance": ["daily_meal_portion.view"],
   feedback: ["meal_complaint.view"],
-  inspection: ["food_safety_incident.view"],
+  "food-safety-incident": ["food_safety_incident.view"],
   supplier: ["supplier.view", "supplier.manage"],
   authority: ["authority.view", "food_safety_report.view"],
   class: ["class.view"],
@@ -298,10 +298,22 @@ export const listScopes = {
       };
     throw new HttpError(403, "Vai trò không được phép xem khiếu nại");
   },
-  inspection: (p: AuthPrincipal): Prisma.FoodSafetyIncidentWhereInput => {
-    assertPermission(p, ...RESOURCE_PERMISSIONS["inspection"]);
+  "food-safety-incident": (
+    p: AuthPrincipal,
+  ): Prisma.FoodSafetyIncidentWhereInput => {
+    assertPermission(p, ...RESOURCE_PERMISSIONS["food-safety-incident"]);
     if (p.orgType === "SYSTEM") return {};
-    if (p.orgType === "SCHOOL") return { schoolId: school(p) };
+    if (p.orgType === "SCHOOL" && p.role === ROLES.SCHOOL_ADMINISTRATION)
+      throw new HttpError(403, "Vai trò không được phép xem sự cố");
+    if (p.orgType === "SCHOOL" && p.role === ROLES.SCHOOL_MANAGEMENT_BOARD)
+      return { schoolId: school(p) };
+    // Q23: người báo (PH/GVCN) chỉ theo dõi hồ sơ mình báo; không thấy hồ sơ BGH tự lập.
+    if (p.orgType === "SCHOOL")
+      return {
+        schoolId: school(p),
+        reportedByUserId: p.id,
+        source: { in: ["PARENT_REPORT", "TEACHER_REPORT"] },
+      };
     if (p.orgType === "AUTHORITY")
       return {
         foodSafetyReportForwardings: {

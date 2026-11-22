@@ -759,10 +759,11 @@ void test("kitchen and nutrition wire contracts use real scoped PostgreSQL data"
   );
   const incident = await db.foodSafetyIncident.create({
     data: {
+      status: "SUBMITTED_TO_AUTHORITY",
+      source: "LEGACY_IMPORT",
       schoolId: schoolA.id,
       title: "Wire held sample",
       description: "Disposable integration incident",
-      status: "OPEN",
       reportedByUserId: chefA.id,
     },
   });

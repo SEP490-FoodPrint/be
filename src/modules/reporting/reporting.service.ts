@@ -108,18 +108,34 @@ export function createReportingService(
         );
         if (!report)
           throw new HttpError(404, "Không tìm thấy yêu cầu kiểm tra");
-        if (report.receivedAt) return mapReceipt(report);
+        if (report.receivedAt) {
+          // Bản chuyển cũ đã tiếp nhận trước PR5: đưa hồ sơ SUBMITTED_TO_AUTHORITY sang AUTHORITY_ACKNOWLEDGED (no-op nếu đã chuyển).
+          await repository.acknowledgeIncident(
+            tx,
+            report.incidentId,
+            { id: actor.id, roleCode: actor.role },
+            report.receivedAt,
+          );
+          return mapReceipt(report);
+        }
         if (report.FoodSafetyIncident.status === "CLOSED")
           throw new HttpError(409, "Yêu cầu kiểm tra đã đóng");
+        const receivedAt = new Date();
         const count = await repository.receive(
           tx,
           report.id,
           actor.id,
           actor.communeFoodSafetyUnitId,
-          new Date(),
+          receivedAt,
         );
         if (count !== 1)
           throw new HttpError(409, "Trạng thái yêu cầu đã thay đổi");
+        await repository.acknowledgeIncident(
+          tx,
+          report.incidentId,
+          { id: actor.id, roleCode: actor.role },
+          receivedAt,
+        );
         const updated = await repository.findForOfficer(
           tx,
           report.id,

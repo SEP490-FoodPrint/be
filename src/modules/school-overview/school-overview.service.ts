@@ -3,7 +3,7 @@ import { getPrisma } from "../../utils/database";
 import { assertPermission } from "../../utils/authorization";
 import { HttpError } from "../../utils/http-error";
 import { ROLES } from "../../constants/roles";
-import { isComplaintSubmitter } from "../../utils/resource-access";
+import { isComplaintSubmitter, listScopes } from "../../utils/resource-access";
 
 function countComplaints(
   rows: { complaintType: string; Complaint: { status: string } }[],
@@ -41,6 +41,12 @@ export async function getSchoolOverview(
     allowed("meal_complaint.view") &&
     (principal.role === ROLES.SCHOOL_MANAGEMENT_BOARD ||
       isComplaintSubmitter(principal.role));
+  // Q23: phụ huynh/GVCN chỉ thấy hồ sơ sự cố mình báo (cùng phạm vi với /api/food-safety-incidents).
+  const incidentScope =
+    allowed("food_safety_incident.view") &&
+    principal.role !== ROLES.SCHOOL_ADMINISTRATION
+      ? listScopes["food-safety-incident"](principal)
+      : null;
   // Dashboard access does not grant access to another business module.
   const [school, menus, complaints, suppliers, incidents] =
     await db.$transaction([
@@ -84,10 +90,9 @@ export async function getSchoolOverview(
         _count: { _all: true },
       }),
       db.foodSafetyIncident.findMany({
-        where: {
-          schoolId,
-          ...(!allowed("food_safety_incident.view") ? { id: { in: [] } } : {}),
-        },
+        where: incidentScope
+          ? { ...incidentScope, schoolId }
+          : { schoolId, id: { in: [] } },
         select: {
           id: true,
           title: true,
@@ -108,7 +113,7 @@ export async function getSchoolOverview(
     )
       ? suppliers.map(({ status, _count }) => ({ status, count: _count._all }))
       : null,
-    incidents: allowed("food_safety_incident.view") ? incidents : null,
+    incidents: incidentScope ? incidents : null,
     updatedAt: new Date().toISOString(),
   };
 }

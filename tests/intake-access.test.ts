@@ -444,7 +444,7 @@ void test("paused officer cannot receive a new report but can re-read its receip
         recipientUserId: officer.id,
         recipientCommuneFoodSafetyUnitId: "unit-1",
         receivedAt,
-        FoodSafetyIncident: { status: "OPEN" },
+        FoodSafetyIncident: { status: "SUBMITTED_TO_AUTHORITY" },
       }),
   };
   const service = createIntakeAccessService(repo, () =>

@@ -553,6 +553,14 @@ export const INITIAL_PERMISSIONS = [
     description: "Tạo báo cáo sự cố an toàn thực phẩm.",
   },
   {
+    code: "food_safety_incident.report",
+    name: "Báo cáo sự cố an toàn thực phẩm lên Ban Giám hiệu",
+    module: "food_safety_incident",
+    action: "report",
+    description:
+      "Phụ huynh (Ban đại diện) hoặc GVCN báo cáo sự cố lên Ban Giám hiệu và theo dõi tiến độ hồ sơ mình đã báo.",
+  },
+  {
     code: "food_safety_incident.manage",
     name: "Quản lý sự cố an toàn thực phẩm",
     module: "food_safety_incident",
@@ -794,6 +802,8 @@ export const INITIAL_ROLE_PERMISSIONS = [
   ["HOMEROOM_TEACHER", "meal_complaint.view"],
   ["HOMEROOM_TEACHER", "daily_meal_portion.view"],
   ["HOMEROOM_TEACHER", "daily_meal_portion.update"],
+  ["HOMEROOM_TEACHER", "food_safety_incident.view"],
+  ["HOMEROOM_TEACHER", "food_safety_incident.report"],
   ["PARENTS_COMMITTEE", "dashboard.view"],
   ["PARENTS_COMMITTEE", "delivery.view"],
   ["PARENTS_COMMITTEE", "delivery.inspect"],
@@ -803,6 +813,7 @@ export const INITIAL_ROLE_PERMISSIONS = [
   ["PARENTS_COMMITTEE", "authority_complaint.submit"],
   ["PARENTS_COMMITTEE", "authority_complaint.view"],
   ["PARENTS_COMMITTEE", "food_safety_incident.view"],
+  ["PARENTS_COMMITTEE", "food_safety_incident.report"],
   ["INGREDIENT_MANAGEMENT_DEPARTMENT", "dashboard.view"],
   ["INGREDIENT_MANAGEMENT_DEPARTMENT", "menu.view"],
   ["INGREDIENT_MANAGEMENT_DEPARTMENT", "ingredient.view"],

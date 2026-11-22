@@ -202,7 +202,8 @@ export function createRetainedSampleRepository(read?: ListReader) {
       return tx.foodSafetyIncident.findFirst({
         where: {
           schoolId,
-          status: { in: ["OPEN", "INVESTIGATING"] },
+          // Hồ sơ còn hiệu lực: mọi trạng thái trừ đã đóng/đã hủy (specs/food-safety-incident-workflow FR-010).
+          status: { notIn: ["CLOSED", "CANCELLED_BY_SCHOOL"] },
           OR: [
             { foodAnalysisResults: { some: { retainedFoodSampleId: id } } },
             {
