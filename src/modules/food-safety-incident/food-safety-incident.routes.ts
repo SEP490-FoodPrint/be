@@ -33,6 +33,12 @@ export function createFoodSafetyIncidentRouter(
     controller.createDirect,
   );
   router.get("/:id", authHandler, resource, controller.getOne);
+  router.get(
+    "/:id/trace-snapshots/:version",
+    authHandler,
+    resource,
+    controller.getTraceSnapshot,
+  );
   router.post(
     "/:id/forward",
     authHandler,

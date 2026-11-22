@@ -12176,6 +12176,107 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         ],
       );
 
+      // PR5b: snapshot v1 khi chuyển (suất ăn chưa có mẻ nấu → PARTIAL), bản chuyển trỏ tới snapshot.
+      const snapshotRoute = (id: string, version: number) =>
+        `${route}/${id}/trace-snapshots/${version}`;
+      const v1 = await db.foodSafetyIncidentTraceSnapshot.findUniqueOrThrow({
+        where: {
+          incidentId_version: { incidentId: parentIncident, version: 1 },
+        },
+      });
+      assert.equal(v1.completeness, "PARTIAL");
+      assert.deepEqual(v1.missingReasons, [
+        { code: "ALLOCATION_WITHOUT_COOKING_BATCH", mealAllocationId: served },
+      ]);
+      assert.equal(forwarding.traceSnapshotId, v1.id);
+      assert.equal(officerView.traceCompleteness, "PARTIAL");
+      assert.deepEqual(
+        (officerView.forwardings as Record<string, unknown>[]).map(
+          (item) => item.traceSnapshotVersion,
+        ),
+        [1],
+      );
+      assert.equal(
+        await db.foodSafetyIncidentTraceSnapshot.count({
+          where: { incidentId: parentIncident },
+        }),
+        1,
+        "lượt chuyển thua đồng thời không để lại snapshot",
+      );
+      // Bổ sung suất ăn sau khi ATTP tiếp nhận → v2 + bản chuyển bổ sung, trạng thái giữ nguyên.
+      const servedLater = await allocation(
+        otherClass.id,
+        "FINALIZED",
+        "LUNCH",
+        kitchen,
+      );
+      const supplemented = await attach([servedLater]);
+      assert.equal(supplemented.status, 200);
+      assert.equal(
+        record(data(supplemented).incident).status,
+        "AUTHORITY_ACKNOWLEDGED",
+      );
+      assert.equal(data(await attach([servedLater])).added, 0);
+      const snapshots = await db.foodSafetyIncidentTraceSnapshot.findMany({
+        where: { incidentId: parentIncident },
+        orderBy: { version: "asc" },
+      });
+      assert.deepEqual(
+        snapshots.map((item) => item.version),
+        [1, 2],
+      );
+      assert.deepEqual(snapshots[0], v1, "snapshot cũ không đổi");
+      const supplements = await db.foodSafetyReportForwarding.findMany({
+        where: { incidentId: parentIncident },
+        orderBy: { createdAt: "asc" },
+      });
+      assert.deepEqual(
+        supplements.map((item) => item.traceSnapshotId),
+        [v1.id, snapshots[1].id],
+      );
+      assert.equal(supplements[1].recipientUserId, receiver);
+      const v2 = await request(snapshotRoute(parentIncident, 2), receiver);
+      assert.equal(v2.status, 200);
+      assert.equal(data(v2).hashMatches, true);
+      assert.equal(data(v2).payloadHash, snapshots[1].payloadHash);
+      assert.equal(record(data(v2).payload).potentialExposedPortionCount, 60);
+      assert.equal(
+        (await request(snapshotRoute(parentIncident, 1), board)).status,
+        200,
+      );
+      assert.equal(
+        (await request(snapshotRoute(parentIncident, 3), board)).status,
+        404,
+      );
+      assert.equal(
+        (await request(snapshotRoute(parentIncident, 1), parent)).status,
+        403,
+      );
+      assert.equal(
+        (await request(snapshotRoute(parentIncident, 1), foreignOfficer))
+          .status,
+        404,
+      );
+      assert.equal(
+        "traceSnapshots" in
+          data(await request(`${route}/${parentIncident}`, parent)),
+        false,
+      );
+      await assert.rejects(
+        db.foodSafetyIncidentTraceSnapshot.create({
+          data: {
+            incidentId: parentIncident,
+            version: 3,
+            completeness: "COMPLETE",
+            missingReasons: [{ code: "NO_ALLOCATIONS" }],
+            payload: {},
+            payloadHash: snapshots[1].payloadHash,
+            createdByUserId: board,
+          },
+        }),
+        "CHECK: COMPLETE không được có lý do thiếu",
+      );
+
       // US3: BGH tự lập hồ sơ gửi thẳng ATTP; người báo khác không thấy.
       const direct = await request(`${route}/direct`, board, "POST", {
         ...body,
@@ -12186,6 +12287,13 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       assert.equal(data(direct).source, "SCHOOL_DIRECT");
       assert.equal(data(direct).status, "SUBMITTED_TO_AUTHORITY");
       assert.equal(record(data(direct).recipientUnit).id, unitB.id);
+      assert.equal(data(direct).traceCompleteness, "MISSING");
+      assert.deepEqual(
+        (data(direct).traceSnapshots as Record<string, unknown>[]).map(
+          (item) => [item.version, item.completeness],
+        ),
+        [[1, "MISSING"]],
+      );
       assert.equal(
         (
           await request(`${route}/direct`, parent, "POST", {

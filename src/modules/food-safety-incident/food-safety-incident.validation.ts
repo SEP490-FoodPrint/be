@@ -56,6 +56,16 @@ export const foodSafetyIncidentParamsSchema = z.strictObject({
   id: requestUuidSchema,
 });
 
+/** PR5b: `GET /:id/trace-snapshots/:version`. */
+export const foodSafetyIncidentSnapshotParamsSchema = z.strictObject({
+  id: requestUuidSchema,
+  version: z.coerce
+    .number({ error: "version phải là số nguyên dương" })
+    .int({ error: "version phải là số nguyên dương" })
+    .positive({ error: "version phải là số nguyên dương" })
+    .max(1_000_000, { error: "version vượt giới hạn" }),
+});
+
 const preliminaryFields = {
   preliminaryAssessment: z.enum(PRELIMINARY_ASSESSMENTS, {
     error: "Nhận định sơ bộ không hợp lệ",
@@ -115,6 +125,8 @@ export const validateFoodSafetyIncidentListQuery = (value: unknown) =>
   parseRequest(foodSafetyIncidentListQuerySchema, value ?? {});
 export const validateFoodSafetyIncidentParams = (value: unknown) =>
   parseRequest(foodSafetyIncidentParamsSchema, value);
+export const validateFoodSafetyIncidentSnapshotParams = (value: unknown) =>
+  parseRequest(foodSafetyIncidentSnapshotParamsSchema, value);
 export const validateReportFoodSafetyIncident = (value: unknown) =>
   parseRequest(reportFoodSafetyIncidentSchema, value);
 export const validateDirectFoodSafetyIncident = (value: unknown) =>

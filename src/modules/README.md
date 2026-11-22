@@ -220,7 +220,8 @@ Theo [specs/food-safety-incident-workflow](../../specs/food-safety-incident-work
 - `POST /:id/allocations` (BGH, `.manage`): gắn `{mealAllocationIds}` (1–50) đã `DISTRIBUTED`/`FINALIZED` của trường, chỉ thêm, khi hồ sơ chưa đóng/hủy.
 - `GET /:id`: projection theo người xem — `view: "REPORTER"` cho phụ huynh/GVCN (nội dung đã gửi, trạng thái, mốc lịch sử, lý do hủy) và `view: "FULL"` cho BGH, ATTP nhận hồ sơ, System Admin (nhận định, đơn vị nhận, bản chuyển, allocation, lịch sử kèm người thao tác, `allowedActions`). Danh sách lọc tùy chọn `status`.
 - `reporting` (`POST /api/food-safety-reports/:id/receive`): tiếp nhận còn chuyển hồ sơ `SUBMITTED_TO_AUTHORITY` → `AUTHORITY_ACKNOWLEDGED` (có điều kiện, kể cả khi gọi lại bản chuyển đã tiếp nhận từ trước).
-- Snapshot truy xuất, `trace_completeness` và hash thuộc PR5b; mẫu lưu coi hồ sơ còn hiệu lực là mọi trạng thái khác `CLOSED`/`CANCELLED_BY_SCHOOL`; tổng quan trường (`/api/school-overview`) dùng cùng phạm vi đọc.
+- Snapshot truy xuất (PR5b, [specs/food-safety-incident-trace-snapshots](../../specs/food-safety-incident-trace-snapshots/spec.md)): `forward`/`direct` tạo `food_safety_incident_trace_snapshots` v1 (bản chuyển mang `trace_snapshot_id`); `allocations` sau khi đã gửi ATTP và có suất ăn mới tạo phiên bản kế tiếp + bản chuyển bổ sung. Payload chuẩn hóa (suất ăn → mẻ nấu/món → lô → NCC/cơ sở nguồn → mẫu lưu, `potentialExposedPortionCount`) hash `KECCAK-256`; `trace_completeness` `MISSING`/`PARTIAL`/`COMPLETE` kèm `missing_reasons`. `GET /:id/trace-snapshots/:version` cho BGH/ATTP/System (PH/GVCN `403`) trả payload + `hashMatches`. Snapshot không sửa/xóa; neo blockchain chưa làm.
+- Mẫu lưu coi hồ sơ còn hiệu lực là mọi trạng thái khác `CLOSED`/`CANCELLED_BY_SCHOOL`; tổng quan trường (`/api/school-overview`) dùng cùng phạm vi đọc.
 
 ## Quản trị quyền toàn hệ thống
 

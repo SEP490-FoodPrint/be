@@ -25,6 +25,117 @@ const listSelect = {
 
 const person = { select: { id: true, fullName: true } } as const;
 
+const snapshotSummarySelect = {
+  id: true,
+  version: true,
+  completeness: true,
+  missingReasons: true,
+  payloadVersion: true,
+  hashAlgorithm: true,
+  payloadHash: true,
+  createdAt: true,
+  createdByUser: person,
+} as const satisfies Prisma.FoodSafetyIncidentTraceSnapshotSelect;
+
+const snapshotSelect = {
+  ...snapshotSummarySelect,
+  incidentId: true,
+  payload: true,
+} as const satisfies Prisma.FoodSafetyIncidentTraceSnapshotSelect;
+
+/** Chuỗi truy xuất của các suất ăn gắn với hồ sơ (PR5b). */
+const traceSourceSelect = {
+  mealAllocationId: true,
+  MealAllocation: {
+    select: {
+      id: true,
+      status: true,
+      distributedAt: true,
+      finalizedAt: true,
+      DailyMealPortion: {
+        select: {
+          id: true,
+          mealDate: true,
+          mealType: true,
+          totalPortions: true,
+          Class: { select: { id: true, name: true } },
+        },
+      },
+      mealAllocationBatches: {
+        select: {
+          cookingBatchId: true,
+          dishId: true,
+          allocatedPortions: true,
+          CookingBatch: {
+            select: {
+              id: true,
+              batchCode: true,
+              menuDayId: true,
+              mealType: true,
+              status: true,
+              completedAt: true,
+            },
+          },
+          CookingBatchDish: {
+            select: {
+              Dish: { select: { name: true } },
+              cookingBatchLots: {
+                select: {
+                  ingredientLotId: true,
+                  quantityUsed: true,
+                  unit: true,
+                  IngredientLot: {
+                    select: {
+                      id: true,
+                      lotCode: true,
+                      manufactureDate: true,
+                      expiryDate: true,
+                      unit: true,
+                      SourceFacility: {
+                        select: {
+                          id: true,
+                          supplierId: true,
+                          name: true,
+                          facilityCode: true,
+                        },
+                      },
+                      DeliveryItem: {
+                        select: {
+                          ingredientId: true,
+                          ingredientNameSnapshot: true,
+                          Ingredient: { select: { name: true } },
+                          Delivery: {
+                            select: {
+                              id: true,
+                              deliveryNo: true,
+                              Supplier: { select: { id: true, name: true } },
+                            },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+              retainedFoodSamples: {
+                select: {
+                  id: true,
+                  sampledAt: true,
+                  status: true,
+                  quantity: true,
+                  unit: true,
+                  storageLocation: true,
+                  photoHash: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+} as const satisfies Prisma.FoodSafetyIncidentAllocationSelect;
+
 const detailSelect = {
   ...listSelect,
   reportedRoleCode: true,
@@ -34,6 +145,7 @@ const detailSelect = {
   schoolReviewedAt: true,
   cancellationReason: true,
   cancellationNote: true,
+  traceCompleteness: true,
   School: { select: { id: true, name: true } },
   User: person,
   SchoolReviewedBy: person,
@@ -48,8 +160,13 @@ const detailSelect = {
       forwardedAt: true,
       receivedAt: true,
       createdAt: true,
+      TraceSnapshot: { select: { version: true } },
     },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  },
+  traceSnapshots: {
+    select: snapshotSummarySelect,
+    orderBy: { version: "asc" },
   },
   foodSafetyIncidentAllocations: {
     select: {
@@ -90,8 +207,31 @@ export type FoodSafetyIncidentDetailRow = Prisma.FoodSafetyIncidentGetPayload<{
 }>;
 export type FoodSafetyIncidentTarget = {
   id: string;
+  code: string | null;
+  schoolId: string;
   status: NonNullable<Status>;
   source: Prisma.FoodSafetyIncidentCreateInput["source"];
+  recipientCommuneFoodSafetyUnitId: string | null;
+};
+export type TraceSourceRow = Prisma.FoodSafetyIncidentAllocationGetPayload<{
+  select: typeof traceSourceSelect;
+}>;
+export type TraceSnapshotRow =
+  Prisma.FoodSafetyIncidentTraceSnapshotGetPayload<{
+    select: typeof snapshotSelect;
+  }>;
+export type TraceCompletenessValue = NonNullable<
+  Prisma.FoodSafetyIncidentCreateInput["traceCompleteness"]
+>;
+export type NewTraceSnapshot = {
+  incidentId: string;
+  completeness: TraceCompletenessValue;
+  missingReasons: readonly object[];
+  payload: object;
+  payloadVersion: number;
+  payloadHash: string;
+  createdByUserId: string;
+  at: Date;
 };
 export type IncidentActor = { id: string; roleCode: string };
 export type IncidentRecipient = {
@@ -139,7 +279,14 @@ export function createFoodSafetyIncidentRepository(connect = getPrisma) {
     ): Promise<FoodSafetyIncidentTarget | null> {
       return tx.foodSafetyIncident.findFirst({
         where: { id, schoolId },
-        select: { id: true, status: true, source: true },
+        select: {
+          id: true,
+          code: true,
+          schoolId: true,
+          status: true,
+          source: true,
+          recipientCommuneFoodSafetyUnitId: true,
+        },
       });
     },
     findActiveClass(
@@ -187,6 +334,15 @@ export function createFoodSafetyIncidentRepository(connect = getPrisma) {
     ): Promise<{ id: string; name: string } | null> {
       return tx.communeFoodSafetyUnit.findFirst({
         where: { locationId, status: "ACTIVE" },
+        select: { id: true, name: true },
+      });
+    },
+    findActiveUnit(
+      tx: Tx,
+      unitId: string,
+    ): Promise<{ id: string; name: string } | null> {
+      return tx.communeFoodSafetyUnit.findFirst({
+        where: { id: unitId, status: "ACTIVE" },
         select: { id: true, name: true },
       });
     },
@@ -276,12 +432,14 @@ export function createFoodSafetyIncidentRepository(connect = getPrisma) {
         incidentId: string;
         recipient: IncidentRecipient;
         forwardedByUserId: string;
+        traceSnapshotId: string;
         at: Date;
       },
     ): Promise<void> {
       await tx.foodSafetyReportForwarding.create({
         data: {
           incidentId: data.incidentId,
+          traceSnapshotId: data.traceSnapshotId,
           recipientCommuneFoodSafetyUnitId: data.recipient.unitId,
           recipientUserId: data.recipient.officerId,
           recipientOrganization: data.recipient.unitName,
@@ -337,6 +495,57 @@ export function createFoodSafetyIncidentRepository(connect = getPrisma) {
         skipDuplicates: true,
       });
       return result.count;
+    },
+    findTraceSource(tx: Tx, incidentId: string): Promise<TraceSourceRow[]> {
+      return tx.foodSafetyIncidentAllocation.findMany({
+        where: { incidentId },
+        select: traceSourceSelect,
+        orderBy: { mealAllocationId: "asc" },
+      });
+    },
+    async nextSnapshotVersion(tx: Tx, incidentId: string): Promise<number> {
+      const result = await tx.foodSafetyIncidentTraceSnapshot.aggregate({
+        where: { incidentId },
+        _max: { version: true },
+      });
+      return (result._max.version ?? 0) + 1;
+    },
+    /** Snapshot chỉ được tạo, không sửa/xóa (FR-007); cập nhật mức đầy đủ trên hồ sơ cùng lúc. */
+    async createSnapshot(
+      tx: Tx,
+      version: number,
+      data: NewTraceSnapshot,
+    ): Promise<string> {
+      const row = await tx.foodSafetyIncidentTraceSnapshot.create({
+        data: {
+          incidentId: data.incidentId,
+          version,
+          completeness: data.completeness,
+          missingReasons: data.missingReasons,
+          payload: data.payload,
+          payloadVersion: data.payloadVersion,
+          payloadHash: data.payloadHash,
+          createdByUserId: data.createdByUserId,
+          createdAt: data.at,
+        },
+        select: { id: true },
+      });
+      await tx.foodSafetyIncident.update({
+        where: { id: data.incidentId },
+        data: { traceCompleteness: data.completeness },
+      });
+      return row.id;
+    },
+    findSnapshot(
+      db: Pick<Tx, "foodSafetyIncidentTraceSnapshot">,
+      incidentId: string,
+      version: number,
+      scope: Prisma.FoodSafetyIncidentWhereInput,
+    ): Promise<TraceSnapshotRow | null> {
+      return db.foodSafetyIncidentTraceSnapshot.findFirst({
+        where: { incidentId, version, Incident: scope },
+        select: snapshotSelect,
+      });
     },
   };
 }

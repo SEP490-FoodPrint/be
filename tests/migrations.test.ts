@@ -1970,6 +1970,199 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
   );
 
   await context.test(
+    "food_safety_incident_trace_snapshots: keeps PR5 rows NULL, enforces completeness, hash and same-incident snapshot FK",
+    async () => {
+      const migration = "20261130000100_food_safety_incident_trace_snapshots";
+      const name = `foodprint_migration_test_snapshot_${randomUUID().replaceAll("-", "")}`;
+      await db.query(`CREATE DATABASE "${name}"`);
+      recordLocalTestDatabase(name);
+      const fresh = new URL(url);
+      fresh.pathname = `/${name}`;
+      const client = new Client({ connectionString: fresh.toString() });
+      await client.connect();
+      const apply = async (version: string) =>
+        client.query(
+          await readFile(
+            path.join(root, "prisma/migrations", version, "migration.sql"),
+            "utf8",
+          ),
+        );
+      const placeholders = (count: number) =>
+        Array.from({ length: count }, (_, index) => `$${index + 1}`).join(",");
+      try {
+        await client.query(
+          "CREATE SCHEMA IF NOT EXISTS foodprint; SET search_path = foodprint, public;",
+        );
+        for (const version of migrationNames.filter(
+          (value) => value < migration,
+        ))
+          await apply(version);
+        await client.query("SET search_path = public;");
+        const one = async (sql: string, values: unknown[] = []) =>
+          (await client.query<{ id: string }>(sql, values)).rows[0].id;
+        const school = await one(
+          "INSERT INTO foodprint.schools(name) VALUES ('Snapshot school') RETURNING id",
+        );
+        const unit = await one(
+          "INSERT INTO foodprint.commune_food_safety_units(code,name) VALUES ('SNAP-A','Unit A') RETURNING id",
+        );
+        const boardRole = await one(
+          "INSERT INTO foodprint.roles(code,name,type) VALUES ('SCHOOL_MANAGEMENT_BOARD','BGH','SCHOOL') RETURNING id",
+        );
+        const board = await one(
+          "INSERT INTO foodprint.users(role_id,role_code,school_id,username,email,password_hash,full_name,status) VALUES ($1,'SCHOOL_MANAGEMENT_BOARD',$2,'snapshot-board','snapshot-board@example.test','fixture','Board','ACTIVE') RETURNING id",
+          [boardRole, school],
+        );
+        let sequence = 20000;
+        const incident = (status: string) => {
+          const row: Record<string, unknown> = {
+            school_id: school,
+            title: "Sự cố",
+            description: "Nhiều học sinh đau bụng",
+            status,
+            source: "SCHOOL_DIRECT",
+            reported_by_user_id: board,
+            reported_role_code: "SCHOOL_MANAGEMENT_BOARD",
+            reported_symptomatic_count: 3,
+            code: `FP-IC-${++sequence}`,
+          };
+          if (status !== "PENDING_SCHOOL_REVIEW")
+            Object.assign(row, {
+              school_preliminary_assessment: "UNDETERMINED",
+              school_reviewed_by_user_id: board,
+              school_reviewed_at: new Date(),
+              recipient_commune_food_safety_unit_id: unit,
+            });
+          const keys = Object.keys(row);
+          return one(
+            `INSERT INTO foodprint.food_safety_incidents(${keys.join(",")}) VALUES (${placeholders(keys.length)}) RETURNING id`,
+            keys.map((key) => row[key]),
+          );
+        };
+        // Hồ sơ PR5 đã chuyển ATTP trước PR5b: migration không được hỏng, giữ NULL.
+        const before = await incident("SUBMITTED_TO_AUTHORITY");
+        await client.query(
+          "INSERT INTO foodprint.food_safety_report_forwardings(incident_id,recipient_organization,recipient_commune_food_safety_unit_id) VALUES ($1,'Unit A',$2)",
+          [before, unit],
+        );
+        await client.query("SET search_path = foodprint, public;");
+        await apply(migration);
+        await client.query("SET search_path = public;");
+        const kept = await client.query<{ trace_completeness: string | null }>(
+          "SELECT trace_completeness FROM foodprint.food_safety_incidents WHERE id=$1",
+          [before],
+        );
+        assert.equal(kept.rows[0].trace_completeness, null);
+        assert.equal(
+          (
+            await client.query(
+              "SELECT 1 FROM foodprint.food_safety_report_forwardings WHERE incident_id=$1 AND trace_snapshot_id IS NULL",
+              [before],
+            )
+          ).rowCount,
+          1,
+        );
+
+        const pending = await incident("PENDING_SCHOOL_REVIEW");
+        await assert.rejects(
+          client.query(
+            "UPDATE foodprint.food_safety_incidents SET trace_completeness='MISSING' WHERE id=$1",
+            [pending],
+          ),
+          (error) =>
+            sqlState(
+              error,
+              "23514",
+              "food_safety_incidents_trace_completeness",
+            ),
+        );
+        const hash = `0x${"a".repeat(64)}`;
+        const snapshot = (fields: Record<string, unknown>) => {
+          const row: Record<string, unknown> = {
+            incident_id: before,
+            version: 1,
+            completeness: "MISSING",
+            missing_reasons: JSON.stringify([{ code: "NO_ALLOCATIONS" }]),
+            payload: JSON.stringify({ incident: { id: before } }),
+            payload_hash: hash,
+            created_by_user_id: board,
+            ...fields,
+          };
+          const keys = Object.keys(row);
+          return client.query<{ id: string }>(
+            `INSERT INTO foodprint.food_safety_incident_trace_snapshots(${keys.join(",")}) VALUES (${placeholders(keys.length)}) RETURNING id`,
+            keys.map((key) => row[key]),
+          );
+        };
+        const rejects = async (
+          fields: Record<string, unknown>,
+          constraint: string,
+        ) =>
+          assert.rejects(snapshot(fields), (error) =>
+            sqlState(error, "23514", constraint),
+          );
+        await rejects(
+          { version: 0 },
+          "food_safety_incident_trace_snapshots_version",
+        );
+        await rejects(
+          { payload_hash: hash.toUpperCase() },
+          "food_safety_incident_trace_snapshots_hash",
+        );
+        await rejects(
+          { hash_algorithm: "SHA-256" },
+          "food_safety_incident_trace_snapshots_hash",
+        );
+        await rejects(
+          { payload: "[]" },
+          "food_safety_incident_trace_snapshots_payload",
+        );
+        await rejects(
+          { completeness: "COMPLETE" },
+          "food_safety_incident_trace_snapshots_missing",
+        );
+        await rejects(
+          { missing_reasons: "[]" },
+          "food_safety_incident_trace_snapshots_missing",
+        );
+        await rejects(
+          { missing_reasons: "{}" },
+          "food_safety_incident_trace_snapshots_missing",
+        );
+        const v1 = (await snapshot({})).rows[0].id;
+        await snapshot({
+          version: 2,
+          completeness: "COMPLETE",
+          missing_reasons: "[]",
+        });
+        await assert.rejects(snapshot({}), (error) =>
+          sqlState(
+            error,
+            "23505",
+            "food_safety_incident_trace_snapshots_incident_id_version_key",
+          ),
+        );
+        const other = await incident("SUBMITTED_TO_AUTHORITY");
+        const forward = (incidentId: string) =>
+          client.query(
+            "INSERT INTO foodprint.food_safety_report_forwardings(incident_id,recipient_organization,trace_snapshot_id) VALUES ($1,'Unit A',$2)",
+            [incidentId, v1],
+          );
+        await forward(before);
+        await assert.rejects(forward(other), (error) =>
+          sqlState(
+            error,
+            "23503",
+            "food_safety_report_forwardings_trace_snapshot_fkey",
+          ),
+        );
+      } finally {
+        await client.end();
+      }
+    },
+  );
+
+  await context.test(
     "authority_complaints: AUTHORITY parent with FP-AC code, one C05 per C03, one ATTP unit per ward",
     async () => {
       const migration = "20261128000100_authority_complaints";
