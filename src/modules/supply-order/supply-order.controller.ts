@@ -12,7 +12,9 @@ import {
   validateSupplyOrderAcceptParams,
   validateSupplyOrderAcceptBody,
   validateSupplyOrderAcceptQuery,
+  validateFreshDemandQuery,
 } from "./supply-order.validation";
+import { getFreshDemand } from "./fresh-demand.service";
 
 export function createSupplyOrderController(
   service: SupplyOrderService = supplyOrderService,
@@ -28,6 +30,15 @@ export function createSupplyOrderController(
       validateSupplyOrderDetailQuery(req.query);
       const result = await service.getDetail(params, requirePrincipal(req));
       sendSuccess(res, result, "Lấy chi tiết yêu cầu cung ứng thành công");
+    }),
+    freshDemand: asyncHandler(async (req, res) => {
+      const query = validateFreshDemandQuery(req.query);
+      const result = await getFreshDemand(requirePrincipal(req), query);
+      sendSuccess(
+        res,
+        result,
+        "Tính nhu cầu nguyên liệu tươi theo khối thành công",
+      );
     }),
     accept: asyncHandler(async (req, res) => {
       const params = validateSupplyOrderAcceptParams(req.params);

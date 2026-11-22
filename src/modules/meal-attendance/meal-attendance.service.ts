@@ -228,13 +228,12 @@ export function createMealAttendanceService(
     principal: AuthPrincipal,
   ) {
     if (principal.orgType !== "SCHOOL" || !principal.schoolId)
-      throw new HttpError(403, "C岷 ph岷 vi tr瓢峄漬g");
+      throw new HttpError(403, "Cần phạm vi trường");
     const demand = await db.dailyMealPortion.findFirst({
       where: { id, Class: { schoolId: principal.schoolId } },
       include: { portionGroups: true, dailyAllergyPortions: true },
     });
-    if (!demand)
-      throw new HttpError(404, "Kh么ng t矛m th岷 su岷 膬n c峄 l峄沺");
+    if (!demand) throw new HttpError(404, "Không tìm thấy suất ăn của lớp");
     if (principal.role === "HOMEROOM_TEACHER") {
       const assignment = await db.classHomeroomAssignment.findFirst({
         where: {
@@ -538,16 +537,10 @@ export function createMealAttendanceService(
         "daily_meal_portion.update",
         async (tx, actor, schoolId) => {
           if (actor.role !== "HOMEROOM_TEACHER")
-            throw new HttpError(
-              403,
-              "Ch峄?GVCN ch峄憈 s峄?su岷 nh贸m c峄 l峄沺",
-            );
+            throw new HttpError(403, "Chỉ GVCN chốt số suất nhóm của lớp");
           const demand = await owned(tx, id, actor);
           if (demand.status !== "FINALIZED")
-            throw new HttpError(
-              409,
-              "C岷 ch峄憈 t峄昻g s峄?su岷 c峄 l峄沺 tr瓢峄沜",
-            );
+            throw new HttpError(409, "Cần chốt tổng số suất của lớp trước");
           const meal = {
             menuDayId: input.menuDayId,
             mealType: demand.mealType,
@@ -575,12 +568,12 @@ export function createMealAttendanceService(
           if (!day)
             throw new HttpError(
               404,
-              "Ng脿y th峄眂 膽啤n kh么ng kh峄沺 su岷 膬n c峄 l峄沺",
+              "Ngày thực đơn không khớp suất ăn của lớp",
             );
           if (day.approvalStatus !== "APPROVED")
             throw new HttpError(
               409,
-              "Ch峄?ch峄憈 nh贸m su岷 cho ng脿y th峄眂 膽啤n 膽茫 duy峄噒",
+              "Chỉ chốt nhóm suất cho ngày thực đơn đã duyệt",
             );
           const groups = await assertPortionGroupSafety(tx, meal, schoolId);
           if (
@@ -593,7 +586,7 @@ export function createMealAttendanceService(
           )
             throw new HttpError(
               422,
-              "C谩c nh贸m ph岷 膽岷 膽峄? kh么ng tr霉ng v脿 c峄檔g 膽煤ng t峄昻g s峄?su岷 l峄沺",
+              "Các nhóm phải đầy đủ, không trùng và cộng đúng tổng số suất lớp",
             );
           if (
             demand.portionGroups.some(
@@ -602,7 +595,7 @@ export function createMealAttendanceService(
           )
             throw new HttpError(
               409,
-              "Su岷 膬n 膽茫 膽瓢峄 ch峄憈 cho th峄眂 膽啤n kh谩c; kh么ng ghi 膽猫",
+              "Suất ăn đã được chốt cho thực đơn khác; không ghi đè",
             );
           // Quy suất nhóm riêng về dị ứng khai báo của lớp theo mã hoặc tên.
           const master = await tx.classAllergy.findMany({
@@ -658,7 +651,7 @@ export function createMealAttendanceService(
           )
             throw new HttpError(
               422,
-              "Nh贸m su岷 kh谩c s峄?su岷 d峄?峄﹏g 膽茫 ch峄憈; c岷 膽峄慽 chi岷縰, kh么ng t峄?ghi 膽猫",
+              "Nhóm suất khác số suất dị ứng đã chốt; cần đối chiếu, không tự ghi đè",
             );
           const capacity = expectedSpecialGroupCounts(
             groups,
@@ -675,7 +668,7 @@ export function createMealAttendanceService(
           )
             throw new HttpError(
               422,
-              "S峄?su岷 nh贸m v瓢峄 th么ng tin d峄?峄﹏g c峄 l峄沺; c岷 y t岷?膽峄慽 chi岷縰",
+              "Số suất nhóm vượt thông tin dị ứng của lớp; cần y tế đối chiếu",
             );
           const unchanged =
             demand.portionGroups.length === groups.length &&
@@ -701,7 +694,7 @@ export function createMealAttendanceService(
           )
             throw new HttpError(
               409,
-              "膼茫 l岷璸 m岷?ho岷穋 ph芒n ph峄慽; kh么ng thay 膽峄昳 nh贸m su岷",
+              "Đã lấy mẫu hoặc phân phối; không thay đổi nhóm suất",
             );
           const now = new Date();
           for (const group of input.groups)
@@ -744,7 +737,7 @@ export function createMealAttendanceService(
         "supply_request.create",
       );
       if (principal.orgType !== "SCHOOL" || !principal.schoolId)
-        throw new HttpError(403, "C岷 ph岷 vi tr瓢峄漬g");
+        throw new HttpError(403, "Cần phạm vi trường");
       const db = await connect();
       return db.$transaction(
         async (tx) => {

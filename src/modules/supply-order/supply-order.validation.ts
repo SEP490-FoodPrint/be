@@ -56,3 +56,17 @@ export const validateSupplyOrderDetailParams = (value: unknown) =>
   parseRequest(supplyOrderDetailParamsSchema, value);
 export const validateSupplyOrderDetailQuery = (value: unknown) =>
   parseRequest(supplyOrderEmptySchema, value);
+export const freshDemandQuerySchema = z.strictObject({
+  date: z
+    .string({ error: "Ngày phải có dạng YYYY-MM-DD" })
+    .regex(/^\d{4}-\d{2}-\d{2}$/, { error: "Ngày phải có dạng YYYY-MM-DD" })
+    .refine((v) => !Number.isNaN(Date.parse(`${v}T00:00:00Z`)), {
+      error: "Ngày không hợp lệ",
+    }),
+  batchNo: z
+    .string({ error: "Đợt giao phải là 1 hoặc 2" })
+    .regex(/^[12]$/, { error: "Đợt giao phải là 1 hoặc 2" })
+    .transform((v) => Number(v) as 1 | 2),
+});
+export const validateFreshDemandQuery = (value: unknown) =>
+  parseRequest(freshDemandQuerySchema, value);

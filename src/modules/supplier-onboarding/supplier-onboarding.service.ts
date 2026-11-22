@@ -7,6 +7,10 @@ import {
   loadPrincipal,
 } from "../../utils/authorization";
 import { getPrisma } from "../../utils/database";
+import {
+  loadFreshDemand,
+  saveBatch1Snapshot,
+} from "../supply-order/fresh-demand.service";
 import { HttpError } from "../../utils/http-error";
 import { uuid } from "../../utils/auth-validation";
 import { listScopes } from "../../utils/resource-access";
@@ -1043,8 +1047,16 @@ export function createOrderIntakeService(
     repository?: typeof supplierOrderRepository;
     guard?: Pick<typeof intakeAccess, "assertAccess">;
     write?: typeof write;
+    freshDemand?: {
+      load: typeof loadFreshDemand;
+      saveBatch1: typeof saveBatch1Snapshot;
+    };
   } = {},
 ) {
+  const freshDemand = dependencies.freshDemand ?? {
+    load: loadFreshDemand,
+    saveBatch1: saveBatch1Snapshot,
+  };
   const orderRepository = dependencies.repository ?? supplierOrderRepository;
   const guard = dependencies.guard ?? intakeAccess;
   const writeOrder = dependencies.write ?? write;
@@ -1105,6 +1117,24 @@ export function createOrderIntakeService(
               409,
               `Chưa thể tạo yêu cầu nhập hàng Đợt 2: còn ${notFinalized.length} lớp chưa chốt điểm danh (${notFinalized.map((c) => c.name).join(", ")})`,
             );
+        }
+        // TASK-08: Đợt 1 lưu mốc suất theo khối (dùng chung cho mọi NCC cùng ngày); Đợt 2 bắt buộc đã có mốc.
+        if (body.orderType === "DIRECT_USE" && body.batchNo) {
+          const date = body.deliveryDate.toISOString().slice(0, 10);
+          const demand = await freshDemand.load(
+            tx,
+            schoolId,
+            date,
+            body.batchNo,
+          );
+          // Đợt 2 của ngày có Đợt 1 cũ (chưa có mốc): lưu mốc bù để các đơn sau dùng chung.
+          await freshDemand.saveBatch1(
+            tx,
+            schoolId,
+            date,
+            demand.grades,
+            body.batchNo === 1 ? demand.items : [],
+          );
         }
         const result = await orderRepository.createDraft(tx, {
           schoolId,

@@ -423,6 +423,18 @@ function draftService(
     write: (_p, _s, operation) =>
       operation(tx, schoolActor, schoolActor.schoolId!),
     guard: { assertAccess: () => Promise.resolve(schoolActor) },
+    freshDemand: {
+      load: (_tx, _s, date, batchNo) =>
+        Promise.resolve({
+          date,
+          batchNo,
+          batch1Saved: true,
+          schoolWide: true,
+          grades: [],
+          items: [],
+        }),
+      saveBatch1: () => Promise.resolve(),
+    },
     repository: {
       ...supplierOrderRepository,
       findEntries: () =>

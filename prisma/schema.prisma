@@ -84,6 +84,7 @@ model Class {
 model SchoolGrade {
   weeklyMenus WeeklyMenuGrade[]
   dishRecipes DishGradeRecipe[]
+  supplyBatch1Portions SupplyBatch1GradePortion[]
   id          String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   schoolId    String            @map("school_id") @db.Uuid
   name        String            @db.VarChar(120)
@@ -789,6 +790,8 @@ model IngredientEntry {
   deliveryItems          DeliveryItem[]                  @relation("delivery_items_ingredient_entry_id__ingredient_entries")
   menuMealSeasonings     MenuMealSeasoning[]
   portionGroupAvoidances MenuMealPortionGroupAvoidance[]
+
+  batch1Carryovers SupplyBatch1Carryover[]
 
   @@unique([schoolId, ingredientId])
   @@index([schoolId], map: "idx_ingredient_entries_school_id")
@@ -2520,5 +2523,34 @@ model MeasurementUnitAlias {
   unit MeasurementUnit @relation(fields: [unitId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   @@index([unitId])
   @@map("measurement_unit_aliases")
+  @@schema("foodprint")
+}
+
+/// TASK-08: mốc suất Đợt 1 theo khối, lưu khi tạo yêu cầu nhập hàng tươi Đợt 1; Đợt 2 trừ theo mốc này.
+model SupplyBatch1GradePortion {
+  schoolId     String      @map("school_id") @db.Uuid
+  deliveryDate DateTime    @map("delivery_date") @db.Date
+  gradeId      String      @map("grade_id") @db.Uuid
+  portions     Int         @db.Integer
+  createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  grade        SchoolGrade @relation(fields: [schoolId, gradeId], references: [schoolId, id], onDelete: Restrict, onUpdate: NoAction, map: "supply_batch1_grade_portions_grade_fkey")
+
+  @@id([schoolId, deliveryDate, gradeId])
+  @@map("supply_batch1_grade_portions")
+  @@schema("foodprint")
+}
+
+/// Phần lẻ Đợt 1 theo nguyên liệu: Đợt 1 đặt phần nguyên (làm tròn xuống), phần lẻ chuyển sang Đợt 2 cùng ngày.
+model SupplyBatch1Carryover {
+  schoolId          String          @map("school_id") @db.Uuid
+  deliveryDate      DateTime        @map("delivery_date") @db.Date
+  ingredientEntryId String          @map("ingredient_entry_id") @db.Uuid
+  quantity          Decimal         @db.Decimal(14, 3)
+  unit              String          @db.VarChar(30)
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  entry             IngredientEntry @relation(fields: [ingredientEntryId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "supply_batch1_carryovers_entry_fkey")
+
+  @@id([schoolId, deliveryDate, ingredientEntryId])
+  @@map("supply_batch1_carryovers")
   @@schema("foodprint")
 }
