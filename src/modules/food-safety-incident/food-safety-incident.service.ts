@@ -6,6 +6,10 @@ import {
   databaseOperation,
   withSchoolTransaction,
 } from "../../utils/authorization";
+import {
+  canonicalizeJson,
+  computeCanonicalHash,
+} from "../../utils/canonical-hash";
 import { getPrisma } from "../../utils/database";
 import { HttpError } from "../../utils/http-error";
 import { readListPage } from "../../utils/list-query";
@@ -16,8 +20,11 @@ import {
   type FoodSafetyIncidentDetailRow,
   type FoodSafetyIncidentListRow,
   type FoodSafetyIncidentRepository,
+  type FoodSafetyIncidentTarget,
   type IncidentActor,
   type IncidentRecipient,
+  type TraceSnapshotRow,
+  type TraceSourceRow,
 } from "./food-safety-incident.repository";
 import type {
   AddFoodSafetyIncidentAllocationsRequestDTO,
@@ -35,6 +42,11 @@ import type {
   FoodSafetyIncidentListItemDTO,
   FoodSafetyIncidentListResponseDTO,
   FoodSafetyIncidentReporterDetailDTO,
+  FoodSafetyIncidentTraceSnapshotDTO,
+  FoodSafetyIncidentTraceSnapshotSummaryDTO,
+  TraceCompletenessDTO,
+  TraceMissingReasonDTO,
+  TracePayloadV1DTO,
 } from "./food-safety-incident.response.dto";
 
 type Tx = Prisma.TransactionClient;
@@ -83,6 +95,251 @@ export function allowedIncidentActions(
 
 const iso = (value: Date | null) => value?.toISOString() ?? null;
 const isoDate = (value: Date) => value.toISOString().slice(0, 10);
+
+// ---- PR5b: snapshot truy xuất (specs/food-safety-incident-trace-snapshots) ----
+
+export const TRACE_PAYLOAD_VERSION = 1;
+
+type DecimalLike = { toFixed(digits: number): string };
+const fixed3 = (value: DecimalLike) => value.toFixed(3);
+const optionalDay = (value: Date | null) => (value ? isoDate(value) : null);
+
+/** So sánh theo mã ký tự (không phụ thuộc locale) để thứ tự payload cố định. */
+function byKeys<T>(...keys: ((item: T) => string)[]) {
+  return (left: T, right: T): number => {
+    for (const key of keys) {
+      const a = key(left);
+      const b = key(right);
+      if (a !== b) return a < b ? -1 : 1;
+    }
+    return 0;
+  };
+}
+
+function uniqueBy<T>(items: T[], key: (item: T) => string): T[] {
+  const seen = new Map<string, T>();
+  for (const item of items) if (!seen.has(key(item))) seen.set(key(item), item);
+  return [...seen.values()];
+}
+
+export type TraceSnapshotDraft = {
+  completeness: TraceCompletenessDTO;
+  missingReasons: TraceMissingReasonDTO[];
+  payload: TracePayloadV1DTO;
+};
+
+/** FR-004: dựng payload chuẩn hóa + lý do thiếu từ chuỗi truy xuất của các suất ăn đã gắn. */
+export function buildTraceSnapshot(
+  incident: { id: string; code: string | null; schoolId: string },
+  rows: readonly TraceSourceRow[],
+): TraceSnapshotDraft {
+  const allocations = uniqueBy(
+    rows.map((row) => row.MealAllocation),
+    (allocation) => allocation.id,
+  );
+  const links = allocations.flatMap((allocation) =>
+    allocation.mealAllocationBatches.map((link) => ({
+      ...link,
+      mealAllocationId: allocation.id,
+    })),
+  );
+  const dishKey = (link: { cookingBatchId: string; dishId: string }) =>
+    `${link.cookingBatchId}:${link.dishId}`;
+  const batchDishes = uniqueBy(links, dishKey);
+  const usages = batchDishes.flatMap((link) =>
+    link.CookingBatchDish.cookingBatchLots.map((usage) => ({
+      ...usage,
+      cookingBatchId: link.cookingBatchId,
+      dishId: link.dishId,
+    })),
+  );
+  const lots = uniqueBy(
+    usages.map((usage) => usage.IngredientLot),
+    (lot) => lot.id,
+  );
+  const samples = batchDishes.flatMap((link) =>
+    link.CookingBatchDish.retainedFoodSamples.map((sample) => ({
+      ...sample,
+      cookingBatchId: link.cookingBatchId,
+      dishId: link.dishId,
+    })),
+  );
+
+  const missingReasons: TraceMissingReasonDTO[] = [];
+  if (allocations.length === 0) missingReasons.push({ code: "NO_ALLOCATIONS" });
+  for (const allocation of allocations)
+    if (allocation.mealAllocationBatches.length === 0)
+      missingReasons.push({
+        code: "ALLOCATION_WITHOUT_COOKING_BATCH",
+        mealAllocationId: allocation.id,
+      });
+  for (const link of batchDishes) {
+    const ref = { cookingBatchId: link.cookingBatchId, dishId: link.dishId };
+    if (link.CookingBatchDish.cookingBatchLots.length === 0)
+      missingReasons.push({ code: "COOKING_BATCH_DISH_WITHOUT_LOTS", ...ref });
+    if (link.CookingBatchDish.retainedFoodSamples.length === 0)
+      missingReasons.push({
+        code: "COOKING_BATCH_DISH_WITHOUT_RETAINED_SAMPLE",
+        ...ref,
+      });
+  }
+  missingReasons.sort(byKeys((reason) => canonicalizeJson(reason)));
+
+  const byId = byKeys<{ id: string }>((item) => item.id);
+  const payload: TracePayloadV1DTO = {
+    incident: {
+      id: incident.id,
+      code: incident.code,
+      schoolId: incident.schoolId,
+    },
+    allocations: allocations
+      .map((allocation) => ({
+        id: allocation.id,
+        dailyMealPortionId: allocation.DailyMealPortion.id,
+        classId: allocation.DailyMealPortion.Class.id,
+        className: allocation.DailyMealPortion.Class.name,
+        mealDate: isoDate(allocation.DailyMealPortion.mealDate),
+        mealType: allocation.DailyMealPortion.mealType,
+        totalPortions: allocation.DailyMealPortion.totalPortions,
+        status: allocation.status,
+        distributedAt: iso(allocation.distributedAt),
+        finalizedAt: iso(allocation.finalizedAt),
+      }))
+      .sort(byId),
+    cookingBatches: uniqueBy(
+      links.map((link) => link.CookingBatch),
+      (batch) => batch.id,
+    )
+      .map((batch) => ({
+        id: batch.id,
+        batchCode: batch.batchCode,
+        menuDayId: batch.menuDayId,
+        mealType: batch.mealType,
+        status: batch.status,
+        completedAt: iso(batch.completedAt),
+      }))
+      .sort(byId),
+    allocationBatches: links
+      .map((link) => ({
+        mealAllocationId: link.mealAllocationId,
+        cookingBatchId: link.cookingBatchId,
+        dishId: link.dishId,
+        dishName: link.CookingBatchDish.Dish.name,
+        allocatedPortions: fixed3(link.allocatedPortions),
+      }))
+      .sort(
+        byKeys(
+          (item) => item.mealAllocationId,
+          (item) => item.cookingBatchId,
+          (item) => item.dishId,
+        ),
+      ),
+    lotUsages: usages
+      .map((usage) => ({
+        cookingBatchId: usage.cookingBatchId,
+        dishId: usage.dishId,
+        ingredientLotId: usage.ingredientLotId,
+        quantityUsed: fixed3(usage.quantityUsed),
+        unit: usage.unit,
+      }))
+      .sort(
+        byKeys(
+          (item) => item.cookingBatchId,
+          (item) => item.dishId,
+          (item) => item.ingredientLotId,
+        ),
+      ),
+    ingredientLots: lots
+      .map((lot) => ({
+        id: lot.id,
+        lotCode: lot.lotCode,
+        ingredientId: lot.DeliveryItem.ingredientId,
+        ingredientName:
+          lot.DeliveryItem.ingredientNameSnapshot ??
+          lot.DeliveryItem.Ingredient.name,
+        supplierId: lot.DeliveryItem.Delivery.Supplier.id,
+        deliveryId: lot.DeliveryItem.Delivery.id,
+        deliveryNo: lot.DeliveryItem.Delivery.deliveryNo,
+        sourceFacilityId: lot.SourceFacility?.id ?? null,
+        manufactureDate: optionalDay(lot.manufactureDate),
+        expiryDate: optionalDay(lot.expiryDate),
+        unit: lot.unit,
+      }))
+      .sort(byId),
+    suppliers: uniqueBy(
+      lots.map((lot) => lot.DeliveryItem.Delivery.Supplier),
+      (supplier) => supplier.id,
+    )
+      .map((supplier) => ({ id: supplier.id, name: supplier.name }))
+      .sort(byId),
+    sourceFacilities: uniqueBy(
+      lots.flatMap((lot) => (lot.SourceFacility ? [lot.SourceFacility] : [])),
+      (facility) => facility.id,
+    )
+      .map((facility) => ({
+        id: facility.id,
+        supplierId: facility.supplierId,
+        name: facility.name,
+        facilityCode: facility.facilityCode,
+      }))
+      .sort(byId),
+    retainedSamples: samples
+      .map((sample) => ({
+        id: sample.id,
+        cookingBatchId: sample.cookingBatchId,
+        dishId: sample.dishId,
+        sampledAt: sample.sampledAt.toISOString(),
+        status: sample.status,
+        quantity: sample.quantity ? fixed3(sample.quantity) : null,
+        unit: sample.unit,
+        storageLocation: sample.storageLocation,
+        photoHash: sample.photoHash,
+      }))
+      .sort(byId),
+    potentialExposedPortionCount: allocations.reduce(
+      (total, allocation) => total + allocation.DailyMealPortion.totalPortions,
+      0,
+    ),
+  };
+  const completeness: TraceCompletenessDTO =
+    allocations.length === 0
+      ? "MISSING"
+      : missingReasons.length > 0
+        ? "PARTIAL"
+        : "COMPLETE";
+  return { completeness, missingReasons, payload };
+}
+
+export function hashTracePayload(payload: unknown): string {
+  return computeCanonicalHash(payload).toLowerCase();
+}
+
+function mapSnapshotSummary(
+  row: Omit<TraceSnapshotRow, "incidentId" | "payload">,
+): FoodSafetyIncidentTraceSnapshotSummaryDTO {
+  return {
+    id: row.id,
+    version: row.version,
+    completeness: row.completeness,
+    missingReasons: row.missingReasons as TraceMissingReasonDTO[],
+    payloadVersion: row.payloadVersion,
+    hashAlgorithm: row.hashAlgorithm,
+    payloadHash: row.payloadHash,
+    createdAt: row.createdAt.toISOString(),
+    createdBy: row.createdByUser,
+  };
+}
+
+function mapSnapshot(
+  row: TraceSnapshotRow,
+): FoodSafetyIncidentTraceSnapshotDTO {
+  return {
+    ...mapSnapshotSummary(row),
+    incidentId: row.incidentId,
+    payload: row.payload as unknown as TracePayloadV1DTO,
+    hashMatches: hashTracePayload(row.payload) === row.payloadHash,
+  };
+}
 
 function mapListItem(
   row: FoodSafetyIncidentListRow,
@@ -159,7 +416,10 @@ function mapFullDetail(
       forwardedAt: iso(forwarding.forwardedAt),
       receivedAt: iso(forwarding.receivedAt),
       createdAt: forwarding.createdAt.toISOString(),
+      traceSnapshotVersion: forwarding.TraceSnapshot?.version ?? null,
     })),
+    traceCompleteness: row.traceCompleteness,
+    traceSnapshots: row.traceSnapshots.map(mapSnapshotSummary),
     allocations: row.foodSafetyIncidentAllocations.map((link) => ({
       mealAllocationId: link.mealAllocationId,
       status: link.MealAllocation.status,
@@ -274,7 +534,7 @@ export function createFoodSafetyIncidentService(
     run: (
       tx: Tx,
       actor: AuthPrincipal,
-      target: { id: string; status: string },
+      target: FoodSafetyIncidentTarget,
       schoolId: string,
       at: Date,
     ) => Promise<T>,
@@ -292,6 +552,44 @@ export function createFoodSafetyIncidentService(
         return run(tx, actor, target, schoolId, now());
       },
     );
+  }
+
+  /** FR-004: snapshot phiên bản kế tiếp trong transaction đang khóa dòng hồ sơ. */
+  async function takeSnapshot(
+    tx: Tx,
+    incident: { id: string; code: string | null; schoolId: string },
+    actorId: string,
+    at: Date,
+  ): Promise<string> {
+    const draft = buildTraceSnapshot(
+      incident,
+      await repository.findTraceSource(tx, incident.id),
+    );
+    const version = await repository.nextSnapshotVersion(tx, incident.id);
+    return repository.createSnapshot(tx, version, {
+      incidentId: incident.id,
+      completeness: draft.completeness,
+      missingReasons: draft.missingReasons,
+      payload: draft.payload,
+      payloadVersion: TRACE_PAYLOAD_VERSION,
+      payloadHash: hashTracePayload(draft.payload),
+      createdByUserId: actorId,
+      at,
+    });
+  }
+
+  /** FR-006: bản bổ sung gửi tới đơn vị đang nhận hồ sơ (không suy lại từ phường/xã). */
+  async function supplementRecipient(
+    tx: Tx,
+    unitId: string,
+  ): Promise<IncidentRecipient> {
+    const unit = await repository.findActiveUnit(tx, unitId);
+    if (!unit)
+      throw new HttpError(409, "Đơn vị ATTP nhận hồ sơ không còn hoạt động");
+    const officer = await repository.findUnitOfficer(tx, unit.id);
+    if (!officer)
+      throw new HttpError(409, "Đơn vị ATTP chưa có cán bộ đang hoạt động");
+    return { unitId: unit.id, unitName: unit.name, officerId: officer.id };
   }
 
   return {
@@ -325,6 +623,25 @@ export function createFoodSafetyIncidentService(
       const row = await repository.findDetail(await database(), id, scope);
       if (!row) throw new HttpError(404, NOT_FOUND);
       return mapDetail(row, principal);
+    },
+
+    /** FR-008: payload snapshot cho BGH/ATTP/SYSTEM; người báo không xem (Q23). */
+    async getTraceSnapshot(
+      id: string,
+      version: number,
+      principal: AuthPrincipal,
+    ): Promise<FoodSafetyIncidentTraceSnapshotDTO> {
+      const scope = listScopes["food-safety-incident"](principal);
+      if (isReporterView(principal))
+        throw new HttpError(403, "Người báo không xem được snapshot truy xuất");
+      const row = await repository.findSnapshot(
+        await database(),
+        id,
+        version,
+        scope,
+      );
+      if (!row) throw new HttpError(404, "Không tìm thấy snapshot truy xuất");
+      return mapSnapshot(row);
     },
 
     /** US1: PH/GVCN báo cáo → PENDING_SCHOOL_REVIEW. */
@@ -430,10 +747,17 @@ export function createFoodSafetyIncidentService(
             actor: actorOf(actor),
             at,
           });
+          const traceSnapshotId = await takeSnapshot(
+            tx,
+            { id, code, schoolId },
+            actor.id,
+            at,
+          );
           await repository.createForwarding(tx, {
             incidentId: id,
             recipient,
             forwardedByUserId: actor.id,
+            traceSnapshotId,
             at,
           });
           return mapFullDetail(await readDetail(tx, id), actor);
@@ -470,10 +794,12 @@ export function createFoodSafetyIncidentService(
             actor: actorOf(actor),
             at,
           });
+          const traceSnapshotId = await takeSnapshot(tx, target, actor.id, at);
           await repository.createForwarding(tx, {
             incidentId: id,
             recipient,
             forwardedByUserId: actor.id,
+            traceSnapshotId,
             at,
           });
           return mapFullDetail(await readDetail(tx, id), actor);
@@ -519,7 +845,7 @@ export function createFoodSafetyIncidentService(
         id,
         principal,
         "food_safety_incident.manage",
-        async (tx, actor, target, schoolId) => {
+        async (tx, actor, target, schoolId, at) => {
           if (FINISHED_STATUSES.has(target.status))
             throw new HttpError(409, FINISHED);
           const allocations = await repository.findSchoolAllocations(
@@ -536,6 +862,29 @@ export function createFoodSafetyIncidentService(
             id,
             body.mealAllocationIds,
           );
+          // FR-006: sau khi đã gửi ATTP, mỗi lần bổ sung suất ăn mới → snapshot mới + bản chuyển bổ sung.
+          if (added > 0 && target.status !== "PENDING_SCHOOL_REVIEW") {
+            const recipient = target.recipientCommuneFoodSafetyUnitId
+              ? await supplementRecipient(
+                  tx,
+                  target.recipientCommuneFoodSafetyUnitId,
+                )
+              : null;
+            const traceSnapshotId = await takeSnapshot(
+              tx,
+              target,
+              actor.id,
+              at,
+            );
+            if (recipient)
+              await repository.createForwarding(tx, {
+                incidentId: id,
+                recipient,
+                forwardedByUserId: actor.id,
+                traceSnapshotId,
+                at,
+              });
+          }
           return {
             added,
             incident: mapFullDetail(await readDetail(tx, id), actor),

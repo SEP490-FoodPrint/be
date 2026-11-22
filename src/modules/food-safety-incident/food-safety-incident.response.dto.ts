@@ -83,7 +83,11 @@ export interface FoodSafetyIncidentFullDetailDTO extends Omit<
     forwardedAt: string | null;
     receivedAt: string | null;
     createdAt: string;
+    /** PR5b: phiên bản snapshot gửi kèm; NULL với bản chuyển cũ. */
+    traceSnapshotVersion: number | null;
   }[];
+  traceCompleteness: TraceCompletenessDTO | null;
+  traceSnapshots: FoodSafetyIncidentTraceSnapshotSummaryDTO[];
   allocations: {
     mealAllocationId: string;
     status: "ALLOCATED" | "DISTRIBUTED" | "FINALIZED" | "CANCELLED";
@@ -96,6 +100,109 @@ export interface FoodSafetyIncidentFullDetailDTO extends Omit<
     actor: { id: string; fullName: string; roleCode: string } | null;
     note: string | null;
   })[];
+}
+
+export type TraceCompletenessDTO = "COMPLETE" | "PARTIAL" | "MISSING";
+
+export type TraceMissingReasonDTO =
+  | { code: "NO_ALLOCATIONS" }
+  | { code: "ALLOCATION_WITHOUT_COOKING_BATCH"; mealAllocationId: string }
+  | {
+      code:
+        | "COOKING_BATCH_DISH_WITHOUT_LOTS"
+        | "COOKING_BATCH_DISH_WITHOUT_RETAINED_SAMPLE";
+      cookingBatchId: string;
+      dishId: string;
+    };
+
+export interface FoodSafetyIncidentTraceSnapshotSummaryDTO {
+  id: string;
+  version: number;
+  completeness: TraceCompletenessDTO;
+  missingReasons: TraceMissingReasonDTO[];
+  payloadVersion: number;
+  hashAlgorithm: string;
+  payloadHash: string;
+  createdAt: string;
+  createdBy: { id: string; fullName: string };
+}
+
+/** Payload chuẩn hóa v1: chỉ kiểu nguyên thủy, mảng sắp xếp theo ID. */
+export interface TracePayloadV1DTO {
+  incident: { id: string; code: string | null; schoolId: string };
+  allocations: {
+    id: string;
+    dailyMealPortionId: string;
+    classId: string;
+    className: string;
+    mealDate: string;
+    mealType: string;
+    totalPortions: number;
+    status: string;
+    distributedAt: string | null;
+    finalizedAt: string | null;
+  }[];
+  cookingBatches: {
+    id: string;
+    batchCode: string;
+    menuDayId: string;
+    mealType: string;
+    status: string;
+    completedAt: string | null;
+  }[];
+  allocationBatches: {
+    mealAllocationId: string;
+    cookingBatchId: string;
+    dishId: string;
+    dishName: string;
+    allocatedPortions: string;
+  }[];
+  lotUsages: {
+    cookingBatchId: string;
+    dishId: string;
+    ingredientLotId: string;
+    quantityUsed: string;
+    unit: string;
+  }[];
+  ingredientLots: {
+    id: string;
+    lotCode: string;
+    ingredientId: string;
+    ingredientName: string;
+    supplierId: string;
+    deliveryId: string;
+    deliveryNo: string;
+    sourceFacilityId: string | null;
+    manufactureDate: string | null;
+    expiryDate: string | null;
+    unit: string;
+  }[];
+  suppliers: { id: string; name: string }[];
+  sourceFacilities: {
+    id: string;
+    supplierId: string;
+    name: string;
+    facilityCode: string | null;
+  }[];
+  retainedSamples: {
+    id: string;
+    cookingBatchId: string;
+    dishId: string;
+    sampledAt: string;
+    status: string;
+    quantity: string | null;
+    unit: string | null;
+    storageLocation: string | null;
+    photoHash: string | null;
+  }[];
+  potentialExposedPortionCount: number;
+}
+
+export interface FoodSafetyIncidentTraceSnapshotDTO extends FoodSafetyIncidentTraceSnapshotSummaryDTO {
+  incidentId: string;
+  payload: TracePayloadV1DTO;
+  /** Hash tính lại từ payload đã lưu khớp `payloadHash`. */
+  hashMatches: boolean;
 }
 
 export type FoodSafetyIncidentDetailResponseDTO =

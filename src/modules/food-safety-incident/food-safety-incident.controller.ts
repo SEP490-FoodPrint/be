@@ -12,6 +12,7 @@ import {
   validateDirectFoodSafetyIncident,
   validateFoodSafetyIncidentListQuery,
   validateFoodSafetyIncidentParams,
+  validateFoodSafetyIncidentSnapshotParams,
   validateForwardFoodSafetyIncident,
   validateReportFoodSafetyIncident,
 } from "./food-safety-incident.validation";
@@ -46,6 +47,16 @@ export function createFoodSafetyIncidentController(
         res,
         await service.getOne(id, requirePrincipal(req)),
         "Lấy chi tiết sự cố an toàn thực phẩm thành công",
+      );
+    }),
+    getTraceSnapshot: asyncHandler(async (req, res) => {
+      const { id, version } = validateFoodSafetyIncidentSnapshotParams(
+        req.params,
+      );
+      privateResult(
+        res,
+        await service.getTraceSnapshot(id, version, requirePrincipal(req)),
+        "Lấy snapshot truy xuất thành công",
       );
     }),
     report: asyncHandler(async (req, res) => {

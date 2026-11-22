@@ -596,6 +596,8 @@ model FoodSafetyIncident {
   cancellationReason               FoodSafetyIncidentCancellationReason? @map("cancellation_reason")
   cancellationNote                 String?                               @map("cancellation_note") @db.Text
   recipientCommuneFoodSafetyUnitId String?                               @map("recipient_commune_food_safety_unit_id") @db.Uuid
+  /// PR5b: mức đầy đủ của snapshot truy xuất mới nhất; NULL trước khi gửi ATTP.
+  traceCompleteness                TraceCompleteness?                    @map("trace_completeness")
   occurredAt                       DateTime?                             @map("occurred_at") @db.Timestamptz(6)
   resolvedAt                       DateTime?                             @map("resolved_at") @db.Timestamptz(6)
   createdAt                        DateTime                              @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -611,6 +613,7 @@ model FoodSafetyIncident {
   foodAnalysisResults              FoodAnalysisResult[]                  @relation("food_analysis_results_incident_id__food_safety_incidents")
   incidentSchoolAlerts             IncidentSchoolAlert[]                 @relation("incident_school_alerts_incident_id__food_safety_incidents")
   statusHistories                  FoodSafetyIncidentStatusHistory[]
+  traceSnapshots                   FoodSafetyIncidentTraceSnapshot[]
 
   @@index([schoolId, status], map: "idx_food_safety_incidents_school_status")
   @@index([reportedByUserId, createdAt], map: "idx_food_safety_incidents_reporter", where: raw("(reported_by_user_id IS NOT NULL)"))
@@ -635,6 +638,30 @@ model FoodSafetyIncidentStatusHistory {
 
   @@index([incidentId, createdAt, id], map: "idx_food_safety_incident_status_histories_incident")
   @@map("food_safety_incident_status_histories")
+  @@schema("foodprint")
+}
+
+/// PR5b: snapshot truy xuất bất biến theo phiên bản (specs/food-safety-incident-trace-snapshots).
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model FoodSafetyIncidentTraceSnapshot {
+  id              String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  incidentId      String                       @map("incident_id") @db.Uuid
+  version         Int
+  completeness    TraceCompleteness
+  missingReasons  Json                         @map("missing_reasons")
+  payload         Json
+  payloadVersion  Int                          @default(1) @map("payload_version")
+  hashAlgorithm   String                       @default("KECCAK-256") @map("hash_algorithm") @db.VarChar(20)
+  payloadHash     String                       @map("payload_hash") @db.VarChar(128)
+  createdByUserId String                       @map("created_by_user_id") @db.Uuid
+  createdAt       DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  Incident        FoodSafetyIncident           @relation(fields: [incidentId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  createdByUser   User                         @relation("food_safety_incident_trace_snapshots_created_by_user", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  forwardings     FoodSafetyReportForwarding[]
+
+  @@unique([incidentId, version])
+  @@unique([incidentId, id])
+  @@map("food_safety_incident_trace_snapshots")
   @@schema("foodprint")
 }
 
@@ -663,10 +690,14 @@ model FoodSafetyReportForwarding {
   User                             User?                  @relation("food_safety_report_forwardings_forwarded_by_user_id__users", fields: [forwardedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   recipientUser User? @relation("food_safety_forwarding_recipient_user", fields: [recipientUserId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "food_safety_forwarding_recipient_user_fkey")
+  /// PR5b: snapshot truy xuất gửi kèm; NULL cho bản chuyển cũ.
+  traceSnapshotId String?                          @map("trace_snapshot_id") @db.Uuid
+  TraceSnapshot   FoodSafetyIncidentTraceSnapshot? @relation(fields: [incidentId, traceSnapshotId], references: [incidentId, id], onDelete: Restrict, onUpdate: NoAction, map: "food_safety_report_forwardings_trace_snapshot_fkey")
 
   @@index([recipientUserId, incidentId], map: "idx_food_safety_forwardings_recipient_user")
   @@index([incidentId, createdAt(sort: Desc)], map: "idx_food_safety_forwardings_incident")
   @@index([recipientCommuneFoodSafetyUnitId, createdAt(sort: Desc)], map: "idx_food_safety_forwardings_recipient_unit", where: raw("recipient_commune_food_safety_unit_id IS NOT NULL"))
+  @@index([traceSnapshotId], map: "idx_food_safety_forwardings_trace_snapshot", where: raw("(trace_snapshot_id IS NOT NULL)"))
   @@map("food_safety_report_forwardings")
   @@schema("foodprint")
 }
@@ -1578,6 +1609,7 @@ model User {
   foodSafetyIncidents                          FoodSafetyIncident[]         @relation("food_safety_incidents_reported_by_user_id__users")
   foodSafetyIncidentsReviewed                  FoodSafetyIncident[]         @relation("food_safety_incidents_school_reviewed_by")
   foodSafetyIncidentHistories                  FoodSafetyIncidentStatusHistory[] @relation("food_safety_incident_status_histories_actor_user")
+  foodSafetyIncidentTraceSnapshots             FoodSafetyIncidentTraceSnapshot[] @relation("food_safety_incident_trace_snapshots_created_by_user")
   foodSafetyReportForwardings                  FoodSafetyReportForwarding[] @relation("food_safety_report_forwardings_forwarded_by_user_id__users")
   foodAnalysisResults                          FoodAnalysisResult[]         @relation("food_analysis_results_recorded_by_user_id__users")
   incidentSchoolAlerts                         IncidentSchoolAlert[]        @relation("incident_school_alerts_sent_by_user_id__users")
@@ -1993,6 +2025,16 @@ enum SchoolPreliminaryAssessment {
   UNDETERMINED
 
   @@map("school_preliminary_assessment")
+  @@schema("foodprint")
+}
+
+/// PR5b: mức đầy đủ truy xuất của snapshot.
+enum TraceCompleteness {
+  COMPLETE
+  PARTIAL
+  MISSING
+
+  @@map("trace_completeness")
   @@schema("foodprint")
 }
 
