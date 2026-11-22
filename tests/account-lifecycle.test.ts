@@ -121,6 +121,7 @@ function setup() {
   };
   let ongoing = false;
   let openReports = false;
+  let restricted = false;
   let changed = 0;
   let activeMembers = 2;
   const repo = {
@@ -132,6 +133,7 @@ function setup() {
     lockParents: () => Promise.resolve(),
     hasOngoingOrders: () => Promise.resolve(ongoing),
     hasOpenReports: () => Promise.resolve(openReports),
+    hasActiveRestriction: () => Promise.resolve(restricted),
     countAccounts: () => Promise.resolve({ total: 3, active: activeMembers }),
     deactivateOfficer: () => {
       changed += 1;
@@ -171,6 +173,9 @@ function setup() {
     },
     setOngoing(value: boolean) {
       ongoing = value;
+    },
+    setRestricted(value: boolean) {
+      restricted = value;
     },
     setTarget(value: LifecycleTarget) {
       target = value;
@@ -303,6 +308,34 @@ void test("supplier uses its own scope and inspection-specific state", async () 
   await assert.rejects(
     f.service.setIntakeState({ userId }, { state: "PAUSED" }, testAdmin),
     /không hợp lệ/i,
+  );
+});
+
+void test("PR6b: supplier intake cannot return to ACTIVE while a restriction is active", async () => {
+  const f = setup();
+  f.setTarget({
+    ...f.target,
+    roleCode: "INGREDIENT_SUPPLIER_ADMIN",
+    Role: { type: "SUPPLIER" },
+    schoolId: null,
+    School: null,
+    supplierId: schoolId,
+    Supplier: {
+      intakeState: "PAUSED_FOR_FOOD_SAFETY_INSPECTION",
+      updatedAt: now,
+    },
+  });
+  f.setRestricted(true);
+  await assert.rejects(
+    f.service.setIntakeState({ userId }, { state: "ACTIVE" }, testAdmin),
+    (error: unknown) => error instanceof HttpError && error.statusCode === 409,
+  );
+  assert.equal(f.changed, 0);
+  f.setRestricted(false);
+  assert.equal(
+    (await f.service.setIntakeState({ userId }, { state: "ACTIVE" }, testAdmin))
+      .intakeState,
+    "ACTIVE",
   );
 });
 

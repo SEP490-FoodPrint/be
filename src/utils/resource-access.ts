@@ -107,6 +107,10 @@ export const RESOURCE_PERMISSIONS = {
   reporting: ["food_safety_report.view"],
   "system-complaint": ["system_complaint.view", "system_complaint.submit"],
   "authority-complaint": ["authority_complaint.view"],
+  "supplier-enforcement": [
+    "supplier_enforcement.request",
+    "supplier_enforcement.decide",
+  ],
   "food-analysis": ["food_analysis_result.view"],
   "school-alert": ["school_alert.view"],
   "menu-review": ["menu.view", "menu.review", "menu.approve"],
@@ -548,6 +552,29 @@ export const listScopes = {
     assertPermission(p, ...RESOURCE_PERMISSIONS["school-alert"]);
     if (p.orgType === "SYSTEM") return {};
     if (p.orgType === "SCHOOL") return { targetSchoolId: school(p) };
+    throw new HttpError(
+      403,
+      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
+    );
+  },
+  /** PR6b: System Admin xem mọi yêu cầu; cán bộ ATTP chỉ hồ sơ đơn vị đang nhận. */
+  "supplier-enforcement": (
+    p: AuthPrincipal,
+  ): Prisma.SupplierEnforcementActionWhereInput => {
+    assertPermission(p, ...RESOURCE_PERMISSIONS["supplier-enforcement"]);
+    if (p.orgType === "SYSTEM" && p.role === ROLES.SYSTEM_ADMIN) {
+      assertPermission(p, "supplier_enforcement.decide");
+      return {};
+    }
+    if (
+      p.orgType === "AUTHORITY" &&
+      p.role === ROLES.COMMUNE_FOOD_SAFETY_OFFICER
+    ) {
+      assertPermission(p, "supplier_enforcement.request");
+      return {
+        Incident: { recipientCommuneFoodSafetyUnitId: authority(p) },
+      };
+    }
     throw new HttpError(
       403,
       "Loại tổ chức không có phạm vi truy cập tài nguyên này",

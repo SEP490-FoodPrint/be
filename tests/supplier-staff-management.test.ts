@@ -170,6 +170,7 @@ function createFixture(initialRows: StaffRow[] = []) {
     type: "SUPPLIER",
   };
   let duplicate = false;
+  let accountLock = false;
   let afterLock: (() => void) | undefined;
   let afterCreateFailure: Error | undefined;
   let afterStatusFailure: Error | undefined;
@@ -231,6 +232,13 @@ function createFixture(initialRows: StaffRow[] = []) {
       calls.push("lock");
       afterLock?.();
       return Promise.resolve();
+    },
+    hasAccountLock(
+      _scope: { supplierId: string },
+      tx: Prisma.TransactionClient,
+    ) {
+      assertTx(tx);
+      return Promise.resolve(accountLock);
     },
     duplicateExists(
       scope: { supplierId: string },
@@ -423,6 +431,9 @@ function createFixture(initialRows: StaffRow[] = []) {
     transactions: () => transactions,
     setDuplicate(value: boolean) {
       duplicate = value;
+    },
+    setAccountLock(value: boolean) {
+      accountLock = value;
     },
     setActor(value: AuthPrincipal) {
       actor = value;
@@ -1025,6 +1036,31 @@ void test("US3 duplicate lookup checks email globally and username only within t
   );
   assert.equal(branches.length, 2);
   assert(!("supplierId" in queries[0].where!));
+});
+
+void test("PR6b: supplier under ACCOUNT_LOCKED restriction cannot create or reactivate staff", async () => {
+  const locked = staffRow(1, { status: "LOCKED" });
+  const fixture = createFixture([locked]);
+  fixture.setAccountLock(true);
+  await assert.rejects(
+    () =>
+      fixture.service.create(
+        validateSupplierStaffCreate(createBody),
+        principal,
+      ),
+    (error: unknown) => error instanceof HttpError && error.statusCode === 409,
+  );
+  await assert.rejects(
+    () =>
+      fixture.service.changeStatus(
+        { userId: locked.id },
+        { status: "ACTIVE" },
+        principal,
+      ),
+    (error: unknown) => error instanceof HttpError && error.statusCode === 409,
+  );
+  assert.equal(fixture.rows.length, 1);
+  assert.equal(fixture.rows[0].status, "LOCKED");
 });
 
 void test("US3 create rejects duplicate prechecks with a generic 409 and writes no account", async () => {
@@ -2247,6 +2283,9 @@ void test("CI retry reaches real actor lookup conflicts before locks and during 
               },
               lock() {
                 return Promise.resolve();
+              },
+              hasAccountLock() {
+                return Promise.resolve(false);
               },
               duplicateExists() {
                 return Promise.resolve(false);

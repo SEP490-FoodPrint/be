@@ -1970,6 +1970,234 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
   );
 
   await context.test(
+    "supplier_enforcement: evidence FK, decision/execution CHECKs, one PENDING and one active restriction (NULLS NOT DISTINCT)",
+    async () => {
+      const name = `foodprint_migration_test_enforcement_${randomUUID().replaceAll("-", "")}`;
+      await db.query(`CREATE DATABASE "${name}"`);
+      recordLocalTestDatabase(name);
+      const fresh = new URL(url);
+      fresh.pathname = `/${name}`;
+      const client = new Client({ connectionString: fresh.toString() });
+      await client.connect();
+      try {
+        await client.query(
+          "CREATE SCHEMA IF NOT EXISTS foodprint; SET search_path = foodprint, public;",
+        );
+        for (const version of migrationNames.filter(
+          (value) => value <= "20261202000100_supplier_enforcement",
+        ))
+          await client.query(
+            await readFile(
+              path.join(root, "prisma/migrations", version, "migration.sql"),
+              "utf8",
+            ),
+          );
+        await client.query("SET search_path = public;");
+        const one = async (sql: string, values: unknown[] = []) =>
+          (await client.query<{ id: string }>(sql, values)).rows[0].id;
+        const placeholders = (count: number) =>
+          Array.from({ length: count }, (_, index) => `$${index + 1}`).join(
+            ",",
+          );
+        const school = await one(
+          "INSERT INTO foodprint.schools(name) VALUES ('Enforcement school') RETURNING id",
+        );
+        const incident = await one(
+          "INSERT INTO foodprint.food_safety_incidents(school_id,title,description,status,source) VALUES ($1,'Sự cố','Legacy','INSPECTION_COMPLETED','LEGACY_IMPORT') RETURNING id",
+          [school],
+        );
+        const otherIncident = await one(
+          "INSERT INTO foodprint.food_safety_incidents(school_id,title,description,status,source) VALUES ($1,'Sự cố 2','Legacy','INSPECTION_COMPLETED','LEGACY_IMPORT') RETURNING id",
+          [school],
+        );
+        const role = await one(
+          "INSERT INTO foodprint.roles(code,name,type) VALUES ('SCHOOL_MANAGEMENT_BOARD','BGH','SCHOOL') RETURNING id",
+        );
+        const actor = await one(
+          "INSERT INTO foodprint.users(role_id,role_code,school_id,username,email,password_hash,full_name,status) VALUES ($1,'SCHOOL_MANAGEMENT_BOARD',$2,'enforcement-actor','enforcement-actor@example.test','fixture','Actor','ACTIVE') RETURNING id",
+          [role, school],
+        );
+        const supplier = await one(
+          "INSERT INTO foodprint.suppliers(name) VALUES ('Enforcement supplier') RETURNING id",
+        );
+        const inspection = await one(
+          "INSERT INTO foodprint.food_safety_inspections(incident_id,team_description,scheduled_at,created_by_user_id) VALUES ($1,'Đoàn',now(),$2) RETURNING id",
+          [incident, actor],
+        );
+        const insert = (table: string, row: Record<string, unknown>) => {
+          const keys = Object.keys(row);
+          return client.query<{ id: string }>(
+            `INSERT INTO foodprint.${table}(${keys.join(",")}) VALUES (${placeholders(keys.length)}) RETURNING id`,
+            keys.map((key) => row[key]),
+          );
+        };
+        const action = (fields: Record<string, unknown>) =>
+          insert("supplier_enforcement_actions", {
+            incident_id: incident,
+            supplier_id: supplier,
+            action_type: "PAUSE_INTAKE",
+            requested_by_user_id: actor,
+            request_reason: "Nguyên liệu quá hạn",
+            ...fields,
+          });
+        const rejects = (
+          promise: Promise<unknown>,
+          state: string,
+          constraint: string,
+        ) =>
+          assert.rejects(promise, (error) =>
+            sqlState(error, state, constraint),
+          );
+        await rejects(
+          action({ action_type: "LOCK_ACCOUNT" }),
+          "23514",
+          "supplier_enforcement_actions_lock_evidence",
+        );
+        await rejects(
+          action({ request_reason: "  " }),
+          "23514",
+          "supplier_enforcement_actions_reason",
+        );
+        await rejects(
+          action({ decision_status: "APPROVED" }),
+          "23514",
+          "supplier_enforcement_actions_decision",
+        );
+        await rejects(
+          action({
+            decision_status: "REJECTED",
+            decided_by_user_id: actor,
+            decided_at: new Date(),
+          }),
+          "23514",
+          "supplier_enforcement_actions_decision",
+        );
+        await rejects(
+          action({
+            decision_status: "APPROVED",
+            decided_by_user_id: actor,
+            decided_at: new Date(),
+          }),
+          "23514",
+          "supplier_enforcement_actions_execution",
+        );
+        await rejects(
+          action({
+            decision_status: "APPROVED",
+            decided_by_user_id: actor,
+            decided_at: new Date(),
+            execution_status: "FAILED",
+            executed_at: new Date(),
+          }),
+          "23514",
+          "supplier_enforcement_actions_execution",
+        );
+        // Căn cứ phải là đợt kiểm tra của chính hồ sơ (FK tổ hợp).
+        await rejects(
+          action({
+            incident_id: otherIncident,
+            action_type: "LOCK_ACCOUNT",
+            evidence_inspection_id: inspection,
+          }),
+          "23503",
+          "supplier_enforcement_actions_evidence_inspection_fkey",
+        );
+        const source = (
+          await action({
+            action_type: "LOCK_ACCOUNT",
+            evidence_inspection_id: inspection,
+          })
+        ).rows[0].id;
+        await rejects(
+          action({
+            action_type: "LOCK_ACCOUNT",
+            evidence_inspection_id: inspection,
+          }),
+          "23505",
+          "uq_supplier_enforcement_actions_pending",
+        );
+        await client.query(
+          "UPDATE foodprint.supplier_enforcement_actions SET decision_status='APPROVED',decided_by_user_id=$2,decided_at=now(),execution_status='APPLIED',executed_at=now() WHERE id=$1",
+          [source, actor],
+        );
+
+        const restriction = (fields: Record<string, unknown>) =>
+          insert("supplier_restrictions", {
+            supplier_id: supplier,
+            incident_id: incident,
+            restriction_type: "ACCOUNT_LOCKED",
+            source_action_id: source,
+            ...fields,
+          });
+        await rejects(
+          restriction({ source_action_id: null }),
+          "23514",
+          "supplier_restrictions_source",
+        );
+        await rejects(
+          restriction({ is_active: false }),
+          "23514",
+          "supplier_restrictions_lifted",
+        );
+        await rejects(
+          restriction({ incident_id: otherIncident }),
+          "23503",
+          "supplier_restrictions_source_action_fkey",
+        );
+        const active = (await restriction({})).rows[0].id;
+        await rejects(
+          restriction({}),
+          "23505",
+          "uq_supplier_restrictions_active",
+        );
+        // Hạn chế thủ công (incident_id NULL): NULLS NOT DISTINCT chặn bản thứ hai.
+        await restriction({ incident_id: null, source_action_id: null });
+        await rejects(
+          restriction({ incident_id: null, source_action_id: null }),
+          "23505",
+          "uq_supplier_restrictions_active",
+        );
+        await client.query(
+          "UPDATE foodprint.supplier_restrictions SET is_active=false,lifted_at=now() WHERE id=$1",
+          [active],
+        );
+        await restriction({});
+
+        await client.query(
+          "INSERT INTO foodprint.supplier_restriction_locked_accounts(restriction_id,user_id,previous_status) VALUES ($1,$2,'ACTIVE')",
+          [active, actor],
+        );
+        await rejects(
+          client.query(
+            "INSERT INTO foodprint.supplier_restriction_locked_accounts(restriction_id,user_id,previous_status) VALUES ($1,$2,'LOCKED')",
+            [active, actor],
+          ),
+          "23514",
+          "supplier_restriction_locked_accounts_previous_status",
+        );
+        await rejects(
+          client.query(
+            "INSERT INTO foodprint.account_status_histories(user_id,from_status,to_status,reason,actor_user_id) VALUES ($1,'LOCKED','LOCKED','x',$1)",
+            [actor],
+          ),
+          "23514",
+          "account_status_histories_change",
+        );
+        await rejects(
+          client.query(
+            "INSERT INTO foodprint.account_status_histories(user_id,from_status,to_status,reason,actor_user_id) VALUES ($1,'ACTIVE','LOCKED',' ',$1)",
+            [actor],
+          ),
+          "23514",
+          "account_status_histories_reason",
+        );
+      } finally {
+        await client.end();
+      }
+    },
+  );
+
+  await context.test(
     "food_safety_inspections: result columns follow status, findings keyed by inspection and supplier",
     async () => {
       const name = `foodprint_migration_test_inspection_${randomUUID().replaceAll("-", "")}`;

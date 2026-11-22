@@ -616,6 +616,8 @@ model FoodSafetyIncident {
   statusHistories                  FoodSafetyIncidentStatusHistory[]
   traceSnapshots                   FoodSafetyIncidentTraceSnapshot[]
   inspections                      FoodSafetyInspection[]
+  enforcementActions               SupplierEnforcementAction[]
+  supplierRestrictions             SupplierRestriction[]
 
   @@index([schoolId, status], map: "idx_food_safety_incidents_school_status")
   @@index([reportedByUserId, createdAt], map: "idx_food_safety_incidents_reporter", where: raw("(reported_by_user_id IS NOT NULL)"))
@@ -662,6 +664,7 @@ model FoodSafetyInspection {
   recordedByUser    User?                                @relation("food_safety_inspections_recorded_by_user", fields: [recordedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   createdByUser     User                                 @relation("food_safety_inspections_created_by_user", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   findings          FoodSafetyInspectionSupplierFinding[]
+  enforcementActions SupplierEnforcementAction[]
 
   @@unique([incidentId, id])
   @@index([incidentId, status], map: "idx_food_safety_inspections_incident")
@@ -681,6 +684,104 @@ model FoodSafetyInspectionSupplierFinding {
   @@id([inspectionId, supplierId])
   @@index([supplierId, finding], map: "idx_food_safety_inspection_findings_supplier")
   @@map("food_safety_inspection_supplier_findings")
+  @@schema("foodprint")
+}
+
+/// PR6b: yêu cầu chế tài NCC theo sự cố (specs/supplier-enforcement).
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model SupplierEnforcementAction {
+  id                   String                              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  incidentId           String                              @map("incident_id") @db.Uuid
+  supplierId           String                              @map("supplier_id") @db.Uuid
+  actionType           SupplierEnforcementActionType       @map("action_type")
+  requestedByUserId    String                              @map("requested_by_user_id") @db.Uuid
+  requestReason        String                              @map("request_reason") @db.Text
+  evidenceInspectionId String?                             @map("evidence_inspection_id") @db.Uuid
+  decisionStatus       SupplierEnforcementDecisionStatus   @default(PENDING) @map("decision_status")
+  decidedByUserId      String?                             @map("decided_by_user_id") @db.Uuid
+  decidedAt            DateTime?                           @map("decided_at") @db.Timestamptz(6)
+  decisionNote         String?                             @map("decision_note") @db.Text
+  executionStatus      SupplierEnforcementExecutionStatus  @default(NOT_APPLIED) @map("execution_status")
+  executedAt           DateTime?                           @map("executed_at") @db.Timestamptz(6)
+  executionNote        String?                             @map("execution_note") @db.Text
+  createdAt            DateTime                            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime                            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  Incident             FoodSafetyIncident                  @relation(fields: [incidentId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  Supplier             Supplier                            @relation(fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  EvidenceInspection   FoodSafetyInspection?               @relation(fields: [incidentId, evidenceInspectionId], references: [incidentId, id], onDelete: Restrict, onUpdate: NoAction, map: "supplier_enforcement_actions_evidence_inspection_fkey")
+  requestedByUser      User                                @relation("supplier_enforcement_actions_requested_by_user", fields: [requestedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  decidedByUser        User?                               @relation("supplier_enforcement_actions_decided_by_user", fields: [decidedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  restrictionsCreated  SupplierRestriction[]               @relation("supplier_restrictions_source_action")
+  restrictionsLifted   SupplierRestriction[]               @relation("supplier_restrictions_lifted_by_action")
+  accountStatusHistories AccountStatusHistory[]
+
+  @@unique([id, supplierId, incidentId])
+  @@unique([incidentId, supplierId, actionType], map: "uq_supplier_enforcement_actions_pending", where: raw("(decision_status = 'PENDING'::supplier_enforcement_decision_status)"))
+  @@index([decisionStatus, createdAt], map: "idx_supplier_enforcement_actions_queue")
+  @@index([supplierId, createdAt], map: "idx_supplier_enforcement_actions_supplier")
+  @@map("supplier_enforcement_actions")
+  @@schema("foodprint")
+}
+
+/// PR6b: hạn chế đang/đã hiệu lực trên NCC; UNIQUE NULLS NOT DISTINCT nằm trong SQL migration.
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model SupplierRestriction {
+  id               String                             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  supplierId       String                             @map("supplier_id") @db.Uuid
+  incidentId       String?                            @map("incident_id") @db.Uuid
+  restrictionType  SupplierRestrictionType            @map("restriction_type")
+  sourceActionId   String?                            @map("source_action_id") @db.Uuid
+  isActive         Boolean                            @default(true) @map("is_active")
+  activatedAt      DateTime                           @default(now()) @map("activated_at") @db.Timestamptz(6)
+  liftedAt         DateTime?                          @map("lifted_at") @db.Timestamptz(6)
+  liftedByActionId String?                            @map("lifted_by_action_id") @db.Uuid
+  Supplier         Supplier                           @relation(fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  Incident         FoodSafetyIncident?                @relation(fields: [incidentId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  SourceAction     SupplierEnforcementAction?         @relation("supplier_restrictions_source_action", fields: [sourceActionId, supplierId, incidentId], references: [id, supplierId, incidentId], onDelete: Restrict, onUpdate: NoAction, map: "supplier_restrictions_source_action_fkey")
+  LiftedByAction   SupplierEnforcementAction?         @relation("supplier_restrictions_lifted_by_action", fields: [liftedByActionId, supplierId, incidentId], references: [id, supplierId, incidentId], onDelete: Restrict, onUpdate: NoAction, map: "supplier_restrictions_lifted_by_action_fkey")
+  lockedAccounts   SupplierRestrictionLockedAccount[]
+
+  @@unique([supplierId, incidentId, restrictionType], map: "uq_supplier_restrictions_active", where: raw("is_active"))
+  @@index([incidentId], map: "idx_supplier_restrictions_incident")
+  @@map("supplier_restrictions")
+  @@schema("foodprint")
+}
+
+/// PR6b: tài khoản bị khóa bởi đúng hạn chế ACCOUNT_LOCKED nào.
+model SupplierRestrictionLockedAccount {
+  restrictionId  String              @map("restriction_id") @db.Uuid
+  userId         String              @map("user_id") @db.Uuid
+  previousStatus AccountStatus       @map("previous_status")
+  lockedAt       DateTime            @default(now()) @map("locked_at") @db.Timestamptz(6)
+  unlockedAt     DateTime?           @map("unlocked_at") @db.Timestamptz(6)
+  Restriction    SupplierRestriction @relation(fields: [restrictionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  User           User                @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([restrictionId, userId])
+  @@index([userId], map: "idx_supplier_restriction_locked_accounts_user")
+  @@map("supplier_restriction_locked_accounts")
+  @@schema("foodprint")
+}
+
+/// PR6b: lịch sử khóa/mở tài khoản (append-only).
+model AccountStatusHistory {
+  id             String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId         String                     @map("user_id") @db.Uuid
+  supplierId     String?                    @map("supplier_id") @db.Uuid
+  fromStatus     AccountStatus              @map("from_status")
+  toStatus       AccountStatus              @map("to_status")
+  reason         String                     @db.Text
+  sourceActionId String?                    @map("source_action_id") @db.Uuid
+  actorUserId    String                     @map("actor_user_id") @db.Uuid
+  createdAt      DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+  User           User                       @relation("account_status_histories_user", fields: [userId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  Supplier       Supplier?                  @relation(fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  SourceAction   SupplierEnforcementAction? @relation(fields: [sourceActionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  actorUser      User                       @relation("account_status_histories_actor", fields: [actorUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([userId, createdAt], map: "idx_account_status_histories_user")
+  @@index([sourceActionId], map: "idx_account_status_histories_action")
+  @@map("account_status_histories")
   @@schema("foodprint")
 }
 
@@ -1525,6 +1626,9 @@ model Supplier {
   users                       User[]                       @relation("users_supplier_id__suppliers")
   sourceFacilities            SourceFacility[]             @relation("source_facilities_supplier_id__suppliers")
   foodSafetyInspectionFindings FoodSafetyInspectionSupplierFinding[]
+  enforcementActions          SupplierEnforcementAction[]
+  restrictions                SupplierRestriction[]
+  accountStatusHistories      AccountStatusHistory[]
   schoolSupplierRelationships SchoolSupplierRelationship[] @relation("school_supplier_relationships_supplier_id__suppliers")
   ingredients                 Ingredient[]                 @relation("ingredients_supplier_id__suppliers")
   supplyRequests              SupplyRequest[]              @relation("supply_requests_supplier_id__suppliers")
@@ -1658,6 +1762,11 @@ model User {
   foodSafetyIncidentTraceSnapshots             FoodSafetyIncidentTraceSnapshot[] @relation("food_safety_incident_trace_snapshots_created_by_user")
   foodSafetyInspectionsRecorded                FoodSafetyInspection[] @relation("food_safety_inspections_recorded_by_user")
   foodSafetyInspectionsCreated                 FoodSafetyInspection[] @relation("food_safety_inspections_created_by_user")
+  enforcementActionsRequested                  SupplierEnforcementAction[] @relation("supplier_enforcement_actions_requested_by_user")
+  enforcementActionsDecided                    SupplierEnforcementAction[] @relation("supplier_enforcement_actions_decided_by_user")
+  restrictionLocks                             SupplierRestrictionLockedAccount[]
+  accountStatusHistories                       AccountStatusHistory[]       @relation("account_status_histories_user")
+  accountStatusChanges                         AccountStatusHistory[]       @relation("account_status_histories_actor")
   foodSafetyReportForwardings                  FoodSafetyReportForwarding[] @relation("food_safety_report_forwardings_forwarded_by_user_id__users")
   foodAnalysisResults                          FoodAnalysisResult[]         @relation("food_analysis_results_recorded_by_user_id__users")
   incidentSchoolAlerts                         IncidentSchoolAlert[]        @relation("incident_school_alerts_sent_by_user_id__users")
@@ -2104,6 +2213,41 @@ enum FoodSafetySupplierFinding {
   INCONCLUSIVE
 
   @@map("food_safety_supplier_finding")
+  @@schema("foodprint")
+}
+
+enum SupplierEnforcementActionType {
+  PAUSE_INTAKE
+  LOCK_ACCOUNT
+  RESTORE
+
+  @@map("supplier_enforcement_action_type")
+  @@schema("foodprint")
+}
+
+enum SupplierEnforcementDecisionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+
+  @@map("supplier_enforcement_decision_status")
+  @@schema("foodprint")
+}
+
+enum SupplierEnforcementExecutionStatus {
+  NOT_APPLIED
+  APPLIED
+  FAILED
+
+  @@map("supplier_enforcement_execution_status")
+  @@schema("foodprint")
+}
+
+enum SupplierRestrictionType {
+  PAUSE_INTAKE
+  ACCOUNT_LOCKED
+
+  @@map("supplier_restriction_type")
   @@schema("foodprint")
 }
 

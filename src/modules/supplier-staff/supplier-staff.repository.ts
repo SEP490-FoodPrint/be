@@ -214,6 +214,19 @@ export function createSupplierStaffRepository(connect = getPrisma) {
       });
       return result.count ? this.find(scope, id, tx) : null;
     },
+    /** PR6b: NCC đang có hạn chế ACCOUNT_LOCKED hiệu lực. */
+    async hasAccountLock(scope: SupplierStaffManagementScope, tx: Tx) {
+      return Boolean(
+        await tx.supplierRestriction.findFirst({
+          where: {
+            supplierId: scope.supplierId,
+            restrictionType: "ACCOUNT_LOCKED",
+            isActive: true,
+          },
+          select: { id: true },
+        }),
+      );
+    },
     async duplicateExists(
       scope: SupplierStaffManagementScope,
       username: string,

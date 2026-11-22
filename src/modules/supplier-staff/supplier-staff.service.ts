@@ -81,6 +81,10 @@ function permissionsDto(
       .sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0)),
   };
 }
+/** PR6b (cách 1): không tạo/mở khóa tài khoản khi NCC đang bị khóa do sự cố ATTP. */
+const SUPPLIER_LOCKED =
+  "NCC đang bị khóa tài khoản theo sự cố ATTP; không thể tạo hoặc mở khóa tài khoản";
+
 function active(target: StaffRow) {
   if (target.status !== "ACTIVE")
     throw new HttpError(403, "Chỉ quản lý quyền của tài khoản đang hoạt động");
@@ -211,6 +215,8 @@ export function createSupplierStaffService(
             "Trạng thái tài khoản không hỗ trợ khóa hoặc mở khóa",
           );
         if (target.status === input.status) return detailDto(target);
+        if (input.status === "ACTIVE" && (await repo.hasAccountLock(scope, tx)))
+          throw new HttpError(409, SUPPLIER_LOCKED);
         return detailDto(
           found(
             await repo.setStatus(
@@ -240,6 +246,8 @@ export function createSupplierStaffService(
           role.type !== "SUPPLIER"
         )
           throw new HttpError(503, "Cấu hình vai trò nhân viên không hợp lệ");
+        if (await repo.hasAccountLock(scope, tx))
+          throw new HttpError(409, SUPPLIER_LOCKED);
         if (await repo.duplicateExists(scope, input.username, input.email, tx))
           throw new HttpError(409, "Tên đăng nhập hoặc email đã được sử dụng");
         return detailDto(

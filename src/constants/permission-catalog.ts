@@ -591,6 +591,22 @@ export const INITIAL_PERMISSIONS = [
       "Cán bộ ATTP lập đợt kiểm tra, ghi kết quả và đóng hồ sơ sự cố của đơn vị.",
   },
   {
+    code: "supplier_enforcement.request",
+    name: "Đề nghị chế tài nhà cung cấp",
+    module: "supplier_enforcement",
+    action: "request",
+    description:
+      "Cán bộ ATTP đề nghị tạm dừng tiếp nhận, khóa tài khoản hoặc khôi phục NCC theo hồ sơ sự cố của đơn vị.",
+  },
+  {
+    code: "supplier_enforcement.decide",
+    name: "Duyệt chế tài nhà cung cấp",
+    module: "supplier_enforcement",
+    action: "decide",
+    description:
+      "System Admin duyệt, từ chối và thực thi yêu cầu chế tài NCC do ATTP đề nghị.",
+  },
+  {
     code: "food_safety_report.view",
     name: "Xem báo cáo được chuyển đến",
     module: "food_safety_report",
@@ -729,6 +745,7 @@ export const INITIAL_ROLE_PERMISSIONS = [
   ["SYSTEM_ADMIN", "supplier_relationship.view"],
   ["SYSTEM_ADMIN", "system_complaint.view"],
   ["SYSTEM_ADMIN", "system_complaint.respond"],
+  ["SYSTEM_ADMIN", "supplier_enforcement.decide"],
   ["SYSTEM_ADMIN", "authority.view"],
   ["SYSTEM_ADMIN", "authority.manage"],
   ["SCHOOL_ADMINISTRATION", "system_complaint.submit"],
@@ -857,6 +874,7 @@ export const INITIAL_ROLE_PERMISSIONS = [
   ["COMMUNE_FOOD_SAFETY_OFFICER", "food_safety_report.receive"],
   ["COMMUNE_FOOD_SAFETY_OFFICER", "food_safety_incident.view"],
   ["COMMUNE_FOOD_SAFETY_OFFICER", "food_safety_inspection.manage"],
+  ["COMMUNE_FOOD_SAFETY_OFFICER", "supplier_enforcement.request"],
   ["COMMUNE_FOOD_SAFETY_OFFICER", "authority_complaint.view"],
   ["COMMUNE_FOOD_SAFETY_OFFICER", "authority_complaint.respond"],
   ["SYSTEM_ADMIN", "role.view"],
