@@ -9,7 +9,39 @@ export type FoodSafetyIncidentStatusDTO =
 export type FoodSafetyIncidentSourceDTO =
   "PARENT_REPORT" | "TEACHER_REPORT" | "SCHOOL_DIRECT" | "LEGACY_IMPORT";
 export type FoodSafetyIncidentActionDTO =
-  "FORWARD" | "CANCEL" | "ADD_ALLOCATIONS";
+  "FORWARD" | "CANCEL" | "ADD_ALLOCATIONS" | "PLAN_INSPECTION" | "CLOSE";
+
+/** PR6a: đợt kiểm tra theo projection người báo (Q23) — không có teamDescription, người ghi chỉ tên/vai trò. */
+export interface FoodSafetyIncidentInspectionReporterDTO {
+  id: string;
+  status: "PLANNED" | "COMPLETED";
+  scheduledAt: string;
+  completedAt: string | null;
+  resultSummary: string | null;
+  overallConclusion:
+    | "SUPPLIER_AT_FAULT"
+    | "SCHOOL_AT_FAULT"
+    | "MIXED_FAULT"
+    | "NOT_FOOD_RELATED"
+    | "INCONCLUSIVE"
+    | null;
+  recordedBy: { fullName: string; roleCode: string } | null;
+  findings: {
+    supplier: { id: string; name: string };
+    finding: "AT_FAULT" | "CLEARED" | "INCONCLUSIVE";
+    evidenceNote: string | null;
+  }[];
+}
+
+export interface FoodSafetyIncidentInspectionFullDTO extends Omit<
+  FoodSafetyIncidentInspectionReporterDTO,
+  "recordedBy"
+> {
+  teamDescription: string;
+  createdAt: string;
+  createdBy: { id: string; fullName: string };
+  recordedBy: { id: string; fullName: string; roleCode: string } | null;
+}
 
 export interface FoodSafetyIncidentListItemDTO {
   id: string;
@@ -55,6 +87,7 @@ export interface FoodSafetyIncidentReporterDetailDTO {
   cancellationReason: (typeof CANCELLATION_REASONS)[number] | null;
   cancellationNote: string | null;
   histories: FoodSafetyIncidentHistoryDTO[];
+  inspections: FoodSafetyIncidentInspectionReporterDTO[];
   allowedActions: FoodSafetyIncidentActionDTO[];
   createdAt: string;
   updatedAt: string;
@@ -63,8 +96,9 @@ export interface FoodSafetyIncidentReporterDetailDTO {
 /** Projection đầy đủ cho BGH, ATTP nhận hồ sơ và System Admin. */
 export interface FoodSafetyIncidentFullDetailDTO extends Omit<
   FoodSafetyIncidentReporterDetailDTO,
-  "view" | "histories"
+  "view" | "histories" | "inspections"
 > {
+  inspections: FoodSafetyIncidentInspectionFullDTO[];
   view: "FULL";
   school: { id: string; name: string };
   reportedBy: { id: string; fullName: string } | null;

@@ -615,6 +615,7 @@ model FoodSafetyIncident {
   incidentSchoolAlerts             IncidentSchoolAlert[]                 @relation("incident_school_alerts_incident_id__food_safety_incidents")
   statusHistories                  FoodSafetyIncidentStatusHistory[]
   traceSnapshots                   FoodSafetyIncidentTraceSnapshot[]
+  inspections                      FoodSafetyInspection[]
 
   @@index([schoolId, status], map: "idx_food_safety_incidents_school_status")
   @@index([reportedByUserId, createdAt], map: "idx_food_safety_incidents_reporter", where: raw("(reported_by_user_id IS NOT NULL)"))
@@ -639,6 +640,47 @@ model FoodSafetyIncidentStatusHistory {
 
   @@index([incidentId, createdAt, id], map: "idx_food_safety_incident_status_histories_incident")
   @@map("food_safety_incident_status_histories")
+  @@schema("foodprint")
+}
+
+/// PR6a: đợt kiểm tra ATTP; kết quả ghi một lần (specs/food-safety-inspections).
+/// CHECK constraints are defined in the source SQL and are not represented in Prisma.
+model FoodSafetyInspection {
+  id                String                               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  incidentId        String                               @map("incident_id") @db.Uuid
+  teamDescription   String                               @map("team_description") @db.Text
+  scheduledAt       DateTime                             @map("scheduled_at") @db.Timestamptz(6)
+  status            FoodSafetyInspectionStatus           @default(PLANNED)
+  resultSummary     String?                              @map("result_summary") @db.Text
+  overallConclusion FoodSafetyInspectionConclusion?      @map("overall_conclusion")
+  recordedByUserId  String?                              @map("recorded_by_user_id") @db.Uuid
+  completedAt       DateTime?                            @map("completed_at") @db.Timestamptz(6)
+  createdByUserId   String                               @map("created_by_user_id") @db.Uuid
+  createdAt         DateTime                             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime                             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  Incident          FoodSafetyIncident                   @relation(fields: [incidentId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  recordedByUser    User?                                @relation("food_safety_inspections_recorded_by_user", fields: [recordedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  createdByUser     User                                 @relation("food_safety_inspections_created_by_user", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  findings          FoodSafetyInspectionSupplierFinding[]
+
+  @@unique([incidentId, id])
+  @@index([incidentId, status], map: "idx_food_safety_inspections_incident")
+  @@map("food_safety_inspections")
+  @@schema("foodprint")
+}
+
+/// PR6a: kết luận theo từng NCC của một đợt kiểm tra; chỉ tạo cùng lúc ghi kết quả.
+model FoodSafetyInspectionSupplierFinding {
+  inspectionId String                     @map("inspection_id") @db.Uuid
+  supplierId   String                     @map("supplier_id") @db.Uuid
+  finding      FoodSafetySupplierFinding
+  evidenceNote String?                    @map("evidence_note") @db.Text
+  Inspection   FoodSafetyInspection       @relation(fields: [inspectionId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  Supplier     Supplier                   @relation(fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([inspectionId, supplierId])
+  @@index([supplierId, finding], map: "idx_food_safety_inspection_findings_supplier")
+  @@map("food_safety_inspection_supplier_findings")
   @@schema("foodprint")
 }
 
@@ -1482,6 +1524,7 @@ model Supplier {
   supplierCertifications      SupplierCertification[]      @relation("supplier_certifications_supplier_id__suppliers")
   users                       User[]                       @relation("users_supplier_id__suppliers")
   sourceFacilities            SourceFacility[]             @relation("source_facilities_supplier_id__suppliers")
+  foodSafetyInspectionFindings FoodSafetyInspectionSupplierFinding[]
   schoolSupplierRelationships SchoolSupplierRelationship[] @relation("school_supplier_relationships_supplier_id__suppliers")
   ingredients                 Ingredient[]                 @relation("ingredients_supplier_id__suppliers")
   supplyRequests              SupplyRequest[]              @relation("supply_requests_supplier_id__suppliers")
@@ -1613,6 +1656,8 @@ model User {
   foodSafetyIncidentsReviewed                  FoodSafetyIncident[]         @relation("food_safety_incidents_school_reviewed_by")
   foodSafetyIncidentHistories                  FoodSafetyIncidentStatusHistory[] @relation("food_safety_incident_status_histories_actor_user")
   foodSafetyIncidentTraceSnapshots             FoodSafetyIncidentTraceSnapshot[] @relation("food_safety_incident_trace_snapshots_created_by_user")
+  foodSafetyInspectionsRecorded                FoodSafetyInspection[] @relation("food_safety_inspections_recorded_by_user")
+  foodSafetyInspectionsCreated                 FoodSafetyInspection[] @relation("food_safety_inspections_created_by_user")
   foodSafetyReportForwardings                  FoodSafetyReportForwarding[] @relation("food_safety_report_forwardings_forwarded_by_user_id__users")
   foodAnalysisResults                          FoodAnalysisResult[]         @relation("food_analysis_results_recorded_by_user_id__users")
   incidentSchoolAlerts                         IncidentSchoolAlert[]        @relation("incident_school_alerts_sent_by_user_id__users")
@@ -2031,6 +2076,37 @@ enum SchoolPreliminaryAssessment {
   @@schema("foodprint")
 }
 
+/// PR6a: trạng thái đợt kiểm tra.
+enum FoodSafetyInspectionStatus {
+  PLANNED
+  COMPLETED
+
+  @@map("food_safety_inspection_status")
+  @@schema("foodprint")
+}
+
+/// PR6a: kết luận chung của đợt kiểm tra.
+enum FoodSafetyInspectionConclusion {
+  SUPPLIER_AT_FAULT
+  SCHOOL_AT_FAULT
+  MIXED_FAULT
+  NOT_FOOD_RELATED
+  INCONCLUSIVE
+
+  @@map("food_safety_inspection_conclusion")
+  @@schema("foodprint")
+}
+
+/// PR6a: kết luận theo NCC.
+enum FoodSafetySupplierFinding {
+  AT_FAULT
+  CLEARED
+  INCONCLUSIVE
+
+  @@map("food_safety_supplier_finding")
+  @@schema("foodprint")
+}
+
 /// PR5b: mức đầy đủ truy xuất của snapshot.
 enum TraceCompleteness {
   COMPLETE
@@ -2433,7 +2509,6 @@ model MeasurementUnit {
   name String @db.VarChar(100)
   symbol String @unique @db.VarChar(30)
   group String @db.VarChar(10)
-  recommendedStep Decimal @map("recommended_step") @db.Decimal(14,3)
   status EntityStatus @default(ACTIVE)
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
