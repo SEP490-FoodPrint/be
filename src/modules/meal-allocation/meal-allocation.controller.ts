@@ -3,10 +3,7 @@ import {
   materialAllocationService,
   type MaterialAllocationService,
 } from "./material-allocation.service";
-import {
-  validateMaterialApply,
-  validateAllocationDraft,
-} from "./meal-allocation.validation";
+import { validateAllocationDraft } from "./meal-allocation.validation";
 import { HttpError } from "../../utils/http-error";
 import { asyncHandler } from "../../utils/async-handler";
 import { requirePrincipal } from "../../utils/authorization";
@@ -47,12 +44,20 @@ export function createMealAllocationController(
       if (!mealType) throw new HttpError(400, "Cần chọn bữa ăn");
       sendSuccess(res, await materials.retry(mealType, requirePrincipal(req)));
     }),
+    suggestDraft: asyncHandler(async (req, res) => {
+      const { mealType } = validateAllocationQuery(req.body);
+      if (!mealType) throw new HttpError(400, "Cần chọn bữa ăn");
+      sendSuccess(
+        res,
+        await materials.suggest({ mealType }, requirePrincipal(req)),
+        "Đã đề xuất phân bổ bằng GLPK",
+      );
+    }),
     apply: asyncHandler(async (req, res) => {
       if (
         req.body &&
         typeof req.body === "object" &&
-        !("batches" in req.body) &&
-        !("planId" in req.body)
+        !("batches" in req.body)
       ) {
         sendSuccess(
           res,
@@ -61,15 +66,6 @@ export function createMealAllocationController(
             requirePrincipal(req),
             true,
           ),
-        );
-        return;
-      }
-      if (req.body && typeof req.body === "object" && "planId" in req.body) {
-        const input = validateMaterialApply(req.body);
-        sendSuccess(
-          res,
-          await materials.apply(input, requirePrincipal(req)),
-          "Đã áp dụng phân bổ suất ăn",
         );
         return;
       }

@@ -16,3 +16,5 @@ TASK-06 cập nhật dữ liệu dị ứng, tính nhu cầu theo món, kiểm t
 - [ ] npm run validate toàn repo còn bị chặn bởi lỗi format ở các file ngoài phạm vi
 
 - [x] Tích hợp GET/PUT tự lập phương án, bỏ nút tính, hỗ trợ lô cũ và kiểm thử hồi quy.
+
+- TASK-07 bổ sung: API `POST /draft/suggest` chạy GLPK theo yêu cầu và ghi đè bản nháp; phản hồi trang không còn nguyên liệu cấp; gỡ nhánh `planId` và `preview` cũ; GET vẫn trả bảng chỉnh khi chưa có đề xuất.
