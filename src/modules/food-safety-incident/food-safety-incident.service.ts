@@ -77,12 +77,33 @@ export function isReporterView(p: AuthPrincipal): boolean {
   return p.orgType === "SCHOOL" && !isBoard(p);
 }
 
+/** PR6a: cán bộ ATTP của đơn vị đang nhận hồ sơ. */
+export function isRecipientOfficer(
+  p: AuthPrincipal,
+  recipientUnitId: string | null,
+): boolean {
+  return (
+    p.orgType === "AUTHORITY" &&
+    p.role === ROLES.COMMUNE_FOOD_SAFETY_OFFICER &&
+    recipientUnitId !== null &&
+    p.communeFoodSafetyUnitId === recipientUnitId
+  );
+}
+
 export function allowedIncidentActions(
   principal: AuthPrincipal,
   status: string,
+  recipientUnitId: string | null = null,
 ): FoodSafetyIncidentActionDTO[] {
-  if (!isBoard(principal)) return [];
   const has = (code: string) => principal.permissions.includes(code);
+  if (isRecipientOfficer(principal, recipientUnitId)) {
+    if (!has("food_safety_inspection.manage")) return [];
+    if (status === "AUTHORITY_ACKNOWLEDGED" || status === "UNDER_INSPECTION")
+      return ["PLAN_INSPECTION"];
+    if (status === "INSPECTION_COMPLETED") return ["CLOSE"];
+    return [];
+  }
+  if (!isBoard(principal)) return [];
   const actions: FoodSafetyIncidentActionDTO[] = [];
   if (status === "PENDING_SCHOOL_REVIEW") {
     if (has("food_safety_incident.forward")) actions.push("FORWARD");
@@ -362,6 +383,24 @@ function mapListItem(
   };
 }
 
+function mapInspectionCore(
+  inspection: FoodSafetyIncidentDetailRow["inspections"][number],
+) {
+  return {
+    id: inspection.id,
+    status: inspection.status,
+    scheduledAt: inspection.scheduledAt.toISOString(),
+    completedAt: iso(inspection.completedAt),
+    resultSummary: inspection.resultSummary,
+    overallConclusion: inspection.overallConclusion,
+    findings: inspection.findings.map((finding) => ({
+      supplier: finding.Supplier,
+      finding: finding.finding,
+      evidenceNote: finding.evidenceNote,
+    })),
+  };
+}
+
 function mapReporterDetail(
   row: FoodSafetyIncidentDetailRow,
 ): FoodSafetyIncidentReporterDetailDTO {
@@ -383,6 +422,15 @@ function mapReporterDetail(
       fromStatus: history.fromStatus,
       toStatus: history.toStatus,
       createdAt: history.createdAt.toISOString(),
+    })),
+    inspections: row.inspections.map((inspection) => ({
+      ...mapInspectionCore(inspection),
+      recordedBy: inspection.recordedByUser
+        ? {
+            fullName: inspection.recordedByUser.fullName,
+            roleCode: inspection.recordedByUser.roleCode,
+          }
+        : null,
     })),
     allowedActions: [],
     createdAt: row.createdAt.toISOString(),
@@ -438,7 +486,18 @@ function mapFullDetail(
           ? { ...history.actorUser, roleCode: history.actorRoleCode }
           : null,
     })),
-    allowedActions: allowedIncidentActions(principal, row.status),
+    inspections: row.inspections.map((inspection) => ({
+      ...mapInspectionCore(inspection),
+      teamDescription: inspection.teamDescription,
+      createdAt: inspection.createdAt.toISOString(),
+      createdBy: inspection.createdByUser,
+      recordedBy: inspection.recordedByUser,
+    })),
+    allowedActions: allowedIncidentActions(
+      principal,
+      row.status,
+      row.recipientCommuneFoodSafetyUnitId,
+    ),
   };
 }
 

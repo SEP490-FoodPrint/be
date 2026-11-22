@@ -583,6 +583,14 @@ export const INITIAL_PERMISSIONS = [
       "Ban Giám hiệu gửi cảnh báo sự cố tới các trường khác theo nghiệp vụ đã chốt.",
   },
   {
+    code: "food_safety_inspection.manage",
+    name: "Kiểm tra sự cố an toàn thực phẩm",
+    module: "food_safety_inspection",
+    action: "manage",
+    description:
+      "Cán bộ ATTP lập đợt kiểm tra, ghi kết quả và đóng hồ sơ sự cố của đơn vị.",
+  },
+  {
     code: "food_safety_report.view",
     name: "Xem báo cáo được chuyển đến",
     module: "food_safety_report",
@@ -848,6 +856,7 @@ export const INITIAL_ROLE_PERMISSIONS = [
   ["COMMUNE_FOOD_SAFETY_OFFICER", "food_safety_report.view"],
   ["COMMUNE_FOOD_SAFETY_OFFICER", "food_safety_report.receive"],
   ["COMMUNE_FOOD_SAFETY_OFFICER", "food_safety_incident.view"],
+  ["COMMUNE_FOOD_SAFETY_OFFICER", "food_safety_inspection.manage"],
   ["COMMUNE_FOOD_SAFETY_OFFICER", "authority_complaint.view"],
   ["COMMUNE_FOOD_SAFETY_OFFICER", "authority_complaint.respond"],
   ["SYSTEM_ADMIN", "role.view"],

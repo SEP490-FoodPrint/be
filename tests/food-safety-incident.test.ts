@@ -147,6 +147,7 @@ function detailRow(
     cancellationNote: null,
     traceCompleteness: null,
     traceSnapshots: [],
+    inspections: [],
     School: { id: schoolId, name: "Trường A" },
     User: { id: parent.id, fullName: parent.fullName },
     SchoolReviewedBy: null,

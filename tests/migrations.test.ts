@@ -1970,6 +1970,112 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
   );
 
   await context.test(
+    "food_safety_inspections: result columns follow status, findings keyed by inspection and supplier",
+    async () => {
+      const name = `foodprint_migration_test_inspection_${randomUUID().replaceAll("-", "")}`;
+      await db.query(`CREATE DATABASE "${name}"`);
+      recordLocalTestDatabase(name);
+      const fresh = new URL(url);
+      fresh.pathname = `/${name}`;
+      const client = new Client({ connectionString: fresh.toString() });
+      await client.connect();
+      try {
+        await client.query(
+          "CREATE SCHEMA IF NOT EXISTS foodprint; SET search_path = foodprint, public;",
+        );
+        for (const version of migrationNames.filter(
+          (value) => value <= "20261201000100_food_safety_inspections",
+        ))
+          await client.query(
+            await readFile(
+              path.join(root, "prisma/migrations", version, "migration.sql"),
+              "utf8",
+            ),
+          );
+        await client.query("SET search_path = public;");
+        const one = async (sql: string, values: unknown[] = []) =>
+          (await client.query<{ id: string }>(sql, values)).rows[0].id;
+        const school = await one(
+          "INSERT INTO foodprint.schools(name) VALUES ('Inspection school') RETURNING id",
+        );
+        const incident = await one(
+          "INSERT INTO foodprint.food_safety_incidents(school_id,title,description,status,source) VALUES ($1,'Sự cố','Legacy','UNDER_INSPECTION','LEGACY_IMPORT') RETURNING id",
+          [school],
+        );
+        const officerRole = await one(
+          "INSERT INTO foodprint.roles(code,name,type) VALUES ('SCHOOL_MANAGEMENT_BOARD','BGH','SCHOOL') RETURNING id",
+        );
+        const actor = await one(
+          "INSERT INTO foodprint.users(role_id,role_code,school_id,username,email,password_hash,full_name,status) VALUES ($1,'SCHOOL_MANAGEMENT_BOARD',$2,'inspection-actor','inspection-actor@example.test','fixture','Actor','ACTIVE') RETURNING id",
+          [officerRole, school],
+        );
+        const supplier = await one(
+          "INSERT INTO foodprint.suppliers(name) VALUES ('Inspection supplier') RETURNING id",
+        );
+        const insert = (fields: Record<string, unknown>) => {
+          const row: Record<string, unknown> = {
+            incident_id: incident,
+            team_description: "Đoàn kiểm tra",
+            scheduled_at: new Date(),
+            created_by_user_id: actor,
+            ...fields,
+          };
+          const keys = Object.keys(row);
+          return client.query<{ id: string }>(
+            `INSERT INTO foodprint.food_safety_inspections(${keys.join(",")}) VALUES (${keys.map((_, index) => `$${index + 1}`).join(",")}) RETURNING id`,
+            keys.map((key) => row[key]),
+          );
+        };
+        const rejects = (fields: Record<string, unknown>, constraint: string) =>
+          assert.rejects(insert(fields), (error) =>
+            sqlState(error, "23514", constraint),
+          );
+        const result = {
+          status: "COMPLETED",
+          result_summary: "Phát hiện thịt quá hạn",
+          overall_conclusion: "SUPPLIER_AT_FAULT",
+          recorded_by_user_id: actor,
+          completed_at: new Date(),
+        };
+        await rejects(
+          { team_description: "   " },
+          "food_safety_inspections_team_description",
+        );
+        await rejects(
+          { result_summary: "Có kết quả" },
+          "food_safety_inspections_result",
+        );
+        await rejects(
+          { ...result, completed_at: null },
+          "food_safety_inspections_result",
+        );
+        await rejects(
+          { ...result, result_summary: " " },
+          "food_safety_inspections_result",
+        );
+        const planned = (await insert({})).rows[0].id;
+        const completed = (await insert(result)).rows[0].id;
+        assert.ok(planned);
+        const finding = (finding: string) =>
+          client.query(
+            "INSERT INTO foodprint.food_safety_inspection_supplier_findings(inspection_id,supplier_id,finding) VALUES ($1,$2,$3)",
+            [completed, supplier, finding],
+          );
+        await finding("AT_FAULT");
+        await assert.rejects(finding("CLEARED"), (error) =>
+          sqlState(
+            error,
+            "23505",
+            "food_safety_inspection_supplier_findings_pkey",
+          ),
+        );
+      } finally {
+        await client.end();
+      }
+    },
+  );
+
+  await context.test(
     "food_safety_incident_trace_snapshots: keeps PR5 rows NULL, enforces completeness, hash and same-incident snapshot FK",
     async () => {
       const migration = "20261130000100_food_safety_incident_trace_snapshots";

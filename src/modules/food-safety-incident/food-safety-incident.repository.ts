@@ -168,6 +168,31 @@ const detailSelect = {
     select: snapshotSummarySelect,
     orderBy: { version: "asc" },
   },
+  inspections: {
+    select: {
+      id: true,
+      status: true,
+      teamDescription: true,
+      scheduledAt: true,
+      resultSummary: true,
+      overallConclusion: true,
+      completedAt: true,
+      createdAt: true,
+      recordedByUser: {
+        select: { id: true, fullName: true, roleCode: true },
+      },
+      createdByUser: person,
+      findings: {
+        select: {
+          finding: true,
+          evidenceNote: true,
+          Supplier: { select: { id: true, name: true } },
+        },
+        orderBy: { supplierId: "asc" },
+      },
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  },
   foodSafetyIncidentAllocations: {
     select: {
       mealAllocationId: true,
