@@ -4,7 +4,6 @@ export interface MeasurementUnitResponse {
   name: string;
   symbol: string;
   group: string;
-  recommendedStep: string;
   status: string;
   aliases: string[];
   createdAt: string;

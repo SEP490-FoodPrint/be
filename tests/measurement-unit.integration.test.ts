@@ -201,7 +201,6 @@ void test("measurement-unit migration and API on explicitly owned cloud test dat
     name: "Đơn vị kiểm thử",
     symbol: "testpiece",
     group: "COUNT",
-    recommendedStep: "0.5",
     aliases: ["testalias"],
   };
   let unitId = "";
@@ -235,10 +234,10 @@ void test("measurement-unit migration and API on explicitly owned cloud test dat
       });
       assert.equal(response.status, 201);
       const result = (await response.json()) as {
-        data: { id: string; recommendedStep: string };
+        data: { id: string; recommendedStep?: string };
       };
       unitId = result.data.id;
-      assert.equal(result.data.recommendedStep, "0.5");
+      assert.equal(result.data.recommendedStep, undefined);
     },
   );
   await context.test(
@@ -262,10 +261,10 @@ void test("measurement-unit migration and API on explicitly owned cloud test dat
       });
       const updated = await service.update(
         { id: unitId },
-        validateUnitUpdate({ recommendedStep: "0.25", status: "INACTIVE" }),
+        validateUnitUpdate({ status: "INACTIVE" }),
         actors[0],
       );
-      assert.equal(updated.recommendedStep, "0.25");
+      assert.equal(updated.status, "INACTIVE");
       await db.$transaction(async (tx) => {
         await assert.rejects(resolveMeasurementUnit(tx, "testalias"), {
           statusCode: 422,

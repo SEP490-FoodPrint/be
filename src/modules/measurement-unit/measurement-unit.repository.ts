@@ -6,7 +6,6 @@ const select = {
   name: true,
   symbol: true,
   group: true,
-  recommendedStep: true,
   status: true,
   createdAt: true,
   updatedAt: true,
@@ -77,7 +76,6 @@ export const measurementUnitRepository = {
       name: string;
       symbol: string;
       group: string;
-      recommendedStep: string;
       aliases: string[];
     },
   ) {
@@ -95,7 +93,6 @@ export const measurementUnitRepository = {
     id: string,
     data: {
       name?: string;
-      recommendedStep?: string;
       status?: "ACTIVE" | "INACTIVE";
     },
   ) {

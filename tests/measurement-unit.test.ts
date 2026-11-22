@@ -14,7 +14,6 @@ void test("unit catalogue validates precision, normalization and immutable field
     name: "Kilôgam",
     symbol: " kg ",
     group: "MASS",
-    recommendedStep: "0.1",
     aliases: [" Kilogram "],
   };
   assert.deepEqual(validateUnitCreate(input), {
@@ -23,11 +22,13 @@ void test("unit catalogue validates precision, normalization and immutable field
     symbol: "kg",
     aliases: ["kilogram"],
   });
-  for (const step of ["0", "-1", "0.0001", "1e2", "100000000000"])
-    assert.throws(
-      () => validateUnitCreate({ ...input, recommendedStep: step }),
-      { statusCode: 400 },
-    );
+  // Không còn bước khuyến nghị: gửi trường này bị từ chối như mọi trường lạ
+  assert.throws(
+    () => validateUnitCreate({ ...input, recommendedStep: "0.1" }),
+    {
+      statusCode: 400,
+    },
+  );
   for (const field of ["code", "symbol", "group"])
     assert.throws(() => validateUnitUpdate({ [field]: "kg" }), {
       statusCode: 400,
@@ -47,7 +48,6 @@ void test("unit mutations reject non-system roles and missing permission before 
     name: "Hộp",
     symbol: "hộp",
     group: "COUNT",
-    recommendedStep: "1",
   });
   await assert.rejects(
     service.create(input, {
