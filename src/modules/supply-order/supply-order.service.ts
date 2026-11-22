@@ -112,7 +112,7 @@ function mapOrderTypeBatch(row: {
     orderType: row.orderType,
     orderTypeLabel:
       row.orderType === "DRY_STOCK"
-        ? "Đồ khô"
+        ? "Đồ lưu kho"
         : row.orderType === "DIRECT_USE"
           ? "Đồ tươi"
           : null,
@@ -272,7 +272,7 @@ export function createSupplyOrderService(
           ingredientEntryId: item.ingredientEntryId,
           ingredientName:
             item.IngredientEntry?.Ingredient?.name ?? "Nguyên liệu",
-          // Đồ khô (DRY_STOCK) bắt buộc NCC nhập ngày sản xuất và hạn dùng của lô khi tạo chuyến giao.
+          // Đồ lưu kho (DRY_STOCK) bắt buộc NCC nhập ngày sản xuất và hạn dùng của lô khi tạo chuyến giao.
           handlingType: item.IngredientEntry?.handlingType ?? null,
           requestedQuantity: item.requestedQuantity.toString(),
           unit: item.unit,

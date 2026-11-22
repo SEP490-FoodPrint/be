@@ -1,0 +1,9 @@
+- [x] T001 Kitchen: API `GET /v1/kitchen/day-progress` + `summarizeDayProgress` (FR-001)
+- [x] T002 Warehouse: API `GET /ingredient-lots/stock-alerts` + tính cảnh báo đồ lưu kho (FR-002)
+- [x] T003 Kitchen: gộp lô cùng cơ sở nguồn khi nấu riêng (FR-003)
+- [x] T004 Sample storage: số ngăn không vượt sức chứa (FR-004)
+- [x] T005 Menu approval: `weekNumber` cho từng tuần (FR-005)
+- [x] T006 Supply order: sắp xếp theo ngày giao dự kiến giảm dần (FR-006)
+- [x] T007 Delivery: hoàn tất đơn cung ứng khi không còn chuyến đang chạy (FR-007)
+- [x] T008 Đổi chữ "đồ khô" → "đồ lưu kho" (FR-008)
+- [x] T009 Unit test mới + cập nhật test cũ; `npm run test:unit`, typecheck, lint

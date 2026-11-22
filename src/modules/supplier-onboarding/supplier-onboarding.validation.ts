@@ -204,7 +204,7 @@ export const orderDraftSchema = z
       ctx.addIssue({
         code: "custom",
         path: ["batchNo"],
-        message: "Đơn đồ khô không có đợt giao",
+        message: "Đơn đồ lưu đồ lưu khong có đợt giao",
       });
     if (
       new Set(value.items.map((item) => item.ingredientEntryId)).size !==

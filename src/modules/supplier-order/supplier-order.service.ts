@@ -259,10 +259,10 @@ function lotDatesFingerprint(line: {
 }
 
 /**
- * Ngày của lô khi NCC tạo chuyến giao: đồ khô (DRY_STOCK) bắt buộc có ngày sản xuất và hạn dùng;
+ * Ngày của lô khi NCC tạo chuyến giao: đồ lưu kho (DRY_STOCK) bắt buộc có ngày sản xuất và hạn dùng;
  * ngày sản xuất không được sau hôm nay (giờ VN). Đồ tươi không bắt buộc.
  */
-/** Đồ khô phải còn hạn sử dụng ít nhất số ngày này khi NCC giao. */
+/** Đồ lưu kho phải còn hạn sử dụng ít nhất số ngày này khi NCC giao. */
 const DRY_MIN_SHELF_DAYS = 7;
 
 function assertLotDates(
@@ -283,7 +283,7 @@ function assertLotDates(
   if (missing.length)
     throw new HttpError(
       422,
-      `Đồ khô cần nhập ngày sản xuất và hạn sử dụng của lô: ${[...new Set(missing)].join(", ")}`,
+      `Đồ lưu kho cần nhập ngày sản xuất và hạn sử dụng của lô: ${[...new Set(missing)].join(", ")}`,
     );
   const today = new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10);
   const future = lines
@@ -331,7 +331,7 @@ function assertLotDates(
   if (shortShelfLife.length)
     throw new HttpError(
       422,
-      `Đồ khô cần còn hạn sử dụng ít nhất ${DRY_MIN_SHELF_DAYS} ngày kể từ hôm nay: ${[...new Set(shortShelfLife)].join(", ")}`,
+      `Đồ lưu kho cần còn hạn sử dụng ít nhất ${DRY_MIN_SHELF_DAYS} ngày kể từ hôm nay: ${[...new Set(shortShelfLife)].join(", ")}`,
     );
 }
 

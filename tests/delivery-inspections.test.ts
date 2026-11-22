@@ -62,7 +62,7 @@ void test("all four school inspection roles read scoped deliveries, filtered cou
           take: number;
         }) => {
           assert.equal(where.schoolId, principal.schoolId);
-          // Bộ phận khác Ban quản lý nguyên liệu có thêm điều kiện ẩn xe đồ khô.
+          // Bộ phận khác Ban quản lý nguyên liệu có thêm điều kiện ẩn xe đồ lưu kho.
           const hidesDry = role !== "INGREDIENT_MANAGEMENT_DEPARTMENT";
           assert.equal(where.AND.length, hidesDry ? 3 : 2);
           assert.equal(JSON.stringify(where).includes('"NOT"'), hidesDry);
@@ -161,7 +161,7 @@ void test("inspection detail keeps separate delivery identities and serializes a
   assert.equal(first.deliveryItems?.[0].ingredientLots[0].status, "BLOCKED");
 });
 
-void test("xe chỉ có đồ khô: bộ phận khác không xem được, Ban quản lý nguyên liệu xem được", async () => {
+void test("xe chỉ có đồ lưu kho: bộ phận khác không xem được, Ban quản lý nguyên liệu xem được", async () => {
   const dryRow = {
     ...row(id),
     deliveryItems: [
@@ -813,13 +813,13 @@ void test("invalid lot totals, ownership and expiry roll back the final approval
   }
 });
 
-void test("hạn dùng: đồ khô còn ít nhất 7 ngày kể từ ngày nhận, đồ tươi chỉ cần còn hạn hôm nay", async () => {
+void test("hạn dùng: đồ lưu kho còn ít nhất 7 ngày kể từ ngày nhận, đồ tươi chỉ cần còn hạn hôm nay", async () => {
   // Đồng hồ fixture: 13/11/2026 (giờ VN).
   const cases = [
     [
       "DRY_STOCK",
       "2026-11-19",
-      "Lô (đồ khô) chỉ còn hạn đến 19/11/2026; cần còn hạn ít nhất 7 ngày kể từ ngày nhận (đến 20/11/2026)",
+      "Lô (đồ lưu kho) chỉ còn hạn đến 19/11/2026; cần còn hạn ít nhất 7 ngày kể từ ngày nhận (đến 20/11/2026)",
     ],
     ["DRY_STOCK", "2026-11-20", null],
     ["DIRECT_USE", "2026-11-12", "Lô đã hết hạn dùng (12/11/2026)"],
@@ -830,7 +830,7 @@ void test("hạn dùng: đồ khô còn ít nhất 7 ngày kể từ ngày nhậ
       delivery = f.data.deliveries[0];
     delivery.handlingType = handlingType;
     delivery.lots[0].expiry = expiry;
-    // Đồ khô chỉ Ban quản lý nguyên liệu (actors[2]) ký; đồ tươi cần đủ 4 bộ phận.
+    // Đồ lưu kho chỉ Ban quản lý nguyên liệu (actors[2]) ký; đồ tươi cần đủ 4 bộ phận.
     const signers = handlingType === "DRY_STOCK" ? [f.actors[2]] : f.actors;
     if (issue) {
       // Bị chặn ngay ở chữ ký "Đạt" đầu tiên, không ghi quyết định.
@@ -847,18 +847,18 @@ void test("hạn dùng: đồ khô còn ít nhất 7 ngày kể từ ngày nhậ
   }
 });
 
-void test("chuyến chỉ có đồ khô: chỉ Ban quản lý nguyên liệu kiểm tra, một chữ ký là nhập kho", async () => {
+void test("chuyến chỉ có đồ lưu kho: chỉ Ban quản lý nguyên liệu kiểm tra, một chữ ký là nhập kho", async () => {
   const f = decisionFixture(),
     delivery = f.data.deliveries[0];
   delivery.handlingType = "DRY_STOCK";
-  // Các bộ phận khác không được ký chuyến đồ khô.
+  // Các bộ phận khác không được ký chuyến đồ lưu kho.
   for (const actor of [f.actors[0], f.actors[1], f.actors[3]])
     await assert.rejects(
       () => f.service.decide(delivery.id, approve(), actor),
       {
         statusCode: 403,
         message:
-          "Chuyến giao đồ khô: chỉ Ban quản lý nguyên liệu kiểm tra và ký nhận",
+          "Chuyến giao đồ lưu kho: chỉ Ban quản lý nguyên liệu kiểm tra và ký nhận",
       },
     );
   assert.equal(f.data.decisions.length, 0);

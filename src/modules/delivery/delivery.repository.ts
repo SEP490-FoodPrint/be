@@ -267,7 +267,7 @@ const detailSelect = {
 } as const satisfies Prisma.DeliverySelect;
 
 /**
- * Xe đồ khô: mọi dòng hàng là DRY_STOCK. Chỉ cần 1 dòng đồ tươi là xe đồ tươi.
+ * Xe đồ lưu kho: mọi dòng hàng là DRY_STOCK. Chỉ cần 1 dòng đồ tươi là xe đồ tươi.
  * Cùng tiêu chí với requiredInspectionRoles; không suy luận theo nhà cung cấp.
  */
 export const dryOnlyDeliveryWhere = {
@@ -307,7 +307,7 @@ function inspectionWhere(
     schoolId,
     ...(query.status ? { status: query.status } : {}),
     AND: [
-      // Xe đồ khô chỉ hiện cho Ban quản lý nguyên liệu.
+      // Xe đồ lưu kho chỉ hiện cho Ban quản lý nguyên liệu.
       ...(hideDryOnly ? [{ NOT: dryOnlyDeliveryWhere }] : []),
       ...(query.orderType === "DRY_STOCK" ? [dryOnlyDeliveryWhere] : []),
       ...(query.orderType === "DIRECT_USE"
@@ -559,6 +559,35 @@ export const deliveryInspectionRepository = {
         status: "REJECTED",
       },
     });
+  },
+  /**
+   * Hoàn tất đơn cung ứng khi một đợt giao vừa được nhận và đơn không còn đợt giao nào đang chạy
+   * (đang chuẩn bị / vận chuyển / đã đến / chờ duyệt / đã duyệt chưa nhập kho). Đợt bị từ chối hoặc
+   * đã hủy không giữ đơn lại. Chỉ chuyển từ IN_PROGRESS; trả số đơn được cập nhật (0 hoặc 1).
+   */
+  async completeRequestIfDone(tx: Tx, supplyRequestId: string) {
+    if (!tx.delivery?.count || !tx.supplyRequest?.updateMany) return 0;
+    const running = await tx.delivery.count({
+      where: {
+        supplyRequestId,
+        status: {
+          in: [
+            "CREATED",
+            "PREPARING",
+            "IN_TRANSIT",
+            "ARRIVED",
+            "PENDING_APPROVAL",
+            "APPROVED",
+          ],
+        },
+      },
+    });
+    if (running) return 0;
+    const updated = await tx.supplyRequest.updateMany({
+      where: { id: supplyRequestId, status: "IN_PROGRESS" },
+      data: { status: "COMPLETED" },
+    });
+    return updated.count;
   },
   async cancelRemainder(tx: Tx, supplyRequestId: string) {
     await tx.supplyRequest.update({

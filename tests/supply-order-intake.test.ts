@@ -681,7 +681,10 @@ void test("repository supplier reads retain scope, hide drafts, use bounded pagi
   });
   assert.equal(many[0].skip, 3);
   assert.equal(many[0].take, 4);
-  assert.deepEqual(many[0].orderBy, [{ id: "asc" }]);
+  assert.deepEqual(many[0].orderBy, [
+    { requestedDeliveryDate: { sort: "desc", nulls: "last" } },
+    { id: "asc" },
+  ]);
   assert.deepEqual(Object.keys(many[0].select!).sort(), [
     "School",
     "_count",

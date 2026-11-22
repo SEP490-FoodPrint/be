@@ -162,7 +162,7 @@ export const deliveryInspectionRoles = [
 type DeliveryInspectionRole = (typeof deliveryInspectionRoles)[number];
 
 /**
- * Xe đồ khô khi mọi dòng hàng là DRY_STOCK: chỉ Ban quản lý nguyên liệu kiểm tra.
+ * Xe đồ lưu kho khi mọi dòng hàng là DRY_STOCK: chỉ Ban quản lý nguyên liệu kiểm tra.
  * Chỉ cần 1 dòng đồ tươi là xe đồ tươi, theo cấu hình phân nhóm duyệt của trường.
  * Không suy luận theo nhà cung cấp.
  */
@@ -223,11 +223,11 @@ export function requiredInspectionRoles(row: {
     : deliveryInspectionRoles;
 }
 
-/** Bộ phận này có bị ẩn xe đồ khô không (chỉ Ban quản lý nguyên liệu thấy xe đồ khô). */
+/** Bộ phận này có bị ẩn xe đồ lưu đồ lưu khong (chỉ Ban quản lý nguyên liệu thấy xe đồ lưu kho). */
 const hidesDryOnly = (principal: AuthPrincipal) =>
   principal.role !== "INGREDIENT_MANAGEMENT_DEPARTMENT";
 
-/** Xe không thuộc phạm vi của bộ phận (xe đồ khô với bộ phận khác) coi như không tồn tại. */
+/** Xe không thuộc phạm vi của bộ phận (xe đồ lưu kho với bộ phận khác) coi như không tồn tại. */
 function assertVisibleTo(
   row: Parameters<typeof requiredInspectionRoles>[0],
   principal: AuthPrincipal,
@@ -474,7 +474,7 @@ function inspectionDateRange(
   };
 }
 
-/** Đồ khô phải còn hạn ít nhất số ngày này kể từ ngày nhận (đủ dùng một tuần thực đơn). */
+/** Đồ lưu kho phải còn hạn ít nhất số ngày này kể từ ngày nhận (đủ dùng một tuần thực đơn). */
 export const DRY_STOCK_MIN_SHELF_DAYS = 7;
 const dmy = (iso: string) => iso.split("-").reverse().join("/");
 const shiftIsoDate = (iso: string, days: number) =>
@@ -593,7 +593,7 @@ function assertReceipt(
           `${lotName}: ngày sản xuất ${dmy(manufacture)} sau hạn dùng ${dmy(expiry)}`,
         );
       if (expiry) {
-        // Đồ tươi dùng trong ngày: hạn ≥ ngày nhận. Đồ khô dùng dần: còn ít nhất DRY_STOCK_MIN_SHELF_DAYS ngày.
+        // Đồ tươi dùng trong ngày: hạn ≥ ngày nhận. Đồ lưu kho dùng dần: còn ít nhất DRY_STOCK_MIN_SHELF_DAYS ngày.
         const handlingType =
           item.IngredientEntry?.handlingType ??
           item.SupplyRequestItem?.IngredientEntry?.handlingType ??
@@ -606,7 +606,7 @@ function assertReceipt(
           throw new HttpError(
             409,
             handlingType === "DRY_STOCK"
-              ? `${lotName} (đồ khô) chỉ còn hạn đến ${dmy(expiry)}; cần còn hạn ít nhất ${DRY_STOCK_MIN_SHELF_DAYS} ngày kể từ ngày nhận (đến ${dmy(minimum)})`
+              ? `${lotName} (đồ lưu kho) chỉ còn hạn đến ${dmy(expiry)}; cần còn hạn ít nhất ${DRY_STOCK_MIN_SHELF_DAYS} ngày kể từ ngày nhận (đến ${dmy(minimum)})`
               : `${lotName} đã hết hạn dùng (${dmy(expiry)})`,
           );
       }
@@ -883,7 +883,7 @@ export function createDeliveryInspectionService(
             if (actor.role !== "INGREDIENT_MANAGEMENT_DEPARTMENT") {
               throw new HttpError(
                 403,
-                "Chuyến giao đồ khô: chỉ Ban quản lý nguyên liệu được xác nhận xe đã đến",
+                "Chuyến giao đồ lưu kho: chỉ Ban quản lý nguyên liệu được xác nhận xe đã đến",
               );
             }
           } else {
@@ -1036,7 +1036,7 @@ export function createDeliveryInspectionService(
           if (!requiredRoles.some((role) => role === actor.role))
             throw new HttpError(
               403,
-              "Chuyến giao đồ khô: chỉ Ban quản lý nguyên liệu kiểm tra và ký nhận",
+              "Chuyến giao đồ lưu kho: chỉ Ban quản lý nguyên liệu kiểm tra và ký nhận",
             );
           if (input.decision === "APPROVE") {
             // Chặn ngay chữ ký "Đạt" khi dữ liệu không thể tiếp nhận, không đợi bộ phận bắt buộc cuối.
@@ -1118,6 +1118,12 @@ export function createDeliveryInspectionService(
                   );
               }
               await inspections.setStatus(tx, id, "RECEIVED", actor.id, now());
+              // Đơn cung ứng hoàn tất khi không còn đợt giao nào đang chạy (khớp trạng thái hai phía NCC / trường)
+              if (row.supplyRequestId !== null)
+                await inspections.completeRequestIfDone(
+                  tx,
+                  row.supplyRequestId,
+                );
             } else {
               await inspections.setStatus(
                 tx,

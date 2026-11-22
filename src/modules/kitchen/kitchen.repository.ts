@@ -342,6 +342,11 @@ export const kitchenRepository = {
         },
         menuDate: true,
         approvalStatus: true,
+        // Gia vị chung của bữa: đã giữ kho riêng, không giữ thêm theo công thức từng món
+        mealSeasonings: {
+          where: { mealType },
+          select: { ingredientEntryId: true },
+        },
         menuDayDishes: {
           where: { mealType },
           orderBy: { dishId: "asc" },
@@ -459,6 +464,43 @@ export const kitchenRepository = {
       where: { id, cookingBatches: { none: {} } },
     });
   },
+  /** Thực đơn đã duyệt của trường trong ngày, kèm món và các lô nấu/mẫu lưu của từng món. */
+  findDayProgress(client: Tx, schoolId: string, menuDate: Date) {
+    return client.menuDay.findMany({
+      where: {
+        menuDate,
+        approvalStatus: "APPROVED",
+        WeeklyMenu: { schoolId },
+      },
+      orderBy: [{ weeklyMenuId: "asc" }],
+      select: {
+        id: true,
+        WeeklyMenu: {
+          select: {
+            id: true,
+            isSchoolWide: true,
+            grades: {
+              select: { grade: { select: { id: true, name: true } } },
+            },
+          },
+        },
+        menuDayDishes: {
+          orderBy: [{ displayOrder: "asc" }, { dishId: "asc" }],
+          select: {
+            mealType: true,
+            dishId: true,
+            Dish: { select: { name: true } },
+            cookingBatchDishes: {
+              select: {
+                CookingBatch: { select: { status: true } },
+                retainedFoodSamples: { select: { id: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+  },
   findSchoolContext(client: Tx, schoolId: string) {
     return client.school.findFirst({
       where: { id: schoolId, status: "ACTIVE" },
@@ -564,3 +606,7 @@ export const kitchenRepository = {
     });
   },
 };
+
+export type KitchenDayProgressRow = Awaited<
+  ReturnType<typeof kitchenRepository.findDayProgress>
+>[number];

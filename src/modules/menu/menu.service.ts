@@ -261,7 +261,7 @@ async function validateIngredientSources(
     const names = await repository.ingredientEntryNames(tx, invalid, schoolId);
     throw new HttpError(
       422,
-      `Gia vị phải thuộc danh mục kho khô của trường${names.length ? `: ${names.join(", ")} không phải đồ khô đang dùng` : ""}`,
+      `Gia vị phải thuộc danh mục đồ lưu kho của trường${names.length ? `: ${names.join(", ")} không phải đồ lưu kho đang dùng` : ""}`,
     );
   }
 
@@ -778,6 +778,11 @@ function createIngredientOperations(
           if (spices.some((s) => s.ingredientEntry.schoolId !== schoolId))
             throw new HttpError(409, "Gia vị nằm ngoài phạm vi trường");
 
+          // Gia vị của bữa là gia vị dùng chung: không tính thêm phần gia vị trong công thức từng món
+          const sharedSeasoningIngredientIds = new Set(
+            spices.map((row) => row.ingredientEntry.Ingredient.id),
+          );
+
           const groups = new Map<
             string,
             {
@@ -792,15 +797,19 @@ function createIngredientOperations(
           >();
 
           const lines = [
-            ...main.map((row) => ({
-              ingredient: row.ingredient,
+            ...main
+              .filter(
+                (row) => !sharedSeasoningIngredientIds.has(row.ingredient.id),
+              )
+              .map((row) => ({
+                ingredient: row.ingredient,
 
-              quantity: row.quantityPerPortion,
+                quantity: row.quantityPerPortion,
 
-              portions: demand.dishPortions.get(row.dishId) ?? 0,
+                portions: demand.dishPortions.get(row.dishId) ?? 0,
 
-              unit: row.unit,
-            })),
+                unit: row.unit,
+              })),
 
             ...spices.map((row) => ({
               ingredient: row.ingredientEntry.Ingredient,
