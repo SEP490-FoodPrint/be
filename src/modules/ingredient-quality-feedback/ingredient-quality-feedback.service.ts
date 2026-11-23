@@ -34,6 +34,7 @@ import {
 import {
   mapTicketComment,
   mapTicketFields,
+  queueRequesterEmail,
 } from "../complaint-ticket/complaint-ticket.service";
 import type {
   CreateIngredientQualityFeedbackRequest,
@@ -385,6 +386,7 @@ export function createIngredientQualityFeedbackService(
             userId: actor.id,
             roleCode: actor.role,
           });
+          await queueRequesterEmail(tx, tickets, created.id, "CREATED");
           return readAndMapDetail(tx, created.id, readScope, actor, now());
         },
       );
@@ -444,6 +446,7 @@ export function createIngredientQualityFeedbackService(
             type: "RESOLUTION",
             content: body.content,
           });
+          await queueRequesterEmail(tx, tickets, target.id, "RESOLVED");
         },
       );
     },
@@ -462,6 +465,8 @@ export function createIngredientQualityFeedbackService(
           type: "MESSAGE",
           content: body.content,
         });
+        if (side === "HANDLER")
+          await queueRequesterEmail(tx, tickets, target.id, "HANDLER_COMMENT");
       };
       return side === "HANDLER"
         ? supplierAct(params, principal, "COMMENT", run)

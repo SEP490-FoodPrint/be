@@ -10,8 +10,8 @@ import { expandMenuHolidays } from "../../utils/menu-week";
 import { sendMail, type MailOptions } from "../../utils/mailer";
 import {
   readEmailLogoUrl,
-  renderBrandedEmail,
-  type BrandedEmail,
+  renderLetterEmail,
+  type LetterEmail,
 } from "../../utils/branded-email";
 
 /**
@@ -87,7 +87,7 @@ export async function menuRecipients(
 async function sendToEach(
   recipients: { email: string; fullName: string }[],
   subject: string,
-  build: (fullName: string) => BrandedEmail,
+  build: (fullName: string) => LetterEmail,
   idempotencyKey: (email: string) => string,
   sender: Sender,
   log: Logger,
@@ -95,7 +95,7 @@ async function sendToEach(
   const logoUrl = readEmailLogoUrl();
   let sent = 0;
   for (const recipient of recipients) {
-    const { html, text } = renderBrandedEmail(build(recipient.fullName), {
+    const { html, text } = renderLetterEmail(build(recipient.fullName), {
       logoUrl,
     });
     try {
@@ -185,40 +185,44 @@ export async function notifyMenuDecision(
     (fullName) =>
       approved
         ? {
-            tone: "success",
-            badge: "Đã duyệt",
-            heading: "Thực đơn tuần đã được duyệt",
+            title: subject,
             preheader: `${title} (${week}) đã được Ban Giám hiệu duyệt.`,
-            greeting: `Xin chào ${fullName},`,
-            paragraphs: [
-              "Ban Giám hiệu đã duyệt thực đơn tuần dưới đây. Nhà bếp có thể bắt đầu lên kế hoạch nguyên liệu và chế biến theo thực đơn này.",
+            greeting: `Kính gửi ${fullName},`,
+            intro: ["Ban Giám hiệu đã duyệt thực đơn tuần sau:"],
+            fields: [
+              ...details,
+              ...(decision.feedback
+                ? [
+                    {
+                      label: "Ghi chú của Ban Giám hiệu",
+                      value: decision.feedback,
+                      block: true,
+                    },
+                  ]
+                : []),
             ],
-            details,
-            ...(decision.feedback
-              ? {
-                  highlight: {
-                    title: "Ghi chú của Ban Giám hiệu",
-                    body: decision.feedback,
-                  },
-                }
-              : {}),
+            outro: [
+              "Nhà bếp có thể bắt đầu lên kế hoạch nguyên liệu và chế biến theo thực đơn này.",
+            ],
             ...(link ? { action: { label: "Xem thực đơn", url: link } } : {}),
           }
         : {
-            tone: "danger",
-            badge: "Cần chỉnh sửa",
-            heading: "Ban Giám hiệu yêu cầu chỉnh sửa thực đơn",
+            title: subject,
             preheader: `${title} (${week}) cần chỉnh sửa theo nhận xét của Ban Giám hiệu.`,
-            greeting: `Xin chào ${fullName},`,
-            paragraphs: [
-              "Thực đơn tuần dưới đây chưa được duyệt. Vui lòng chỉnh sửa theo nhận xét của Ban Giám hiệu rồi gửi duyệt lại trước hạn chót.",
+            greeting: `Kính gửi ${fullName},`,
+            intro: ["Thực đơn tuần sau chưa được Ban Giám hiệu duyệt:"],
+            fields: [
+              ...details,
+              {
+                label: "Nhận xét của Ban Giám hiệu",
+                value:
+                  decision.feedback || "Ban Giám hiệu không ghi lý do cụ thể.",
+                block: true,
+              },
             ],
-            details,
-            highlight: {
-              title: "Nhận xét của Ban Giám hiệu",
-              body:
-                decision.feedback || "Ban Giám hiệu không ghi lý do cụ thể.",
-            },
+            outro: [
+              "Vui lòng chỉnh sửa theo nhận xét rồi gửi duyệt lại trước hạn chót.",
+            ],
             ...(link ? { action: { label: "Sửa thực đơn", url: link } } : {}),
           },
     (email) =>
@@ -326,19 +330,15 @@ export async function runMenuDeadlineReminders(
       recipients,
       subject,
       (fullName) => ({
-        tone: daysLeft <= 0 ? "danger" : "warning",
-        badge: daysLeft <= 0 ? "Hạn chót hôm nay" : "Nhắc nhở",
-        heading: needCreate
-          ? `Nhắc tạo thực đơn dinh dưỡng tuần ${weekNumber}`
-          : `Nhắc hoàn thành thực đơn tuần ${weekNumber}`,
+        title: subject,
         preheader: `Thực đơn tuần ${week} cần tạo và gửi duyệt trước hết Chủ nhật ${dmy(deadline)}.`,
-        greeting: `Xin chào ${fullName},`,
-        paragraphs: [
+        greeting: `Kính gửi ${fullName},`,
+        intro: [
           needCreate
             ? "Thực đơn của tuần tới chưa được tạo đầy đủ. Vui lòng tạo thực đơn và gửi Ban Giám hiệu duyệt trước hạn chót."
             : "Thực đơn của tuần tới chưa được gửi duyệt. Vui lòng hoàn thành và gửi Ban Giám hiệu duyệt trước hạn chót.",
         ],
-        details: [
+        fields: [
           { label: "Tuần", value: `Tuần ${weekNumber} (${week})` },
           { label: "Trường", value: school?.name || "" },
           {
@@ -347,6 +347,7 @@ export async function runMenuDeadlineReminders(
           },
         ],
         bullets,
+        note: "Sau hạn chót, thực đơn tuần sẽ bị khoá chỉnh sửa trừ khi Ban Giám hiệu yêu cầu chỉnh sửa.",
         ...(link
           ? {
               action: {
@@ -355,8 +356,6 @@ export async function runMenuDeadlineReminders(
               },
             }
           : {}),
-        footnote:
-          "Sau hạn chót, thực đơn tuần sẽ bị khoá chỉnh sửa trừ khi Ban Giám hiệu yêu cầu chỉnh sửa.",
       }),
       (email) =>
         `menu-reminder/${year.schoolId}/${isoDate(nextMonday)}/${kind}/${isoDate(today)}/${email}`,

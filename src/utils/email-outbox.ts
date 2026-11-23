@@ -73,7 +73,10 @@ export async function processEmailOutbox(
       subject: row.subject,
       text: row.text,
       html: row.html,
-      idempotencyKey: `registration-review/${id}`,
+      // Dòng hồ sơ đăng ký giữ khóa cũ; dòng khiếu nại dùng khóa riêng (specs/complaint-email-notifications).
+      idempotencyKey: row.complaintId
+        ? `complaint-email/${id}`
+        : `registration-review/${id}`,
     });
     await db.emailOutbox.updateMany({
       where: { id, status: "PROCESSING", attempts: row.attempts },
@@ -93,7 +96,7 @@ export async function processEmailOutbox(
         nextAttemptAt: new Date(Date.now() + retryDelay(row.attempts)),
       },
     });
-    throw new Error("Registration review email was not accepted");
+    throw new Error("Outbox email was not accepted");
   }
 }
 

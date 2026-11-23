@@ -1166,6 +1166,7 @@ model Complaint {
   authorityComplaint            AuthorityComplaint?
   comments                      ComplaintComment[]
   statusHistories               ComplaintStatusHistory[]
+  emailOutbox                   EmailOutbox[]
 
   @@unique([id, kind], map: "uq_complaints_id_kind")
   @@index([kind, submittedAt(sort: Desc), id], map: "idx_complaints_kind_submitted")
@@ -1320,7 +1321,9 @@ model BusinessCodeCounter {
 
 model EmailOutbox {
   id                String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  registrationId    String              @map("registration_id") @db.Uuid
+  registrationId    String?             @map("registration_id") @db.Uuid
+  complaintId       String?             @map("complaint_id") @db.Uuid
+  complaintEvent    ComplaintEmailEvent? @map("complaint_event")
   recipientEmail    String              @map("recipient_email") @db.VarChar(254)
   subject           String              @db.VarChar(255)
   text              String              @db.Text
@@ -1333,9 +1336,11 @@ model EmailOutbox {
   providerMessageId String?             @map("provider_message_id") @db.VarChar(255)
   createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt         DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  registration      RegistrationRequest @relation(fields: [registrationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  registration      RegistrationRequest? @relation(fields: [registrationId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  complaint         Complaint?          @relation(fields: [complaintId], references: [id], onDelete: Restrict, onUpdate: NoAction)
 
   @@index([status, nextAttemptAt], map: "idx_email_outbox_dispatch")
+  @@index([complaintId], map: "idx_email_outbox_complaint")
   @@map("email_outbox")
   @@schema("foodprint")
 }
@@ -2240,6 +2245,16 @@ enum SupplierEnforcementExecutionStatus {
   FAILED
 
   @@map("supplier_enforcement_execution_status")
+  @@schema("foodprint")
+}
+
+/// Sự kiện ticket khiếu nại sinh email cho người gửi (specs/complaint-email-notifications).
+enum ComplaintEmailEvent {
+  CREATED
+  HANDLER_COMMENT
+  RESOLVED
+
+  @@map("complaint_email_event")
   @@schema("foodprint")
 }
 

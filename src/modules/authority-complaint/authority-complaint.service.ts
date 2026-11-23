@@ -28,6 +28,7 @@ import {
 import {
   mapTicketComment,
   mapTicketFields,
+  queueRequesterEmail,
 } from "../complaint-ticket/complaint-ticket.service";
 import {
   createAuthorityComplaintRepository,
@@ -382,6 +383,7 @@ export function createAuthorityComplaintService(
             escalatedFromMealComplaintId: source.id,
           });
           await tickets.recordCreated(tx, created.id, ticketActor);
+          await queueRequesterEmail(tx, tickets, created.id, "CREATED");
           const row = await repository.findOne(tx, readScope, created.id);
           if (!row) throw new HttpError(503, CORRUPT_DATA);
           return toDetail(row, actor, at);
@@ -407,6 +409,8 @@ export function createAuthorityComplaintService(
           type: "MESSAGE",
           content: input.content,
         });
+        if (side === "HANDLER")
+          await queueRequesterEmail(tx, tickets, target.id, "HANDLER_COMMENT");
       });
     },
     resolve(
@@ -428,6 +432,7 @@ export function createAuthorityComplaintService(
             type: "RESOLUTION",
             content: input.content,
           });
+          await queueRequesterEmail(tx, tickets, target.id, "RESOLVED");
         },
       );
     },

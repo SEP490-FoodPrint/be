@@ -233,7 +233,7 @@ void test("signup preserves the committed account and reports email failure inst
   assert.equal(result.verificationEmailSent, false);
   assert.equal(result.user.status, "UNVERIFIED");
 });
-void test("Resend adapter sends a text code with a timeout/idempotency key and sanitizes SDK errors", async (context) => {
+void test("Resend adapter sends a branded code email (text + HTML + inline logo) with a timeout/idempotency key and sanitizes SDK errors", async (context) => {
   assert.throws(() => readEmailConfig({}), status(503));
   const before = [process.env.RESEND_API_KEY, process.env.RESEND_FROM];
   context.after(() =>
@@ -266,7 +266,13 @@ void test("Resend adapter sends a text code with a timeout/idempotency key and s
       assert.equal(typeof init?.body, "string");
       const body = JSON.parse(init?.body as string) as Record<string, unknown>;
       assert(String(body.text).includes("012345"));
-      assert.equal(body.html, undefined);
+      // Template thương hiệu: HTML có mã và logo inline đính kèm theo Content-ID.
+      assert(String(body.html).includes("012345"));
+      assert(String(body.html).includes("cid:foodprint-logo"));
+      const attachments = body.attachments as
+        { content_id?: string; filename?: string }[] | undefined;
+      assert.equal(attachments?.[0]?.content_id, "foodprint-logo");
+      assert.equal(attachments?.[0]?.filename, "foodprint-logo.png");
       return Promise.resolve(
         new Response(
           JSON.stringify(
