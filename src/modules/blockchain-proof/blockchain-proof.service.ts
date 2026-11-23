@@ -1023,6 +1023,32 @@ export function createBlockchainProofService(
           }
         : publicView(chain);
     },
+    /**
+     * Journey of one grade's meal for the grade traceability page: every class
+     * of the grade together. Like the class page it keeps vehicle plates, slip
+     * and batch codes; send errors stay hidden and a check is never saved.
+     */
+    async publicGradeMealChain(
+      query: {
+        schoolId: string;
+        gradeId: string;
+        date: string;
+        mealType: "LUNCH" | "AFTERNOON";
+      },
+      verify = false,
+    ): Promise<BlockchainProofChainResponseDTO> {
+      if (verify) requireEnabled();
+      const db = await connect();
+      const subjects = await repo.gradeChainSubjects(db, query);
+      const chain = await buildChain(db, subjects, null, {
+        verify,
+        persist: false,
+      });
+      return {
+        ...chain,
+        nodes: chain.nodes.map((node) => ({ ...node, lastError: null })),
+      };
+    },
     async chain(
       params: BlockchainProofChainParamsDTO,
       query: BlockchainProofChainQueryDTO,

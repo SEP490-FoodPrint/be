@@ -141,3 +141,103 @@ export interface PublicSchoolClassDto {
   gradeId: string | null;
   gradeName: string | null;
 }
+
+/* ---------- Truy xuất chung theo khối ---------- */
+
+export interface GradeInfoDto {
+  id: string;
+  name: string | null;
+}
+
+export interface GradeMealDto {
+  mealDate: string;
+  mealType: string;
+}
+
+/** Một lô nguyên liệu nằm trong đơn giao, dùng cho món đang xem. */
+export interface GradeDeliveryLotDto {
+  ingredientLotId: string;
+  lotCode: string;
+  ingredientName: string;
+  manufactureDate: string | null;
+  expiryDate: string | null;
+  sourceFacility: SourceFacilityDto | null;
+}
+
+export interface GradeDeliveryDto {
+  id: string;
+  deliveryNo: string;
+  status: string;
+  vehiclePlate: string | null;
+  expectedArrivalAt: string | null;
+  arrivedAt: string | null;
+  receivedAt: string | null;
+  approvals: DeliveryApprovalDto[];
+  lots: GradeDeliveryLotDto[];
+}
+
+/** Nhà cung cấp tham gia cung cấp nguyên liệu cho món, kèm các đơn giao. */
+export interface GradeSupplierDto {
+  id: string;
+  name: string;
+  taxCode: string | null;
+  address: string | null;
+  certifications: CertificationDto[];
+  deliveries: GradeDeliveryDto[];
+}
+
+/** Mẻ nấu của món (dùng chung cho mọi lớp trong khối), chỉ để hiện mẫu lưu. */
+export interface GradeBatchDto {
+  cookingBatchId: string;
+  batchCode: string;
+  status: string;
+  confirmedAt: string | null;
+  completedAt: string | null;
+  retainedSample: RetainedSampleDto | null;
+}
+
+/** Các mốc thời gian của quy trình phục vụ món cho khối. */
+export interface GradeProcessDto {
+  /** Từng đơn giao: xe đến lúc nào, trường kiểm nhận lúc nào. */
+  receive: {
+    deliveryId: string;
+    deliveryNo: string;
+    supplierName: string;
+    vehiclePlate: string | null;
+    arrivedAt: string | null;
+    receivedAt: string | null;
+  }[];
+  prepare: {
+    startedAt: string | null;
+    completedAt: string | null;
+    batchCount: number;
+  };
+  sample: {
+    sampledAt: string | null;
+    sampleCount: number;
+  };
+  deliver: {
+    allocatedAt: string | null;
+    firstDistributedAt: string | null;
+    lastDistributedAt: string | null;
+    distributed: boolean;
+  };
+}
+
+export interface GradeDishTraceDto {
+  dishId: string;
+  dishName: string;
+  dishCategory: string | null;
+  process: GradeProcessDto;
+  suppliers: GradeSupplierDto[];
+  batches: GradeBatchDto[];
+}
+
+export interface GradeMealTraceabilityResponseDto {
+  school: SchoolDto;
+  grade: GradeInfoDto;
+  meal: GradeMealDto;
+  dishes: GradeDishTraceDto[];
+  blockchainProof: BlockchainProofChainResponseDTO | null;
+  blockchainProofError: string | null;
+}
