@@ -34,7 +34,8 @@ Hàm trả `{ id }` khi Resend chấp nhận yêu cầu. Kết quả này không
 - Helper quản lý client Resend, sender, timeout, idempotency header và lỗi gửi mail.
 - Tính năng quản lý người nhận, tiêu đề/template, sinh mã, hash, TTL Redis, giới hạn gửi và phản hồi nghiệp vụ.
 - `verification-email.ts` và `password-reset-email.ts` là các template adapter gọi `sendMail`; các service hiện tại vẫn inject mailer để test.
-- Với email thông báo sau một thao tác DB, chọn gửi sau commit và xử lý lỗi theo nghiệp vụ. Riêng email kết quả xét duyệt hồ sơ dùng `EmailOutbox` ghi cùng transaction và worker BullMQ/Resend riêng; không gửi trực tiếp trong request xét duyệt. Xem [hợp đồng và vận hành outbox](ONBOARDING.md#thông-báo-kết-quả-xét-duyệt). Lỗi gửi email không có nghĩa thao tác DB đã thất bại. Không gọi trực tiếp SDK Resend ở service mới.
+- Mọi email dùng bố cục lá thư `renderLetterEmail` (`src/utils/branded-email.ts`; khung rộng 343px, cao theo nội dung). Logo dự án (`src/utils/email-logo.ts`, lấy từ `public/logo.png` của frontend) được tham chiếu bằng `cid:foodprint-logo`; `sendMail` tự đính kèm ảnh inline khi HTML có tham chiếu này. `EMAIL_LOGO_URL` (https) thay bằng ảnh công khai nếu cần.
+- Với email thông báo sau một thao tác DB, chọn gửi sau commit và xử lý lỗi theo nghiệp vụ. Riêng email kết quả xét duyệt hồ sơ và email thông báo khiếu nại cho người gửi ([specs/complaint-email-notifications](../specs/complaint-email-notifications/spec.md)) dùng `EmailOutbox` ghi cùng transaction và worker BullMQ/Resend riêng; không gửi trực tiếp trong request xét duyệt. Xem [hợp đồng và vận hành outbox](ONBOARDING.md#thông-báo-kết-quả-xét-duyệt). Lỗi gửi email không có nghĩa thao tác DB đã thất bại. Không gọi trực tiếp SDK Resend ở service mới.
 
 ## Kiểm thử
 

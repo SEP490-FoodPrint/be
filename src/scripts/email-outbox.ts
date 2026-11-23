@@ -28,6 +28,8 @@ async function main() {
       select: {
         id: true,
         registrationId: true,
+        complaintId: true,
+        complaintEvent: true,
         status: true,
         attempts: true,
         firstAttemptAt: true,

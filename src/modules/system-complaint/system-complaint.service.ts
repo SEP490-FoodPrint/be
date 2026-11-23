@@ -26,6 +26,7 @@ import {
 import {
   mapTicketComment,
   mapTicketFields,
+  queueRequesterEmail,
 } from "../complaint-ticket/complaint-ticket.service";
 import {
   createSystemComplaintRepository,
@@ -296,6 +297,7 @@ export function createSystemComplaintService(
         });
         const ticketActor = { userId: actor.id, roleCode: actor.role };
         await tickets.recordCreated(tx, created.id, ticketActor);
+        await queueRequesterEmail(tx, tickets, created.id, "CREATED");
         const row = await repository.findOne(
           tx,
           listScopes["system-complaint"](actor),
@@ -324,6 +326,8 @@ export function createSystemComplaintService(
           type: "MESSAGE",
           content: input.content,
         });
+        if (side === "HANDLER")
+          await queueRequesterEmail(tx, tickets, target.id, "HANDLER_COMMENT");
       });
     },
     resolve(
@@ -345,6 +349,7 @@ export function createSystemComplaintService(
             type: "RESOLUTION",
             content: input.content,
           });
+          await queueRequesterEmail(tx, tickets, target.id, "RESOLVED");
         },
       );
     },

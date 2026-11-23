@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { PrismaClient } from "../src/generated/prisma/client";
-import { renderBrandedEmail } from "../src/utils/branded-email";
+import { renderLetterEmail } from "../src/utils/branded-email";
 import {
   notifyMenuDecision,
   runMenuDeadlineReminders,
@@ -63,16 +63,22 @@ function fakeDb(overrides: Record<string, unknown> = {}) {
 }
 
 void test("email thương hiệu có tên dự án, màu xanh và escape nội dung động", () => {
-  const { html, text } = renderBrandedEmail({
-    tone: "danger",
-    heading: "Ban Giám hiệu yêu cầu chỉnh sửa thực đơn",
+  const { html, text } = renderLetterEmail({
+    title: "Ban Giám hiệu yêu cầu chỉnh sửa thực đơn",
     preheader: "preheader",
-    paragraphs: ["Xin chào"],
-    highlight: { title: "Nhận xét", body: "<script>alert(1)</script>\nDòng 2" },
+    greeting: "Kính gửi A,",
+    intro: ["Xin chào"],
+    fields: [
+      {
+        label: "Nhận xét",
+        value: "<script>alert(1)</script>\nDòng 2",
+        block: true,
+      },
+    ],
     action: { label: "Sửa thực đơn", url: "javascript:alert(1)" },
   });
   assert.match(html, /FoodPrint/);
-  assert.match(html, /#0a8066/);
+  assert.match(html, /#065f4b/);
   assert.doesNotMatch(html, /<script>/);
   assert.match(html, /&lt;script&gt;/);
   assert.match(html, /Dòng 2/);

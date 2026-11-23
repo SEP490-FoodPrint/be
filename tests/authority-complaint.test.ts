@@ -232,6 +232,23 @@ function escalateHarness(options: {
       calls.push("history");
       return Promise.resolve({});
     },
+    findEmailRecipient: () =>
+      Promise.resolve({
+        kind: "AUTHORITY" as const,
+        code: "FP-AC-00042",
+        title: "Khiếu nại chuyển ATTP",
+        description: "Mô tả",
+        comments: [],
+        senderUser: {
+          email: "parent@example.test",
+          fullName: "Phụ huynh",
+          status: "ACTIVE" as const,
+        },
+      }),
+    queueEmail: (_tx, input) => {
+      calls.push(`email:${input.event}`);
+      return Promise.resolve({});
+    },
   };
   const service = createAuthorityComplaintService(
     repository,
@@ -375,6 +392,7 @@ void test("escalate: khóa C03, đóng ESCALATED, ghi chú lý do, cấp FP-AC v
     "code:AC",
     "create",
     "history",
+    "email:CREATED",
     `read:${createdId}`,
   ]);
   assert.equal(h.transitions[0].closeReason, "ESCALATED");

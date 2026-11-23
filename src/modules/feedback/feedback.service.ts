@@ -27,6 +27,7 @@ import {
 import {
   mapTicketComment,
   mapTicketFields,
+  queueRequesterEmail,
 } from "../complaint-ticket/complaint-ticket.service";
 import {
   createFeedbackRepository,
@@ -382,6 +383,7 @@ export function createFeedbackService(
             userId: actor.id,
             roleCode: actor.role,
           });
+          await queueRequesterEmail(tx, tickets, created.id, "CREATED");
           const row = await repository.findOne(
             tx,
             listScopes.feedback(actor),
@@ -411,6 +413,8 @@ export function createFeedbackService(
           type: "MESSAGE",
           content: input.content,
         });
+        if (side === "HANDLER")
+          await queueRequesterEmail(tx, tickets, target.id, "HANDLER_COMMENT");
       });
     },
     resolve(
@@ -432,6 +436,7 @@ export function createFeedbackService(
             type: "RESOLUTION",
             content: input.content,
           });
+          await queueRequesterEmail(tx, tickets, target.id, "RESOLVED");
         },
       );
     },

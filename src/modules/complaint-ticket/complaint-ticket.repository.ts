@@ -3,6 +3,7 @@ import {
   allocateBusinessCode,
   type BusinessCodeType,
 } from "../../utils/business-code";
+import type { ComplaintEmailEvent } from "../../utils/complaint-email";
 import type { TicketStatus } from "./complaint-ticket.lifecycle";
 
 type Tx = Prisma.TransactionClient;
@@ -42,6 +43,20 @@ export const ticketCommentsArgs = {
   orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   select: ticketCommentSelect,
 } as const satisfies Prisma.Complaint$commentsArgs;
+
+export interface ComplaintEmailRecipientRow {
+  kind: ComplaintKindValue;
+  code: string;
+  title: string;
+  description: string;
+  senderUser: { email: string; fullName: string; status: string };
+  /** Bình luận mới nhất của bên xử lý (bình luận/nội dung xử lý vừa ghi trong cùng transaction). */
+  comments: {
+    content: string;
+    createdAt: Date;
+    authorUser: { fullName: string };
+  }[];
+}
 
 export interface TransitionInput {
   complaintId: string;
@@ -146,6 +161,56 @@ export function createComplaintTicketRepository() {
           commentType: input.type,
           content: input.content,
         },
+      });
+    },
+    /** Người nhận email thông báo: người gửi đơn (specs/complaint-email-notifications). */
+    findEmailRecipient(
+      tx: Tx,
+      complaintId: string,
+    ): Promise<ComplaintEmailRecipientRow | null> {
+      return tx.complaint.findUnique({
+        where: { id: complaintId },
+        select: {
+          kind: true,
+          code: true,
+          title: true,
+          description: true,
+          senderUser: { select: { email: true, fullName: true, status: true } },
+          comments: {
+            where: { authorSide: "HANDLER" },
+            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+            take: 1,
+            select: {
+              content: true,
+              createdAt: true,
+              authorUser: { select: { fullName: true } },
+            },
+          },
+        },
+      });
+    },
+    /** Ghi outbox trong transaction của thao tác; dispatcher chỉ gửi sau khi commit. */
+    queueEmail(
+      tx: Tx,
+      input: {
+        complaintId: string;
+        event: ComplaintEmailEvent;
+        recipientEmail: string;
+        subject: string;
+        text: string;
+        html: string;
+      },
+    ): Promise<unknown> {
+      return tx.emailOutbox.create({
+        data: {
+          complaintId: input.complaintId,
+          complaintEvent: input.event,
+          recipientEmail: input.recipientEmail,
+          subject: input.subject,
+          text: input.text,
+          html: input.html,
+        },
+        select: { id: true },
       });
     },
     /** Đơn `RESOLVED` đã hết hạn đánh giá (`lastResolvedAt <= cutoff`), cũ nhất trước. */

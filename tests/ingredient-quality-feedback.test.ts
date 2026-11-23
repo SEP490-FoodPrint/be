@@ -186,8 +186,30 @@ function harness(options: {
   const client = fakeClient(record);
   const transitions: TransitionInput[] = [];
   const comments: { side: string; type: string; content: string }[] = [];
+  const emails: { complaintId: string; event: string; subject: string }[] = [];
   const tickets: ComplaintTicketRepository = {
     ...createComplaintTicketRepository(),
+    findEmailRecipient: () =>
+      Promise.resolve({
+        kind: "INGREDIENT" as const,
+        code: "FP-CP-48213",
+        title: "Phản ánh chất lượng nguyên liệu",
+        description: "Mô tả",
+        comments: [],
+        senderUser: {
+          email: "sender@example.test",
+          fullName: "Người gửi",
+          status: "ACTIVE" as const,
+        },
+      }),
+    queueEmail: (_tx, input) => {
+      emails.push({
+        complaintId: input.complaintId,
+        event: input.event,
+        subject: input.subject,
+      });
+      return Promise.resolve({});
+    },
     transition: (_tx, input) => {
       transitions.push(input);
       return Promise.resolve(true);
@@ -214,7 +236,7 @@ function harness(options: {
     () => NOW,
     tickets,
   );
-  return { service, transitions, comments, record };
+  return { service, transitions, comments, emails, record };
 }
 
 function supplierRepository(
@@ -437,6 +459,15 @@ void test("supplier accept → resolve: lock order, actor recheck, Serializable,
   assert.deepEqual(resolve.comments, [
     { side: "HANDLER", type: "RESOLUTION", content: "Đã đổi lô mới" },
   ]);
+  // PR-E: email "Đã xử lý" cho người gửi; Tiếp nhận không gửi email.
+  assert.deepEqual(accept.emails, []);
+  assert.deepEqual(resolve.emails, [
+    {
+      complaintId: feedbackId1,
+      event: "RESOLVED",
+      subject: "[FoodPrint] Đơn FP-CP-48213 đã được xử lý",
+    },
+  ]);
 });
 
 void test("supplier cannot comment before accepting and lost races return 409", async () => {
@@ -632,7 +663,7 @@ function createHarness(
 }
 
 void test("create: checks delivery and lot in the sender's school, allocates FP-CP and records NEW", async () => {
-  const { service, calls, created, record } = createHarness({
+  const { service, calls, created, record, emails } = createHarness({
     id: deliveryId1,
     deliveryNo: "FP-DE-00010",
     status: "RECEIVED",
@@ -662,6 +693,10 @@ void test("create: checks delivery and lot in the sender's school, allocates FP-
     },
   ]);
   assert.equal(detail.displayStatus, "IN_PROGRESS");
+  assert.deepEqual(
+    emails.map((email) => [email.complaintId, email.event]),
+    [[feedbackId1, "CREATED"]],
+  );
 
   const withLot = createHarness(
     { id: deliveryId1, deliveryNo: "FP-DE-00010", status: "REJECTED" },
