@@ -1,6 +1,7 @@
 import { Router } from "express";
 import type { RequestHandler } from "express";
 import { authenticate } from "../../middlewares/auth.middleware";
+import { requirePermission } from "../../middlewares/permission.middleware";
 import { createSampleStorageController } from "./sample-storage.controller";
 import {
   sampleStorageService,
@@ -14,11 +15,15 @@ export function createSampleStorageRouter(
   const router = Router();
   const controller = createSampleStorageController(service);
 
-  router.get("/", authHandler, controller.list);
-  router.get("/:id", authHandler, controller.getById);
-  router.post("/", authHandler, controller.create);
-  router.put("/:id", authHandler, controller.update);
-  router.delete("/:id", authHandler, controller.remove);
+  // Tủ lưu mẫu chỉ dành cho nhân viên bếp: xem cần quyền xem mẫu lưu,
+  // thêm / sửa / xóa tủ cần quyền cập nhật mẫu lưu.
+  const canView = requirePermission("retained_sample.view");
+  const canManage = requirePermission("retained_sample.update");
+  router.get("/", authHandler, canView, controller.list);
+  router.get("/:id", authHandler, canView, controller.getById);
+  router.post("/", authHandler, canManage, controller.create);
+  router.put("/:id", authHandler, canManage, controller.update);
+  router.delete("/:id", authHandler, canManage, controller.remove);
 
   return router;
 }

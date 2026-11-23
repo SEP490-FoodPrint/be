@@ -1552,14 +1552,10 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       assert.equal(grPlannedFor(grCommon), 120);
       assert.equal(grPlannedFor(grRegular), 107);
       assert.equal(grPlannedFor(grAlt), 13);
-      const grFirst = grPlan.batches[0];
       assert.equal("update" in batches, false);
       assert(grPlan.batches.every((batch) => batch.status === "CONFIRMED"));
-      await assert.rejects(
-        () => batches.remove(grFirst.id, chef),
-        (error: unknown) =>
-          error instanceof HttpError && error.statusCode === 409,
-      );
+      // Không còn API xóa lô chế biến
+      assert.equal("remove" in batches, false);
       const repeatedPlan = await batches.plan(
         { ...grKey, dishId: grCommon },
         chef,
@@ -1575,10 +1571,6 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         240,
       );
       await batches.confirm(grPlan.batches[0].id, chef);
-      await assert.rejects(
-        () => batches.remove(grPlan.batches[0].id, chef),
-        (e: unknown) => e instanceof HttpError && e.statusCode === 409,
-      );
       const grNormal = (
           await batches.plan({ ...grKey, dishId: grRegular }, chef)
         ).batches,

@@ -35,7 +35,7 @@ export function createKitchenRouter(
     requireResource("kitchen"),
     controller.dayProgress,
   );
-  // Đã gỡ bỏ API chỉnh sửa lô chế biến (PUT /:id) theo yêu cầu nghiệp vụ
+  // Đã gỡ bỏ API chỉnh sửa (PUT /:id) và xóa (DELETE /:id) lô chế biến theo yêu cầu nghiệp vụ
   router.get(
     "/groups/:id",
     authHandler,
@@ -43,12 +43,6 @@ export function createKitchenRouter(
     controller.getGroup,
   );
 
-  router.delete(
-    "/:id",
-    authHandler,
-    requirePermission("cooking_batch.update"),
-    controller.remove,
-  );
   router.get("/", authHandler, requireResource("kitchen"), controller.list);
   router.get(
     "/stats",

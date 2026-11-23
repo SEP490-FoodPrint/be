@@ -7,6 +7,7 @@ import express, { type RequestHandler } from "express";
 import { Prisma, type SampleStorageUnit } from "../src/generated/prisma/client";
 import { SampleStorageService } from "../src/modules/sample-storage/sample-storage.service";
 import { createSampleStorageRouter } from "../src/modules/sample-storage/sample-storage.routes";
+import { globalErrorHandler } from "../src/middlewares/error.middleware";
 import { validateSampleStorageWrite } from "../src/modules/sample-storage/sample-storage.validation";
 import { testStaff } from "./helpers/authorization";
 import { startHttp } from "./helpers/http";
@@ -409,5 +410,63 @@ void test("SampleStorage router handles HTTP CRUD endpoints with authentications
     assert.equal(deleteBody.success, true);
   } finally {
     await http.close();
+  }
+
+  // Tài khoản trường không có quyền mẫu lưu (vd. GVCN, Y tế) bị chặn 403 với mọi thao tác tủ
+  const otherApp = express();
+  otherApp.use(express.json());
+  otherApp.use(
+    "/v1/sample-storage-units",
+    createSampleStorageRouter(service, (req, _res, next) => {
+      req.auth = { ...testStaff, permissions: ["menu.view"] };
+      next();
+    }),
+  );
+  otherApp.use(globalErrorHandler);
+  const other = await startHttp(otherApp);
+  try {
+    for (const [method, path] of [
+      ["GET", "/v1/sample-storage-units"],
+      ["GET", `/v1/sample-storage-units/${dummyUnit.id}`],
+      ["POST", "/v1/sample-storage-units"],
+      ["PUT", `/v1/sample-storage-units/${dummyUnit.id}`],
+      ["DELETE", `/v1/sample-storage-units/${dummyUnit.id}`],
+    ]) {
+      const res = await other.request(path, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        ...(method === "POST" || method === "PUT" ? { body: "{}" } : {}),
+      });
+      assert.equal(res.status, 403, `${method} ${path}`);
+    }
+  } finally {
+    await other.close();
+  }
+
+  // Chỉ có quyền xem: xem được, không được thêm tủ
+  const viewerApp = express();
+  viewerApp.use(express.json());
+  viewerApp.use(
+    "/v1/sample-storage-units",
+    createSampleStorageRouter(service, (req, _res, next) => {
+      req.auth = { ...testStaff, permissions: ["retained_sample.view"] };
+      next();
+    }),
+  );
+  viewerApp.use(globalErrorHandler);
+  const viewer = await startHttp(viewerApp);
+  try {
+    assert.equal(
+      (await viewer.request("/v1/sample-storage-units")).status,
+      200,
+    );
+    const denied = await viewer.request("/v1/sample-storage-units", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    assert.equal(denied.status, 403);
+  } finally {
+    await viewer.close();
   }
 });

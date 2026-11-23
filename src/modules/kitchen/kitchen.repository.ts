@@ -459,11 +459,6 @@ export const kitchenRepository = {
       },
     });
   },
-  removeEmptyGroup(client: Tx, id: string) {
-    return client.cookingBatchGroup.deleteMany({
-      where: { id, cookingBatches: { none: {} } },
-    });
-  },
   /** Thực đơn đã duyệt của trường trong ngày, kèm món và các lô nấu/mẫu lưu của từng món. */
   findDayProgress(client: Tx, schoolId: string, menuDate: Date) {
     return client.menuDay.findMany({

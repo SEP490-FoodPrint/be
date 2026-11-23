@@ -1774,66 +1774,6 @@ export function createKitchenLifecycle(
       };
     },
 
-    remove(id: string, principal: AuthPrincipal) {
-      return write(
-        principal,
-        "cooking_batch.update",
-        async (tx, _actor, schoolId) => {
-          const batch = await lockedBatch(tx, id, schoolId);
-          if (batch.status !== "UNCONFIRMED")
-            throw new HttpError(
-              409,
-              "Chỉ được xóa mẻ trước khi ấn xác nhận nấu",
-            );
-          const shared = await tx.menuMealSeasoningLot.findMany({
-            where: mealKey(batch),
-            select: { id: true, usedAt: true },
-          });
-          if (
-            shared.some((s) => s.usedAt !== null) ||
-            (await tx.inventoryTransaction.count({
-              where: {
-                OR: [
-                  { referenceType: "COOKING_BATCH", referenceId: id },
-                  {
-                    referenceType: "MENU_MEAL_SEASONING",
-                    referenceId: { in: shared.map((s) => s.id) },
-                  },
-                ],
-              },
-            })) ||
-            (await tx.mealAllocationBatch.count({
-              where: { cookingBatchId: id },
-            })) ||
-            (await tx.retainedFoodSample.count({
-              where: { cookingBatchId: id },
-            })) ||
-            (await tx.blockchainProof.count({
-              where: { cookingBatchId: id },
-            }))
-          )
-            throw new HttpError(
-              409,
-              "Mẻ hoặc bữa đã phát sinh lịch sử nghiệp vụ; không được xóa",
-            );
-          await tx.cookingBatch.delete({ where: { id } });
-          await repository.removeEmptyGroup(tx, batch.batchGroupId);
-          const remaining = await tx.cookingBatch.count({
-            where: mealKey(batch),
-          });
-          if (!remaining)
-            await tx.menuMealSeasoningLot.deleteMany({
-              where: { ...mealKey(batch), usedAt: null },
-            });
-          return {
-            id,
-            deleted: true,
-            reservationsReleased: true,
-            mealSeasoningReservationsReleased: remaining === 0,
-          };
-        },
-      );
-    },
     preview(input: PlanInput, principal: AuthPrincipal) {
       return executePlan(
         input,
