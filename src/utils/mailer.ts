@@ -1,5 +1,10 @@
 import { Resend, type CreateEmailOptions } from "resend";
 import { readEmailConfig } from "../config/email";
+import {
+  EMAIL_LOGO_CID,
+  EMAIL_LOGO_FILENAME,
+  EMAIL_LOGO_PNG_BASE64,
+} from "./email-logo";
 import { HttpError } from "./http-error";
 
 export type MailOptions = {
@@ -34,7 +39,24 @@ export async function sendMail(options: MailOptions): Promise<{ id: string }> {
   try {
     if (!cached || cached.apiKey !== config.apiKey)
       cached = { apiKey: config.apiKey, client: new Resend(config.apiKey) };
-    const base = { from: config.from, to, subject: options.subject };
+    // HTML thương hiệu tham chiếu logo bằng `cid:`; đính kèm inline đúng ảnh đó (không cần host ảnh).
+    const attachments = options.html?.includes(`cid:${EMAIL_LOGO_CID}`)
+      ? [
+          {
+            filename: EMAIL_LOGO_FILENAME,
+            // Chuỗi base64 (Buffer sẽ bị JSON hóa thành {type, data}).
+            content: EMAIL_LOGO_PNG_BASE64,
+            contentType: "image/png",
+            contentId: EMAIL_LOGO_CID,
+          },
+        ]
+      : undefined;
+    const base = {
+      from: config.from,
+      to,
+      subject: options.subject,
+      ...(attachments ? { attachments } : {}),
+    };
     const message: CreateEmailOptions =
       options.text === undefined
         ? { ...base, html: options.html }

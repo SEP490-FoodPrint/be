@@ -206,3 +206,40 @@ void test("shared mailer validates configuration before sending and uses the lat
   );
   assert.equal(fetch.mock.callCount(), 2);
 });
+
+void test("shared mailer attaches the inline FoodPrint logo only when the HTML references cid:foodprint-logo", async (context) => {
+  configure(context);
+  const bodies: Record<string, unknown>[] = [];
+  context.mock.method(
+    globalThis,
+    "fetch",
+    (_input: string | URL | Request, init?: RequestInit) => {
+      bodies.push(payload(init));
+      return Promise.resolve(response({ id: "accepted-email-id" }));
+    },
+  );
+  await sendMail({
+    ...message,
+    html: '<img src="cid:foodprint-logo" alt="FoodPrint" />',
+  });
+  await sendMail({ ...message, html: "<p>Không có logo</p>" });
+  const [withLogo, withoutLogo] = bodies;
+  const attachments = withLogo.attachments as {
+    content?: string;
+    filename?: string;
+    content_type?: string;
+    content_id?: string;
+  }[];
+  assert.equal(attachments.length, 1);
+  assert.equal(attachments[0].filename, "foodprint-logo.png");
+  assert.equal(attachments[0].content_id, "foodprint-logo");
+  assert.equal(attachments[0].content_type, "image/png");
+  // PNG hợp lệ (chữ ký 89 50 4E 47) sau khi giải base64.
+  assert.equal(
+    Buffer.from(String(attachments[0].content), "base64")
+      .subarray(0, 4)
+      .toString("hex"),
+    "89504e47",
+  );
+  assert.equal(withoutLogo.attachments, undefined);
+});

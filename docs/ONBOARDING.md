@@ -109,6 +109,8 @@ Migration `20261102000100_registration_review_outbox` tạo bảng `foodprint.em
 
 Lỗi Redis/Resend sau commit không thay đổi quyết định xét duyệt. Worker tự thử tối đa 5 lượt, chờ tăng dần từ 5 giây. Kiểm tra một sự kiện bằng `npm run email:outbox:status -- <UUID>`; gửi lại trạng thái FAILED bằng `npm run email:outbox:retry -- <UUID>`. Nếu lượt gửi đầu đã quá 24 giờ và kết quả chưa rõ, đối soát trên Resend trước rồi dùng `--confirm-possible-duplicate`. Các lệnh mặc định chỉ cho PostgreSQL local; thao tác Azure cần `--azure`, `AZURE_DATABASE_HOST` khớp target và quyền vận hành riêng. Không dùng script này để seed hoặc gửi bù hồ sơ cũ.
 
+Migration `20261203000100_complaint_email_outbox` cho bảng này nhận thêm email thông báo khiếu nại: mỗi dòng có đúng một nguồn (`registration_id` hoặc `complaint_id` + `complaint_event`, CHECK `email_outbox_source_check`). Dòng hồ sơ đăng ký giữ khóa idempotency `registration-review/<id>`, dòng khiếu nại dùng `complaint-email/<id>`; cùng hàng đợi, dispatcher và lệnh `email:outbox:*` (lệnh `status` hiển thị thêm `complaintId`, `complaintEvent`).
+
 ## Lưu tài liệu và kiểm thử
 
 Cloudinary cần CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET trong `.env` riêng; xem `.env.example`. Không có cấu hình vẫn nộp được hồ sơ không đính kèm, còn gửi tệp trả 503. Nhận PDF/PNG/JPEG tối đa 5 MiB/tệp, kiểm tra MIME và chữ ký đầu tệp, tối đa 20 tệp/request. Các giới hạn là giới hạn API, không thay đổi yêu cầu trường bắt buộc trong Figma.

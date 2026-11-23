@@ -83,8 +83,8 @@ void test("review email uses the applicant address, escapes HTML and includes re
   assert.match(approved.text, /kích hoạt/);
   assert(!approved.text.includes("Thiếu <giấy phép>"));
   for (const mail of [approved, rejected]) {
-    assert.match(mail.text, /Hồ sơ FP-REG-00001/);
-    assert.match(mail.html, /Hồ sơ FP-REG-00001/);
+    assert.match(mail.text, /Mã hồ sơ: FP-REG-00001/);
+    assert.match(mail.html, /<strong>Mã hồ sơ:<\/strong> FP-REG-00001/);
     assert.ok(!mail.text.includes(row.id));
     assert.ok(!mail.html.includes(row.id));
   }

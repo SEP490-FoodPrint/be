@@ -8072,7 +8072,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       let worker: ReturnType<typeof createEmailWorker> | undefined;
       try {
         const pending = await db.emailOutbox.findFirstOrThrow({
-          where: { status: "PENDING" },
+          where: { status: "PENDING", registrationId: { not: null } },
           select: { id: true },
         });
         await dispatchEmailOutbox(db, queue);
@@ -8087,10 +8087,12 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             .length,
           1,
         );
+        // Dòng hồ sơ đăng ký giữ khóa cũ; dòng khiếu nại (PR-E) dùng khóa riêng.
+        const keys: string[] = [];
         worker = createEmailWorker(
           db,
           (mail) => {
-            assert.match(mail.idempotencyKey ?? "", /^registration-review\//);
+            keys.push(mail.idempotencyKey ?? "");
             return Promise.resolve({ id: "resend-test-queue" });
           },
           namespace,
@@ -8104,6 +8106,18 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         assert.equal(
           await db.emailOutbox.count({ where: { status: "PENDING" } }),
           0,
+        );
+        assert(keys.includes(`registration-review/${pending.id}`));
+        const complaintRows = await db.emailOutbox.findMany({
+          where: { complaintId: { not: null } },
+          select: { id: true },
+        });
+        for (const row of complaintRows)
+          assert(keys.includes(`complaint-email/${row.id}`));
+        assert(
+          keys.every((key) =>
+            /^(registration-review|complaint-email)\//.test(key),
+          ),
         );
       } finally {
         if (worker) await closeEmailWorker(worker);
@@ -11448,6 +11462,15 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       const handlerView = data(await request(`${route}/${ticketId}`, admin2));
       assert.equal(handlerView.hasNewMessage, true);
       assert.deepEqual(handlerView.allowedActions, ["COMMENT", "RESOLVE"]);
+      // PR-E: bình luận của bên xử lý gửi email cho người gửi; bình luận của người gửi thì không.
+      assert.equal(
+        (
+          await request(`${route}/${ticketId}/comments`, admin2, "POST", {
+            content: "Bạn dùng trình duyệt nào?",
+          })
+        ).status,
+        201,
+      );
       const resolved = await request(
         `${route}/${ticketId}/resolve`,
         admin2,
@@ -11480,6 +11503,44 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         (await request(`${route}/${ticketId}/reopen`, kitchen, "POST", {}))
           .status,
         409,
+      );
+
+      // PR-E: outbox có đúng một email cho mỗi sự kiện (tạo, bình luận bên xử lý, Đã xử lý),
+      // gửi tới email người gửi; Tiếp nhận, bình luận người gửi, Hài lòng không tạo email.
+      const kitchenEmail = (
+        await db.user.findUniqueOrThrow({ where: { id: kitchen } })
+      ).email;
+      const outbox = await db.emailOutbox.findMany({
+        where: { complaintId: ticketId },
+        orderBy: { createdAt: "asc" },
+      });
+      assert.deepEqual(
+        outbox.map((row) => row.complaintEvent),
+        ["CREATED", "HANDLER_COMMENT", "RESOLVED"],
+      );
+      assert(outbox.every((row) => row.recipientEmail === kitchenEmail));
+      assert(outbox.every((row) => row.registrationId === null));
+      assert.equal(outbox[0].status, "PENDING");
+      assert.match(outbox[1].text, /Bạn dùng trình duyệt nào\?/);
+      assert.match(outbox[2].subject, /đã được xử lý$/);
+      assert.match(outbox[2].text, /Đã khắc phục lỗi tải báo cáo\./);
+      assert.equal(
+        await db.emailOutbox.count({
+          where: { complaint: { kind: "SYSTEM" }, complaintEvent: "CREATED" },
+        }),
+        4,
+      );
+      await assert.rejects(
+        db.emailOutbox.create({
+          data: {
+            complaintId: ticketId,
+            recipientEmail: kitchenEmail,
+            subject: "x",
+            text: "x",
+            html: "x",
+          },
+        }),
+        "CHECK: complaint_id cần complaint_event",
       );
 
       // Tài khoản bị khóa sau khi gửi: đơn vẫn còn với snapshot cũ, người gửi không thao tác được nữa.

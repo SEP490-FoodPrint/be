@@ -1,4 +1,5 @@
 import { readEmailConfig } from "../config/email";
+import { readEmailLogoUrl, renderLetterEmail } from "./branded-email";
 import { HttpError } from "./http-error";
 import { sendMail } from "./mailer";
 
@@ -16,7 +17,23 @@ export const verificationMailer: VerificationMailer = {
       await sendMail({
         to: email,
         subject: "Mã xác minh email FoodPrint",
-        text: `Mã xác minh email FoodPrint của bạn là: ${code}\n\nMã có hiệu lực 10 phút và chỉ dùng một lần. Không chia sẻ mã với người khác.\nNếu bạn không đăng ký tài khoản FoodPrint, hãy bỏ qua email này.`,
+        ...renderLetterEmail(
+          {
+            title: "Mã xác minh email FoodPrint",
+            preheader: "Mã có hiệu lực 10 phút và chỉ dùng một lần.",
+            greeting: "Kính gửi Quý khách,",
+            intro: [
+              "Nhập mã dưới đây để xác minh địa chỉ email và tiếp tục đăng ký tài khoản FoodPrint.",
+            ],
+            code: {
+              label: "Mã xác minh",
+              value: code,
+              note: "Có hiệu lực 10 phút · Chỉ dùng một lần",
+            },
+            note: "Không chia sẻ mã với người khác. Nếu bạn không đăng ký tài khoản FoodPrint, hãy bỏ qua email này.",
+          },
+          { logoUrl: readEmailLogoUrl() },
+        ),
         idempotencyKey: `email-verification/${challengeId}`,
       });
     } catch {

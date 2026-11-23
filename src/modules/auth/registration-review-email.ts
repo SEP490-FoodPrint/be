@@ -1,40 +1,78 @@
+import {
+  readEmailAppUrl,
+  readEmailLogoUrl,
+  renderLetterEmail,
+  type LetterEmail,
+} from "../../utils/branded-email";
 import type { ReviewRow } from "./registration-review";
 import type { Application } from "./onboarding.repository";
 
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (char) => {
-    const entities: Record<string, string> = {
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#39;",
-    };
-    return entities[char];
-  });
+function organizationName(profileData: unknown): string | null {
+  return profileData &&
+    typeof profileData === "object" &&
+    !Array.isArray(profileData) &&
+    "name" in profileData &&
+    typeof profileData.name === "string" &&
+    profileData.name.trim()
+    ? profileData.name
+    : null;
+}
+
+function render(email: LetterEmail) {
+  return renderLetterEmail(email, { logoUrl: readEmailLogoUrl() });
+}
+
+/** Nút "Đăng nhập ngay", chỉ khi có cấu hình origin giao diện. */
+function loginAction() {
+  const url = readEmailAppUrl();
+  return url ? { action: { label: "Đăng nhập ngay", url } } : {};
+}
+
+function dossierFields(code: string, profileData: unknown) {
+  return [
+    { label: "Mã hồ sơ", value: code },
+    {
+      label: "Tổ chức",
+      value: organizationName(profileData) ?? "Hồ sơ đăng ký tài khoản",
+    },
+  ];
 }
 
 export function reviewEmail(row: ReviewRow, rejectionReason?: string) {
   const registrationID = row.code;
-  const name = row.applicantUser.fullName;
-  const organization =
-    row.profileData &&
-    typeof row.profileData === "object" &&
-    !Array.isArray(row.profileData) &&
-    "name" in row.profileData &&
-    typeof row.profileData.name === "string"
-      ? row.profileData.name
-      : "tổ chức đăng ký";
-  const decision = rejectionReason ? "từ chối" : "phê duyệt";
-  const nextStep = rejectionReason
-    ? `Lý do: ${rejectionReason}\nVui lòng đăng nhập FoodPrint, sửa hồ sơ và nộp lại.`
-    : "Tài khoản của bạn đã được kích hoạt. Vui lòng đăng nhập FoodPrint.";
-  const text = `Xin chào ${name},\n\nHồ sơ ${registrationID} của ${organization} đã được ${decision}.\n${nextStep}`;
+  const subject = rejectionReason
+    ? `[FoodPrint] Hồ sơ ${registrationID} chưa được phê duyệt`
+    : `[FoodPrint] Hồ sơ ${registrationID} đã được phê duyệt`;
+  const common = {
+    title: subject,
+    greeting: `Kính gửi ${row.applicantUser.fullName},`,
+  };
+  const content: LetterEmail = rejectionReason
+    ? {
+        ...common,
+        preheader: `Hồ sơ ${registrationID} đã bị từ chối. Vui lòng sửa và nộp lại.`,
+        intro: ["Hồ sơ đăng ký tài khoản của bạn chưa được phê duyệt:"],
+        fields: [
+          ...dossierFields(registrationID, row.profileData),
+          { label: "Lý do từ chối", value: rejectionReason, block: true },
+        ],
+        outro: ["Vui lòng đăng nhập FoodPrint, sửa hồ sơ và nộp lại."],
+        ...loginAction(),
+      }
+    : {
+        ...common,
+        preheader: `Hồ sơ ${registrationID} đã được phê duyệt. Tài khoản đã được kích hoạt.`,
+        intro: ["Hồ sơ đăng ký tài khoản của bạn đã được phê duyệt:"],
+        fields: dossierFields(registrationID, row.profileData),
+        outro: [
+          "Tài khoản của bạn đã được kích hoạt, bạn có thể đăng nhập FoodPrint ngay.",
+        ],
+        ...loginAction(),
+      };
   return {
     recipientEmail: row.applicantUser.email,
-    subject: `FoodPrint: Hồ sơ đăng ký đã được ${decision}`,
-    text,
-    html: `<p>Xin chào ${escapeHtml(name)},</p><p>Hồ sơ ${escapeHtml(registrationID)} của ${escapeHtml(organization)} đã được ${decision}.</p>${rejectionReason ? `<p>Lý do: ${escapeHtml(rejectionReason)}</p><p>Vui lòng đăng nhập FoodPrint, sửa hồ sơ và nộp lại.</p>` : "<p>Tài khoản của bạn đã được kích hoạt. Vui lòng đăng nhập FoodPrint.</p>"}`,
+    subject,
+    ...render(content),
   };
 }
 
@@ -43,11 +81,19 @@ export function submissionEmail(
   recipient: { fullName: string; email: string },
 ) {
   const registrationID = row.code;
-  const text = `Xin chào ${recipient.fullName},\n\nFoodPrint đã tiếp nhận hồ sơ ${registrationID} của bạn. Hồ sơ đang chờ xét duyệt.\nChúng tôi sẽ gửi email khi hồ sơ được phê duyệt hoặc từ chối. Bạn có thể đăng nhập FoodPrint để theo dõi hồ sơ.`;
+  const subject = `[FoodPrint] Đã tiếp nhận hồ sơ ${registrationID}`;
   return {
     recipientEmail: recipient.email,
-    subject: "FoodPrint: Đã tiếp nhận hồ sơ đăng ký",
-    text,
-    html: `<p>Xin chào ${escapeHtml(recipient.fullName)},</p><p>FoodPrint đã tiếp nhận hồ sơ ${escapeHtml(registrationID)} của bạn. Hồ sơ đang chờ xét duyệt.</p><p>Chúng tôi sẽ gửi email khi hồ sơ được phê duyệt hoặc từ chối. Bạn có thể đăng nhập FoodPrint để theo dõi hồ sơ.</p>`,
+    subject,
+    ...render({
+      title: subject,
+      preheader: `FoodPrint đã tiếp nhận hồ sơ ${registrationID}.`,
+      greeting: `Kính gửi ${recipient.fullName},`,
+      intro: ["Chúng tôi đã tiếp nhận hồ sơ đăng ký tài khoản của bạn:"],
+      fields: dossierFields(registrationID, row.profileData),
+      outro: [
+        "Hồ sơ đang chờ xét duyệt, chúng tôi sẽ gửi email khi có kết quả.",
+      ],
+    }),
   };
 }

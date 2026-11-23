@@ -1970,6 +1970,68 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
   );
 
   await context.test(
+    "complaint_email_outbox: email_outbox has exactly one source and complaint rows carry an event",
+    async () => {
+      const name = `foodprint_migration_test_complaint_email_${randomUUID().replaceAll("-", "")}`;
+      await db.query(`CREATE DATABASE "${name}"`);
+      recordLocalTestDatabase(name);
+      const fresh = new URL(url);
+      fresh.pathname = `/${name}`;
+      const client = new Client({ connectionString: fresh.toString() });
+      await client.connect();
+      try {
+        await client.query(
+          "CREATE SCHEMA IF NOT EXISTS foodprint; SET search_path = foodprint, public;",
+        );
+        for (const version of migrationNames.filter(
+          (value) => value <= "20261203000100_complaint_email_outbox",
+        ))
+          await client.query(
+            await readFile(
+              path.join(root, "prisma/migrations", version, "migration.sql"),
+              "utf8",
+            ),
+          );
+        await client.query("SET search_path = public;");
+        const insert = (fields: string, values: unknown[]) =>
+          client.query(
+            `INSERT INTO foodprint.email_outbox(${fields},recipient_email,subject,text,html) VALUES (${values.map((_, index) => `$${index + 1}`).join(",")},'a@example.test','s','t','h')`,
+            values,
+          );
+        // CHECK chạy trước FK nên không cần dữ liệu nguồn thật.
+        await assert.rejects(
+          client.query(
+            "INSERT INTO foodprint.email_outbox(recipient_email,subject,text,html) VALUES ('a@example.test','s','t','h')",
+          ),
+          (error) => sqlState(error, "23514", "email_outbox_source_check"),
+        );
+        await assert.rejects(
+          insert("registration_id,complaint_id,complaint_event", [
+            randomUUID(),
+            randomUUID(),
+            "CREATED",
+          ]),
+          (error) => sqlState(error, "23514", "email_outbox_source_check"),
+        );
+        await assert.rejects(insert("complaint_id", [randomUUID()]), (error) =>
+          sqlState(error, "23514", "email_outbox_complaint_event_check"),
+        );
+        await assert.rejects(
+          insert("registration_id,complaint_event", [randomUUID(), "CREATED"]),
+          (error) =>
+            sqlState(error, "23514", "email_outbox_complaint_event_check"),
+        );
+        await assert.rejects(
+          insert("complaint_id,complaint_event", [randomUUID(), "RESOLVED"]),
+          (error) => sqlState(error, "23503", "email_outbox_complaint_id_fkey"),
+        );
+      } finally {
+        await client.end();
+      }
+    },
+  );
+
+  await context.test(
     "supplier_enforcement: evidence FK, decision/execution CHECKs, one PENDING and one active restriction (NULLS NOT DISTINCT)",
     async () => {
       const name = `foodprint_migration_test_enforcement_${randomUUID().replaceAll("-", "")}`;
