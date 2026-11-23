@@ -144,6 +144,7 @@ export async function readStockAlertSource(schoolId: string, from: Date) {
       id: true,
       ingredientId: true,
       handlingType: true,
+      wasteRate: true,
       Ingredient: { select: { name: true, defaultUnit: true } },
     },
   });

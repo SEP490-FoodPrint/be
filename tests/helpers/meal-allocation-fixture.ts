@@ -111,6 +111,8 @@ export async function loadAllocationFixture(
         create: {
           id: dishId,
           schoolId,
+          standardQuantity: "100",
+          standardUnit: "g",
           name: index === 0 ? "Cơm fixture 12/11" : "Thịt kho fixture 12/11",
         },
         update: {},

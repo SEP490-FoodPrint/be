@@ -427,7 +427,7 @@ model DishIngredientEntry {
   ingredientRole    String?         @map("ingredient_role") @db.VarChar(12)
   dishId            String          @map("dish_id") @db.Uuid
   ingredientEntryId String          @map("ingredient_entry_id") @db.Uuid
-  /// Ingredient quantity for ONE standard serving of this Dish. Total demand = required_quantity times serving count (convert units consistently).
+  /// Cooked (finished) ingredient quantity inside the Dish standard (Dish.standard_quantity + standard_unit), NOT per serving. Per-serving quantity for a grade = required_quantity × DishGradeRecipe.portion_quantity / Dish.standard_quantity for g/ml lines; count-unit lines (quả, hộp, cái…) keep required_quantity (src/utils/dish-portion.ts). Raw demand = per-serving × serving count / (1 - IngredientEntry.waste_rate).
   requiredQuantity  Decimal         @map("required_quantity") @db.Decimal(14, 3)
   unit              String          @db.VarChar(30)
   Dish              Dish            @relation("dish_ingredient_entries_dish_id__dishes", fields: [dishId], references: [id], onDelete: Cascade, onUpdate: NoAction)
@@ -502,6 +502,9 @@ model Dish {
   categoryId            String?               @map("category_id") @db.Uuid
   schoolCategory        SchoolDishCategory?   @relation(fields: [categoryId, schoolId], references: [id, schoolId], onDelete: Restrict, onUpdate: NoAction)
   description           String?               @db.Text
+  /// Dish standard amount (e.g. 100 g). CHECK: > 0, unit in ('g','ml').
+  standardQuantity      Decimal               @map("standard_quantity") @db.Decimal(14, 3)
+  standardUnit          String                @map("standard_unit") @db.VarChar(30)
   status                EntityStatus          @default(ACTIVE)
   createdAt             DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt             DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -869,7 +872,6 @@ model IncidentSchoolAlert {
 
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
 model IngredientEntry {
-  gradeRecipeLines       DishGradeRecipeLine[]
   id                     String                          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   schoolId               String                          @map("school_id") @db.Uuid
   ingredientId           String                          @map("ingredient_id") @db.Uuid
@@ -877,6 +879,8 @@ model IngredientEntry {
   shelfLifeDays          Int?                            @map("shelf_life_days") @db.Integer
   /// School-specific handling method: DRY_STOCK = dry goods kept across days (rice, salt, spices); DIRECT_USE = fresh ingredients received and prepared the same day. Both types retain lots and inventory movement/traceability records.
   handlingType           IngredientHandlingType          @map("handling_type")
+  /// School-configured loss ratio from raw to cooked (0 <= r < 1): raw = cooked / (1 - r). Not applied to shared meal seasonings.
+  wasteRate              Decimal                         @default(0) @map("waste_rate") @db.Decimal(5, 4)
   status                 EntityStatus                    @default(ACTIVE)
   createdByUserId        String?                         @map("created_by_user_id") @db.Uuid
   createdAt              DateTime                        @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -2532,31 +2536,17 @@ model WeeklyMenuGrade {
 }
 
 model DishGradeRecipe {
-  dishId    String                @map("dish_id") @db.Uuid
-  gradeId   String                @map("grade_id") @db.Uuid
-  schoolId  String                @map("school_id") @db.Uuid
-  updatedAt DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  dish      Dish                  @relation(fields: [dishId, schoolId], references: [id, schoolId], onDelete: Cascade, onUpdate: NoAction)
-  grade     SchoolGrade           @relation(fields: [schoolId, gradeId], references: [schoolId, id], onDelete: Restrict, onUpdate: NoAction)
-  lines     DishGradeRecipeLine[]
+  dishId          String      @map("dish_id") @db.Uuid
+  gradeId         String      @map("grade_id") @db.Uuid
+  schoolId        String      @map("school_id") @db.Uuid
+  /// One serving for this grade, in Dish.standard_unit. CHECK > 0.
+  portionQuantity Decimal     @map("portion_quantity") @db.Decimal(14, 3)
+  updatedAt       DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  dish            Dish        @relation(fields: [dishId, schoolId], references: [id, schoolId], onDelete: Cascade, onUpdate: NoAction)
+  grade           SchoolGrade @relation(fields: [schoolId, gradeId], references: [schoolId, id], onDelete: Restrict, onUpdate: NoAction)
 
   @@id([dishId, gradeId])
   @@map("dish_grade_recipes")
-  @@schema("foodprint")
-}
-
-model DishGradeRecipeLine {
-  dishId            String          @map("dish_id") @db.Uuid
-  gradeId           String          @map("grade_id") @db.Uuid
-  ingredientEntryId String          @map("ingredient_entry_id") @db.Uuid
-  ingredientRole    String          @map("ingredient_role") @db.VarChar(12)
-  requiredQuantity  Decimal         @map("required_quantity") @db.Decimal(14, 3)
-  unit              String          @db.VarChar(30)
-  recipe            DishGradeRecipe @relation(fields: [dishId, gradeId], references: [dishId, gradeId], onDelete: Cascade, onUpdate: NoAction)
-  entry             IngredientEntry @relation(fields: [ingredientEntryId], references: [id], onDelete: Restrict, onUpdate: NoAction)
-
-  @@id([dishId, gradeId, ingredientEntryId])
-  @@map("dish_grade_recipe_lines")
   @@schema("foodprint")
 }
 

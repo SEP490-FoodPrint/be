@@ -12,9 +12,15 @@ export interface DishRecipeDTO {
   category: string | null;
   categoryLabel: string | null;
   description: string | null;
+  /** Mốc chuẩn của món. */
+  standardQuantity: string;
+  standardUnit: string;
   gradeRecipes?: {
     gradeId: string;
     gradeName: string;
+    /** Khẩu phần 1 suất của khối, đơn vị = standardUnit. */
+    portionQuantity: string;
+    /** Định lượng 1 suất của khối, tính sẵn từ mốc chuẩn × khẩu phần. */
     lines: {
       ingredientEntryId: string;
       ingredientId: string;

@@ -84,6 +84,7 @@ import { createHash } from "node:crypto";
 import { Prisma } from "../generated/prisma/client";
 import { prisma } from "../config/prisma";
 import { convertQuantity } from "../modules/kitchen/kitchen.service";
+import { scaleDishLines } from "../utils/dish-portion";
 
 // ---------------------------------------------------------------------------
 // CẤU HÌNH (dữ liệu seed)
@@ -297,30 +298,40 @@ async function loadCatalog(
     c.items.forEach((i) => set.add(i.ingredientId));
     inContract.set(c.supplierId, set);
   }
-  const recipes = await db.dishGradeRecipe.findMany({
-    where: { gradeId, schoolId: ctx.school.id, dish: { status: "ACTIVE" } },
+  const gradeRecipes = await db.dishGradeRecipe.findMany({
+    where: {
+      gradeId,
+      schoolId: ctx.school.id,
+      dish: { status: "ACTIVE" },
+    },
     select: {
       dishId: true,
+      portionQuantity: true,
       dish: {
         select: {
           name: true,
           mealType: true,
+          standardQuantity: true,
           schoolCategory: { select: { name: true } },
-        },
-      },
-      lines: {
-        select: {
-          ingredientRole: true,
-          requiredQuantity: true,
-          unit: true,
-          entry: {
+          dishIngredientEntries: {
             select: {
-              id: true,
-              status: true,
-              handlingType: true,
-              ingredientId: true,
-              Ingredient: {
-                select: { status: true, supplierId: true, defaultUnit: true },
+              ingredientRole: true,
+              requiredQuantity: true,
+              unit: true,
+              IngredientEntry: {
+                select: {
+                  id: true,
+                  status: true,
+                  handlingType: true,
+                  ingredientId: true,
+                  Ingredient: {
+                    select: {
+                      status: true,
+                      supplierId: true,
+                      defaultUnit: true,
+                    },
+                  },
+                },
               },
             },
           },
@@ -328,6 +339,19 @@ async function loadCatalog(
       },
     },
   });
+  // Định lượng 1 suất của khối = công thức mốc chuẩn × khẩu phần / mốc chuẩn.
+  const recipes = gradeRecipes.map((r) => ({
+    dishId: r.dishId,
+    dish: r.dish,
+    lines: scaleDishLines(
+      r.dish.standardQuantity,
+      r.portionQuantity,
+      r.dish.dishIngredientEntries,
+    ).map(({ IngredientEntry, ...line }) => ({
+      ...line,
+      entry: IngredientEntry,
+    })),
+  }));
   const ordered = (l: Line) =>
     inContract.get(l.entry.Ingredient.supplierId)?.has(l.entry.ingredientId) ??
     false;

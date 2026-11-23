@@ -2,12 +2,14 @@
  * TASK-08 — Tính lượng nguyên liệu tươi (DIRECT_USE) cần đặt theo khối cho Đợt 1 / Đợt 2.
  *
  * - Chọn thực đơn đã duyệt có ngày khớp; toàn trường áp cho mọi khối, thực đơn tách khối áp đúng khối gán.
- * - Định lượng lấy từ công thức mới nhất `dish_grade_recipe_lines` theo (dish, grade); thiếu thì báo lỗi.
+ * - Định lượng theo (dish, grade) = công thức mốc chuẩn × khẩu phần khối / mốc chuẩn (đơn vị đếm giữ nguyên); thiếu khẩu phần thì báo lỗi.
  * - Đợt 1 = floor(suất kế hoạch / 2) từng khối, lưu mốc khi tạo đơn. Đợt 2 = max(0, thực tế − mốc Đợt 1).
  * - Cùng một số suất của khối áp cho cả bữa chính và bữa xế. Không làm tròn số lượng đặt.
+ * - TASK-09: định lượng công thức là thành phẩm; lượng đặt là lượng sống = thành phẩm / (1 − tỷ lệ hao hụt).
  */
 import type { Prisma } from "../../generated/prisma/client";
 import type { AuthPrincipal } from "../../types/auth";
+import { grossFromNet } from "../../utils/waste-rate";
 import {
   assertPermission,
   authorizationTransaction,
@@ -15,6 +17,7 @@ import {
 } from "../../utils/authorization";
 import { getPrisma } from "../../utils/database";
 import { HttpError } from "../../utils/http-error";
+import { scaleDishLines } from "../../utils/dish-portion";
 
 type Tx = Prisma.TransactionClient;
 type MealType = "LUNCH" | "AFTERNOON";
@@ -106,7 +109,10 @@ export type CalcInput = {
       name: string;
       handlingType: string;
       active: boolean;
+      /** Định lượng thành phẩm cho 1 suất. */
       requiredQuantity: number;
+      /** Tỷ lệ hao hụt của nguyên liệu trong danh mục trường (0 <= r < 1). */
+      wasteRate?: number;
       unit: string;
       orderUnit: string;
       supplierId: string;
@@ -233,7 +239,11 @@ export function computeFreshDemand(
             );
             continue;
           }
-          const perPortion = mul(line.requiredQuantity, factor);
+          // Kho đặt theo lượng sống: thành phẩm / (1 − tỷ lệ hao hụt).
+          const perPortion = mul(
+            grossFromNet(line.requiredQuantity, line.wasteRate ?? 0).toNumber(),
+            factor,
+          );
           const quantity = mul(perPortion, g.batchPortions);
           const item = items.get(line.ingredientEntryId) ?? {
             ingredientEntryId: line.ingredientEntryId,
@@ -433,35 +443,61 @@ export async function loadFreshDemand(
   const dishIds = [
     ...new Set(menuInputs.flatMap((m) => m.dishes.map((d) => d.dishId))),
   ];
-  const recipeRows = await tx.dishGradeRecipeLine.findMany({
+  // Định lượng 1 suất của khối = công thức mốc chuẩn × khẩu phần khối / mốc chuẩn.
+  const gradeRecipes = await tx.dishGradeRecipe.findMany({
     where: {
       dishId: { in: dishIds },
       gradeId: { in: [...planned.keys()] },
-      recipe: { schoolId },
+      schoolId,
     },
     select: {
       dishId: true,
       gradeId: true,
-      ingredientEntryId: true,
-      requiredQuantity: true,
-      unit: true,
-      entry: {
+      portionQuantity: true,
+      dish: {
         select: {
-          handlingType: true,
-          status: true,
-          Ingredient: {
+          standardQuantity: true,
+          dishIngredientEntries: {
             select: {
-              id: true,
-              name: true,
-              defaultUnit: true,
-              supplierId: true,
-              Supplier: { select: { name: true } },
+              ingredientEntryId: true,
+              requiredQuantity: true,
+              unit: true,
+              IngredientEntry: {
+                select: {
+                  handlingType: true,
+                  status: true,
+                  wasteRate: true,
+                  Ingredient: {
+                    select: {
+                      id: true,
+                      name: true,
+                      defaultUnit: true,
+                      supplierId: true,
+                      Supplier: { select: { name: true } },
+                    },
+                  },
+                },
+              },
             },
           },
         },
       },
     },
   });
+  const recipeRows = gradeRecipes.flatMap((recipe) =>
+    scaleDishLines(
+      recipe.dish.standardQuantity,
+      recipe.portionQuantity,
+      recipe.dish.dishIngredientEntries,
+    ).map((line) => ({
+      dishId: recipe.dishId,
+      gradeId: recipe.gradeId,
+      ingredientEntryId: line.ingredientEntryId,
+      requiredQuantity: line.requiredQuantity,
+      unit: line.unit,
+      entry: line.IngredientEntry,
+    })),
+  );
   const recipes: CalcInput["recipes"] = new Map();
   for (const r of recipeRows) {
     const key = recipeKey(r.dishId, r.gradeId);
@@ -473,6 +509,7 @@ export async function loadFreshDemand(
       handlingType: r.entry.handlingType,
       active: r.entry.status === "ACTIVE",
       requiredQuantity: Number(r.requiredQuantity),
+      wasteRate: Number(r.entry.wasteRate),
       unit: r.unit,
       orderUnit: r.entry.Ingredient.defaultUnit,
       supplierId: r.entry.Ingredient.supplierId,

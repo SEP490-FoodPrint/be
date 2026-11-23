@@ -3,24 +3,11 @@ import type { DishMealType } from "../../generated/prisma/enums";
 type Tx = Prisma.TransactionClient;
 const recipeInclude = {
   gradeRecipes: {
-    include: {
+    orderBy: { gradeId: "asc" },
+    select: {
+      gradeId: true,
+      portionQuantity: true,
       grade: { select: { id: true, name: true } },
-      lines: {
-        include: {
-          entry: {
-            include: {
-              Ingredient: {
-                include: {
-                  Supplier: { select: { name: true } },
-                  ingredientCategory: {
-                    select: { id: true, categoryName: true },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
     },
   },
   schoolCategory: true,
@@ -50,33 +37,20 @@ export const dishRecipeRepository = {
     tx: Tx,
     schoolId: string,
     dishId: string,
-    profiles: {
-      gradeId: string;
-      lines: {
-        ingredientEntryId: string;
-        ingredientRole: string;
-        requiredQuantity: string;
-        unit: string;
-      }[];
-    }[],
+    profiles: { gradeId: string; portionQuantity: string }[],
   ) {
-    for (const profile of profiles) {
+    // Khối chỉ lưu khẩu phần; định lượng từng nguyên liệu tính từ công thức mốc chuẩn.
+    for (const profile of profiles)
       await tx.dishGradeRecipe.upsert({
         where: { dishId_gradeId: { dishId, gradeId: profile.gradeId } },
-        create: { dishId, gradeId: profile.gradeId, schoolId },
-        update: { updatedAt: new Date() },
-      });
-      await tx.dishGradeRecipeLine.deleteMany({
-        where: { dishId, gradeId: profile.gradeId },
-      });
-      await tx.dishGradeRecipeLine.createMany({
-        data: profile.lines.map((line) => ({
-          ...line,
+        create: {
           dishId,
           gradeId: profile.gradeId,
-        })),
+          schoolId,
+          portionQuantity: profile.portionQuantity,
+        },
+        update: { portionQuantity: profile.portionQuantity },
       });
-    }
   },
 
   categories(tx: Tx, schoolId: string) {
@@ -169,6 +143,7 @@ export const dishRecipeRepository = {
     id: string | undefined,
     name: string,
     description: string | null,
+    standard: { quantity: string; unit: string },
     categoryId: string | null | undefined,
     lines: {
       ingredientEntryId: string;
@@ -189,6 +164,8 @@ export const dishRecipeRepository = {
     const data = {
       name,
       description,
+      standardQuantity: standard.quantity,
+      standardUnit: standard.unit,
       ...(mealType !== undefined ? { mealType } : {}),
       ...(categoryId !== undefined ? { categoryId, category: null } : {}),
       dishIngredientEntries: { create: lines },

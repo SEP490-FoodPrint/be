@@ -6,6 +6,12 @@ import {
   selectDishGradeRecipes,
 } from "../src/modules/dish/dish.service";
 import { validateDishRecipe } from "../src/modules/dish/dish.validation";
+import {
+  isScaledUnit,
+  scaleDishLines,
+  scaleDishQuantity,
+  standardQuantityIssue,
+} from "../src/utils/dish-portion";
 import { dishRecipeRepository } from "../src/modules/dish/dish.repository";
 import { expandMenuHolidays } from "../src/modules/menu/menu.service";
 import {
@@ -19,6 +25,8 @@ type Rows = Parameters<typeof aggregateDishRecipes>[0];
 void test("dish meal classification validates only lunch, afternoon and both while preserving legacy omission", () => {
   const input = {
     name: "Món mẫu",
+    standardQuantity: "100",
+    standardUnit: "g",
     lines: [
       {
         ingredientEntryId: "00000000-0000-4000-8000-000000000001",
@@ -175,71 +183,194 @@ void test("combined kitchen plan identifies the ingredient and shortage", () => 
   );
 });
 
-void test("grade recipes with equivalent lít and ml quantities can share a menu", () => {
-  const line = (quantity: string, unit: string) => ({
-    ingredientEntryId: "oil",
-    ingredientRole: "MAIN",
-    requiredQuantity: new Prisma.Decimal(quantity),
-    unit,
-    entry: { ingredientId: "oil", Ingredient: { defaultUnit: "lít" } },
-  });
-  const rows = [
+const scaledDish = (gradeRecipes: { gradeId: string; portion: string }[]) =>
+  [
     {
       id: "dish",
-      name: "Dish",
-      dishIngredientEntries: [],
-      gradeRecipes: [
-        { gradeId: "small", lines: [line("250", "ml")] },
-        { gradeId: "large", lines: [line("0.25", "lit")] },
+      name: "Gà xào nấm",
+      standardQuantity: new Prisma.Decimal("100"),
+      standardUnit: "g",
+      dishIngredientEntries: [
+        {
+          ingredientEntryId: "chicken",
+          ingredientRole: "MAIN",
+          requiredQuantity: new Prisma.Decimal("60"),
+          unit: "g",
+          IngredientEntry: {
+            ingredientId: "chicken",
+            Ingredient: { name: "Gà", defaultUnit: "kg" },
+          },
+        },
+        {
+          ingredientEntryId: "salt",
+          ingredientRole: "SEASONING",
+          requiredQuantity: new Prisma.Decimal("2"),
+          unit: "g",
+          IngredientEntry: {
+            ingredientId: "salt",
+            Ingredient: { name: "Muối", defaultUnit: "g" },
+          },
+        },
       ],
+      gradeRecipes: gradeRecipes.map(({ gradeId, portion }) => ({
+        gradeId,
+        portionQuantity: new Prisma.Decimal(portion),
+      })),
     },
   ] as unknown as Rows;
-  assert.equal(selectDishGradeRecipes(rows, ["small", "large"]).length, 1);
-  rows[0].gradeRecipes[1].lines[0].requiredQuantity = new Prisma.Decimal("0.3");
+
+void test("grade recipe scales the dish standard by the grade portion", () => {
+  const rows = scaledDish([
+    { gradeId: "small", portion: "80" },
+    { gradeId: "large", portion: "120" },
+  ]);
+  const large = selectDishGradeRecipes(rows, ["large"])[0];
+  assert.deepEqual(
+    large.dishIngredientEntries.map((l) => l.requiredQuantity.toString()),
+    ["72", "2.4"],
+  );
+  // Thực đơn toàn trường dùng đúng mốc chuẩn (tỉ lệ 1).
+  assert.deepEqual(
+    selectDishGradeRecipes(rows, [])[0].dishIngredientEntries.map((l) =>
+      l.requiredQuantity.toString(),
+    ),
+    ["60", "2"],
+  );
+  // Không đổi dữ liệu gốc.
+  assert.equal(
+    rows[0].dishIngredientEntries[0].requiredQuantity.toString(),
+    "60",
+  );
+});
+
+void test("grade recipe selection rejects differing portions and grades without a portion", () => {
+  const rows = scaledDish([
+    { gradeId: "small", portion: "80" },
+    { gradeId: "same", portion: "80.000" },
+    { gradeId: "large", portion: "120" },
+  ]);
+  assert.equal(selectDishGradeRecipes(rows, ["small", "same"]).length, 1);
   assert.throws(() => selectDishGradeRecipes(rows, ["small", "large"]), {
     statusCode: 422,
+    message: /hãy tách thực đơn/,
+  });
+  assert.throws(() => selectDishGradeRecipes(rows, ["missing"]), {
+    statusCode: 422,
+    message: /chưa có khẩu phần/,
+  });
+  const tiny = scaledDish([{ gradeId: "tiny", portion: "0.01" }]);
+  assert.throws(() => selectDishGradeRecipes(tiny, ["tiny"]), {
+    statusCode: 422,
+    message: /bằng 0 sau khi làm tròn/,
   });
 });
 
-void test("grade recipe selection compares normalized quantities and never falls back to another grade", () => {
-  const profile = (gradeId: string, quantity: string, unit: string) => ({
-    gradeId,
+void test("dish portion helper rounds half up to three decimals", () => {
+  assert.equal(scaleDishQuantity("1", "1", "3").toString(), "0.333");
+  assert.equal(scaleDishQuantity("2", "1", "3").toString(), "0.667");
+  assert.equal(scaleDishQuantity("0.0025", "1", "1").toString(), "0.003");
+  assert.equal(
+    scaleDishLines("100", null, [
+      { requiredQuantity: "60", unit: "g" },
+    ])[0].requiredQuantity.toString(),
+    "60",
+  );
+});
+
+void test("count units keep the declared quantity while g/ml lines scale", () => {
+  const lines = scaleDishLines("100", "80", [
+    { requiredQuantity: "60", unit: "g" },
+    { requiredQuantity: "5", unit: "ml" },
+    { requiredQuantity: "1", unit: "cái" },
+    { requiredQuantity: "1", unit: "Quả" },
+    { requiredQuantity: "0.026", unit: "hộp" },
+  ]);
+  assert.deepEqual(
+    lines.map((line) => line.requiredQuantity.toString()),
+    ["48", "4", "1", "1", "0.026"],
+  );
+  assert.equal(isScaledUnit(" ML "), true);
+  assert.equal(isScaledUnit("phần"), false);
+});
+
+void test("standard quantity covers every same-unit line, including seasonings", () => {
+  const l = (requiredQuantity: string, unit: string) => ({
+    requiredQuantity,
+    unit,
+  });
+  // Mọi dòng cùng đơn vị mốc chuẩn: >= S.
+  const allGrams = [l("50", "g"), l("20", "g"), l("2", "g")];
+  assert.equal(standardQuantityIssue(allGrams, "72", "g"), null);
+  assert.match(
+    standardQuantityIssue(allGrams, "71.999", "g")!,
+    /hoặc bằng 72 g/,
+  );
+  // Có dòng khác đơn vị (gia vị ml, quả): > S.
+  const mixed = [
+    l("50", "g"),
+    l("20", "g"),
+    l("2", "g"),
+    l("5", "ml"),
+    l("1", "quả"),
+  ];
+  assert.match(standardQuantityIssue(mixed, "72", "g")!, /lớn hơn 72 g/);
+  assert.equal(standardQuantityIssue(mixed, "72.001", "g"), null);
+  // Mốc theo ml chỉ cộng dòng ml.
+  assert.equal(standardQuantityIssue(mixed, "5.5", "ml"), null);
+  assert.ok(standardQuantityIssue(mixed, "5", "ml"));
+  // Không dòng nào cùng đơn vị: chỉ cần > 0.
+  assert.equal(standardQuantityIssue([l("1", "quả")], "0.5", "g"), null);
+  assert.ok(standardQuantityIssue([l("1", "quả")], "0", "g"));
+  // Không quy đổi đơn vị: kg không được cộng vào g.
+  assert.equal(
+    standardQuantityIssue([l("1", "kg"), l("10", "g")], "11", "g"),
+    null,
+  );
+});
+
+void test("dish write validates standard unit, threshold and grade portions", () => {
+  const grade = {
+    gradeId: "33333333-3333-4333-8333-333333333333",
+    portionQuantity: "120",
+  };
+  const base = {
+    name: "Gà xào nấm",
+    standardQuantity: "100",
+    standardUnit: "G",
     lines: [
       {
-        ingredientEntryId: "meat",
+        ingredientEntryId: "11111111-1111-4111-8111-111111111111",
         ingredientRole: "MAIN",
-        requiredQuantity: new Prisma.Decimal(quantity),
-        unit,
-        entry: { ingredientId: "meat", Ingredient: { defaultUnit: "g" } },
+        requiredQuantity: "60",
+        unit: "g",
+      },
+      {
+        ingredientEntryId: "22222222-2222-4222-8222-222222222222",
+        ingredientRole: "SEASONING",
+        requiredQuantity: "5",
+        unit: "ml",
       },
     ],
-  });
-  const rows = [
-    {
-      id: "dish",
-      name: "Dish",
-      dishIngredientEntries: [],
-      gradeRecipes: [
-        profile("small", "80", "g"),
-        profile("large", "0.08", "kg"),
-      ],
-    },
-  ] as unknown as Rows;
-  const selected = selectDishGradeRecipes(rows, ["small", "large"]);
-  assert.equal(
-    selected[0].dishIngredientEntries[0].requiredQuantity.toString(),
-    "80",
+    gradeRecipes: [grade],
+  };
+  const parsed = validateDishRecipe(base);
+  assert.equal(parsed.standardUnit, "g");
+  assert.equal(parsed.gradeRecipes?.[0].portionQuantity, "120");
+  assert.throws(() => validateDishRecipe({ ...base, standardUnit: "kg" }));
+  assert.throws(() => validateDishRecipe({ ...base, standardQuantity: "60" }));
+  assert.throws(() => validateDishRecipe({ ...base, standardQuantity: "0" }));
+  assert.throws(() =>
+    validateDishRecipe({
+      ...base,
+      gradeRecipes: [{ ...grade, portionQuantity: "0" }],
+    }),
   );
-  assert.equal(rows[0].dishIngredientEntries.length, 0);
-  assert.throws(() => selectDishGradeRecipes(rows, ["missing"]), {
-    statusCode: 422,
-  });
-  rows[0].gradeRecipes[1].lines[0].requiredQuantity = new Prisma.Decimal(
-    "0.12",
+  assert.throws(() =>
+    validateDishRecipe({ ...base, gradeRecipes: [{ ...grade, lines: [] }] }),
   );
-  assert.throws(() => selectDishGradeRecipes(rows, ["small", "large"]), {
-    statusCode: 422,
-  });
+  assert.throws(() =>
+    validateDishRecipe({ ...base, gradeRecipes: [grade, grade] }),
+  );
 });
 
 void test("school holidays include range endpoints, legacy dates, reasons and year boundaries", () => {
@@ -404,12 +535,21 @@ void test("recipe writes require an explicit role, positive precision and unique
     unit: "g",
   };
   assert.equal(
-    validateDishRecipe({ name: "Rice", lines: [line] }).lines[0]
-      .requiredQuantity,
+    validateDishRecipe({
+      name: "Rice",
+      standardQuantity: "100",
+      standardUnit: "g",
+      lines: [line],
+    }).lines[0].requiredQuantity,
     "80",
   );
   assert.throws(() =>
-    validateDishRecipe({ name: "Rice", lines: [line, line] }),
+    validateDishRecipe({
+      name: "Rice",
+      standardQuantity: "100",
+      standardUnit: "g",
+      lines: [line, line],
+    }),
   );
   assert.throws(() =>
     validateDishRecipe({

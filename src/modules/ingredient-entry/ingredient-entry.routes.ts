@@ -20,6 +20,13 @@ export function createIngredientEntryRouter(
     requireResource("ingredient-entry"),
     controller.getAll,
   );
+  // Cấu hình tỷ lệ hao hụt của bếp; service kiểm tra quyền ingredient_waste_rate.manage và phạm vi trường.
+  router.get("/waste-rates", authHandler, controller.listWasteRates);
+  router.patch(
+    "/:ingredientEntryId/waste-rate",
+    authHandler,
+    controller.updateWasteRate,
+  );
   return router;
 }
 

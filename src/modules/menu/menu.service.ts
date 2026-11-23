@@ -31,6 +31,7 @@ import {
 import { getPrisma } from "../../utils/database";
 
 import { HttpError } from "../../utils/http-error";
+import { grossFromNet } from "../../utils/waste-rate";
 import {
   assertCompleteMenuWeek,
   assertMenuDaysEditable,
@@ -803,6 +804,21 @@ function createIngredientOperations(
             }
           >();
 
+          const entries = await repository.ingredientStockEntries(
+            tx,
+            schoolId,
+            [
+              ...new Set([
+                ...main.map((row) => row.ingredient.id),
+                ...spices.map((row) => row.ingredientEntry.Ingredient.id),
+              ]),
+            ],
+          );
+
+          const wasteRates = new Map(
+            entries.map((e) => [e.ingredientId, e.wasteRate]),
+          );
+
           const lines = [
             ...main
               .filter(
@@ -811,7 +827,11 @@ function createIngredientOperations(
               .map((row) => ({
                 ingredient: row.ingredient,
 
-                quantity: row.quantityPerPortion,
+                // Định lượng món là thành phẩm; nhu cầu kho là lượng sống. Gia vị chung giữ 1-1.
+                quantity: grossFromNet(
+                  row.quantityPerPortion,
+                  wasteRates.get(row.ingredient.id) ?? 0,
+                ),
 
                 portions: demand.dishPortions.get(row.dishId) ?? 0,
 
@@ -854,12 +874,6 @@ function createIngredientOperations(
 
             groups.set(i.id, group);
           }
-
-          const entries = await repository.ingredientStockEntries(
-            tx,
-            schoolId,
-            [...groups.keys()],
-          );
 
           const stock = await readPlanningStock(
             tx,
@@ -1492,12 +1506,16 @@ function createMenuOperations(
         const dishes: MenuStandardsInput["dishes"] = [];
 
         for (const [displayOrder, item] of meal.dishes.entries()) {
-          let dish = item.dishId
+          const dish = item.dishId
             ? await repository.activeSchoolDish(tx, schoolId, item.dishId)
             : await repository.namedSchoolDish(tx, schoolId, item.name!);
 
+          // Món phải có mốc chuẩn nên không tự tạo món chỉ từ tên trong thực đơn.
           if (!dish && item.name)
-            dish = await repository.createSchoolDish(tx, schoolId, item.name);
+            throw new HttpError(
+              422,
+              `Món “${item.name}” chưa có trong danh mục; hãy tạo món kèm mốc chuẩn trước`,
+            );
 
           if (!dish || dish.status !== "ACTIVE")
             throw new HttpError(

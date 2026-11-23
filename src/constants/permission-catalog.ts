@@ -304,6 +304,14 @@ export const INITIAL_PERMISSIONS = [
     description: "Quản lý thông tin nguyên liệu theo quyền và phạm vi tổ chức.",
   },
   {
+    code: "ingredient_waste_rate.manage",
+    name: "Cấu hình tỷ lệ hao hụt nguyên liệu",
+    module: "ingredient_waste_rate",
+    action: "manage",
+    description:
+      "Xem và cập nhật tỷ lệ hao hụt của nguyên liệu trong danh mục trường.",
+  },
+  {
     code: "inventory.view",
     name: "Xem tồn kho nguyên liệu",
     module: "inventory",
@@ -800,6 +808,7 @@ export const INITIAL_ROLE_PERMISSIONS = [
   ["SCHOOL_KITCHEN_STAFF", "meal_allocation.update"],
   ["SCHOOL_KITCHEN_STAFF", "meal_allocation.distribute"],
   ["SCHOOL_KITCHEN_STAFF", "ingredient.view"],
+  ["SCHOOL_KITCHEN_STAFF", "ingredient_waste_rate.manage"],
   ["SCHOOL_KITCHEN_STAFF", "retained_sample.view"],
   ["SCHOOL_KITCHEN_STAFF", "retained_sample.create"],
   ["SCHOOL_KITCHEN_STAFF", "retained_sample.update"],

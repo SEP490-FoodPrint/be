@@ -858,7 +858,12 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
         data: { weeklyMenuId: menu.id, menuDate: new Date("2026-10-26") },
       });
       const dish = await db.dish.create({
-        data: { schoolId: schoolA, name: "Hidden history dish" },
+        data: {
+          schoolId: schoolA,
+          standardQuantity: "100",
+          standardUnit: "g",
+          name: "Hidden history dish",
+        },
       });
       await db.menuDayDish.create({
         data: { menuDayId: day.id, dishId: dish.id, mealType: "LUNCH" },

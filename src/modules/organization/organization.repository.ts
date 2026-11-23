@@ -109,7 +109,8 @@ export const publicMenuDayInclude = {
           status: true,
           category: true,
           schoolCategory: { select: { name: true } },
-          // Định lượng chuẩn của món (1 suất)
+          // Công thức trong mốc chuẩn của món
+          standardQuantity: true,
           dishIngredientEntries: {
             select: {
               ...publicRecipeLineSelect,
@@ -118,19 +119,9 @@ export const publicMenuDayInclude = {
               },
             },
           },
-          // Định lượng riêng theo khối
+          // Khẩu phần theo khối (định lượng = mốc chuẩn × khẩu phần / mốc chuẩn)
           gradeRecipes: {
-            select: {
-              gradeId: true,
-              lines: {
-                select: {
-                  ...publicRecipeLineSelect,
-                  entry: {
-                    select: { Ingredient: { select: publicIngredientSelect } },
-                  },
-                },
-              },
-            },
+            select: { gradeId: true, portionQuantity: true },
           },
         },
       },
