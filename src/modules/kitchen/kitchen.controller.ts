@@ -38,13 +38,6 @@ export function createKitchenController(
       validateKitchenAction(req.query);
       sendSuccess(res, await service.getContext(requirePrincipal(req)));
     }),
-    remove: asyncHandler(async (req, res) => {
-      sendSuccess(
-        res,
-        await service.remove(uuid(req.params.id), requirePrincipal(req)),
-        "Đã xóa mẻ chưa xác nhận nấu và giải phóng giữ chỗ",
-      );
-    }),
     list: asyncHandler(
       async (req, res) =>
         void sendSuccess(

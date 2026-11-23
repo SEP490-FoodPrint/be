@@ -1,0 +1,3 @@
+- [x] T001 Gỡ API xóa lô chế biến (route, controller, service, repository) (FR-001)
+- [x] T002 Phân quyền đọc / ghi cho API tủ lưu mẫu (FR-002, FR-003, FR-004)
+- [x] T003 Cập nhật test modules, authorization integration, sample-storage; typecheck, lint
