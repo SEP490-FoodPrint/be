@@ -963,21 +963,39 @@ function resolvePublicDishRecipe(
   return { source: null, lines: [] };
 }
 
-/** Tổng khối lượng nguyên liệu chính (g) khi tất cả quy đổi được sang gam. */
+/**
+ * Định lượng 1 suất từ nguyên liệu chính: tổng gam khi mọi dòng quy đổi được
+ * sang gam; nếu có đơn vị đếm (hộp, quả...) thì cộng theo từng đơn vị gốc,
+ * vd. "1 hộp" hoặc "1 hộp + 50 g".
+ */
 function totalMainWeight(lines: PublicRecipeLine[]): string | null {
   const mains = lines.filter((line) => line.ingredientRole !== "SEASONING");
   if (!mains.length) return null;
   let total = 0;
+  let allMass = true;
   for (const line of mains) {
     try {
       total += Number(
         convertQuantity(line.requiredQuantity, line.unit, "g").toString(),
       );
     } catch {
-      return null;
+      allMass = false;
+      break;
     }
   }
-  return `${formatPublicQuantity(total)} g`;
+  if (allMass) return `${formatPublicQuantity(total)} g`;
+
+  const byUnit = new Map<string, number>();
+  for (const line of mains) {
+    const unit = line.unit.trim() || "suất";
+    byUnit.set(
+      unit,
+      (byUnit.get(unit) ?? 0) + Number(line.requiredQuantity.toString()),
+    );
+  }
+  return [...byUnit]
+    .map(([unit, qty]) => `${formatPublicQuantity(qty)} ${unit}`)
+    .join(" + ");
 }
 
 function toPublicDishItem(

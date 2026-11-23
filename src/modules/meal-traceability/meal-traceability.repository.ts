@@ -141,6 +141,45 @@ export const mealTraceabilityRepository = {
     });
   },
 
+  /**
+   * Mọi suất ăn (chưa huỷ) của các lớp thuộc một khối trong một ngày và bữa,
+   * giới hạn theo trường nếu có mã. Khối luôn thuộc đúng một trường.
+   */
+  async findGradeAllocationRecords(params: {
+    gradeId: string;
+    date: string;
+    mealType: "LUNCH" | "AFTERNOON";
+    schoolCode?: string;
+  }): Promise<MealAllocationTraceRecord[]> {
+    const prisma = await getPrisma();
+    return prisma.mealAllocation.findMany({
+      where: {
+        status: { not: "CANCELLED" },
+        DailyMealPortion: {
+          is: {
+            mealDate: new Date(`${params.date}T00:00:00.000Z`),
+            mealType: params.mealType,
+            Class: {
+              gradeId: params.gradeId,
+              ...(params.schoolCode
+                ? {
+                    School: {
+                      code: {
+                        equals: params.schoolCode.trim(),
+                        mode: "insensitive" as const,
+                      },
+                    },
+                  }
+                : {}),
+            },
+          },
+        },
+      },
+      include: mealAllocationTraceInclude,
+      orderBy: { id: "asc" },
+    });
+  },
+
   /** Lớp đang hoạt động của một trường đang hoạt động, cho trang công khai. */
   async listPublicSchoolClasses(schoolCode: string) {
     const prisma = await getPrisma();
