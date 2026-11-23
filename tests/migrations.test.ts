@@ -469,6 +469,50 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
         "INSERT INTO foodprint.dishes(id,school_id,name) VALUES ($1,$3,'Cơm gạo ST25'),($2,$3,'Renamed legacy dish')",
         [categoryFixture, renamedCategoryFixture, schoolId],
       );
+      const cleanup = "20261206000100_dish_standard_portion_cleanup";
+      const temporary = await mkdtemp(
+        path.join(tmpdir(), "foodprint-dish-portion-migrations-"),
+      );
+      const directory = path.join(temporary, "migrations");
+      const config = path.join(temporary, "prisma.config.ts");
+      try {
+        await mkdir(directory);
+        await copyFile(
+          path.join(root, "prisma/migrations/migration_lock.toml"),
+          path.join(directory, "migration_lock.toml"),
+        );
+        assert(migrationNames.includes(cleanup));
+        for (const migration of migrationNames.slice(
+          0,
+          migrationNames.indexOf(cleanup),
+        )) {
+          await mkdir(path.join(directory, migration));
+          await copyFile(
+            path.join(root, "prisma/migrations", migration, "migration.sql"),
+            path.join(directory, migration, "migration.sql"),
+          );
+        }
+        await writeFile(
+          config,
+          `import { defineConfig } from ${JSON.stringify(path.join(root, "node_modules/prisma/config.js"))};\nexport default defineConfig({ schema: ${JSON.stringify(path.join(root, "prisma/schema.prisma"))}, migrations: { path: ${JSON.stringify(directory)} }, datasource: { url: process.env.DATABASE_URL } });\n`,
+        );
+        await runPrisma(url, ["migrate", "deploy", "--config", config]);
+      } finally {
+        await rm(temporary, { recursive: true, force: true });
+      }
+      const cleanupSql = await readFile(
+        path.join(root, "prisma/migrations", cleanup, "migration.sql"),
+        "utf8",
+      );
+      try {
+        await assert.rejects(db.query(cleanupSql), /còn món chưa có mốc chuẩn/);
+      } finally {
+        await db.query("ROLLBACK");
+      }
+      await db.query(
+        "UPDATE foodprint.dishes SET standard_quantity=100,standard_unit='g' WHERE id=ANY($1::uuid[])",
+        [[categoryFixture, renamedCategoryFixture]],
+      );
       await runPrisma(url, ["migrate", "deploy"]);
       const classified = await db.query<{
         id: string;
