@@ -918,15 +918,45 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       }
       const rice = await stock("API rice", [6, 3.6, 1.2]);
       const seasoning = await stock("API seasoning", [1]);
-      const dish = (name: string, quantityPerPortion: number) => ({
-        name,
-        ingredients: [
-          { ingredientId: rice.ingredient.id, quantityPerPortion, unit: "g" },
-        ],
-      });
+      async function dish(
+        name: string,
+        ...lines: [Awaited<ReturnType<typeof stock>>, number][]
+      ) {
+        const unit = "g";
+        const { id: dishId } = await db.dish.create({
+          data: {
+            schoolId: school.id,
+            name,
+            standardQuantity: lines.reduce(
+              (total, [, quantity]) => total + quantity,
+              0,
+            ),
+            standardUnit: unit,
+            dishIngredientEntries: {
+              create: lines.map(([source, requiredQuantity]) => ({
+                ingredientEntryId: source.entry.id,
+                ingredientRole: "MAIN",
+                requiredQuantity,
+                unit,
+              })),
+            },
+          },
+        });
+        return {
+          dishId,
+          ingredients: lines.map(([source, quantityPerPortion]) => ({
+            ingredientId: source.ingredient.id,
+            quantityPerPortion,
+            unit,
+          })),
+        };
+      }
       const meal = {
         mealType: "LUNCH",
-        dishes: [dish("API main", 80), dish("API side", 10)],
+        dishes: [
+          await dish("API main", [rice, 80]),
+          await dish("API side", [rice, 10]),
+        ],
         seasonings: [
           {
             ingredientEntryId: seasoning.entry.id,
@@ -1289,57 +1319,14 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             meals: [
               {
                 mealType: "AFTERNOON",
-                dishes: [
-                  {
-                    name: "Group afternoon",
-                    ingredients: [
-                      {
-                        ingredientId: grRice.ingredient.id,
-                        quantityPerPortion: 80,
-                        unit: "g",
-                      },
-                    ],
-                  },
-                ],
+                dishes: [await dish("Group afternoon", [grRice, 80])],
               },
               {
                 mealType: "LUNCH",
                 dishes: [
-                  {
-                    name: "Group common",
-                    ingredients: [
-                      {
-                        ingredientId: grRice.ingredient.id,
-                        quantityPerPortion: 80,
-                        unit: "g",
-                      },
-                    ],
-                  },
-                  {
-                    name: "Group regular",
-                    ingredients: [
-                      {
-                        ingredientId: grMilk.ingredient.id,
-                        quantityPerPortion: 10,
-                        unit: "g",
-                      },
-                      {
-                        ingredientId: grPeanut.ingredient.id,
-                        quantityPerPortion: 5,
-                        unit: "g",
-                      },
-                    ],
-                  },
-                  {
-                    name: "Group manual alternative",
-                    ingredients: [
-                      {
-                        ingredientId: grBeef.ingredient.id,
-                        quantityPerPortion: 20,
-                        unit: "g",
-                      },
-                    ],
-                  },
+                  await dish("Group common", [grRice, 80]),
+                  await dish("Group regular", [grMilk, 10], [grPeanut, 5]),
+                  await dish("Group manual alternative", [grBeef, 20]),
                 ],
                 seasonings: [
                   {
