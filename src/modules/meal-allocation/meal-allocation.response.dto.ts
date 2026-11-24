@@ -125,7 +125,15 @@ export interface AllocationDayResponse {
     mealType: MealType;
     plannedPortions: number | null;
     note: string | null;
-    status: "UNCONFIRMED" | "CONFIRMED" | "COMPLETED";
+    /** Trạng thái mới (Chờ duyệt, Đã duyệt Đợt 1/2, Đã hủy) chỉ phát sinh từ lập mẻ theo đợt giao. */
+    status:
+      | "UNCONFIRMED"
+      | "CONFIRMED"
+      | "COMPLETED"
+      | "PENDING_APPROVAL"
+      | "ROUND1_APPROVED"
+      | "ROUND2_APPROVED"
+      | "CANCELLED";
     hasSample: boolean;
     entries: {
       dailyMealPortionId: string;

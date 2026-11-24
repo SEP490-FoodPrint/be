@@ -57,6 +57,7 @@ import {
 import { recordPhotoUrl } from "../../utils/record-photo";
 import { grossFromNet, netFromGross } from "../../utils/waste-rate";
 import { gradeDishLines } from "../../utils/dish-portion";
+import { convertQuantity } from "../../utils/quantity-conversion";
 
 const Decimal = Prisma.Decimal;
 export interface RecipeLine {
@@ -93,44 +94,8 @@ function positive(value: string): Prisma.Decimal {
   return decimal;
 }
 
-const units: Record<string, { dimension: string; factor: string }> = {
-  kg: { dimension: "mass", factor: "1000" },
-  kilogram: { dimension: "mass", factor: "1000" },
-  kilogam: { dimension: "mass", factor: "1000" },
-  g: { dimension: "mass", factor: "1" },
-  gam: { dimension: "mass", factor: "1" },
-  gram: { dimension: "mass", factor: "1" },
-  mg: { dimension: "mass", factor: "0.001" },
-  miligam: { dimension: "mass", factor: "0.001" },
-  milligram: { dimension: "mass", factor: "0.001" },
-  l: { dimension: "volume", factor: "1000" },
-  lit: { dimension: "volume", factor: "1000" },
-  lít: { dimension: "volume", factor: "1000" },
-  liter: { dimension: "volume", factor: "1000" },
-  litre: { dimension: "volume", factor: "1000" },
-  ml: { dimension: "volume", factor: "1" },
-  mililit: { dimension: "volume", factor: "1" },
-  mililít: { dimension: "volume", factor: "1" },
-  milliliter: { dimension: "volume", factor: "1" },
-  millilitre: { dimension: "volume", factor: "1" },
-};
-export function convertQuantity(
-  quantity: Prisma.Decimal,
-  from: string,
-  to: string,
-): Prisma.Decimal {
-  const source = from.trim().normalize("NFC").toLowerCase();
-  const target = to.trim().normalize("NFC").toLowerCase();
-  if (source && source === target) return quantity;
-  const left = Object.hasOwn(units, source) ? units[source] : undefined;
-  const right = Object.hasOwn(units, target) ? units[target] : undefined;
-  if (!left || !right || left.dimension !== right.dimension)
-    throw new HttpError(
-      409,
-      `Không thể quy đổi đơn vị “${from.trim()}” sang “${to.trim()}”. Vui lòng kiểm tra đơn vị nguyên liệu.`,
-    );
-  return quantity.mul(left.factor).div(right.factor);
-}
+// Giữ export cũ để các module/test đang import từ kitchen.service không đổi.
+export { convertQuantity };
 
 function storedQuantity(quantity: Prisma.Decimal): string {
   if (
