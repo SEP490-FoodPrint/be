@@ -6,7 +6,10 @@ import {
 } from "../src/constants/permission-catalog";
 import type { Prisma, PrismaClient } from "../src/generated/prisma/client";
 import { createAuthorityService } from "../src/modules/authority/authority.service";
-import type { AuthorityRepository } from "../src/modules/authority/authority.repository";
+import {
+  authorityRepository,
+  type AuthorityRepository,
+} from "../src/modules/authority/authority.repository";
 import {
   createAuthorityComplaintRepository,
   type AuthorityComplaintRepository,
@@ -502,6 +505,7 @@ function locationHarness(options: {
 }) {
   const calls: string[] = [];
   const repository: AuthorityRepository = {
+    ...authorityRepository,
     lockUnit: () => {
       calls.push("lock");
       return Promise.resolve(options.unitExists ?? true);

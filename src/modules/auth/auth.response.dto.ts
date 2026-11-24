@@ -1,5 +1,6 @@
 import type { OnboardingProfile } from "./onboarding.validation";
 import type { SessionUser } from "../../types/session-user";
+import type { WardLocationDTO } from "../../utils/ward-location";
 
 export interface OnboardingResponseDTO {
   id: string;
@@ -8,6 +9,8 @@ export interface OnboardingResponseDTO {
   requestType: "SCHOOL" | "SUPPLIER";
   status: "PENDING" | "APPROVED" | "REJECTED";
   profileData: OnboardingProfile["profileData"];
+  /** Phường/xã đã chọn (`profileData.locationId`); hồ sơ cũ chưa chọn → `null`. */
+  location: WardLocationDTO | null;
   submittedAt: string;
   reviewedAt: string | null;
   rejectionReason: string | null;

@@ -107,7 +107,9 @@ void test("all list resources deny absent grants, including System Admin", () =>
       resource === "supplier-staff" ||
       resource === "supplier-school" ||
       // C05 không có phạm vi SYSTEM (specs/authority-complaints FR-005).
-      resource === "authority-complaint"
+      resource === "authority-complaint" ||
+      // Trường thuộc địa bàn chỉ dành cho cán bộ ATTP (specs/authority-officer-accounts FR-009).
+      resource === "authority-school"
     ) {
       assert.throws(() => scope(grantedSystem), status(403));
     } else if (resource === "feedback") {
