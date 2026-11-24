@@ -233,11 +233,17 @@ void test("signup preserves the committed account and reports email failure inst
   assert.equal(result.verificationEmailSent, false);
   assert.equal(result.user.status, "UNVERIFIED");
 });
-void test("Resend adapter sends a branded code email (text + HTML + inline logo) with a timeout/idempotency key and sanitizes SDK errors", async (context) => {
+void test("Resend adapter sends a branded code email (text + HTML + Cloudinary logo) with a timeout/idempotency key and sanitizes SDK errors", async (context) => {
   assert.throws(() => readEmailConfig({}), status(503));
-  const before = [process.env.RESEND_API_KEY, process.env.RESEND_FROM];
+  const keys = [
+    "RESEND_API_KEY",
+    "RESEND_FROM",
+    "CLOUDINARY_CLOUD_NAME",
+    "EMAIL_LOGO_URL",
+  ];
+  const before = keys.map((key) => process.env[key]);
   context.after(() =>
-    ["RESEND_API_KEY", "RESEND_FROM"].forEach((key, i) => {
+    keys.forEach((key, i) => {
       const value = before[i];
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -245,6 +251,8 @@ void test("Resend adapter sends a branded code email (text + HTML + inline logo)
   );
   process.env.RESEND_API_KEY = "re_unit_test";
   process.env.RESEND_FROM = "FoodPrint <no-reply@foodprint.example.com>";
+  process.env.CLOUDINARY_CLOUD_NAME = "test-cloud";
+  delete process.env.EMAIL_LOGO_URL;
   let fail = false;
   context.mock.method(
     globalThis,
@@ -266,13 +274,15 @@ void test("Resend adapter sends a branded code email (text + HTML + inline logo)
       assert.equal(typeof init?.body, "string");
       const body = JSON.parse(init?.body as string) as Record<string, unknown>;
       assert(String(body.text).includes("012345"));
-      // Template thương hiệu: HTML có mã và logo inline đính kèm theo Content-ID.
+      // Template thương hiệu: HTML có mã và logo là link Cloudinary, không đính kèm inline.
       assert(String(body.html).includes("012345"));
-      assert(String(body.html).includes("cid:foodprint-logo"));
-      const attachments = body.attachments as
-        { content_id?: string; filename?: string }[] | undefined;
-      assert.equal(attachments?.[0]?.content_id, "foodprint-logo");
-      assert.equal(attachments?.[0]?.filename, "foodprint-logo.png");
+      assert(
+        String(body.html).includes(
+          'src="https://res.cloudinary.com/test-cloud/image/upload/c_limit,w_80,h_80,q_auto,f_png/logo_ko2iaa"',
+        ),
+      );
+      assert(!String(body.html).includes("cid:foodprint-logo"));
+      assert.equal(body.attachments, undefined);
       return Promise.resolve(
         new Response(
           JSON.stringify(
