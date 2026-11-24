@@ -214,20 +214,37 @@ void test("kitchen and nutrition wire contracts use real scoped PostgreSQL data"
     },
   });
   const dishA = await db.dish.create({
-    data: { schoolId: schoolA.id, name: "Wire rice dish A" },
+    data: {
+      schoolId: schoolA.id,
+      standardQuantity: "100",
+      standardUnit: "g",
+      name: "Wire rice dish A",
+    },
   });
   const sideA = await db.dish.create({
-    data: { schoolId: schoolA.id, name: "Wire side dish A" },
+    data: {
+      schoolId: schoolA.id,
+      standardQuantity: "100",
+      standardUnit: "g",
+      name: "Wire side dish A",
+    },
   });
   const inactiveDish = await db.dish.create({
     data: {
       schoolId: schoolA.id,
+      standardQuantity: "100",
+      standardUnit: "g",
       name: "Wire inactive dish A",
       status: "INACTIVE",
     },
   });
   const dishB = await db.dish.create({
-    data: { schoolId: schoolB.id, name: "Wire rice dish B" },
+    data: {
+      schoolId: schoolB.id,
+      standardQuantity: "100",
+      standardUnit: "g",
+      name: "Wire rice dish B",
+    },
   });
 
   // HTTP goes through the actual routers/validators/services/repositories. Only

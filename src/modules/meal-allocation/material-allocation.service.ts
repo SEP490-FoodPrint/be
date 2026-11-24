@@ -11,6 +11,7 @@ import {
   withSchoolTransaction,
 } from "../../utils/authorization";
 import { HttpError } from "../../utils/http-error";
+import { netFromGross } from "../../utils/waste-rate";
 import { solveInWorker } from "./material-allocation-solver";
 import {
   projectAllocationDay,
@@ -33,6 +34,7 @@ import {
   type MaterialSource,
   type MaterialEntry,
 } from "./material-allocation";
+import { gradeDishLines } from "../../utils/dish-portion";
 
 const line = z.object({
   ingredientId: z.string(),
@@ -276,7 +278,16 @@ export function buildMaterialPlan(
           409,
           "Nguồn nguyên liệu chưa xác định được danh mục",
         );
-      const normalized = canonicalAmount(lot.quantityUsed.toString(), lot.unit);
+      // Lô trừ kho theo lượng sống; phân bổ cho lớp theo thành phẩm = sống × (1 − tỷ lệ hao hụt hiện tại).
+      const wasteRate =
+        lot.IngredientLot.DeliveryItem.IngredientEntry?.wasteRate ??
+        lot.IngredientLot.DeliveryItem.SupplyRequestItem?.IngredientEntry
+          ?.wasteRate ??
+        0;
+      const normalized = canonicalAmount(
+        netFromGross(lot.quantityUsed, wasteRate).toString(),
+        lot.unit,
+      );
       const used = locked
         .flatMap((a) => a.mealAllocationBatches)
         .flatMap((row) => row.materials)
@@ -291,9 +302,13 @@ export function buildMaterialPlan(
             sum.add(canonicalAmount(m.quantity.toString(), m.unit).quantity),
           new Prisma.Decimal(0),
         );
-      const remaining = normalized.quantity.sub(used);
-      if (remaining.lt(0))
+      // Lượng đã cấp không thể vượt lượng sống của lô. Nếu trường tăng tỷ lệ hao hụt sau khi đã
+      // khóa phân bổ, thành phẩm còn lại chỉ về 0 chứ không coi là lỗi lịch sử.
+      if (
+        canonicalAmount(lot.quantityUsed.toString(), lot.unit).quantity.lt(used)
+      )
         throw new HttpError(409, "Lịch sử cấp vượt nguồn nguyên liệu");
+      const remaining = Prisma.Decimal.max(0, normalized.quantity.sub(used));
       return {
         batchId: batch.id,
         ingredientName: lot.IngredientLot.DeliveryItem.Ingredient?.name,
@@ -357,14 +372,18 @@ export function buildMaterialPlan(
                 unit: ingredient.unit,
               })) ?? [];
           const gradeLines =
-            menus[0].WeeklyMenu?.isSchoolWide !== false
-              ? batchDish.Dish?.gradeRecipes
-                  .find((recipe) => recipe.gradeId === demand.Class.gradeId)
-                  ?.lines.map((recipeLine) => ({
-                    ingredientId: recipeLine.entry.ingredientId,
-                    quantityPerPortion: recipeLine.requiredQuantity.toString(),
-                    unit: recipeLine.unit,
-                  }))
+            menus[0].WeeklyMenu?.isSchoolWide !== false &&
+            batchDish.Dish &&
+            demand.Class.gradeId
+              ? gradeDishLines(
+                  batchDish.Dish,
+                  demand.Class.gradeId,
+                  batchDish.Dish.dishIngredientEntries,
+                )?.map((recipeLine) => ({
+                  ingredientId: recipeLine.IngredientEntry.ingredientId,
+                  quantityPerPortion: recipeLine.requiredQuantity.toString(),
+                  unit: recipeLine.unit,
+                }))
               : undefined;
           const lines = parsed.success
             ? (parsed.data.profiles.find(

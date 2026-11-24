@@ -381,19 +381,18 @@ export async function readMaterialAllocationData(
           allocationRecipeSnapshot: true,
           Dish: {
             select: {
+              standardQuantity: true,
               gradeRecipes: {
                 orderBy: { gradeId: "asc" },
+                select: { gradeId: true, portionQuantity: true },
+              },
+              dishIngredientEntries: {
+                where: { ingredientRole: "MAIN" },
+                orderBy: { ingredientEntryId: "asc" },
                 select: {
-                  gradeId: true,
-                  lines: {
-                    where: { ingredientRole: "MAIN" },
-                    orderBy: { ingredientEntryId: "asc" },
-                    select: {
-                      requiredQuantity: true,
-                      unit: true,
-                      entry: { select: { ingredientId: true } },
-                    },
-                  },
+                  requiredQuantity: true,
+                  unit: true,
+                  IngredientEntry: { select: { ingredientId: true } },
                 },
               },
             },
@@ -413,10 +412,14 @@ export async function readMaterialAllocationData(
               DeliveryItem: {
                 select: {
                   Ingredient: { select: { name: true } },
-                  IngredientEntry: { select: { ingredientId: true } },
+                  IngredientEntry: {
+                    select: { ingredientId: true, wasteRate: true },
+                  },
                   SupplyRequestItem: {
                     select: {
-                      IngredientEntry: { select: { ingredientId: true } },
+                      IngredientEntry: {
+                        select: { ingredientId: true, wasteRate: true },
+                      },
                     },
                   },
                 },

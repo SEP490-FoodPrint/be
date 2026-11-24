@@ -442,7 +442,10 @@ function fixture(
   return {
     service: createKitchenLifecycle(
       () => Promise.resolve().then(() => db as never),
-      proofs,
+      proofs ?? {
+        prepareCookingCompleted: () => Promise.resolve(null),
+        scheduleAnchor: () => {},
+      },
       // Cố định "hôm nay" đúng ngày thực đơn của fixture (chỉ nấu bữa hôm nay).
       () => today ?? date.toISOString().slice(0, 10),
     ),
@@ -684,8 +687,14 @@ void test("single-dish samples are idempotent and historical multi-dish samples 
     },
     sampleStorageUnit: { findFirst: () => Promise.resolve({ ...storageUnit }) },
   });
-  const service = createRetainedSampleService(undefined, () =>
-    Promise.resolve().then(() => f.db as never),
+  const service = createRetainedSampleService(
+    undefined,
+    () => Promise.resolve().then(() => f.db as never),
+    {
+      prepareSampleStored: () => Promise.resolve(null),
+      prepareSampleDisposed: () => Promise.resolve(null),
+      scheduleAnchor: () => {},
+    },
   );
   const input = {
     quantity: "150",

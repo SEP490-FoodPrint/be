@@ -55,6 +55,8 @@ import {
   kitchenSummarySelect as select,
 } from "./kitchen.repository";
 import { recordPhotoUrl } from "../../utils/record-photo";
+import { grossFromNet, netFromGross } from "../../utils/waste-rate";
+import { gradeDishLines } from "../../utils/dish-portion";
 
 const Decimal = Prisma.Decimal;
 export interface RecipeLine {
@@ -176,10 +178,16 @@ export function planCookingBatches(
       );
     return { ...lot, free: available.sub(reserved) };
   });
-  const take = (lot: (typeof lots)[number], amount: Prisma.Decimal) => {
-    const quantityUsed = storedQuantity(amount);
-    if (amount.gt(lot.free))
+  const take = (lot: (typeof lots)[number], exact: Prisma.Decimal) => {
+    if (exact.gt(lot.free))
       throw new HttpError(409, "Không đủ nguyên liệu khả dụng");
+    // Lượng sống sau quy đổi hao hụt có thể lẻ hơn numeric(14,3): làm tròn lên để không thiếu hàng.
+    // Tồn kho lưu 3 chữ số thập phân nên phần làm tròn lên không vượt lượng còn trống.
+    const amount = Decimal.min(
+      exact.toDecimalPlaces(3, Decimal.ROUND_UP),
+      lot.free,
+    );
+    const quantityUsed = storedQuantity(amount);
     lot.free = lot.free.sub(amount);
     return { ingredientLotId: lot.id, quantityUsed, unit: lot.unit };
   };
@@ -1014,6 +1022,15 @@ function dto(batch: Detail): CookingBatchDetailDTO {
     dishId: lot.dishId,
     ingredientLotId: lot.ingredientLotId,
     quantityUsed: lot.quantityUsed.toString(),
+    cookedQuantity: netFromGross(
+      lot.quantityUsed,
+      lot.IngredientLot?.DeliveryItem?.IngredientEntry?.wasteRate ??
+        lot.IngredientLot?.DeliveryItem?.SupplyRequestItem?.IngredientEntry
+          ?.wasteRate ??
+        0,
+    )
+      .toDecimalPlaces(3)
+      .toString(),
     unit: lot.unit,
     lotCode: lot.IngredientLot?.lotCode ?? null,
     ingredientName:
@@ -1455,6 +1472,7 @@ export function createKitchenLifecycle(
         const sharedSeasoningIds = new Set(
           (menu.mealSeasonings ?? []).map((row) => row.ingredientEntryId),
         );
+        const wasteByEntry = new Map<string, Prisma.Decimal>();
         const recipes = menu.menuDayDishes
           .filter((dish) => !input.dishId || dish.dishId === input.dishId)
           .flatMap((dish) => {
@@ -1469,10 +1487,15 @@ export function createKitchenLifecycle(
                   409,
                   "Nguyên liệu thực đơn chưa xác định được danh mục kho trường",
                 );
+              // Thực đơn lưu định lượng thành phẩm; bếp lấy hàng theo lượng sống đã tính hao hụt.
+              wasteByEntry.set(entries[0].id, entries[0].wasteRate);
               return {
                 ingredientEntryId: entries[0].id,
                 ingredientName: row.ingredient.name,
-                quantityPerPortion: row.quantityPerPortion.toString(),
+                quantityPerPortion: grossFromNet(
+                  row.quantityPerPortion,
+                  entries[0].wasteRate,
+                ).toString(),
                 unit: row.unit,
               };
             });
@@ -1595,6 +1618,15 @@ export function createKitchenLifecycle(
                 plannedPortions: dish.plannedPortions,
                 lots: dish.lots.map((lot) => ({
                   ...lot,
+                  cookedQuantity: netFromGross(
+                    lot.quantityUsed,
+                    wasteByEntry.get(
+                      stock.find((row) => row.id === lot.ingredientLotId)
+                        ?.ingredientEntryId ?? "",
+                    ) ?? 0,
+                  )
+                    .toDecimalPlaces(3)
+                    .toString(),
                   lotCode:
                     stock.find((row) => row.id === lot.ingredientLotId)
                       ?.lotCode ?? null,
@@ -1653,19 +1685,11 @@ export function createKitchenLifecycle(
                     allocationRecipeSnapshot: {
                       version: 1,
                       profiles: menu.WeeklyMenu?.isSchoolWide
-                        ? (
+                        ? allocationSnapshotProfiles(
                             allocationProfiles.find(
                               (row) => row.id === d.dishId,
-                            )?.gradeRecipes ?? []
-                          ).map((profile) => ({
-                            gradeId: profile.gradeId,
-                            lines: profile.lines.map((line) => ({
-                              ingredientId: line.entry.ingredientId,
-                              quantityPerPortion:
-                                line.requiredQuantity.toString(),
-                              unit: line.unit,
-                            })),
-                          }))
+                            ),
+                          )
                         : (menu.WeeklyMenu?.grades ?? []).map((profile) => ({
                             gradeId: profile.gradeId,
                             lines: (
@@ -2086,4 +2110,45 @@ async function completionResult(tx: Tx, batch: Detail) {
     mealSeasoningsConsumed:
       shared.length > 0 && shared.every((s) => s.usedAt !== null),
   };
+}
+
+/**
+ * Bản chụp định lượng theo khối cho mẻ của thực đơn toàn trường:
+ * định lượng 1 suất = công thức mốc chuẩn × khẩu phần khối / mốc chuẩn.
+ */
+function allocationSnapshotProfiles(
+  dish:
+    | {
+        standardQuantity: Prisma.Decimal;
+        gradeRecipes: {
+          gradeId: string;
+          portionQuantity: Prisma.Decimal;
+        }[];
+        dishIngredientEntries: {
+          requiredQuantity: Prisma.Decimal;
+          unit: string;
+          IngredientEntry: { ingredientId: string };
+        }[];
+      }
+    | undefined,
+) {
+  if (!dish) return [];
+  return dish.gradeRecipes.flatMap((profile) => {
+    const lines = gradeDishLines(
+      dish,
+      profile.gradeId,
+      dish.dishIngredientEntries,
+    );
+    if (!lines?.length) return [];
+    return [
+      {
+        gradeId: profile.gradeId,
+        lines: lines.map((line) => ({
+          ingredientId: line.IngredientEntry.ingredientId,
+          quantityPerPortion: line.requiredQuantity.toString(),
+          unit: line.unit,
+        })),
+      },
+    ];
+  });
 }

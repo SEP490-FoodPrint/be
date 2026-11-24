@@ -779,7 +779,7 @@ export const menuRepository = {
     return client.ingredientEntry.findMany({
       where: { schoolId, ingredientId: { in: ingredientIds } },
 
-      select: { id: true, ingredientId: true },
+      select: { id: true, ingredientId: true, wasteRate: true },
     });
   },
   batchAssignments(client: Tx, meal: MealReference) {
@@ -895,11 +895,6 @@ export const menuRepository = {
   namedSchoolDish(client: Tx, schoolId: string, name: string) {
     return client.dish.findFirst({
       where: { schoolId, name: name },
-    });
-  },
-  createSchoolDish(client: Tx, schoolId: string, name: string) {
-    return client.dish.create({
-      data: { schoolId, name: name },
     });
   },
   saveMealDish(

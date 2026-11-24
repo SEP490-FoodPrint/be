@@ -398,22 +398,28 @@ void test("material allocation migration and lifecycle in an explicitly owned di
   await context.test(
     "legacy batches without snapshots auto-plan from grade recipes through GET",
     async () => {
+      // Mốc chuẩn 75 g gồm 60 g nguyên liệu; khối 1 dùng 75 g (60 g), khối 2 dùng 100 g (80 g).
+      await db.dish.update({
+        where: { id: dishId },
+        data: { standardQuantity: "75", standardUnit: "g" },
+      });
+      await db.dishIngredientEntry.deleteMany({ where: { dishId } });
+      await db.dishIngredientEntry.create({
+        data: {
+          dishId,
+          ingredientEntryId: entry.id,
+          ingredientRole: "MAIN",
+          requiredQuantity: "60",
+          unit: "g",
+        },
+      });
       for (const [index, grade] of grades.entries()) {
         await db.dishGradeRecipe.create({
           data: {
             dishId,
             gradeId: grade.id,
             schoolId: school.id,
-            lines: {
-              create: [
-                {
-                  ingredientEntryId: entry.id,
-                  ingredientRole: "MAIN",
-                  requiredQuantity: index === 0 ? "60" : "80",
-                  unit: "g",
-                },
-              ],
-            },
+            portionQuantity: index === 0 ? "75" : "100",
           },
         });
       }

@@ -336,7 +336,8 @@ void test("public daily menu resolves per-grade portions, ingredients and allerg
     name: string,
     opts: {
       standard?: [string, string, string, string][];
-      grade?: Record<string, [string, string, string, string][]>;
+      standardQuantity?: string;
+      grade?: Record<string, string>;
       menu?: [string, string, string][];
     } = {},
   ) => ({
@@ -360,17 +361,9 @@ void test("public daily menu resolves per-grade portions, ingredients and allerg
         unit: "g",
         IngredientEntry: { Ingredient: ing(iid, n) },
       })),
+      standardQuantity: dec(opts.standardQuantity ?? "100"),
       gradeRecipes: Object.entries(opts.grade ?? {}).map(
-        ([gradeId, lines]) => ({
-          gradeId,
-          lines: lines.map(([iid, n, q, role]) => ({
-            ingredientEntryId: `e-${iid}`,
-            ingredientRole: role,
-            requiredQuantity: dec(q),
-            unit: "g",
-            entry: { Ingredient: ing(iid, n) },
-          })),
-        }),
+        ([gradeId, portion]) => ({ gradeId, portionQuantity: dec(portion) }),
       ),
     },
     ingredients: (opts.menu ?? []).map(([iid, n, q]) => ({
@@ -397,7 +390,9 @@ void test("public daily menu resolves per-grade portions, ingredients and allerg
           ["i1", "Thịt heo", "60", "MAIN"],
           ["i9", "Muối", "1", "SEASONING"],
         ],
-        grade: { g2: [["i1", "Thịt heo", "80", "MAIN"]] },
+        // Mốc chuẩn 75 g (thịt 60 g); khối g2 dùng 100 g -> thịt 80 g.
+        standardQuantity: "75",
+        grade: { g2: "100" },
         menu: [["i1", "Thịt heo", "0.07"]],
       }),
       dish("d2", "Canh rau", { standard: [["i2", "Rau ngót", "40", "MAIN"]] }),

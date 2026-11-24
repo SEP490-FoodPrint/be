@@ -4,6 +4,7 @@ import { Prisma as RecipePrisma } from "../../generated/prisma/client";
 import { withSchoolTransaction } from "../../utils/authorization";
 import { HttpError } from "../../utils/http-error";
 import { convertQuantity } from "../kitchen/kitchen.service";
+import { scaleDishLines } from "../../utils/dish-portion";
 import { dishRecipeRepository as recipes } from "./dish.repository";
 import type { DishRecipeWrite } from "./dish.request.dto";
 import type { DishRecipeDTO } from "./dish.response.dto";
@@ -73,6 +74,19 @@ export const dishCategoryOptions: DishCategoryOptionDTO[] = [
   { key: "DESSERT", label: "Món phụ / Tráng miệng" },
 ];
 function recipeDTO(row: RecipeRows[number]): DishRecipeDTO {
+  const lines = row.dishIngredientEntries.map((r) => ({
+    ingredientEntryId: r.ingredientEntryId,
+    ingredientId: r.IngredientEntry.ingredientId,
+    name: r.IngredientEntry.Ingredient.name,
+    category:
+      r.IngredientEntry.Ingredient.ingredientCategory?.categoryName ?? null,
+    categoryId: r.IngredientEntry.Ingredient.categoryId ?? null,
+    supplierId: r.IngredientEntry.Ingredient.supplierId,
+    supplierName: r.IngredientEntry.Ingredient.Supplier.name,
+    ingredientRole: r.ingredientRole,
+    requiredQuantity: r.requiredQuantity.toString(),
+    unit: r.unit,
+  }));
   return {
     id: row.id,
     name: row.name,
@@ -80,36 +94,24 @@ function recipeDTO(row: RecipeRows[number]): DishRecipeDTO {
     category: row.categoryId,
     categoryLabel: row.schoolCategory?.name ?? null,
     description: row.description,
+    standardQuantity: row.standardQuantity.toString(),
+    standardUnit: row.standardUnit,
     gradeRecipes: (row.gradeRecipes ?? []).map((profile) => ({
       gradeId: profile.gradeId,
       gradeName: profile.grade.name,
-      lines: profile.lines.map((line) => ({
-        ingredientEntryId: line.ingredientEntryId,
-        ingredientId: line.entry.ingredientId,
-        name: line.entry.Ingredient.name,
-        category:
-          line.entry.Ingredient.ingredientCategory?.categoryName ?? null,
-        categoryId: line.entry.Ingredient.categoryId ?? null,
-        supplierId: line.entry.Ingredient.supplierId,
-        supplierName: line.entry.Ingredient.Supplier.name,
-        ingredientRole: line.ingredientRole,
+      portionQuantity: profile.portionQuantity.toString(),
+      // Định lượng 1 suất của khối, tính sẵn từ mốc chuẩn và khẩu phần.
+      lines: scaleDishLines(
+        row.standardQuantity,
+        profile.portionQuantity,
+        lines,
+      ).map((line) => ({
+        ...line,
+        ingredientRole: line.ingredientRole ?? "MAIN",
         requiredQuantity: line.requiredQuantity.toString(),
-        unit: line.unit,
       })),
     })),
-    lines: row.dishIngredientEntries.map((r) => ({
-      ingredientEntryId: r.ingredientEntryId,
-      ingredientId: r.IngredientEntry.ingredientId,
-      name: r.IngredientEntry.Ingredient.name,
-      category:
-        r.IngredientEntry.Ingredient.ingredientCategory?.categoryName ?? null,
-      categoryId: r.IngredientEntry.Ingredient.categoryId ?? null,
-      supplierId: r.IngredientEntry.Ingredient.supplierId,
-      supplierName: r.IngredientEntry.Ingredient.Supplier.name,
-      ingredientRole: r.ingredientRole,
-      requiredQuantity: r.requiredQuantity.toString(),
-      unit: r.unit,
-    })),
+    lines,
   };
 }
 function assertRecipeEntry(
@@ -175,8 +177,16 @@ export function aggregateDishRecipes(rows: RecipeRows) {
           unit: r.unit,
         });
       else {
+        // Cộng gia vị theo đơn vị của dòng công thức (g/ml) thay vì đơn vị kho (kg/lít):
+        // định lượng đã nhân tỉ lệ như 1.6 g sẽ thành 0.0016 kg, vượt 3 chữ số lưu trữ.
+        // Bếp luôn quy đổi theo `unit` lưu cùng định mức gia vị.
         const old = seasonings.get(r.ingredientEntryId);
-        const total = q.add(old?.quantityPerPortion ?? 0);
+        const seasoningUnit = old?.unit ?? r.unit;
+        const total = convertQuantity(
+          r.requiredQuantity,
+          r.unit,
+          seasoningUnit,
+        ).add(old?.quantityPerPortion ?? 0);
         if (total.decimalPlaces() > 3 || total.gte("100000000000"))
           throw new HttpError(
             422,
@@ -186,7 +196,7 @@ export function aggregateDishRecipes(rows: RecipeRows) {
           ingredientEntryId: r.ingredientEntryId,
           name: r.IngredientEntry.Ingredient.name,
           quantityPerPortion: total.toString(),
-          unit,
+          unit: seasoningUnit,
         });
       }
     }
@@ -210,53 +220,56 @@ export function selectDishGradeRecipes(
   rows: RecipeRows,
   gradeIds: readonly string[],
 ): RecipeRows {
-  if (gradeIds.length) {
-    return rows.map((dish) => {
-      const profiles = gradeIds.map((gradeId) => {
-        const profile = dish.gradeRecipes.find(
-          (row) => row.gradeId === gradeId,
-        );
-        if (!profile)
-          throw new HttpError(
-            422,
-            `Món “${dish.name}” chưa có định lượng cho một trong các khối đã chọn`,
-          );
-        return profile;
-      });
-      const canonical = (profile: (typeof profiles)[number]) =>
-        JSON.stringify(
-          profile.lines
-            .map((line) => ({
-              id: line.ingredientEntryId,
-              role: line.ingredientRole,
-              quantity: convertQuantity(
-                line.requiredQuantity,
-                line.unit,
-                line.entry.Ingredient.defaultUnit,
-              ).toString(),
-              unit: line.entry.Ingredient.defaultUnit,
-            }))
-            .sort((a, b) => a.id.localeCompare(b.id)),
-        );
-      if (
-        profiles.some(
-          (profile) => canonical(profile) !== canonical(profiles[0]),
-        )
-      )
-        throw new HttpError(
-          422,
-          `Các khối có định lượng khác nhau cho món “${dish.name}”; hãy tách thực đơn`,
-        );
-      return {
-        ...dish,
-        dishIngredientEntries: profiles[0].lines.map((line) => ({
-          ...line,
-          IngredientEntry: line.entry,
-        })),
-      };
-    });
-  }
-  return rows;
+  return rows.map((dish) => {
+    // Thực đơn toàn trường dùng đúng mốc chuẩn (tỉ lệ 1).
+    const portions = gradeIds.length
+      ? gradeIds.map((gradeId) => {
+          const portion = dish.gradeRecipes.find(
+            (row) => row.gradeId === gradeId,
+          )?.portionQuantity;
+          if (portion === undefined)
+            throw new HttpError(
+              422,
+              `Món “${dish.name}” chưa có khẩu phần cho một trong các khối đã chọn`,
+            );
+          return portion;
+        })
+      : [dish.standardQuantity];
+    const scaled = portions.map((portion) =>
+      scaleDishLines(
+        dish.standardQuantity,
+        portion,
+        dish.dishIngredientEntries,
+      ),
+    );
+    const canonical = (lines: (typeof scaled)[number]) =>
+      JSON.stringify(
+        lines
+          .map((line) => ({
+            id: line.ingredientEntryId,
+            role: line.ingredientRole,
+            quantity: convertQuantity(
+              line.requiredQuantity,
+              line.unit,
+              line.IngredientEntry.Ingredient.defaultUnit,
+            ).toString(),
+            unit: line.IngredientEntry.Ingredient.defaultUnit,
+          }))
+          .sort((a, b) => a.id.localeCompare(b.id)),
+      );
+    if (scaled.some((lines) => canonical(lines) !== canonical(scaled[0])))
+      throw new HttpError(
+        422,
+        `Các khối có định lượng khác nhau cho món “${dish.name}”; hãy tách thực đơn`,
+      );
+    const tooSmall = scaled[0].find((line) => !line.requiredQuantity.gt(0));
+    if (tooSmall)
+      throw new HttpError(
+        422,
+        `Định lượng “${tooSmall.IngredientEntry.Ingredient.name}” của món “${dish.name}” bằng 0 sau khi làm tròn; hãy kiểm tra mốc chuẩn và khẩu phần`,
+      );
+    return { ...dish, dishIngredientEntries: scaled[0] };
+  });
 }
 
 export async function readDatabaseMealRecipe(
@@ -452,10 +465,20 @@ export function createDishRecipeService(
               throw new HttpError(422, "Nhóm món không thuộc trường");
             categoryId = category.id;
           }
-          const allLines = [
-            ...input.lines,
-            ...(input.gradeRecipes ?? []).flatMap((profile) => profile.lines),
-          ];
+          const allLines = input.lines;
+          // Mỗi khối phải ra định lượng > 0 cho mọi dòng sau khi nhân tỉ lệ và làm tròn.
+          for (const profile of input.gradeRecipes ?? []) {
+            const scaled = scaleDishLines(
+              input.standardQuantity,
+              profile.portionQuantity,
+              input.lines,
+            );
+            if (scaled.some((line) => !line.requiredQuantity.gt(0)))
+              throw new HttpError(
+                422,
+                "Khẩu phần quá nhỏ: có nguyên liệu bằng 0 sau khi làm tròn 3 chữ số thập phân",
+              );
+          }
           if (input.gradeRecipes?.length) {
             const grades = await recipes.grades(
               tx,
@@ -491,22 +514,6 @@ export function createDishRecipeService(
               ),
             );
           }
-          for (const profile of input.gradeRecipes ?? []) {
-            const existing =
-              previous?.gradeRecipes?.find(
-                (old) => old.gradeId === profile.gradeId,
-              )?.lines ?? [];
-            for (const line of profile.lines)
-              await resolveMeasurementUnit(
-                tx,
-                line.unit,
-                existing.some(
-                  (old) =>
-                    old.ingredientEntryId === line.ingredientEntryId &&
-                    old.unit === line.unit,
-                ),
-              );
-          }
           for (const line of allLines) {
             const entry = entries.find((e) => e.id === line.ingredientEntryId)!;
             assertRecipeEntry(entry, line.ingredientRole, schoolId);
@@ -522,6 +529,7 @@ export function createDishRecipeService(
             id,
             input.name,
             input.description ?? null,
+            { quantity: input.standardQuantity, unit: input.standardUnit },
             categoryId,
             input.lines,
             input.mealType,

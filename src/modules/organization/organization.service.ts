@@ -68,6 +68,7 @@ import {
   type PublicSchoolDbRow,
   type SchoolDirectoryRow,
 } from "./organization.repository";
+import { gradeDishLines } from "../../utils/dish-portion";
 
 function mapDirectory(
   row: SchoolDirectoryRow,
@@ -935,17 +936,16 @@ function resolvePublicDishRecipe(
     unit: row.unit,
     ingredient: row.ingredient,
   }));
-  const gradeRecipe = gradeId
-    ? mdd.Dish.gradeRecipes.find((recipe) => recipe.gradeId === gradeId)
-    : undefined;
-  const gradeLines: PublicRecipeLine[] = (gradeRecipe?.lines ?? []).map(
-    (line) => ({
-      ingredientRole: line.ingredientRole,
-      requiredQuantity: line.requiredQuantity,
-      unit: line.unit,
-      ingredient: line.entry.Ingredient,
-    }),
-  );
+  const gradeLines: PublicRecipeLine[] = (
+    (gradeId
+      ? gradeDishLines(mdd.Dish, gradeId, mdd.Dish.dishIngredientEntries)
+      : null) ?? []
+  ).map((line) => ({
+    ingredientRole: line.ingredientRole,
+    requiredQuantity: line.requiredQuantity,
+    unit: line.unit,
+    ingredient: line.IngredientEntry.Ingredient,
+  }));
   const standardLines: PublicRecipeLine[] = mdd.Dish.dishIngredientEntries.map(
     (line) => ({
       ingredientRole: line.ingredientRole,

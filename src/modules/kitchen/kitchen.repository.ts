@@ -48,6 +48,7 @@ export const kitchenDetailSelect = {
               },
               IngredientEntry: {
                 select: {
+                  wasteRate: true,
                   Ingredient: {
                     select: {
                       name: true,
@@ -60,6 +61,7 @@ export const kitchenDetailSelect = {
                 select: {
                   IngredientEntry: {
                     select: {
+                      wasteRate: true,
                       Ingredient: {
                         select: {
                           name: true,
@@ -310,19 +312,18 @@ export const kitchenRepository = {
       orderBy: { id: "asc" },
       select: {
         id: true,
+        standardQuantity: true,
         gradeRecipes: {
           orderBy: { gradeId: "asc" },
+          select: { gradeId: true, portionQuantity: true },
+        },
+        dishIngredientEntries: {
+          orderBy: { ingredientEntryId: "asc" },
+          where: { ingredientRole: "MAIN" },
           select: {
-            gradeId: true,
-            lines: {
-              orderBy: { ingredientEntryId: "asc" },
-              where: { ingredientRole: "MAIN" },
-              select: {
-                requiredQuantity: true,
-                unit: true,
-                entry: { select: { ingredientId: true } },
-              },
-            },
+            requiredQuantity: true,
+            unit: true,
+            IngredientEntry: { select: { ingredientId: true } },
           },
         },
       },
@@ -361,7 +362,7 @@ export const kitchenRepository = {
                     name: true,
                     ingredientEntries: {
                       where: { schoolId },
-                      select: { id: true },
+                      select: { id: true, wasteRate: true },
                     },
                   },
                 },

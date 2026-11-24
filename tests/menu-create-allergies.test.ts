@@ -479,6 +479,8 @@ void test("dish category and meal classification persist through create/read/upd
   const row = () => ({
     id: id(6),
     name: "Rice",
+    standardQuantity: new Prisma.Decimal("100"),
+    standardUnit: "g",
     description: null,
     categoryId: category,
     mealType,
@@ -540,6 +542,8 @@ void test("dish category and meal classification persist through create/read/upd
   const service = createDishRecipeService(() => Promise.resolve(f.db));
   const input = {
     name: "Rice",
+    standardQuantity: "100",
+    standardUnit: "g",
     lines: [
       {
         ingredientEntryId: id(8),
@@ -905,27 +909,29 @@ function gradeFixture(t: TestContext, missingSecond = false) {
   });
   const meat = entry(id(10), id(7), "Thịt"),
     salt = entry(id(8), id(9), "Muối");
+  // Mốc chuẩn 100 g: thịt 80 g, muối 2 g. Khối 1 dùng 100 g (thịt 80), khối 2 dùng 125 g (thịt 100).
   const profiles = grades
     .slice(0, missingSecond ? 1 : 2)
     .map((grade, index) => ({
       gradeId: grade.id,
-      lines: [
-        {
-          ingredientEntryId: meat.id,
-          ingredientRole: "MAIN",
-          requiredQuantity: new Prisma.Decimal(index ? "100" : "80"),
-          unit: "g",
-          entry: meat,
-        },
-        {
-          ingredientEntryId: salt.id,
-          ingredientRole: "SEASONING",
-          requiredQuantity: new Prisma.Decimal(index ? "3" : "2"),
-          unit: "g",
-          entry: salt,
-        },
-      ],
+      portionQuantity: new Prisma.Decimal(index ? "125" : "100"),
     }));
+  const standardLines = [
+    {
+      ingredientEntryId: meat.id,
+      ingredientRole: "MAIN",
+      requiredQuantity: new Prisma.Decimal("80"),
+      unit: "g",
+      IngredientEntry: meat,
+    },
+    {
+      ingredientEntryId: salt.id,
+      ingredientRole: "SEASONING",
+      requiredQuantity: new Prisma.Decimal("2"),
+      unit: "g",
+      IngredientEntry: salt,
+    },
+  ];
   t.mock.method(
     repository,
     "schoolGrades",
@@ -943,8 +949,10 @@ function gradeFixture(t: TestContext, missingSecond = false) {
         {
           id: id(6),
           name: "Thịt kho",
+          standardQuantity: new Prisma.Decimal("100"),
+          standardUnit: "g",
           gradeRecipes: profiles,
-          dishIngredientEntries: [],
+          dishIngredientEntries: standardLines,
         },
       ] as never);
     },
@@ -1055,7 +1063,7 @@ void test("grade batch rolls all prior writes back when a later grade has no rec
   const before = structuredClone(f.menu);
   await assert.rejects(
     f.service.saveGradeBatch(f.batch, f.principal),
-    /Khối 4–5.*chưa có định lượng/,
+    /Khối 4–5.*chưa có khẩu phần/,
   );
   assert.equal(f.writes.length, 1);
   assert.equal(f.counts().committedWrites, 0);

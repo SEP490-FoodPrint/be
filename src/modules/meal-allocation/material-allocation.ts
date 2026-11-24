@@ -357,6 +357,8 @@ export function verifyStoredMaterialAllocations(
           !material.quantityPerPortion.gt(0)
         )
           return false;
+        // Lượng lô là lượng sống; thành phẩm đã cấp luôn ≤ lượng sống nên dùng làm cận trên
+        // (không phụ thuộc tỷ lệ hao hụt có thể đã đổi sau khi phân bổ).
         const sourceAmount = canonicalAmount(
           source.quantityUsed.toString(),
           source.unit,

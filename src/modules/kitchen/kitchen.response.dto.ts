@@ -20,7 +20,10 @@ export interface RetainedSampleBriefDTO {
 export interface CookingBatchLotDTO {
   dishId: string;
   ingredientLotId: string;
+  /** Lượng nguyên liệu sống lấy từ lô (đã trừ kho). */
   quantityUsed: string;
+  /** Lượng thành phẩm dự kiến = quantityUsed × (1 − tỷ lệ hao hụt hiện tại). */
+  cookedQuantity: string;
   unit: string;
   lotCode: string | null;
   ingredientName: string | null;
@@ -156,6 +159,7 @@ export interface CookingBatchPreviewDTO {
       lots: {
         ingredientLotId: string;
         quantityUsed: string;
+        cookedQuantity: string;
         unit: string;
         lotCode: string | null;
         ingredientName: string | null;

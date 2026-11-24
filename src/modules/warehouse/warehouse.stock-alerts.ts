@@ -1,5 +1,6 @@
 import { Prisma } from "../../generated/prisma/client";
 import { convertQuantity } from "../kitchen/kitchen.service";
+import { grossFromNet } from "../../utils/waste-rate";
 import type {
   StockAlertItemDTO,
   StockAlertsResponseDTO,
@@ -249,10 +250,12 @@ export function buildStockAlertSource(
 ): StockAlertSource {
   const handling = new Map<string, Set<string>>();
   const ingredients = new Map<string, { name: string; unit: string }>();
+  const wasteRates = new Map<string, Prisma.Decimal>();
   for (const entry of rows.entries) {
     const types = handling.get(entry.ingredientId) ?? new Set<string>();
     types.add(entry.handlingType);
     handling.set(entry.ingredientId, types);
+    wasteRates.set(entry.ingredientId, entry.wasteRate);
     ingredients.set(entry.ingredientId, {
       name: entry.Ingredient.name,
       unit: entry.Ingredient.defaultUnit,
@@ -314,7 +317,11 @@ export function buildStockAlertSource(
           menuDayId: day.id,
           mealType,
           ingredientId: line.ingredientId,
-          quantityPerPortion: line.quantityPerPortion.toString(),
+          // Dòng món: định lượng thành phẩm → lượng sống cần lấy kho. Gia vị chung giữ 1-1.
+          quantityPerPortion: grossFromNet(
+            line.quantityPerPortion,
+            wasteRates.get(line.ingredientId) ?? 0,
+          ).toString(),
           unit: line.unit,
           portions: dishPortions.get(line.dishId) ?? 0,
         });
