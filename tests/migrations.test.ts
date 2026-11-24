@@ -824,6 +824,133 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
   );
 
   await context.test(
+    "supply-round sample planning adds enums, expand-only columns, CHECKs and the active REQUEST delivery index",
+    async () => {
+      const labels = (
+        await db.query<{ label: string }>(
+          `SELECT e.enumlabel AS label FROM pg_enum e
+           JOIN pg_type t ON t.oid = e.enumtypid
+           JOIN pg_namespace n ON n.oid = t.typnamespace
+           WHERE n.nspname = 'foodprint' AND t.typname = 'cooking_batch_status'
+           ORDER BY e.enumsortorder`,
+        )
+      ).rows.map((row) => row.label);
+      assert.deepEqual(labels, [
+        "UNCONFIRMED",
+        "CONFIRMED",
+        "COMPLETED",
+        "PENDING_APPROVAL",
+        "ROUND1_APPROVED",
+        "ROUND2_APPROVED",
+        "CANCELLED",
+      ]);
+      const constraint = async (table: string, name: string) =>
+        (
+          await db.query<{ def: string | null }>(
+            `SELECT pg_get_constraintdef(c.oid) AS def FROM pg_constraint c
+             JOIN pg_class r ON r.oid = c.conrelid
+             JOIN pg_namespace n ON n.oid = r.relnamespace
+             WHERE n.nspname = 'foodprint' AND r.relname = $1 AND c.conname = $2`,
+            [table, name],
+          )
+        ).rows[0]?.def ?? null;
+      assert.match(
+        (await constraint(
+          "cooking_batch_lots",
+          "cooking_batch_lots_quantity_used_check",
+        )) ?? "",
+        /quantity_used >= .*sample_quantity > /,
+      );
+      const index = async (name: string) =>
+        (
+          await db.query<{ def: string }>(
+            "SELECT indexdef AS def FROM pg_indexes WHERE schemaname = 'foodprint' AND indexname = $1",
+            [name],
+          )
+        ).rows[0]?.def ?? null;
+      assert.equal(await index("uq_deliveries_request_mode"), null);
+      assert.match(
+        (await index("uq_deliveries_request_active")) ?? "",
+        /UNIQUE INDEX .* \(supply_request_id\) WHERE \(\(creation_mode = 'REQUEST'.*REJECTED.*CANCELLED/,
+      );
+      for (const table of [
+        "school_sample_policies",
+        "supply_rounds",
+        "supply_round_dish_plans",
+        "cooking_batch_round_parts",
+        "cooking_batch_round_part_lots",
+      ])
+        assert.equal(
+          (
+            await db.query<{ count: number }>(
+              `SELECT count(*)::int AS count FROM foodprint.${table}`,
+            )
+          ).rows[0].count,
+          0,
+          `Migration must not seed ${table}`,
+        );
+      for (const [table, column] of [
+        ["cooking_batch_lots", "sample_quantity"],
+        ["menu_meal_seasoning_lots", "sample_quantity"],
+        ["ingredient_lots", "sample_top_up_quantity"],
+        ["delivery_items", "sample_top_up_quantity"],
+        ["supply_request_items", "sample_top_up_quantity"],
+      ])
+        assert.equal(
+          (
+            await db.query<{ count: number }>(
+              `SELECT count(*)::int AS count FROM foodprint.${table} WHERE ${column} <> 0`,
+            )
+          ).rows[0].count,
+          0,
+          `Existing ${table} rows keep ${column} = 0`,
+        );
+
+      await db.query("BEGIN");
+      try {
+        await db.query("SAVEPOINT round_check");
+        await assert.rejects(
+          db.query(
+            "INSERT INTO foodprint.supply_rounds(school_id,delivery_date,batch_no,status,not_needed_at) VALUES ($1,'2026-12-01',1,'NOT_NEEDED',now())",
+            [schoolId],
+          ),
+          /supply_rounds_not_needed_check/,
+        );
+        await db.query("ROLLBACK TO SAVEPOINT round_check");
+        await assert.rejects(
+          db.query(
+            "INSERT INTO foodprint.supply_rounds(school_id,delivery_date,batch_no,status) VALUES ($1,'2026-12-01',2,'NOT_NEEDED')",
+            [schoolId],
+          ),
+          /supply_rounds_not_needed_check/,
+        );
+        await db.query("ROLLBACK TO SAVEPOINT round_check");
+        await assert.rejects(
+          db.query(
+            "INSERT INTO foodprint.supply_rounds(school_id,delivery_date,batch_no) VALUES ($1,'2026-12-01',3)",
+            [schoolId],
+          ),
+          /supply_rounds_batch_no_check/,
+        );
+        await db.query("ROLLBACK TO SAVEPOINT round_check");
+        await db.query(
+          "INSERT INTO foodprint.supply_rounds(school_id,delivery_date,batch_no,status,not_needed_at) VALUES ($1,'2026-12-01',2,'NOT_NEEDED',now()),($1,'2026-12-01',1,'COLLECTING',NULL)",
+          [schoolId],
+        );
+        await assert.rejects(
+          db.query(
+            "INSERT INTO foodprint.supply_rounds(school_id,delivery_date,batch_no) VALUES ($1,'2026-12-01',1)",
+            [schoolId],
+          ),
+          /uq_supply_rounds_school_date_batch/,
+        );
+      } finally {
+        await db.query("ROLLBACK");
+      }
+    },
+  );
+
+  await context.test(
     "School profile adoption preserves provisioned data and refuses ambiguous address columns",
     async () => {
       const name = `foodprint_migration_test_school_${randomUUID().replaceAll("-", "")}`;

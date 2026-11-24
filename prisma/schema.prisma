@@ -136,6 +136,8 @@ model CookingBatchLot {
   plannedQuantity  Decimal?         @map("planned_quantity") @ignore @db.Decimal(14, 3)
   /// Backend-computed allocation. Reserved before completion; inventory usage is posted only on completion.
   quantityUsed     Decimal          @map("quantity_used") @db.Decimal(14, 3)
+  /// Raw ingredient reserved for this child's retained food sample (supply-round-sample-planning). Never allocated to classes; inventory usage = quantity_used + sample_quantity. CHECK requires quantity_used > 0 OR sample_quantity > 0.
+  sampleQuantity   Decimal          @default(0) @map("sample_quantity") @db.Decimal(14, 3)
   unit             String           @db.VarChar(30)
   CookingBatch     CookingBatch     @relation("cooking_batch_lots_cooking_batch_id__cooking_batches", fields: [cookingBatchId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   CookingBatchDish CookingBatchDish @relation(fields: [cookingBatchId, dishId], references: [cookingBatchId, dishId], onDelete: Cascade, onUpdate: NoAction)
@@ -155,12 +157,16 @@ model CookingBatchGroup {
   mealType        MealType       @map("meal_type")
   createdByUserId String         @map("created_by_user_id") @db.Uuid
   createdAt       DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  /// Supply round that planned this group automatically; NULL for groups planned manually by the kitchen.
+  supplyRoundId   String?        @map("supply_round_id") @db.Uuid
   MenuDay         MenuDay        @relation(fields: [menuDayId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   CreatedByUser   User           @relation("cooking_batch_groups_created_by_user", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  SupplyRound     SupplyRound?   @relation(fields: [supplyRoundId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   cookingBatches  CookingBatch[]
 
   @@unique([id, menuDayId, mealType])
   @@index([menuDayId, mealType, createdAt], map: "idx_cooking_batch_groups_meal")
+  @@index([supplyRoundId], map: "idx_cooking_batch_groups_supply_round")
   @@map("cooking_batch_groups")
   @@schema("foodprint")
 }
@@ -173,12 +179,21 @@ model CookingBatchDish {
   menuDayId             String                @map("menu_day_id") @db.Uuid
   mealType              MealType              @map("meal_type")
   plannedPortions       Int?                  @map("planned_portions") @db.Integer
+  /// Retained-sample snapshot taken when the batch was planned by a supply round; all four are NULL for older/manual batches (CHECK).
+  /// Sample amount M* in sample_unit, already rounded up for count-unit recipe lines.
+  sampleQuantity        Decimal?              @map("sample_quantity") @db.Decimal(14, 3)
+  /// Sample ratio r applied to the dish standard recipe.
+  sampleRatio           Decimal?              @map("sample_ratio") @db.Decimal(18, 9)
+  /// Dish standard unit at planning time: g or ml.
+  sampleUnit            String?               @map("sample_unit") @db.VarChar(30)
+  standardQuantitySnapshot Decimal?           @map("standard_quantity_snapshot") @db.Decimal(14, 3)
   CookingBatch          CookingBatch          @relation(fields: [cookingBatchId, menuDayId, mealType], references: [id, menuDayId, mealType], onDelete: Cascade, onUpdate: NoAction)
   MenuDayDish           MenuDayDish           @relation(fields: [menuDayId, dishId, mealType], references: [menuDayId, dishId, mealType], onDelete: Restrict, onUpdate: NoAction)
   Dish                  Dish                  @relation(fields: [dishId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   cookingBatchLots      CookingBatchLot[]
   retainedFoodSamples   RetainedFoodSample[]
   mealAllocationBatches MealAllocationBatch[]
+  roundParts            CookingBatchRoundPart[]
 
   @@id([cookingBatchId, dishId])
   @@index([dishId], map: "idx_cooking_batch_dishes_dish")
@@ -212,6 +227,8 @@ model CookingBatch {
   completedByUserId     String?               @map("completed_by_user_id") @db.Uuid
   /// Time kitchen confirmed completion of the plan; COMPLETED is required for meal allocation.
   completedAt           DateTime?             @map("completed_at") @db.Timestamptz(6)
+  /// Supply round (1|2) that created this child; NULL for manually planned batches (CHECK 1 or 2).
+  supplyBatchNo         Int?                  @map("supply_batch_no") @db.SmallInt
   createdAt             DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt             DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   MenuDay               MenuDay               @relation("cooking_batches_menu_day_id__menu_days", fields: [menuDayId], references: [id], onDelete: Restrict, onUpdate: NoAction)
@@ -305,8 +322,17 @@ model Delivery {
   receivedAt                DateTime?                   @map("received_at") @db.Timestamptz(6)
   vehiclePlate              String?                     @map("vehicle_plate") @db.VarChar(40)
   note                      String?                     @db.Text
+  /// Supply-round preparation stage between lot declaration and dispatch; NULL keeps the legacy dispatch flow.
+  preparationStage          DeliveryPreparationStage?   @map("preparation_stage")
+  /// REQUEST delivery that replaces a rejected delivery of the same supply request (CHECK: REQUEST only, not itself).
+  replacesDeliveryId        String?                     @map("replaces_delivery_id") @db.Uuid
+  topUpConfirmedByUserId    String?                     @map("top_up_confirmed_by_user_id") @db.Uuid
+  topUpConfirmedAt          DateTime?                   @map("top_up_confirmed_at") @db.Timestamptz(6)
   createdAt                 DateTime                    @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                 DateTime                    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  replacesDelivery          Delivery?                   @relation("deliveries_replaces_delivery_id__deliveries", fields: [replacesDeliveryId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  replacements              Delivery[]                  @relation("deliveries_replaces_delivery_id__deliveries")
+  topUpConfirmedByUser      User?                       @relation("deliveries_top_up_confirmed_by_user_id__users", fields: [topUpConfirmedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   SupplyRequest             SupplyRequest?              @relation("deliveries_supply_request_id__supply_requests", fields: [supplyRequestId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   School                    School                      @relation("deliveries_school_id__schools", fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   Supplier                  Supplier                    @relation("deliveries_supplier_id__suppliers", fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: NoAction)
@@ -319,7 +345,8 @@ model Delivery {
   blockchainProofs          BlockchainProof[]           @relation("blockchain_proofs_delivery_id__deliveries")
 
   @@unique([supplierId, deliveryNo], map: "uq_deliveries_supplier_no")
-  @@unique([supplyRequestId], map: "uq_deliveries_request_mode", where: raw("(creation_mode = 'REQUEST'::delivery_creation_mode)"))
+  @@unique([supplyRequestId], map: "uq_deliveries_request_active", where: raw("((creation_mode = 'REQUEST'::delivery_creation_mode) AND (status <> ALL (ARRAY['REJECTED'::delivery_status, 'CANCELLED'::delivery_status])))"))
+  @@index([replacesDeliveryId], map: "idx_deliveries_replaces")
   @@unique([supplierId, createdByUserId, creationKey], map: "uq_deliveries_creation_idempotency", where: raw("creation_key IS NOT NULL"))
   @@index([createdByUserId], map: "idx_deliveries_created_by")
   @@index([supplyRequestId, status], map: "idx_deliveries_request_status")
@@ -401,6 +428,8 @@ model DeliveryItem {
   qrToken                    String?            @unique @map("qr_token") @db.VarChar(160)
   qrUrl                      String?            @map("qr_url") @db.VarChar(2048)
   actualQuantity             Decimal            @map("actual_quantity") @db.Decimal(14, 3)
+  /// Sum of this line's lot sample top-ups confirmed by the supplier; already included in actual_quantity.
+  sampleTopUpQuantity        Decimal            @default(0) @map("sample_top_up_quantity") @db.Decimal(14, 3)
   unit                       String             @db.VarChar(30)
   note                       String?            @db.Text
   Delivery                   Delivery           @relation("delivery_items_delivery_id__deliveries", fields: [deliveryId], references: [id], onDelete: Cascade, onUpdate: NoAction)
@@ -481,6 +510,8 @@ model MenuMealSeasoningLot {
   ingredientLotId   String            @map("ingredient_lot_id") @db.Uuid
   plannedPortions   Int               @map("planned_portions") @db.Integer
   quantityUsed      Decimal           @map("quantity_used") @db.Decimal(14, 3)
+  /// Seasoning reserved for the meal's retained food samples; consumed together with quantity_used.
+  sampleQuantity    Decimal           @default(0) @map("sample_quantity") @db.Decimal(14, 3)
   unit              String            @db.VarChar(30)
   usedAt            DateTime?         @map("used_at") @db.Timestamptz(6)
   seasoning         MenuMealSeasoning @relation(fields: [menuDayId, mealType, ingredientEntryId], references: [menuDayId, mealType, ingredientEntryId], onDelete: Restrict, onUpdate: NoAction, map: "fk_menu_meal_seasoning_lot_standard")
@@ -513,6 +544,7 @@ model Dish {
   dishIngredientEntries DishIngredientEntry[] @relation("dish_ingredient_entries_dish_id__dishes")
   cookingBatches        CookingBatch[]        @relation("cooking_batches_dish_id__dishes")
   cookingBatchDishes    CookingBatchDish[]
+  supplyRoundDishPlans  SupplyRoundDishPlan[]
 
   @@unique([id, schoolId])
   @@unique([schoolId, name])
@@ -917,6 +949,8 @@ model IngredientLot {
   manufactureDate           DateTime?                   @map("manufacture_date") @db.Date
   expiryDate                DateTime?                   @map("expiry_date") @db.Date
   receivedQuantity          Decimal                     @map("received_quantity") @db.Decimal(14, 3)
+  /// Sample top-up the supplier confirmed for this lot; already included in received_quantity.
+  sampleTopUpQuantity       Decimal                     @default(0) @map("sample_top_up_quantity") @db.Decimal(14, 3)
   availableQuantity         Decimal                     @default(0) @map("available_quantity") @db.Decimal(14, 3)
   unit                      String                      @db.VarChar(30)
   status                    IngredientLotStatus         @default(BLOCKED)
@@ -929,6 +963,7 @@ model IngredientLot {
   menuMealSeasoningLots     MenuMealSeasoningLot[]
   ingredientQualityFeedback IngredientQualityFeedback[] @relation("ingredient_quality_feedback_ingredient_lot_id__ingredient_lots")
   foodAnalysisResults       FoodAnalysisResult[]        @relation("food_analysis_results_ingredient_lot_id__ingredient_lots")
+  roundPartLots             CookingBatchRoundPartLot[]
 
   @@unique([qrToken])
   @@unique([deliveryItemId, lotCode])
@@ -1349,7 +1384,7 @@ model EmailOutbox {
   @@schema("foodprint")
 }
 
-/// Current project rule: one CookingBatch has at most one retained sample; enforced by UNIQUE(cooking_batch_id).
+/// One retained sample per cooking batch dish; enforced by UNIQUE(cooking_batch_id, dish_id).
 /// CHECK constraints are defined in the source SQL and are not represented in Prisma.
 model RetainedFoodSample {
   dishId              String               @map("dish_id") @db.Uuid
@@ -1514,6 +1549,8 @@ model School {
   complaintsAsSender          Complaint[]                  @relation("complaints_sender_school_id__schools")
   mealComplaints              MealComplaint[]              @relation("meal_complaints_school_id__schools")
   authorityComplaints         AuthorityComplaint[]         @relation("authority_complaints_school")
+  samplePolicy                SchoolSamplePolicy?
+  supplyRounds                SupplyRound[]
 
   blockchainProofs BlockchainProof[] @relation("blockchain_proofs_school_id__schools")
 
@@ -1657,6 +1694,8 @@ model SupplyRequestItem {
   supplyRequestId   String          @map("supply_request_id") @db.Uuid
   ingredientEntryId String          @map("ingredient_entry_id") @db.Uuid
   requestedQuantity Decimal         @map("requested_quantity") @db.Decimal(14, 3)
+  /// Extra quantity ordered from the supplier for retained samples; written by the system on top-up confirmation, never used to split cooking batches. Purchased quantity = requested + sample_top_up.
+  sampleTopUpQuantity Decimal       @default(0) @map("sample_top_up_quantity") @db.Decimal(14, 3)
   unit              String          @db.VarChar(30)
   note              String?         @db.Text
   SupplyRequest     SupplyRequest   @relation("supply_request_items_supply_request_id__supply_requests", fields: [supplyRequestId], references: [id], onDelete: Cascade, onUpdate: NoAction)
@@ -1789,6 +1828,10 @@ model User {
 
   receivedFoodSafetyReports                    FoodSafetyReportForwarding[] @relation("food_safety_forwarding_recipient_user")
   updatedSchoolDeliveryInspectionRoles         SchoolDeliveryInspectionRole[] @relation("school_delivery_inspection_roles_updated_by__users")
+  updatedSchoolSamplePolicies                  SchoolSamplePolicy[]         @relation("school_sample_policies_updated_by__users")
+  approvedSupplyRoundDishPlans                 SupplyRoundDishPlan[]        @relation("supply_round_dish_plans_approved_by__users")
+  approvedCookingBatchRoundParts               CookingBatchRoundPart[]      @relation("cooking_batch_round_parts_approved_by__users")
+  topUpConfirmedDeliveries                     Delivery[]                   @relation("deliveries_top_up_confirmed_by_user_id__users")
 
   @@unique([username], map: "uq_users_non_staff_username", where: raw("((role_code)::text <> 'INGREDIENT_SUPPLIER_STAFF'::text)"))
   @@unique([supplierId, username], map: "uq_users_supplier_username", where: raw("supplier_id IS NOT NULL"))
@@ -2085,10 +2128,61 @@ enum ComplaintActorType {
 
 enum CookingBatchStatus {
   UNCONFIRMED
+  /// Supply-round batches: "Chính thức – sẵn sàng nấu" once round 2 of the day is done (or NOT_NEEDED).
   CONFIRMED
   COMPLETED
+  /// Planned by a supply round, waiting for warehouse approval.
+  PENDING_APPROVAL
+  /// Round 1 batch approved by the warehouse.
+  ROUND1_APPROVED
+  /// New round 2 batch (no matching round 1 source key) approved by the warehouse.
+  ROUND2_APPROVED
+  CANCELLED
 
   @@map("cooking_batch_status")
+  @@schema("foodprint")
+}
+
+enum SupplyRoundStatus {
+  COLLECTING
+  IN_REVIEW
+  READY
+  CLOSED
+  /// Round 2 only: every grade is covered by round 1 quantities (spec D30).
+  NOT_NEEDED
+
+  @@map("supply_round_status")
+  @@schema("foodprint")
+}
+
+enum DishPlanStatus {
+  WAITING_SUPPLIERS
+  PLAN_FAILED
+  PENDING_WAREHOUSE
+  APPROVED
+  REPLAN_REQUIRED
+  CANCELLED
+
+  @@map("dish_plan_status")
+  @@schema("foodprint")
+}
+
+enum RoundPartStatus {
+  PENDING_APPROVAL
+  APPROVED
+  MERGED
+
+  @@map("round_part_status")
+  @@schema("foodprint")
+}
+
+enum DeliveryPreparationStage {
+  LOTS_DECLARED
+  PENDING_WAREHOUSE
+  TOP_UP_PENDING
+  READY_TO_DISPATCH
+
+  @@map("delivery_preparation_stage")
   @@schema("foodprint")
 }
 
@@ -2701,5 +2795,105 @@ model SupplyBatch1Carryover {
 
   @@id([schoolId, deliveryDate, ingredientEntryId])
   @@map("supply_batch1_carryovers")
+  @@schema("foodprint")
+}
+
+/// supply-round-sample-planning: school retained-sample amounts. No row means code defaults (100 g / 150 ml).
+/// CHECK constraints (> 0) are defined in the migration SQL.
+model SchoolSamplePolicy {
+  schoolId          String   @id @map("school_id") @db.Uuid
+  /// Sample amount for dishes whose standard unit is g.
+  sampleGrams       Decimal  @map("sample_grams") @db.Decimal(14, 3)
+  /// Sample amount for dishes whose standard unit is ml.
+  sampleMilliliters Decimal  @map("sample_milliliters") @db.Decimal(14, 3)
+  updatedByUserId   String   @map("updated_by_user_id") @db.Uuid
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  school            School   @relation(fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  updatedByUser     User     @relation("school_sample_policies_updated_by__users", fields: [updatedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@map("school_sample_policies")
+  @@schema("foodprint")
+}
+
+/// One supply round of a school day (batch 1 or 2). CHECK constraints are defined in the migration SQL.
+model SupplyRound {
+  id                 String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  schoolId           String                @map("school_id") @db.Uuid
+  deliveryDate       DateTime              @map("delivery_date") @db.Date
+  batchNo            Int                   @map("batch_no") @db.SmallInt
+  status             SupplyRoundStatus     @default(COLLECTING)
+  /// Set when the system decided round 2 is not needed (status NOT_NEEDED).
+  notNeededAt        DateTime?             @map("not_needed_at") @db.Timestamptz(6)
+  createdAt          DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  school             School                @relation(fields: [schoolId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  dishPlans          SupplyRoundDishPlan[]
+  cookingBatchGroups CookingBatchGroup[]
+  roundParts         CookingBatchRoundPart[]
+
+  @@unique([schoolId, deliveryDate, batchNo], map: "uq_supply_rounds_school_date_batch")
+  @@map("supply_rounds")
+  @@schema("foodprint")
+}
+
+/// Per-dish plan state inside a supply round. CHECK constraints are defined in the migration SQL.
+model SupplyRoundDishPlan {
+  supplyRoundId    String         @map("supply_round_id") @db.Uuid
+  dishId           String         @map("dish_id") @db.Uuid
+  status           DishPlanStatus @default(WAITING_SUPPLIERS)
+  planVersion      String?        @map("plan_version") @db.VarChar(64)
+  failureMessage   String?        @map("failure_message") @db.Text
+  approvedByUserId String?        @map("approved_by_user_id") @db.Uuid
+  approvedAt       DateTime?      @map("approved_at") @db.Timestamptz(6)
+  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  supplyRound      SupplyRound    @relation(fields: [supplyRoundId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  dish             Dish           @relation(fields: [dishId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  approvedByUser   User?          @relation("supply_round_dish_plans_approved_by__users", fields: [approvedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([supplyRoundId, dishId])
+  @@index([dishId], map: "idx_supply_round_dish_plans_dish")
+  @@map("supply_round_dish_plans")
+  @@schema("foodprint")
+}
+
+/// Round 2 portions attached to a matching round 1 cooking batch dish; kept separate until the batch becomes
+/// official so a rejected round 2 lot can be removed without touching round 1. No sample quantity of its own.
+/// CHECK constraints are defined in the migration SQL.
+model CookingBatchRoundPart {
+  id               String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  cookingBatchId   String                     @map("cooking_batch_id") @db.Uuid
+  dishId           String                     @map("dish_id") @db.Uuid
+  supplyRoundId    String                     @map("supply_round_id") @db.Uuid
+  plannedPortions  Int                        @map("planned_portions") @db.Integer
+  status           RoundPartStatus            @default(PENDING_APPROVAL)
+  approvedByUserId String?                    @map("approved_by_user_id") @db.Uuid
+  approvedAt       DateTime?                  @map("approved_at") @db.Timestamptz(6)
+  mergedAt         DateTime?                  @map("merged_at") @db.Timestamptz(6)
+  createdAt        DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+  cookingBatchDish CookingBatchDish           @relation(fields: [cookingBatchId, dishId], references: [cookingBatchId, dishId], onDelete: Cascade, onUpdate: NoAction, map: "fk_cooking_batch_round_parts_dish")
+  supplyRound      SupplyRound                @relation(fields: [supplyRoundId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  approvedByUser   User?                      @relation("cooking_batch_round_parts_approved_by__users", fields: [approvedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  lots             CookingBatchRoundPartLot[]
+
+  @@unique([cookingBatchId, dishId, supplyRoundId], map: "uq_cooking_batch_round_parts_batch_dish_round")
+  @@index([supplyRoundId], map: "idx_cooking_batch_round_parts_round")
+  @@map("cooking_batch_round_parts")
+  @@schema("foodprint")
+}
+
+/// Lot allocations of a round 2 part. CHECK constraints are defined in the migration SQL.
+model CookingBatchRoundPartLot {
+  roundPartId     String                @map("round_part_id") @db.Uuid
+  ingredientLotId String                @map("ingredient_lot_id") @db.Uuid
+  quantityUsed    Decimal               @map("quantity_used") @db.Decimal(14, 3)
+  unit            String                @db.VarChar(30)
+  roundPart       CookingBatchRoundPart @relation(fields: [roundPartId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  ingredientLot   IngredientLot         @relation(fields: [ingredientLotId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([roundPartId, ingredientLotId])
+  @@index([ingredientLotId], map: "idx_cooking_batch_round_part_lots_lot")
+  @@map("cooking_batch_round_part_lots")
   @@schema("foodprint")
 }
