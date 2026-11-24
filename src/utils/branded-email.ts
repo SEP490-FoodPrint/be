@@ -5,6 +5,7 @@
  * đúng trên Gmail/Outlook. Mọi giá trị động đều được escape.
  */
 import { readPublicTraceOrigin } from "../config/env";
+import { cloudinaryImageUrl } from "./cloudinary";
 import { EMAIL_LOGO_CID } from "./email-logo";
 
 export const BRAND = {
@@ -46,12 +47,26 @@ function safeUrl(url: string | undefined): string | null {
   }
 }
 
-/** Logo công khai (link ảnh https) nếu có cấu hình; không có thì dùng logo nhúng inline. */
+/**
+ * Public ID ảnh logo trên Cloudinary (folder `foodprint/logo`, tên hiển thị `logo_foodprint`);
+ * Cloudinary tự sinh public ID khi upload nên khác tên hiển thị.
+ */
+export const EMAIL_LOGO_CLOUDINARY_ID = "logo_ko2iaa";
+
+/**
+ * Link logo cho email: `EMAIL_LOGO_URL` (https) nếu có, sau đó logo trên Cloudinary (80×80 PNG cho
+ * màn hình retina, hiển thị 40px); chưa cấu hình `CLOUDINARY_CLOUD_NAME` thì `null` → logo nhúng inline.
+ */
 export function readEmailLogoUrl(
   source: NodeJS.ProcessEnv = process.env,
 ): string | null {
   const url = safeUrl(source.EMAIL_LOGO_URL?.trim());
-  return url && url.startsWith("https://") ? url : null;
+  if (url && url.startsWith("https://")) return url;
+  return cloudinaryImageUrl(
+    EMAIL_LOGO_CLOUDINARY_ID,
+    { width: 80, height: 80, format: "png" },
+    source,
+  );
 }
 
 /** Trang chủ giao diện FoodPrint cho nút trong email; thiếu cấu hình thì `null` (email bỏ nút). */
@@ -95,7 +110,7 @@ export function renderLetterEmail(
 ): { html: string; text: string } {
   const year = options.year ?? new Date().getFullYear();
   const actionUrl = safeUrl(email.action?.url);
-  // Logo dự án nhúng inline (`cid:`, mailer đính kèm); `EMAIL_LOGO_URL` https có thể thay thế.
+  // Link logo (Cloudinary / `EMAIL_LOGO_URL`) từ `readEmailLogoUrl`; không có thì nhúng inline (`cid:`, mailer đính kèm).
   const logoSrc = options.logoUrl
     ? escapeHtml(options.logoUrl)
     : `cid:${EMAIL_LOGO_CID}`;

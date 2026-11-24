@@ -18,6 +18,7 @@ Backend đã có upload ảnh (`src/utils/cloudinary-upload.ts`, trả `secure_u
 
 - Mục đích → dựng URL ảnh có phép biến đổi (resize, cắt, nén, định dạng tự động) để giao diện/email hiển thị; không tải ảnh về server, không gọi mạng.
 - Phạm vi → PR riêng, chỉ thêm hàm tiện ích + test; chưa gắn vào endpoint nào.
+- Người dùng (2026-11-23): "chuyển đổi những hình ảnh logo thành link cloudinary đi nó nằm trong folder logo, tên ảnh là logo_foodprint" → ảnh ở asset folder `foodprint/logo`, tên hiển thị `logo_foodprint`, public ID thật `logo_ko2iaa` (PNG 1254×1254, tra bằng Admin API chỉ đọc). Logo chỉ xuất hiện trong email (FR-005).
 - Quyết định mặc định: chỉ chấp nhận ảnh công khai (`image/upload`) của cloud trong `CLOUDINARY_CLOUD_NAME`; nguồn không hợp lệ trả `null` (để bên gọi tự xử lý/ẩn ảnh), tùy chọn sai là lỗi lập trình (`RangeError`).
 
 ## User Scenarios & Testing
@@ -39,12 +40,13 @@ Service có `secure_url` của ảnh nguyên liệu/logo và cần ảnh 320×24
 - **FR-002**: Biến đổi (`cloudinaryTransformation`): `width`/`height` số nguyên 1–4000; `crop` `fill|fit|limit|pad|thumb` (mặc định `limit` khi có kích thước); `gravity` `auto|center|face` chỉ với `fill`/`thumb`; `quality` `auto` (mặc định) hoặc 1–100; `format` `auto` (mặc định)|`jpg`|`png`|`webp`. Thứ tự `c_,g_,w_,h_,q_,f_`. Tùy chọn sai ném `RangeError`.
 - **FR-003**: URL có biến đổi cũ đứng trước đoạn version (`v<số>`) thì bỏ biến đổi cũ; giữ nguyên version và public id; các đoạn path được encode lại.
 - **FR-004**: Hàm thuần, không gọi mạng, không dùng API key/secret.
+- **FR-005**: Logo trong mọi email dùng link Cloudinary: `readEmailLogoUrl` trả `EMAIL_LOGO_URL` (https) nếu có, ngược lại `cloudinaryImageUrl("logo_ko2iaa", { width: 80, height: 80, format: "png" })` (PNG vì nhiều trình đọc email không hỗ trợ WebP/AVIF; 80px cho màn retina, hiển thị 40px). Chưa cấu hình `CLOUDINARY_CLOUD_NAME` thì giữ logo nhúng inline `cid:foodprint-logo` làm dự phòng.
 
 ## Success Criteria
 
-- **SC-001**: Test `tests/cloudinary-image-url.test.ts` (trong `test:unit`) bao phủ FR-001–FR-003; `npm run validate` pass.
+- **SC-001**: Test `tests/cloudinary-image-url.test.ts` (trong `test:unit`) bao phủ FR-001–FR-003, FR-005; `npm run validate` pass.
 
 ## Phạm vi
 
-- Trong phạm vi: `src/utils/cloudinary.ts`, test, tài liệu.
+- Trong phạm vi: `src/utils/cloudinary.ts`, logo email (`readEmailLogoUrl` trong `src/utils/branded-email.ts`), test, tài liệu.
 - Ngoài phạm vi: gắn vào response DTO/endpoint, ảnh riêng tư/signed URL, tải ảnh về server.

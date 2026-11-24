@@ -4,6 +4,10 @@ import {
   cloudinaryImageUrl,
   cloudinaryTransformation,
 } from "../src/utils/cloudinary";
+import {
+  EMAIL_LOGO_CLOUDINARY_ID,
+  readEmailLogoUrl,
+} from "../src/utils/branded-email";
 
 const env = { CLOUDINARY_CLOUD_NAME: "test-cloud" } as NodeJS.ProcessEnv;
 const stored =
@@ -91,4 +95,19 @@ void test("tùy chọn sai ném RangeError", () => {
     () => cloudinaryTransformation({ width: 10, gravity: "face" }),
     RangeError,
   );
+});
+
+void test("logo email: link Cloudinary 80×80 PNG; EMAIL_LOGO_URL ưu tiên; chưa cấu hình cloud thì null (nhúng inline)", () => {
+  assert.equal(
+    readEmailLogoUrl(env),
+    `https://res.cloudinary.com/test-cloud/image/upload/c_limit,w_80,h_80,q_auto,f_png/${EMAIL_LOGO_CLOUDINARY_ID}`,
+  );
+  assert.equal(
+    readEmailLogoUrl({
+      ...env,
+      EMAIL_LOGO_URL: "https://cdn.example/logo.png",
+    }),
+    "https://cdn.example/logo.png",
+  );
+  assert.equal(readEmailLogoUrl({}), null);
 });

@@ -18,7 +18,8 @@ TypeScript strict (CommonJS). Không dùng SDK `cloudinary` (chỉ cần nối c
 ## Implementation
 
 - `src/utils/cloudinary.ts`: `cloudinaryTransformation(options)`, `cloudinaryImageUrl(source, options, env)` (FR-001–FR-004).
-- `docs/ONBOARDING.md`: một dòng ghi chú hàm dựng URL ảnh.
+- `src/utils/branded-email.ts`: hằng `EMAIL_LOGO_CLOUDINARY_ID = "logo_ko2iaa"`; `readEmailLogoUrl` trả link Cloudinary sau `EMAIL_LOGO_URL`, `null` khi chưa cấu hình cloud (FR-005). Mọi email đã gọi `readEmailLogoUrl` nên không phải sửa nơi gọi.
+- `docs/ONBOARDING.md`, `docs/MAILER.md`, `.env.example`: ghi chú hàm dựng URL ảnh và nguồn logo.
 
 ## Testing
 
