@@ -22,6 +22,17 @@ export type SchoolListDbRow = Prisma.SchoolGetPayload<{
   select: typeof schoolListSelect;
 }>;
 
+const samplePolicySelect = {
+  sampleGrams: true,
+  sampleMilliliters: true,
+  updatedAt: true,
+  updatedByUser: { select: { fullName: true } },
+} as const satisfies Prisma.SchoolSamplePolicySelect;
+
+export type SamplePolicyRow = Prisma.SchoolSamplePolicyGetPayload<{
+  select: typeof samplePolicySelect;
+}>;
+
 const directorySelect = {
   ...schoolListSelect,
   email: true,
@@ -287,6 +298,20 @@ export interface OrganizationRepository {
     schoolId: string,
     data: { lunchTime: Date | null; afternoonMealTime: Date | null },
   ): Promise<{ lunchTime: Date | null; afternoonMealTime: Date | null }>;
+  /** null nghĩa là trường chưa lưu cấu hình; caller dùng mặc định 100 g / 150 ml. */
+  findSamplePolicy(
+    schoolId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<SamplePolicyRow | null>;
+  saveSamplePolicy(
+    tx: Prisma.TransactionClient,
+    schoolId: string,
+    data: {
+      sampleGrams: string;
+      sampleMilliliters: string;
+      updatedByUserId: string;
+    },
+  ): Promise<SamplePolicyRow>;
   findDeliveryInspectionRoles(schoolId: string): Promise<
     Array<{
       tier: DeliveryInspectionTier;
@@ -440,6 +465,23 @@ export function createOrganizationRepository(
         where: { id: schoolId },
         data,
         select: { lunchTime: true, afternoonMealTime: true },
+      });
+    },
+
+    async findSamplePolicy(schoolId, tx) {
+      const client = tx ?? (await getClient());
+      return client.schoolSamplePolicy.findUnique({
+        where: { schoolId },
+        select: samplePolicySelect,
+      });
+    },
+
+    saveSamplePolicy(tx, schoolId, data) {
+      return tx.schoolSamplePolicy.upsert({
+        where: { schoolId },
+        create: { schoolId, ...data },
+        update: data,
+        select: samplePolicySelect,
       });
     },
 

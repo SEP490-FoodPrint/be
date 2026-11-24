@@ -28,12 +28,12 @@ Chi tiết từng task ở [plan.md](plan.md). Mỗi PR đánh dấu xong khi đ
 
 ## PR2 — Cấu hình lưu mẫu
 
-- [ ] T022 API `GET|PATCH /api/schools/me/sample-policy`.
-- [ ] T023 Quyền `school_sample_policy.manage`, `cooking_plan.view`, `cooking_plan.approve`.
-- [ ] T024 Repository `findSamplePolicy` có mặc định 100 g / 150 ml.
-- [ ] T025 Test BE cấu hình.
-- [ ] T026 FE trang `SCHOOL/SamplePolicy`.
-- [ ] T027 FE route + sidebar "Cấu hình".
+- [x] T022 API `GET|PATCH /api/schools/me/sample-policy`.
+- [x] T023 Quyền `school_sample_policy.manage`, `cooking_plan.view`, `cooking_plan.approve`.
+- [x] T024 Repository `findSamplePolicy` có mặc định 100 g / 150 ml.
+- [x] T025 Test BE cấu hình.
+- [x] T026 FE trang `SCHOOL/SamplePolicy`.
+- [x] T027 FE route + sidebar "Cấu hình".
 
 ## PR3 — Lập mẻ theo món + kho duyệt
 

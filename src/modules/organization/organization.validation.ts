@@ -73,6 +73,24 @@ export const mealTimesBodySchema = z
     },
   );
 
+function sampleAmount(label: string) {
+  return z
+    .union([z.number(), z.string()], {
+      error: `${label} phải là số hoặc chuỗi số thập phân`,
+    })
+    .transform((value) => String(value).trim())
+    .refine(
+      (value) =>
+        /^(?:0|[1-9]\d{0,8})(?:\.\d{1,3})?$/.test(value) && Number(value) > 0,
+      { error: `${label} phải lớn hơn 0 và có tối đa 3 chữ số thập phân` },
+    );
+}
+
+export const samplePolicyBodySchema = z.strictObject({
+  sampleGrams: sampleAmount("Lượng mẫu theo gam"),
+  sampleMilliliters: sampleAmount("Lượng mẫu theo mililít"),
+});
+
 function positiveIntegerQuery(name: string, fallback: number) {
   const message = `${name} phải là số nguyên dương`;
   return z
@@ -281,6 +299,14 @@ export function validateCookingMode(value: unknown) {
 
 export function validateMealTimes(value: unknown) {
   const result = mealTimesBodySchema.safeParse(value);
+  if (!result.success) {
+    throw new OrganizationValidationError(mapZodIssues(result.error.issues));
+  }
+  return result.data;
+}
+
+export function validateSamplePolicy(value: unknown) {
+  const result = samplePolicyBodySchema.safeParse(value);
   if (!result.success) {
     throw new OrganizationValidationError(mapZodIssues(result.error.issues));
   }

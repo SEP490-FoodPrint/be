@@ -79,6 +79,18 @@ export function createOrganizationRouter(
     controller.updateMealTimes,
   );
   router.get(
+    "/me/sample-policy",
+    authHandler,
+    requirePermission("school_sample_policy.manage"),
+    controller.getSamplePolicy,
+  );
+  router.patch(
+    "/me/sample-policy",
+    authHandler,
+    requirePermission("school_sample_policy.manage"),
+    controller.updateSamplePolicy,
+  );
+  router.get(
     "/me/delivery-inspection-roles",
     authHandler,
     requirePermission("school_delivery_inspection.manage"),

@@ -4596,6 +4596,76 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   );
 
   await context.test(
+    "school sample policy persists only for the authenticated board's school",
+    async () => {
+      const route = "/api/schools/me/sample-policy";
+      const board = await user("SCHOOL_MANAGEMENT_BOARD", {
+        schoolId: schoolA.id,
+      });
+      const otherBoard = await user("SCHOOL_MANAGEMENT_BOARD", {
+        schoolId: schoolB.id,
+      });
+      for (const account of [board, otherBoard]) {
+        const session = await authSessions.issue(account.id);
+        issued.set(account.id, session);
+        refreshTokens.push(session.refreshToken);
+      }
+
+      const defaults = await request(route, board.id);
+      assert.equal(defaults.status, 200);
+      assert.deepEqual(record(defaults.body).data, {
+        sampleGrams: "100",
+        sampleMilliliters: "150",
+        isDefault: true,
+        updatedAt: null,
+        updatedBy: null,
+        warnings: [],
+      });
+
+      const values = { sampleGrams: "80.5", sampleMilliliters: "175" };
+      assert.equal(
+        (await request(route, adminA.id, "PATCH", values)).status,
+        403,
+      );
+      assert.equal(
+        (
+          await request(route, board.id, "PATCH", {
+            ...values,
+            schoolId: schoolB.id,
+          })
+        ).status,
+        400,
+      );
+      const saved = await request(route, board.id, "PATCH", values);
+      assert.equal(saved.status, 200);
+      const policy = record(record(saved.body).data);
+      assert.equal(policy.isDefault, false);
+      assert.equal(policy.sampleGrams, values.sampleGrams);
+      assert.equal(policy.sampleMilliliters, values.sampleMilliliters);
+      assert.deepEqual(policy.warnings, [
+        "Thấp hơn mức tối thiểu 100 g theo QĐ 1246/QĐ-BYT",
+      ]);
+      assert.deepEqual(
+        record((await request(route, board.id)).body).data,
+        policy,
+      );
+      assert.deepEqual(
+        record((await request(route, otherBoard.id)).body).data,
+        record(defaults.body).data,
+      );
+      const stored = await db.schoolSamplePolicy.findUniqueOrThrow({
+        where: { schoolId: schoolA.id },
+      });
+      assert.equal(stored.updatedByUserId, board.id);
+      assert.equal(stored.sampleGrams.toString(), values.sampleGrams);
+      assert.equal(
+        stored.sampleMilliliters.toString(),
+        values.sampleMilliliters,
+      );
+    },
+  );
+
+  await context.test(
     "school grades are isolated and can be detached from historical classes",
     async () => {
       const route = "/api/school-grades";

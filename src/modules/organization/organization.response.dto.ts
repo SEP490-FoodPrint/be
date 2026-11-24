@@ -9,6 +9,19 @@ export interface MealTimesResponseDTO {
   afternoonMealTime: string | null;
 }
 
+export interface SamplePolicyResponseDTO {
+  /** Lượng mẫu cho món có mốc chuẩn tính theo g (chuỗi thập phân). */
+  sampleGrams: string;
+  /** Lượng mẫu cho món có mốc chuẩn tính theo ml (chuỗi thập phân). */
+  sampleMilliliters: string;
+  /** true khi trường chưa lưu cấu hình và đang dùng mặc định. */
+  isDefault: boolean;
+  updatedAt: string | null;
+  updatedBy: string | null;
+  /** Cảnh báo thấp hơn mức tối thiểu; không chặn lưu. */
+  warnings: string[];
+}
+
 export interface DeliveryInspectionRoleConfigDTO {
   roleCode: string;
   roleName: string;
