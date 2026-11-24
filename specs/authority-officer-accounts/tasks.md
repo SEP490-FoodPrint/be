@@ -37,6 +37,6 @@ Chia 2 PR: **PR A** (`feat/authority-officer-accounts`) gồm Phase 2–4 và t�
 ## Phase 7: Tài liệu & kiểm thử
 
 - [x] T012 `src/modules/README.md`, `docs/AUTHORIZATION.md`, `docs/ONBOARDING.md`, `docs/AUTH_SESSIONS.md`, `docs/EMAIL_VERIFICATION.md` (PR A đã cập nhật README, AUTHORIZATION, ONBOARDING).
-- [ ] T013 Unit tests (thêm file mới vào `test:unit`).
-- [ ] T014 Integration + migration tests.
-- [ ] T015 `npm run validate`, `test:unit`, `test:local:migrations`, `test:local:authorization`, spec gate; ghi kết quả thật.
+- [x] T013 Unit tests (thêm file mới vào `test:unit`).
+- [x] T014 Integration + migration tests.
+- [x] T015 `npm run validate`, `test:unit`, `test:local:migrations`, `test:local:authorization`, spec gate; ghi kết quả thật.

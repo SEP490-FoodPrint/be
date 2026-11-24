@@ -1208,7 +1208,7 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
           );
         await assert.rejects(
           empty.query(
-            "INSERT INTO foodprint.users(role_id,role_code,username,password_hash,full_name,status) SELECT id,code,'no-email','fixture','No email','UNVERIFIED' FROM foodprint.roles WHERE code<>'COMMUNE_FOOD_SAFETY_OFFICER' LIMIT 1",
+            "WITH r AS (INSERT INTO foodprint.roles(code,name,type) VALUES ('NO_EMAIL_FIXTURE','Fixture','SYSTEM') RETURNING id,code) INSERT INTO foodprint.users(role_id,role_code,username,password_hash,full_name,status) SELECT id,code,'no-email','fixture','No email','UNVERIFIED' FROM r",
           ),
           (error) => sqlState(error, "23514", "chk_users_email_required"),
         );
