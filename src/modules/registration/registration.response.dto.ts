@@ -2,7 +2,7 @@ export interface RegistrationApplicantResponseDTO {
   id: string;
   username: string;
   fullName: string;
-  email: string;
+  email: string | null;
   phone: string | null;
   status: "UNVERIFIED" | "ACTIVE" | "INACTIVE" | "LOCKED" | "DEACTIVATED";
   emailVerifiedAt: string | null;

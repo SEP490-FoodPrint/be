@@ -9,7 +9,11 @@ import {
   databaseOperation,
 } from "../../utils/authorization";
 import { authSessions, type AuthSessions } from "../../utils/auth-sessions";
-import { loadSessionUser } from "../../utils/session-identity";
+import {
+  emailSetupFirst,
+  loadSessionUser,
+  requiresEmailSetup,
+} from "../../utils/session-identity";
 import { HttpError } from "../../utils/http-error";
 import { requireJwtSecret } from "../../utils/jwt";
 import {
@@ -26,7 +30,7 @@ import type { VerificationMailer } from "../../utils/verification-email";
 
 export interface PasswordAccount {
   id: string;
-  email: string;
+  email: string | null;
   passwordHash: string;
   status: string;
 }
@@ -89,8 +93,11 @@ export function passwordFingerprint(...values: string[]) {
     .update(JSON.stringify(["foodprint:password-reset", ...values]))
     .digest("hex");
 }
-const eligible = (user: PasswordAccount | null): user is PasswordAccount =>
-  Boolean(user && ["ACTIVE", "UNVERIFIED"].includes(user.status));
+// Accounts without an email (ATTP officer before email setup) cannot use email-based recovery.
+const eligible = (
+  user: PasswordAccount | null,
+): user is PasswordAccount & { email: string } =>
+  Boolean(user?.email && ["ACTIVE", "UNVERIFIED"].includes(user.status));
 const invalidCode = () =>
   new HttpError(
     400,
@@ -211,6 +218,7 @@ export function createPasswordService(
         passwordFingerprint("change", user.id),
       );
       if (wait > 0) throw new PasswordRateLimitError(wait);
+      if (requiresEmailSetup(user)) throw emailSetupFirst();
       const current = await db.find(user.email);
       if (!eligible(current) || current.id !== user.id)
         throw new HttpError(403, "Không thể xác minh tài khoản hiện tại");
@@ -222,6 +230,7 @@ export function createPasswordService(
       currentPassword: string,
       newPassword: string,
     ): Promise<void> {
+      if (requiresEmailSetup(user)) throw emailSetupFirst();
       const wait = await grants.limitChange(
         passwordFingerprint("change", user.id),
       );

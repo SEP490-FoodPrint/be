@@ -28,7 +28,7 @@ export interface ReviewResponseDTO extends OnboardingResponseDTO {
     id: string;
     username: string;
     fullName: string;
-    email: string;
+    email: string | null;
     phone: string | null;
     status: "UNVERIFIED" | "ACTIVE" | "INACTIVE" | "LOCKED" | "DEACTIVATED";
     emailVerifiedAt: string | null;
@@ -56,6 +56,8 @@ type PublicSession<T> = T extends SessionUser
         rejectionReason: string | null;
       } | null;
       emailVerifiedAt: string | null;
+      /** `true` khi cán bộ ATTP phải cập nhật email trước khi dùng chức năng khác (FR-004). */
+      emailSetupRequired: boolean;
     }
   : never;
 export type SessionUserResponseDTO = PublicSession<SessionUser>;

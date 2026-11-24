@@ -33,6 +33,8 @@ await fetch("http://localhost:5000/api/auth/email-verification/verify", {
 
 Response signup giữ `user` và `onboardingRequired: true`, bổ sung `emailVerificationRequired: true` và `verificationEmailSent`. Giá trị true nghĩa là Resend đã chấp nhận yêu cầu, chưa bảo đảm email đã tới hộp thư. Nếu gửi thất bại, signup vẫn trả 201 với verificationEmailSent=false vì tài khoản đã được tạo; frontend dùng endpoint request thay vì đăng ký lại. Lỗi tạo tài khoản vẫn giữ 409/503 như trước.
 
+Cán bộ ATTP cập nhật email lần đầu dùng endpoint riêng `/api/auth/email-setup/*` sau khi đăng nhập ([AUTH_SESSIONS.md](AUTH_SESSIONS.md)), cùng kho OTP và giới hạn; mỗi tài khoản một thử thách, mã gắn với cả tài khoản và email đích.
+
 ## Mã và giới hạn
 
 - Dùng crypto.randomInt, mã có hiệu lực 10 phút và dùng một lần. Redis chỉ giữ HMAC-SHA256 cùng userId, nonce, attempts và expiresAt; không lưu mã thô hoặc địa chỉ email.

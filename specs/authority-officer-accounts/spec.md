@@ -93,7 +93,7 @@
 
 ### Functional Requirements
 
-- **FR-001**: Migration MUST cho phép `users.email` NULL chỉ khi `role_code = 'COMMUNE_FOOD_SAFETY_OFFICER'`, `status = 'UNVERIFIED'` và `email_verified_at IS NULL` (CHECK); UNIQUE email giữ nguyên.
+- **FR-001**: Migration MUST cho phép `users.email` NULL chỉ khi `role_code = 'COMMUNE_FOOD_SAFETY_OFFICER'`, `status <> 'ACTIVE'` (tài khoản chờ email vẫn khóa/vô hiệu hóa được) và `email_verified_at IS NULL` (CHECK); UNIQUE email giữ nguyên.
 - **FR-002**: `POST /api/authority-officers` (System Admin, `authority.manage`, kiểm tra lại actor trong transaction) MUST nhận `{locationId, username, password, fullName, phone?}`; phường/xã `level = 2` đang hoạt động; tìm hoặc tạo đơn vị theo phường/xã; từ chối `409` nếu đơn vị đã có tài khoản ATTP; tạo tài khoản `UNVERIFIED`, `email = null`; xung đột unique (đồng thời) MUST map thành `409`.
 - **FR-003**: `GET /api/authority-officers` và `GET /api/authority-officers/:userId` (System Admin) MUST trả tài khoản ATTP kèm đơn vị, phường/xã, trạng thái và `emailSetupRequired`; phân trang, lọc `locationId`, `status`, tìm theo tên/tên đăng nhập.
 - **FR-004**: Phiên của tài khoản ATTP chưa có email MUST báo `emailSetupRequired: true` ở `/api/auth/me`; `authenticate` tiếp tục chặn API nghiệp vụ (tài khoản chưa `ACTIVE`); luồng onboarding trường/NCC MUST không áp dụng cho tài khoản này.

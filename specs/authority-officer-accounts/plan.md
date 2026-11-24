@@ -19,10 +19,10 @@ Express + TypeScript strict (CommonJS), Prisma 7, PostgreSQL 18. Tái sử dụn
 
 ## Data Model
 
-Migration `prisma/migrations/20261205000100_authority_officer_accounts/migration.sql`:
+Migration `prisma/migrations/20261208000100_authority_officer_accounts/migration.sql`:
 
 - `ALTER TABLE foodprint.users ALTER COLUMN email DROP NOT NULL;`
-- `CHECK chk_users_email_required`: `email IS NOT NULL OR (role_code = 'COMMUNE_FOOD_SAFETY_OFFICER' AND status = 'UNVERIFIED' AND email_verified_at IS NULL)`.
+- `CHECK chk_users_email_required`: `email IS NOT NULL OR (role_code = 'COMMUNE_FOOD_SAFETY_OFFICER' AND status <> 'ACTIVE' AND email_verified_at IS NULL)`.
 - Không thêm bảng: đã có `uq_commune_food_safety_units_location_id`, `uq_users_commune_officer`, `uq_users_non_staff_username`, `idx_schools_location_id`.
 
 Prisma: `User.email String? @db.Citext`. Rà các chỗ đọc `user.email` (session/me, mailer, quên mật khẩu, danh sách người dùng, DTO) để xử lý `null` theo kiểu; typecheck chỉ ra đủ vị trí.

@@ -9,7 +9,11 @@ import {
 import { loadSessionUser } from "../../utils/session-identity";
 import { HttpError } from "../../utils/http-error";
 import { authSessions, type AuthSessions } from "../../utils/auth-sessions";
-import { sessionRepository } from "./session.repository";
+import {
+  pendingOfficer,
+  sessionRepository,
+  type LoginMatch,
+} from "./session.repository";
 import type { LoginRequestDTO } from "./auth.request.dto";
 import type { SessionUserResponseDTO } from "./auth.response.dto";
 
@@ -21,7 +25,6 @@ export function toSessionUserResponseDTO(
     id: user.id,
     username: user.username,
     fullName: user.fullName,
-    email: user.email,
     phone: user.phone,
     organizationName: user.organizationName ?? null,
     roleId: user.roleId,
@@ -41,19 +44,32 @@ export function toSessionUserResponseDTO(
       : null,
     emailVerifiedAt: user.emailVerifiedAt?.toISOString() ?? null,
   };
-  return user.status === "ACTIVE"
-    ? {
-        ...common,
-        status: "ACTIVE",
-        onboardingRequired: false,
-        permissions: [...user.permissions],
-      }
-    : {
-        ...common,
-        status: "UNVERIFIED",
-        onboardingRequired: true,
-        communeFoodSafetyUnitId: null,
-      };
+  if (user.status === "ACTIVE")
+    return {
+      ...common,
+      email: user.email,
+      status: "ACTIVE",
+      onboardingRequired: false,
+      emailSetupRequired: false,
+      permissions: [...user.permissions],
+    };
+  if (user.email === null)
+    return {
+      ...common,
+      email: null,
+      status: "UNVERIFIED",
+      onboardingRequired: false,
+      emailSetupRequired: true,
+      registrationRequest: null,
+    };
+  return {
+    ...common,
+    email: user.email,
+    status: "UNVERIFIED",
+    onboardingRequired: true,
+    emailSetupRequired: false,
+    communeFoodSafetyUnitId: null,
+  };
 }
 const dummyHash =
   "$2b$12$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy";
@@ -65,10 +81,18 @@ export function createSessionService(
     async login(input: LoginRequestDTO, previousRefreshToken?: string) {
       return databaseOperation(async () => {
         const db = await connect();
-        const candidate = await sessionRepository.findByEmail(
+        let match: LoginMatch = { email: input.identifier };
+        let candidate = await sessionRepository.findByEmail(
           db,
           input.identifier,
         );
+        if (!candidate) {
+          match = pendingOfficer(input.identifier);
+          candidate = await sessionRepository.findPendingOfficer(
+            db,
+            input.identifier,
+          );
+        }
         const valid = await bcrypt.compare(
           input.password,
           candidate?.passwordHash ?? dummyHash,
@@ -79,7 +103,7 @@ export function createSessionService(
           const current = await sessionRepository.lockPassword(
             tx,
             candidate.id,
-            input.identifier,
+            match,
           );
           if (current?.passwordHash !== candidate.passwordHash)
             throw new HttpError(401, "Email hoặc mật khẩu không đúng");

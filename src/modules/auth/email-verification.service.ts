@@ -17,7 +17,7 @@ import {
 
 export interface VerificationAccount {
   id: string;
-  email: string;
+  email: string | null;
   emailVerifiedAt: Date | null;
   status: string;
   roleCode: string;
@@ -126,7 +126,7 @@ export function createEmailVerificationService(
       if (wait > 0) throw new EmailVerificationRateLimitError(wait);
       const user = await db.find(email);
       // Always reserve limits, even for unknown, verified or ineligible accounts.
-      if (!eligible(user)) return false;
+      if (!eligible(user) || !user.email) return false;
       const code = randomInt(0, 1_000_000).toString().padStart(6, "0");
       const record = {
         id,

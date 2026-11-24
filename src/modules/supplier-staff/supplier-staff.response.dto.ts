@@ -4,7 +4,7 @@ export interface StaffListItem {
   id: string;
   username: string;
   fullName: string;
-  email: string;
+  email: string | null;
   phone: string | null;
   roleCode: "INGREDIENT_SUPPLIER_STAFF";
   roleName: string;
