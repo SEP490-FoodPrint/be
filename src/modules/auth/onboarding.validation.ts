@@ -68,6 +68,8 @@ const common = {
     ),
   phone: optionalText(30),
   address: optionalText(4000),
+  /** Phường/xã (`Location.level = 2`); bắt buộc khi nộp, hồ sơ cũ đã lưu có thể thiếu (`null`). */
+  locationId: requestUuidSchema.nullish().transform((value) => value ?? null),
 };
 export const schoolProfileSchema = z.strictObject({
   ...common,
@@ -80,7 +82,7 @@ export const supplierProfileSchema = z.strictObject({
 });
 export type OrganizationProfile = Pick<
   z.infer<typeof schoolProfileSchema>,
-  "name" | "email" | "phone" | "address"
+  "name" | "email" | "phone" | "address" | "locationId"
 >;
 export type OnboardingProfile =
   | { requestType: "SCHOOL"; profileData: z.infer<typeof schoolProfileSchema> }
@@ -117,6 +119,17 @@ const submissionMetadata = {
     .optional()
     .transform((value) => value ?? null),
 };
+function requireLocation(
+  value: { locationId: string | null },
+  context: z.RefinementCtx,
+) {
+  if (!value.locationId)
+    context.addIssue({
+      code: "custom",
+      path: ["locationId"],
+      message: "Vui lòng chọn phường/xã",
+    });
+}
 function checkRetained(
   value: { retainedDocuments: z.infer<typeof retainedDocumentSchema>[] },
   allowed: Set<string>,
@@ -141,9 +154,10 @@ function checkRetained(
 }
 export const schoolSubmissionSchema = schoolProfileSchema
   .extend(submissionMetadata)
-  .superRefine((value, context) =>
-    checkRetained(value, new Set(["legalDocument"]), context),
-  )
+  .superRefine((value, context) => {
+    requireLocation(value, context);
+    checkRetained(value, new Set(["legalDocument"]), context);
+  })
   .transform(({ retainedDocuments, expectedUpdatedAt, ...profileData }) => ({
     profile: { requestType: "SCHOOL" as const, profileData },
     retained: retainedDocuments,
@@ -151,13 +165,14 @@ export const schoolSubmissionSchema = schoolProfileSchema
   }));
 export const supplierSubmissionSchema = supplierProfileSchema
   .extend(submissionMetadata)
-  .superRefine((value, context) =>
+  .superRefine((value, context) => {
+    requireLocation(value, context);
     checkRetained(
       value,
       new Set(value.certifications.map((_, index) => `certificate_${index}`)),
       context,
-    ),
-  )
+    );
+  })
   .transform(({ retainedDocuments, expectedUpdatedAt, ...profileData }) => ({
     profile: { requestType: "SUPPLIER" as const, profileData },
     retained: retainedDocuments,

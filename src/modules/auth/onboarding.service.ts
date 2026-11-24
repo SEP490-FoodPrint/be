@@ -20,7 +20,16 @@ import {
   type DocumentStorage,
   type OnboardingDocument,
 } from "../../utils/onboarding-documents";
-import { validateOnboarding } from "./onboarding.validation";
+import {
+  validateOnboarding,
+  type OnboardingProfile,
+} from "./onboarding.validation";
+import {
+  assertActiveWard,
+  isActiveWard,
+  toWardLocation,
+  type WardLocationDTO,
+} from "../../utils/ward-location";
 import { retainDocuments } from "./onboarding-submission";
 import { reviewVersion } from "./registration-review";
 import { reviewEmail, submissionEmail } from "./registration-review-email";
@@ -63,7 +72,10 @@ function applicant(user: SessionUser): "SCHOOL" | "SUPPLIER" {
     );
   return user.orgType as "SCHOOL" | "SUPPLIER";
 }
-function view(row: Application): OnboardingResponseDTO {
+function view(
+  row: Application,
+  location: WardLocationDTO | null,
+): OnboardingResponseDTO {
   return {
     id: row.id,
     registrationID: row.code,
@@ -72,6 +84,7 @@ function view(row: Application): OnboardingResponseDTO {
     status: row.status,
     profileData: validateOnboarding(row.profileData, row.requestType)
       .profileData,
+    location,
     submittedAt: row.submittedAt.toISOString(),
     reviewedAt: row.reviewedAt?.toISOString() ?? null,
     rejectionReason: row.rejectionReason,
@@ -87,9 +100,12 @@ function view(row: Application): OnboardingResponseDTO {
     ),
   };
 }
-function reviewView(row: ReviewRow): ReviewResponseDTO {
+function reviewView(
+  row: ReviewRow,
+  location: WardLocationDTO | null,
+): ReviewResponseDTO {
   return {
-    ...view(row),
+    ...view(row, location),
     applicantUser: {
       id: row.applicantUser.id,
       username: row.applicantUser.username,
@@ -105,6 +121,29 @@ function reviewView(row: ReviewRow): ReviewResponseDTO {
       : null,
     reviewVersion: reviewVersion(row),
   };
+}
+/** Phường/xã đã chọn trong hồ sơ để hiển thị (giữ tên kể cả khi nay đã ngừng hoạt động). */
+async function locationOf(
+  client: AuthorizationClient,
+  row: Pick<Application, "profileData" | "requestType">,
+): Promise<WardLocationDTO | null> {
+  const { locationId } = validateOnboarding(
+    row.profileData,
+    row.requestType,
+  ).profileData;
+  if (!locationId) return null;
+  const location = await onboardingRepository.findLocation(client, locationId);
+  return location ? toWardLocation(location) : null;
+}
+/** Khi nộp: phường/xã bắt buộc và phải đang hoạt động (`400` theo trường `locationId`). */
+async function assertSubmittedWard(
+  tx: AuthorizationClient,
+  profile: OnboardingProfile,
+): Promise<WardLocationDTO> {
+  const { locationId } = profile.profileData;
+  return assertActiveWard(
+    locationId ? await onboardingRepository.findLocation(tx, locationId) : null,
+  );
 }
 async function createOrganization<T>(operation: () => Promise<T>): Promise<T> {
   try {
@@ -197,8 +236,12 @@ export function createOnboardingService(
   }
   return {
     async own(user: SessionUser) {
-      const row = await readOwn(user);
-      return row ? view(row) : null;
+      const db = await connect();
+      return databaseOperation(async () => {
+        await loadSessionUser(user.id, db);
+        const row = await onboardingRepository.findOwn(db, user.id);
+        return row ? view(row, await locationOf(db, row)) : null;
+      });
     },
     async submit(
       user: SessionUser,
@@ -251,6 +294,7 @@ export function createOnboardingService(
               409,
               "Hồ sơ đã thay đổi; tải lại trước khi chỉnh sửa",
             );
+          const location = await assertSubmittedWard(tx, profile);
           const previous = current
             ? readDocuments(current.supportingDocuments, user.id)
             : [];
@@ -291,7 +335,10 @@ export function createOnboardingService(
             row.id,
             user.id,
           );
-          return { ...view(row), accountStatus: "UNVERIFIED" as const };
+          return {
+            ...view(row, location),
+            accountStatus: "UNVERIFIED" as const,
+          };
         });
         proofs.scheduleAnchor(proof);
         // The replacement has committed; cleanup failure must not undo or hide submission success.
@@ -335,7 +382,7 @@ export function createOnboardingService(
           id,
         );
         if (!row) throw new HttpError(404, "Không tìm thấy hồ sơ");
-        return reviewView(row);
+        return reviewView(row, await locationOf(db, row));
       });
     },
     async approve(
@@ -356,6 +403,22 @@ export function createOnboardingService(
           expectedVersion,
         );
         const profile = validateOnboarding(row.profileData, row.requestType);
+        // Hồ sơ cũ chưa chọn phường/xã vẫn duyệt được (tổ chức chưa có địa bàn, System Admin gắn sau);
+        // phường/xã đã chọn nhưng nay ngừng hoạt động → 409 để người nộp chọn lại.
+        let location: WardLocationDTO | null = null;
+        if (profile.profileData.locationId) {
+          const selected = await onboardingRepository.findLocation(
+            tx,
+            profile.profileData.locationId,
+          );
+          if (!selected || !isActiveWard(selected))
+            throw new HttpError(
+              409,
+              "Phường/xã trong hồ sơ không còn hoạt động; cần từ chối để người nộp chọn lại",
+              "REGISTRATION_LOCATION_INACTIVE",
+            );
+          location = toWardLocation(selected);
+        }
         const documents = readDocuments(
           row.supportingDocuments,
           row.applicantUserId,
@@ -413,7 +476,7 @@ export function createOnboardingService(
         );
         proof = await proofs.prepareRegistrationApproved(tx, id, actor.id);
         return {
-          ...reviewView(result),
+          ...reviewView(result, location),
           accountStatus: "ACTIVE" as const,
           ...membership,
           emailNotification: {
@@ -459,7 +522,7 @@ export function createOnboardingService(
           reviewEmail(original, rejectionReason),
         );
         return {
-          ...reviewView(row),
+          ...reviewView(row, await locationOf(tx, row)),
           accountStatus: "UNVERIFIED" as const,
           emailNotification: {
             id: notification.id,

@@ -30,7 +30,10 @@ import {
   createSupplierEnforcementRouter,
 } from "../modules/supplier-enforcement/supplier-enforcement.routes";
 import { createSupplierRouter } from "../modules/supplier/supplier.routes";
-import { createAuthorityRouter } from "../modules/authority/authority.routes";
+import {
+  createAuthorityRouter,
+  createOrganizationLocationRouter,
+} from "../modules/authority/authority.routes";
 import { createClassRouter } from "../modules/class/class.routes";
 import { createSchoolGradeRouter } from "../modules/school-grade/school-grade.routes";
 import { createSourceFacilityRouter } from "../modules/source-facility/source-facility.routes";
@@ -117,6 +120,10 @@ export function createApiRouter(
     "/suppliers/:supplierId/certifications",
     createSupplierCertificationsChildRouter(undefined, authHandler),
   );
+  router.use(
+    "/schools",
+    createOrganizationLocationRouter("school", undefined, authHandler),
+  );
   router.use("/schools", createOrganizationRouter(undefined, authHandler));
   router.use(
     "/schools/me/academic-years",
@@ -158,6 +165,10 @@ export function createApiRouter(
   router.use(
     "/supplier-enforcement-actions",
     createSupplierEnforcementRouter(undefined, authHandler),
+  );
+  router.use(
+    "/suppliers",
+    createOrganizationLocationRouter("supplier", undefined, authHandler),
   );
   router.use("/suppliers", createSupplierRouter(undefined, authHandler));
   router.use(

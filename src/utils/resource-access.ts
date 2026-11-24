@@ -80,6 +80,7 @@ export const RESOURCE_PERMISSIONS = {
   "food-safety-incident": ["food_safety_incident.view"],
   supplier: ["supplier.view", "supplier.manage"],
   authority: ["authority.view", "food_safety_report.view"],
+  "authority-school": ["authority_school.view"],
   class: ["class.view"],
   "school-grade": ["class.manage"],
   "source-facility": ["source_facility.manage"],
@@ -351,6 +352,24 @@ export const listScopes = {
     assertPermission(p, ...RESOURCE_PERMISSIONS["authority"]);
     if (p.orgType === "SYSTEM") return {};
     if (p.orgType === "AUTHORITY") return { id: authority(p) };
+    throw new HttpError(
+      403,
+      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
+    );
+  },
+  /**
+   * specs/authority-officer-accounts FR-009: cán bộ ATTP xem trường cùng phường/xã với đơn vị mình
+   * (`schools.location_id = unit.location_id`); đơn vị chưa gắn phường/xã → không khớp trường nào.
+   */
+  "authority-school": (p: AuthPrincipal): Prisma.SchoolWhereInput => {
+    assertPermission(p, ...RESOURCE_PERMISSIONS["authority-school"]);
+    if (
+      p.orgType === "AUTHORITY" &&
+      p.role === ROLES.COMMUNE_FOOD_SAFETY_OFFICER
+    )
+      return {
+        location: { communeFoodSafetyUnits: { some: { id: authority(p) } } },
+      };
     throw new HttpError(
       403,
       "Loại tổ chức không có phạm vi truy cập tài nguyên này",

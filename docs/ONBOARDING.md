@@ -13,7 +13,7 @@ Người nộp được sửa hồ sơ PENDING hoặc gửi lại hồ sơ REJEC
 
 ## Trường dữ liệu
 
-Chỉ `name` bắt buộc cho cả hai loại. Trường tùy chọn bị bỏ qua, null hoặc chuỗi rỗng được lưu null. Chuỗi được trim; email được lowercase.
+`name` và `locationId` (phường/xã) bắt buộc cho cả hai loại. Trường tùy chọn bị bỏ qua, null hoặc chuỗi rỗng được lưu null. Chuỗi được trim; email được lowercase.
 
 | Trường         | Nhà trường | Nhà cung cấp          | Giới hạn                |
 | -------------- | ---------- | --------------------- | ----------------------- |
@@ -23,7 +23,10 @@ Chỉ `name` bắt buộc cho cả hai loại. Trường tùy chọn bị bỏ q
 | email          | Tùy chọn   | Tùy chọn              | Email hợp lệ, 254 ký tự |
 | phone          | Tùy chọn   | Tùy chọn              | 30 ký tự                |
 | address        | Tùy chọn   | Tùy chọn              | 4000 ký tự              |
+| locationId     | Bắt buộc   | Bắt buộc              | UUID phường/xã          |
 | certifications | Không nhận | Tùy chọn, mặc định [] | Tối đa 20 mục           |
+
+`locationId` là `Location` cấp phường/xã (`level = 2`) đang hoạt động, lấy từ danh mục `GET /api/schools/public/locations` (có `level`, `parentId`); sai hoặc ngừng hoạt động → `400` theo trường `locationId` ([specs/authority-officer-accounts](../specs/authority-officer-accounts/spec.md) FR-007). Response hồ sơ (người nộp và System Admin) trả thêm `location {id, code, name}`. Khi duyệt, trường/NCC được tạo với `location_id` này; nhờ đó trường tự thuộc địa bàn đơn vị ATTP của phường/xã. Hồ sơ nộp trước tính năng (chưa có `locationId`) vẫn duyệt được và tổ chức chưa có phường/xã (System Admin gắn sau qua `PUT /api/schools/:schoolId/location` hoặc `PUT /api/suppliers/:supplierId/location`); phường/xã đã chọn nhưng nay ngừng hoạt động → duyệt trả `409 REGISTRATION_LOCATION_INACTIVE`.
 
 Mỗi chứng nhận có certificationType và certificateNo bắt buộc, tối đa 120 ký tự; số chứng nhận không trùng trong một hồ sơ. issuedDate/expiryDate tùy chọn dạng YYYY-MM-DD, phải tồn tại trong lịch; khi có cả hai, expiryDate >= issuedDate. Frontend bỏ các hàng trống chưa sử dụng trước khi gửi. websiteUrl không thuộc hai form hiện tại và không được nhận ở API này.
 

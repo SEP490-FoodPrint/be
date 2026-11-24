@@ -6641,6 +6641,24 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
     },
   );
   const onboardingAccounts = new Map<string, { id: string; cookie: string }>();
+  // Hồ sơ đăng ký bắt buộc chọn phường/xã (specs/authority-officer-accounts FR-007).
+  const onboardingProvince = await db.location.create({
+    data: {
+      code: `P-ONB-${randomUUID()}`,
+      name: "Tỉnh đăng ký",
+      type: "PROVINCE",
+      level: 1,
+    },
+  });
+  const onboardingWard = await db.location.create({
+    data: {
+      code: `W-ONB-${randomUUID()}`,
+      name: "Phường đăng ký",
+      type: "WARD",
+      level: 2,
+      parentId: onboardingProvince.id,
+    },
+  });
   for (const [requestType, roleCode] of [
     ["SCHOOL", "SCHOOL_ADMINISTRATION"],
     ["SUPPLIER", "INGREDIENT_SUPPLIER_ADMIN"],
@@ -7159,6 +7177,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           "profile",
           JSON.stringify({
             name: "New supplier from Figma",
+            locationId: onboardingWard.id,
             certifications: [
               {
                 certificationType: "ATTP",
@@ -7185,6 +7204,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             "profile",
             JSON.stringify({
               name: "New school from Figma",
+              locationId: onboardingWard.id,
               code: "ONBOARDING-" + randomUUID(),
             }),
           );
@@ -7517,6 +7537,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         },
         body: JSON.stringify({
           name: "Corrected school",
+          locationId: onboardingWard.id,
           address: "Preserved school profile address",
           code: "ONBOARDING-" + randomUUID(),
         }),
@@ -7583,6 +7604,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           "profile",
           JSON.stringify({
             name: "New supplier from Figma",
+            locationId: onboardingWard.id,
             certifications: [
               {
                 certificationType: "ATTP",
@@ -7756,6 +7778,18 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         assert.match(String(approvedData.reviewVersion), /^[a-f0-9]{64}$/);
         assert.equal(Boolean(approvedData.schoolId), type === "SCHOOL");
         assert.equal(Boolean(approvedData.supplierId), type === "SUPPLIER");
+        assert.equal(record(approvedData.location).id, onboardingWard.id);
+        const organization =
+          type === "SCHOOL"
+            ? await db.school.findUniqueOrThrow({
+                where: { id: String(approvedData.schoolId) },
+                select: { locationId: true },
+              })
+            : await db.supplier.findUniqueOrThrow({
+                where: { id: String(approvedData.supplierId) },
+                select: { locationId: true },
+              });
+        assert.equal(organization.locationId, onboardingWard.id);
         const conflict = results.find((result) => result.status === 409);
         assert(conflict);
         assert.equal(
@@ -7980,7 +8014,10 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
                 ...applicantHeaders(type),
                 "Content-Type": "application/json",
               },
-              body: JSON.stringify({ name: "Cannot reopen" }),
+              body: JSON.stringify({
+                name: "Cannot reopen",
+                locationId: onboardingWard.id,
+              }),
             })
           ).status,
           403,
@@ -11613,6 +11650,133 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       assert.deepEqual(record(data(assigned).location).id, ward.id);
       assert.equal((await assign(unitA.id, admin, ward.id)).status, 200);
       assert.equal((await assign(unitB.id, admin, ward.id)).status, 409);
+
+      // specs/authority-officer-accounts FR-008/FR-009/FR-011: System Admin gắn phường/xã cho
+      // trường/NCC; ATTP xem trường cùng phường/xã và NCC còn hoạt động liên kết với trường.
+      const areaSchool = await db.school.create({
+        data: { name: "AC area school" },
+      });
+      const place = (
+        kind: string,
+        id: string,
+        actor: string,
+        locationId: string,
+      ) => request(`/api/${kind}/${id}/location`, actor, "PUT", { locationId });
+      assert.equal(
+        (await place("schools", areaSchool.id, officer, ward.id)).status,
+        403,
+      );
+      assert.equal(
+        (await place("schools", areaSchool.id, admin, province.id)).status,
+        400,
+      );
+      assert.equal(
+        (await place("schools", randomUUID(), admin, ward.id)).status,
+        404,
+      );
+      const placed = await place("schools", areaSchool.id, admin, ward.id);
+      assert.equal(placed.status, 200);
+      assert.equal(record(data(placed).location).id, ward.id);
+      const areaSupplier = await db.supplier.create({
+        data: { name: "AC supplier A" },
+      });
+      assert.equal(
+        (await place("suppliers", areaSupplier.id, admin, ward.id)).status,
+        200,
+      );
+      assert.equal(
+        (
+          await db.supplier.findUniqueOrThrow({
+            where: { id: areaSupplier.id },
+          })
+        ).locationId,
+        ward.id,
+      );
+      const areaSchools = async (actor: string) => {
+        const response = await request(
+          "/api/commune-food-safety-units/me/schools",
+          actor,
+        );
+        assert.equal(response.status, 200);
+        return (data(response).items as { id: string }[])
+          .map((item) => item.id)
+          .sort();
+      };
+      assert.deepEqual(
+        await areaSchools(officer),
+        [school.id, areaSchool.id].sort(),
+      );
+      assert.deepEqual(await areaSchools(foreignOfficer), []);
+      assert.equal(
+        (await request("/api/commune-food-safety-units/me/schools", board))
+          .status,
+        403,
+      );
+      const linked = async (
+        name: string,
+        status: "ACTIVE" | "SUSPENDED" | "UNLINKED",
+        supplierStatus: "ACTIVE" | "INACTIVE" = "ACTIVE",
+      ) => {
+        const created = await db.supplier.create({
+          data: { name, status: supplierStatus },
+        });
+        const at = new Date("2026-11-20T00:00:00.000Z");
+        await db.schoolSupplierRelationship.create({
+          data: {
+            schoolId: areaSchool.id,
+            supplierId: created.id,
+            status,
+            ...(status === "SUSPENDED"
+              ? { suspendedAt: at, suspensionReason: "Tạm dừng kiểm tra" }
+              : {}),
+            ...(status === "UNLINKED"
+              ? { unlinkedAt: at, unlinkReason: "Hết hợp đồng" }
+              : {}),
+          },
+        });
+        return created.id;
+      };
+      await db.schoolSupplierRelationship.create({
+        data: { schoolId: areaSchool.id, supplierId: areaSupplier.id },
+      });
+      const suspended = await linked("AC supplier B", "SUSPENDED");
+      await linked("AC supplier C", "UNLINKED");
+      await linked("AC supplier D", "ACTIVE", "INACTIVE");
+      const detail = await request(
+        `/api/commune-food-safety-units/me/schools/${areaSchool.id}`,
+        officer,
+      );
+      assert.equal(detail.status, 200);
+      assert.deepEqual(
+        (
+          data(detail).suppliers as {
+            id: string;
+            relationshipStatus: string;
+          }[]
+        ).map((item) => [item.id, item.relationshipStatus]),
+        [
+          [areaSupplier.id, "ACTIVE"],
+          [suspended, "SUSPENDED"],
+        ],
+      );
+      assert.equal(
+        (
+          await request(
+            `/api/commune-food-safety-units/me/schools/${unmappedSchool.id}`,
+            officer,
+          )
+        ).status,
+        404,
+      );
+      assert.equal(
+        (
+          await request(
+            `/api/commune-food-safety-units/me/schools/${areaSchool.id}`,
+            foreignOfficer,
+          )
+        ).status,
+        404,
+      );
 
       // C03 của phụ huynh đã được BGH báo đã xử lý (dựng trực tiếp trong DB).
       const classroom = await db.class.create({

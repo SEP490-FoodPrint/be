@@ -108,6 +108,7 @@ void test("school onboarding requires only name and rejects fields absent from t
       email: null,
       phone: null,
       address: null,
+      locationId: null,
       code: null,
     },
   });
@@ -394,7 +395,25 @@ function editFixture(
 ) {
   const userId = randomUUID(),
     requestId = randomUUID(),
-    documentId = randomUUID();
+    documentId = randomUUID(),
+    wardId = randomUUID(),
+    inactiveWardId = randomUUID();
+  const wards = new Map([
+    [
+      wardId,
+      { id: wardId, code: "W-01", name: "Phường 1", level: 2, isActive: true },
+    ],
+    [
+      inactiveWardId,
+      {
+        id: inactiveWardId,
+        code: "W-02",
+        name: "Phường 2",
+        level: 2,
+        isActive: false,
+      },
+    ],
+  ]);
   const version = new Date("2026-10-31T08:00:00.000Z");
   const document: OnboardingDocument = {
     id: documentId,
@@ -501,6 +520,12 @@ function editFixture(
           RegistrationRequestAsApplicantUser: null,
         }),
     },
+    location: {
+      findUnique: ({ where }: { where: { id: string } }) =>
+        Promise.resolve(
+          wards.get(where.id as ReturnType<typeof randomUUID>) ?? null,
+        ),
+    },
     registrationRequest: {
       findUnique: () => Promise.resolve(status ? structuredClone(row) : null),
       findMany: () => Promise.resolve([]),
@@ -539,6 +564,8 @@ function editFixture(
     row,
     user,
     document,
+    wardId,
+    inactiveWardId,
     removed,
     uploaded,
     notifications,
@@ -561,8 +588,9 @@ function editFixture(
           proofs,
         ).submit(
           actor,
+          // Mặc định chọn phường/xã đang hoạt động; test có thể ghi đè `locationId`.
           readSubmission(
-            body,
+            { locationId: wardId, ...(body as Record<string, unknown>) },
             actor.orgType === "SCHOOL" ? "SCHOOL" : "SUPPLIER",
           ),
           files,
@@ -751,6 +779,7 @@ void test("several distinct retained files can share a certificate field", () =>
   const result = readSubmission(
     {
       name: "Supplier",
+      locationId: randomUUID(),
       certifications: [{ certificationType: "ISO", certificateNo: "ISO" }],
       retainedDocuments: ids.map((id) => ({ id, field: "certificate_0" })),
     },
@@ -924,7 +953,10 @@ void test("registration codes cannot be assigned at any strict input depth and e
     },
   );
   assert.doesNotThrow(() =>
-    readSubmission({ name: "registrationID is ordinary text" }, "SUPPLIER"),
+    readSubmission(
+      { name: "registrationID is ordinary text", locationId: randomUUID() },
+      "SUPPLIER",
+    ),
   );
 });
 
@@ -979,4 +1011,45 @@ void test("HTTP rejects code assignment in JSON and multipart before any databas
   assert.equal(reads, 0);
   assert.deepEqual(fixture.uploaded, []);
   assert.equal(fixture.writes(), 0);
+});
+
+void test("submission requires an active ward, stores it in the profile and returns the ward", async () => {
+  const fixture = editFixture(null);
+  const body = {
+    name: "Supplier",
+    certifications: [],
+  };
+  // Thiếu phường/xã bị chặn ở bước kiểm tra đầu vào (đồng bộ), trước mọi truy cập DB.
+  assert.throws(
+    () => fixture.service.submit(fixture.user, { ...body, locationId: null }),
+    (error: unknown) =>
+      error instanceof RequestValidationError &&
+      error.fields.some((issue) => issue.field === "locationId"),
+  );
+  await assert.rejects(
+    fixture.service.submit(fixture.user, {
+      ...body,
+      locationId: fixture.inactiveWardId,
+    }),
+    (error: unknown) =>
+      error instanceof RequestValidationError &&
+      error.fields.some((issue) => issue.field === "locationId"),
+  );
+  await assert.rejects(
+    fixture.service.submit(fixture.user, {
+      ...body,
+      locationId: randomUUID(),
+    }),
+    (error: unknown) =>
+      error instanceof RequestValidationError &&
+      error.fields.some((issue) => issue.field === "locationId"),
+  );
+  assert.equal(fixture.writes(), 0);
+  const result = await fixture.service.submit(fixture.user, body);
+  assert.equal(result.profileData.locationId, fixture.wardId);
+  assert.deepEqual(result.location, {
+    id: fixture.wardId,
+    code: "W-01",
+    name: "Phường 1",
+  });
 });

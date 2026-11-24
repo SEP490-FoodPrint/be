@@ -8,6 +8,10 @@ import type {
   CertificationInput,
 } from "./onboarding.validation";
 import { registrationApplicantSelect } from "../registration/registration.select";
+import {
+  wardLocationSelect,
+  type WardLocationRow,
+} from "../../utils/ward-location";
 
 export const applicationSelect = {
   id: true,
@@ -139,6 +143,16 @@ export const onboardingRepository = {
       select: applicationSelect,
     });
   },
+  /** Phường/xã đã chọn trong hồ sơ (kiểm tra cấp/hoạt động ở service). */
+  findLocation(
+    client: AuthorizationClient,
+    id: string,
+  ): Promise<WardLocationRow | null> {
+    return client.location.findUnique({
+      where: { id },
+      select: wardLocationSelect,
+    });
+  },
   createSchool(
     tx: AuthorizationClient,
     profile: OrganizationProfile & { code: string | null },
@@ -150,6 +164,7 @@ export const onboardingRepository = {
         phone: profile.phone,
         address: profile.address,
         code: profile.code,
+        locationId: profile.locationId,
       },
       select: { id: true },
     });
@@ -165,6 +180,7 @@ export const onboardingRepository = {
         phone: profile.phone,
         address: profile.address,
         taxCode: profile.taxCode,
+        locationId: profile.locationId,
       },
       select: { id: true },
     });

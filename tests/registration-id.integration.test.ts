@@ -51,6 +51,23 @@ void test("registration numbers are unique across concurrent real submissions an
   const db = await getPrisma();
   context.after(() => db.$disconnect());
   await bootstrapAuthorization(db);
+  // Hồ sơ đăng ký bắt buộc chọn phường/xã đang hoạt động (specs/authority-officer-accounts FR-007).
+  const province = await db.location.create({
+    data: { code: "P-REG", name: "Tỉnh REG", type: "PROVINCE", level: 1 },
+  });
+  const ward = await db.location.create({
+    data: {
+      code: "W-REG",
+      name: "Phường REG",
+      type: "WARD",
+      level: 2,
+      parentId: province.id,
+    },
+  });
+  const submission = (
+    body: Record<string, unknown>,
+    type: "SCHOOL" | "SUPPLIER",
+  ) => validateSubmission({ locationId: ward.id, ...body }, type);
   const schoolRole = await db.role.findUniqueOrThrow({
     where: { code: "SCHOOL_ADMINISTRATION" },
   });
@@ -95,7 +112,7 @@ void test("registration numbers are unique across concurrent real submissions an
       let retries = 0;
       const settled = await Promise.allSettled(
         principals.slice(0, 100).map(async (user) => {
-          const input = validateSubmission(
+          const input = submission(
             { name: user.fullName },
             user.orgType === "SCHOOL" ? "SCHOOL" : "SUPPLIER",
           );
@@ -179,7 +196,7 @@ void test("registration numbers are unique across concurrent real submissions an
       );
       const result = await service.submit(
         principals[100],
-        validateSubmission({ name: "After rollback" }, "SCHOOL"),
+        submission({ name: "After rollback" }, "SCHOOL"),
       );
       const stored = await db.registrationRequest.findUniqueOrThrow({
         where: { id: result.id },
@@ -210,7 +227,7 @@ void test("registration numbers are unique across concurrent real submissions an
       );
       const after = await service.submit(
         principals[102],
-        validateSubmission({ name: "After boundary" }, "SCHOOL"),
+        submission({ name: "After boundary" }, "SCHOOL"),
       );
       assert.match(after.registrationID, /^FP-RG-[0-9]{5}$/);
     },
@@ -221,7 +238,7 @@ void test("registration numbers are unique across concurrent real submissions an
       const applicant = principals[103];
       const submitted = await service.submit(
         applicant,
-        validateSubmission({ name: "Lifecycle" }, "SUPPLIER"),
+        submission({ name: "Lifecycle" }, "SUPPLIER"),
       );
       const adminRole = await db.role.findUniqueOrThrow({
         where: { code: "SYSTEM_ADMIN" },
@@ -263,7 +280,7 @@ void test("registration numbers are unique across concurrent real submissions an
       ).rows[0].last_value;
       const edited = await service.submit(
         applicant,
-        validateSubmission(
+        submission(
           {
             name: "Edited",
             expectedUpdatedAt: submitted.updatedAt,
@@ -280,7 +297,7 @@ void test("registration numbers are unique across concurrent real submissions an
       assert.equal(rejected.registrationID, submitted.registrationID);
       const resubmitted = await service.submit(
         applicant,
-        validateSubmission({ name: "Resubmitted" }, "SUPPLIER"),
+        submission({ name: "Resubmitted" }, "SUPPLIER"),
       );
       assert.equal(resubmitted.registrationID, submitted.registrationID);
       const approved = await service.approve(actor, {
@@ -289,6 +306,20 @@ void test("registration numbers are unique across concurrent real submissions an
       });
       assert.equal(approved.registrationID, submitted.registrationID);
       assert.equal(approved.id, submitted.id);
+      assert.deepEqual(approved.location, {
+        id: ward.id,
+        code: "W-REG",
+        name: "Phường REG",
+      });
+      assert.equal(
+        (
+          await db.supplier.findUniqueOrThrow({
+            where: { id: approved.supplierId },
+            select: { locationId: true },
+          })
+        ).locationId,
+        ward.id,
+      );
       assert.equal(
         await db.emailOutbox.count({ where: { registrationId: submitted.id } }),
         4,

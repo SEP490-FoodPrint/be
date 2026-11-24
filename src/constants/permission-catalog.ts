@@ -547,6 +547,14 @@ export const INITIAL_PERMISSIONS = [
     description: "Gắn đơn vị ATTP với phường/xã phụ trách.",
   },
   {
+    code: "authority_school.view",
+    name: "Xem trường thuộc địa bàn ATTP",
+    module: "authority",
+    action: "view_schools",
+    description:
+      "Cán bộ ATTP xem danh sách, chi tiết trường cùng phường/xã và NCC liên kết với trường.",
+  },
+  {
     code: "food_safety_incident.view",
     name: "Xem sự cố an toàn thực phẩm",
     module: "food_safety_incident",
@@ -878,7 +886,6 @@ export const INITIAL_ROLE_PERMISSIONS = [
   ["INGREDIENT_SUPPLIER_STAFF", "supply_request.accept"],
   ["INGREDIENT_SUPPLIER_STAFF", "ingredient_quality_feedback.view_details"],
   ["INGREDIENT_SUPPLIER_STAFF", "ingredient_quality_feedback.respond"],
-  ["COMMUNE_FOOD_SAFETY_OFFICER", "dashboard.view"],
   ["COMMUNE_FOOD_SAFETY_OFFICER", "food_safety_report.view"],
   ["COMMUNE_FOOD_SAFETY_OFFICER", "food_safety_report.receive"],
   ["COMMUNE_FOOD_SAFETY_OFFICER", "food_safety_incident.view"],
@@ -886,6 +893,7 @@ export const INITIAL_ROLE_PERMISSIONS = [
   ["COMMUNE_FOOD_SAFETY_OFFICER", "supplier_enforcement.request"],
   ["COMMUNE_FOOD_SAFETY_OFFICER", "authority_complaint.view"],
   ["COMMUNE_FOOD_SAFETY_OFFICER", "authority_complaint.respond"],
+  ["COMMUNE_FOOD_SAFETY_OFFICER", "authority_school.view"],
   ["SYSTEM_ADMIN", "role.view"],
   ["SYSTEM_ADMIN", "permission.view"],
   ["SYSTEM_ADMIN", "permission.create"],
