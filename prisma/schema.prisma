@@ -1757,7 +1757,7 @@ model User {
   supplierId                                   String?                      @map("supplier_id") @db.Uuid
   communeFoodSafetyUnitId                      String?                      @map("commune_food_safety_unit_id") @db.Uuid
   username                                     String                       @db.VarChar(120)
-  email                                        String                       @db.Citext
+  email                                        String?                      @db.Citext
   passwordHash                                 String                       @map("password_hash") @db.Text
   fullName                                     String                       @map("full_name") @db.VarChar(255)
   phone                                        String?                      @db.VarChar(30)

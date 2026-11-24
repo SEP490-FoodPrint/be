@@ -1198,6 +1198,28 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
           )
         ).rows[0];
         assert.equal(officer.intake_state, "ACTIVE");
+        // specs/authority-officer-accounts FR-001: only a pending officer may have no email.
+        for (const statement of [
+          "UPDATE foodprint.users SET email=NULL,status='ACTIVE' WHERE id=$1",
+          "UPDATE foodprint.users SET email=NULL,status='UNVERIFIED',email_verified_at=now() WHERE id=$1",
+        ])
+          await assert.rejects(empty.query(statement, [officer.id]), (error) =>
+            sqlState(error, "23514", "chk_users_email_required"),
+          );
+        await assert.rejects(
+          empty.query(
+            "WITH r AS (INSERT INTO foodprint.roles(code,name,type) VALUES ('NO_EMAIL_FIXTURE','Fixture','SYSTEM') RETURNING id,code) INSERT INTO foodprint.users(role_id,role_code,username,password_hash,full_name,status) SELECT id,code,'no-email','fixture','No email','UNVERIFIED' FROM r",
+          ),
+          (error) => sqlState(error, "23514", "chk_users_email_required"),
+        );
+        await empty.query(
+          "UPDATE foodprint.users SET email=NULL,status='UNVERIFIED' WHERE id=$1",
+          [officer.id],
+        );
+        await empty.query(
+          "UPDATE foodprint.users SET email='officer-one@example.test',status='INACTIVE' WHERE id=$1",
+          [officer.id],
+        );
         await assert.rejects(
           empty.query(
             "INSERT INTO foodprint.users(role_id,role_code,commune_food_safety_unit_id,username,email,password_hash,full_name,status) VALUES ($1,'COMMUNE_FOOD_SAFETY_OFFICER',$2,'officer-two','officer-two@example.test','fixture','Officer','DEACTIVATED')",

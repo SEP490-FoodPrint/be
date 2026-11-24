@@ -1,3 +1,4 @@
+import { requireAccountEmail } from "../../utils/account-email";
 import {
   readEmailAppUrl,
   readEmailLogoUrl,
@@ -70,7 +71,7 @@ export function reviewEmail(row: ReviewRow, rejectionReason?: string) {
         ...loginAction(),
       };
   return {
-    recipientEmail: row.applicantUser.email,
+    recipientEmail: requireAccountEmail(row.applicantUser.email),
     subject,
     ...render(content),
   };
@@ -78,12 +79,12 @@ export function reviewEmail(row: ReviewRow, rejectionReason?: string) {
 
 export function submissionEmail(
   row: Application,
-  recipient: { fullName: string; email: string },
+  recipient: { fullName: string; email: string | null },
 ) {
   const registrationID = row.code;
   const subject = `[FoodPrint] Đã tiếp nhận hồ sơ ${registrationID}`;
   return {
-    recipientEmail: recipient.email,
+    recipientEmail: requireAccountEmail(recipient.email),
     subject,
     ...render({
       title: subject,

@@ -609,7 +609,7 @@ void test("a malformed old refresh cookie does not prevent a successful new logi
 
 type SessionIdentity = NonNullable<
   Parameters<typeof sessionUserFromIdentity>[0]
->;
+> & { email: string };
 function unverifiedIdentity(): SessionIdentity {
   return {
     id: testAdmin.id,
@@ -641,6 +641,8 @@ type LoginQuery = {
   where: {
     id?: string;
     email?: string;
+    username?: string;
+    roleCode?: string;
     OR?: { username?: string; email?: string }[];
   };
   select: Record<string, unknown>;
@@ -676,6 +678,12 @@ function emailLoginFixture(accounts: LoginAccount[], beforeLock?: () => void) {
         return Promise.resolve(project(account, query));
       },
       findFirst(query: LoginQuery) {
+        // Username lookup only matches an ATTP officer without an email; these fixtures all have one.
+        if (query.where.id === undefined) {
+          assert.equal(query.where.email, null);
+          assert.equal(query.where.roleCode, ROLES.COMMUNE_FOOD_SAFETY_OFFICER);
+          return Promise.resolve(null);
+        }
         lockedReads.push(query);
         const account = accounts.find(
           (entry) =>

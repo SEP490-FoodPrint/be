@@ -64,9 +64,9 @@ async function fixture() {
   const { store: codes, records } = memoryEmailVerification(clock);
   const { store: sessionStore } = memorySessions(clock);
   const sessions = createAuthSessions(sessionStore, clock);
-  const account: PasswordAccount = {
+  const account: PasswordAccount & { email: string } = {
     id: testAdmin.id,
-    email: sessionUser.email,
+    email: sessionUser.email ?? "",
     passwordHash: await bcrypt.hash(oldPassword, 4),
     status: "ACTIVE",
   };

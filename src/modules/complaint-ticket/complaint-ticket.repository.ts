@@ -49,7 +49,7 @@ export interface ComplaintEmailRecipientRow {
   code: string;
   title: string;
   description: string;
-  senderUser: { email: string; fullName: string; status: string };
+  senderUser: { email: string | null; fullName: string; status: string };
   /** Bình luận mới nhất của bên xử lý (bình luận/nội dung xử lý vừa ghi trong cùng transaction). */
   comments: {
     content: string;

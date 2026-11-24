@@ -1,6 +1,7 @@
 import type { Prisma } from "../src/generated/prisma/client";
 import { ROLES } from "../src/constants/roles";
 import { recordLocalTestDatabase } from "./helpers/local-test-database";
+import { withEmail } from "./helpers/account-email";
 import { createSupplierStaffService } from "../src/modules/supplier-staff/supplier-staff.service";
 import {
   createSupplierStaffRepository,
@@ -67,6 +68,7 @@ import { ACCESS_COOKIE, REFRESH_COOKIE } from "../src/utils/auth-cookies";
 import { createOnboardingService } from "../src/modules/auth/onboarding.service";
 import { sessionService } from "../src/modules/auth/session.service";
 import { createSignupService } from "../src/modules/auth/signup.service";
+import { createEmailSetupService } from "../src/modules/auth/email-setup.service";
 import {
   createEmailVerificationService,
   verificationFingerprint,
@@ -204,18 +206,20 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   ) {
     const r = await role(code);
     const username = "user_" + randomUUID().replaceAll("-", "");
-    return db.user.create({
-      data: {
-        roleId: r.id,
-        roleCode: r.code,
-        username,
-        email: username + "@example.test",
-        passwordHash,
-        fullName: code,
-        status: "ACTIVE",
-        ...scope,
-      },
-    });
+    return withEmail(
+      await db.user.create({
+        data: {
+          roleId: r.id,
+          roleCode: r.code,
+          username,
+          email: username + "@example.test",
+          passwordHash,
+          fullName: code,
+          status: "ACTIVE",
+          ...scope,
+        },
+      }),
+    );
   }
   const system = await user("SYSTEM_ADMIN");
   const adminA = await user("SCHOOL_ADMINISTRATION", { schoolId: schoolA.id });
@@ -388,6 +392,13 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       return Promise.resolve();
     },
   });
+  const emailSetup = createEmailSetupService(emailStore, {
+    assertConfigured() {},
+    send(email, code) {
+      sentCodes.set(email, code);
+      return Promise.resolve();
+    },
+  });
   // External file/email providers are replaced; PostgreSQL, Redis, sessions and HTTP are real.
   const uploadedFiles = new Map<string, OnboardingDocument>();
   let failedUploadField: string | undefined;
@@ -429,6 +440,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         session: sessionService,
         signup: createSignupService(undefined, verification),
         emailVerification: verification,
+        emailSetup,
         password: passwords,
         onboarding: createOnboardingService(getPrisma, testDocumentStorage),
       },
@@ -2727,7 +2739,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           }),
           0,
         );
-        accounts.push(persisted);
+        accounts.push(withEmail(persisted));
       }
       assert.notEqual(accounts[0].id, accounts[1].id);
       assert.deepEqual(
@@ -3285,7 +3297,9 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       const foreignBefore = await db.user.findUniqueOrThrow({
         where: { id: foreign.id },
       });
-      const preservedFields = (account: typeof staff) => ({
+      const preservedFields = (
+        account: Omit<typeof staff, "email"> & { email: string | null },
+      ) => ({
         id: account.id,
         username: account.username,
         email: account.email,
@@ -6872,17 +6886,19 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   async function codeAccount() {
     const id = randomUUID(),
       codeRole = await role("SCHOOL_ADMINISTRATION");
-    return db.user.create({
-      data: {
-        username: "email_" + id,
-        email: id + "@example.test",
-        fullName: "Email test",
-        passwordHash,
-        status: "UNVERIFIED",
-        roleId: codeRole.id,
-        roleCode: codeRole.code,
-      },
-    });
+    return withEmail(
+      await db.user.create({
+        data: {
+          username: "email_" + id,
+          email: id + "@example.test",
+          fullName: "Email test",
+          passwordHash,
+          status: "UNVERIFIED",
+          roleId: codeRole.id,
+          roleCode: codeRole.code,
+        },
+      }),
+    );
   }
   const challengeKey = (email: string) =>
     emailPrefix + "challenge:" + verificationFingerprint("email:" + email);
@@ -11531,8 +11547,8 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
 
       // PR-E: outbox có đúng một email cho mỗi sự kiện (tạo, bình luận bên xử lý, Đã xử lý),
       // gửi tới email người gửi; Tiếp nhận, bình luận người gửi, Hài lòng không tạo email.
-      const kitchenEmail = (
-        await db.user.findUniqueOrThrow({ where: { id: kitchen } })
+      const kitchenEmail = withEmail(
+        await db.user.findUniqueOrThrow({ where: { id: kitchen } }),
       ).email;
       const outbox = await db.emailOutbox.findMany({
         where: { complaintId: ticketId },
@@ -12985,6 +13001,179 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           },
         }),
         "CHECK: LOCK_ACCOUNT cần đợt kiểm tra",
+      );
+    },
+  );
+  await context.test(
+    "ATTP officer accounts: one per ward, username login, email setup, then email login",
+    async () => {
+      const route = "/api/authority-officers";
+      const tag = randomUUID().slice(0, 8);
+      const province = await db.location.create({
+        data: { code: "P-" + tag, name: "Tỉnh", type: "PROVINCE", level: 1 },
+      });
+      const ward = (n: number) =>
+        db.location.create({
+          data: {
+            code: `W${n}-${tag}`,
+            name: `Phường ${n}`,
+            type: "WARD",
+            level: 2,
+            parentId: province.id,
+          },
+        });
+      const [ward1, ward2] = [await ward(1), await ward(2)];
+      const body = (locationId: string, username: string) => ({
+        locationId,
+        username,
+        password: "Officer-123!",
+        fullName: "Cán bộ ATTP",
+      });
+      const create = (
+        locationId: string,
+        username: string,
+        actor = system.id,
+      ) => request(route, actor, "POST", body(locationId, username));
+      const dataOf = (response: { body: unknown }) =>
+        record(record(response.body).data);
+
+      assert.equal((await create(ward1.id, "x-" + tag, adminA.id)).status, 403);
+      assert.equal(
+        (await create(ward1.id, "x-" + tag, officerA.id)).status,
+        403,
+      );
+      assert.equal((await create(province.id, "x-" + tag)).status, 400);
+      const raced = await Promise.all([
+        create(ward1.id, "Attp-A-" + tag),
+        create(ward1.id, "attp-b-" + tag),
+      ]);
+      assert.deepEqual(raced.map((r) => r.status).sort(), [201, 409]);
+      const created = raced.find((r) => r.status === 201);
+      assert(created);
+      const officer = dataOf(created);
+      const username = String(officer.username);
+      assert.equal(username, username.toLowerCase());
+      assert.equal(officer.status, "UNVERIFIED");
+      assert.equal(officer.email, null);
+      assert.equal(officer.emailSetupRequired, true);
+      assert.equal(record(officer.unit).code, "ATTP-" + ward1.code);
+      assert.equal(record(officer.location).id, ward1.id);
+      assert(!("passwordHash" in officer));
+      assert.equal((await create(ward2.id, username)).status, 409);
+      assert.equal(
+        await db.communeFoodSafetyUnit.count({
+          where: { locationId: ward2.id },
+        }),
+        0,
+      );
+      const bare = await db.communeFoodSafetyUnit.create({
+        data: { code: "BARE-" + tag, name: "Bare", locationId: ward2.id },
+      });
+      const reused = await create(ward2.id, "attp-c-" + tag);
+      assert.equal(reused.status, 201);
+      assert.equal(record(dataOf(reused).unit).id, bare.id);
+
+      const listed = await request(
+        `${route}?locationId=${ward1.id}&search=${username}`,
+        system.id,
+      );
+      const items = dataOf(listed).items;
+      assert(Array.isArray(items));
+      assert.equal(items.length, 1);
+      assert.equal(
+        (await request(`${route}/${String(officer.id)}`, system.id)).status,
+        200,
+      );
+      assert.equal(
+        (await request(`${route}/${adminA.id}`, system.id)).status,
+        404,
+      );
+
+      const cookies = (response: { headers: Headers }) => {
+        const value = response.headers
+          .getSetCookie()
+          .map((cookie) => cookie.split(";")[0])
+          .join("; ");
+        const refresh = parseCookie(value)[REFRESH_COOKIE];
+        if (refresh) refreshTokens.push(refresh);
+        return value;
+      };
+      const post = (path: string, payload: unknown, cookie = "") =>
+        http.request("/api/auth" + path, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-CSRF-Protection": "1",
+            ...(cookie ? { Cookie: cookie } : {}),
+          },
+          body: JSON.stringify(payload),
+        });
+      const signIn = (identifier: string) =>
+        post("/login", { identifier, password: "Officer-123!" });
+      const get = (path: string, cookie: string) =>
+        http.request(path, { headers: { Cookie: cookie } });
+
+      const first = await signIn(username);
+      assert.equal(first.status, 200);
+      const pending = cookies(first);
+      const me = record(record((await get("/api/auth/me", pending)).body).data);
+      assert.equal(me.emailSetupRequired, true);
+      assert.equal(me.onboardingRequired, false);
+      assert.equal(me.email, null);
+      assert.equal(
+        (await get("/api/commune-food-safety-units/me/schools", pending))
+          .status,
+        403,
+      );
+      assert.equal((await post("/email-setup/request", {})).status, 401);
+
+      const email = `attp-${tag}@example.test`;
+      assert.equal(
+        (await post("/email-setup/request", { email }, pending)).status,
+        200,
+      );
+      assert.equal(
+        (await post("/email-setup/request", { email }, pending)).status,
+        429,
+      );
+      const code = sentCodes.get(email);
+      assert(code);
+      const wrong = code === "000000" ? "000001" : "000000";
+      for (const bad of [
+        { email, code: wrong },
+        { email: "other-" + email, code },
+      ])
+        assert.equal(
+          (await post("/email-setup/verify", bad, pending)).status,
+          400,
+        );
+      const verified = await post(
+        "/email-setup/verify",
+        { email, code },
+        pending,
+      );
+      assert.equal(verified.status, 200);
+      const active = cookies(verified);
+      assert.equal((await get("/api/auth/me", pending)).status, 401);
+      const after = record(
+        record((await get("/api/auth/me", active)).body).data,
+      );
+      assert.equal(after.status, "ACTIVE");
+      assert.equal(after.emailSetupRequired, false);
+      assert.equal(
+        (await post("/email-setup/request", { email }, active)).status,
+        409,
+      );
+      assert.equal((await signIn(username)).status, 401);
+      const byEmail = await signIn(email);
+      assert.equal(byEmail.status, 200);
+      cookies(byEmail);
+
+      // Email already owned by another account.
+      const second = cookies(await signIn("attp-c-" + tag));
+      assert.equal(
+        (await post("/email-setup/request", { email }, second)).status,
+        409,
       );
     },
   );

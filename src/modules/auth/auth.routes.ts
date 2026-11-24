@@ -19,6 +19,8 @@ import { createProfileController } from "./profile.controller";
 import type { ProfileService } from "./profile.service";
 import { createPasswordController } from "./password.controller";
 import type { PasswordService } from "./password.service";
+import { createEmailSetupController } from "./email-setup.controller";
+import type { EmailSetupService } from "./email-setup.service";
 
 export interface AuthServices {
   session: SessionService;
@@ -28,6 +30,7 @@ export interface AuthServices {
   emailVerification?: EmailVerificationService;
   profile?: ProfileService;
   password?: PasswordService;
+  emailSetup?: EmailSetupService;
 }
 
 export function createAuthRouter(
@@ -57,6 +60,9 @@ export function createAuthRouter(
   );
   router.post("/email-verification/request", emailVerification.request);
   router.post("/email-verification/verify", emailVerification.verify);
+  const emailSetup = createEmailSetupController(services.emailSetup);
+  router.post("/email-setup/request", sessionAuth, emailSetup.request);
+  router.post("/email-setup/verify", sessionAuth, emailSetup.verify);
   router.get("/me", sessionAuth, session.me);
   router.patch(
     "/me",

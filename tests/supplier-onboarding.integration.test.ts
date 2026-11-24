@@ -1,4 +1,5 @@
 import { recordLocalTestDatabase } from "./helpers/local-test-database";
+import { withEmail } from "./helpers/account-email";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { randomUUID } from "node:crypto";
@@ -2442,19 +2443,21 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
         prefix: string,
         org: { schoolId?: string; supplierId?: string },
       ) =>
-        db.user.create({
-          data: {
-            roleId,
-            roleCode,
-            schoolId: org.schoolId ?? null,
-            supplierId: org.supplierId ?? null,
-            username: `${prefix}-${randomUUID().slice(0, 8)}`,
-            email: `${prefix}-${randomUUID().slice(0, 8)}@test.local`,
-            passwordHash,
-            fullName: prefix,
-            status: "ACTIVE",
-          },
-        });
+        withEmail(
+          await db.user.create({
+            data: {
+              roleId,
+              roleCode,
+              schoolId: org.schoolId ?? null,
+              supplierId: org.supplierId ?? null,
+              username: `${prefix}-${randomUUID().slice(0, 8)}`,
+              email: `${prefix}-${randomUUID().slice(0, 8)}@test.local`,
+              passwordHash,
+              fullName: prefix,
+              status: "ACTIVE",
+            },
+          }),
+        );
       const supAdminUserA = await createTestUser(
         supAdminRole.id,
         supAdminRole.code,
@@ -2789,19 +2792,21 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
         tag: string,
         org: { schoolId?: string; supplierId?: string },
       ) =>
-        db.user.create({
-          data: {
-            roleId,
-            roleCode,
-            schoolId: org.schoolId ?? null,
-            supplierId: org.supplierId ?? null,
-            username: `${tag}-${randomUUID().slice(0, 8)}`,
-            email: `${tag}-${randomUUID().slice(0, 8)}@test.local`,
-            passwordHash,
-            fullName: tag,
-            status: "ACTIVE",
-          },
-        });
+        withEmail(
+          await db.user.create({
+            data: {
+              roleId,
+              roleCode,
+              schoolId: org.schoolId ?? null,
+              supplierId: org.supplierId ?? null,
+              username: `${tag}-${randomUUID().slice(0, 8)}`,
+              email: `${tag}-${randomUUID().slice(0, 8)}@test.local`,
+              passwordHash,
+              fullName: tag,
+              status: "ACTIVE",
+            },
+          }),
+        );
       const supStaffRole = await db.role.findUniqueOrThrow({
         where: { code: "INGREDIENT_SUPPLIER_STAFF" },
       });
@@ -3125,19 +3130,21 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
         tag: string,
         org: { schoolId?: string; supplierId?: string },
       ) =>
-        db.user.create({
-          data: {
-            roleId,
-            roleCode,
-            schoolId: org.schoolId ?? null,
-            supplierId: org.supplierId ?? null,
-            username: `${tag}-${randomUUID().slice(0, 8)}`,
-            email: `${tag}-${randomUUID().slice(0, 8)}@test.local`,
-            passwordHash,
-            fullName: tag,
-            status: "ACTIVE",
-          },
-        });
+        withEmail(
+          await db.user.create({
+            data: {
+              roleId,
+              roleCode,
+              schoolId: org.schoolId ?? null,
+              supplierId: org.supplierId ?? null,
+              username: `${tag}-${randomUUID().slice(0, 8)}`,
+              email: `${tag}-${randomUUID().slice(0, 8)}@test.local`,
+              passwordHash,
+              fullName: tag,
+              status: "ACTIVE",
+            },
+          }),
+        );
       const supAdmin1 = await mkActor(
         supAdminRole.id,
         supAdminRole.code,
@@ -3444,24 +3451,26 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
       const schOther = await db.school.create({
         data: { name: "PR3 Other School", code: "SCH-PR3-O" },
       });
-      const mk = (
+      const mk = async (
         r: { id: string; code: string },
         tag: string,
         org: { schoolId?: string; supplierId?: string },
       ) =>
-        db.user.create({
-          data: {
-            roleId: r.id,
-            roleCode: r.code,
-            schoolId: org.schoolId ?? null,
-            supplierId: org.supplierId ?? null,
-            username: `${tag}-${randomUUID().slice(0, 8)}`,
-            email: `${tag}-${randomUUID().slice(0, 8)}@test.local`,
-            passwordHash,
-            fullName: tag,
-            status: "ACTIVE",
-          },
-        });
+        withEmail(
+          await db.user.create({
+            data: {
+              roleId: r.id,
+              roleCode: r.code,
+              schoolId: org.schoolId ?? null,
+              supplierId: org.supplierId ?? null,
+              username: `${tag}-${randomUUID().slice(0, 8)}`,
+              email: `${tag}-${randomUUID().slice(0, 8)}@test.local`,
+              passwordHash,
+              fullName: tag,
+              status: "ACTIVE",
+            },
+          }),
+        );
       const board = await mk(boardRole, "pr3-board", { schoolId: sch.id });
       const kitchen = await mk(kitchenRole, "pr3-kitchen", {
         schoolId: sch.id,

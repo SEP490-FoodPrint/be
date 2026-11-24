@@ -6,8 +6,8 @@ Chia 2 PR: **PR A** (`feat/authority-officer-accounts`) gồm Phase 2–4 và t�
 
 ## Phase 1: Schema
 
-- [ ] T001 Migration `20261205000100_authority_officer_accounts`: `users.email` nullable + `chk_users_email_required` (FR-001).
-- [ ] T002 Prisma `User.email String?`; `prisma:validate`, `prisma:generate`; sửa các chỗ đọc `email` theo typecheck.
+- [x] T001 Migration `20261208000100_authority_officer_accounts`: `users.email` nullable + `chk_users_email_required` (FR-001).
+- [x] T002 Prisma `User.email String?`; `prisma:validate`, `prisma:generate`; sửa các chỗ đọc `email` theo typecheck.
 
 ## Phase 2: Nền tảng quyền
 
@@ -26,17 +26,17 @@ Chia 2 PR: **PR A** (`feat/authority-officer-accounts`) gồm Phase 2–4 và t�
 
 ## Phase 5: Tài khoản ATTP (US1)
 
-- [ ] T008 Module `authority-officer`: tạo, danh sách, chi tiết; mount `/api/authority-officers` (FR-002, FR-003).
+- [x] T008 Module `authority-officer`: tạo, danh sách, chi tiết; mount `/api/authority-officers` (FR-002, FR-003).
 
 ## Phase 6: Email lần đầu (US2)
 
-- [ ] T009 `emailSetupRequired` trong login/`me`; tách khỏi onboarding (FR-004).
-- [ ] T010 `POST /api/auth/email-setup/request|verify` (FR-005).
-- [ ] T011 Đăng nhập: từ chối username khi tài khoản ATTP đã có email (FR-006).
+- [x] T009 `emailSetupRequired` trong login/`me`; tách khỏi onboarding (FR-004).
+- [x] T010 `POST /api/auth/email-setup/request|verify` (FR-005).
+- [x] T011 Đăng nhập: từ chối username khi tài khoản ATTP đã có email (FR-006).
 
 ## Phase 7: Tài liệu & kiểm thử
 
-- [ ] T012 `src/modules/README.md`, `docs/AUTHORIZATION.md`, `docs/ONBOARDING.md`, `docs/AUTH_SESSIONS.md`, `docs/EMAIL_VERIFICATION.md` (PR A đã cập nhật README, AUTHORIZATION, ONBOARDING).
-- [ ] T013 Unit tests (thêm file mới vào `test:unit`).
-- [ ] T014 Integration + migration tests.
-- [ ] T015 `npm run validate`, `test:unit`, `test:local:migrations`, `test:local:authorization`, spec gate; ghi kết quả thật.
+- [x] T012 `src/modules/README.md`, `docs/AUTHORIZATION.md`, `docs/ONBOARDING.md`, `docs/AUTH_SESSIONS.md`, `docs/EMAIL_VERIFICATION.md` (PR A đã cập nhật README, AUTHORIZATION, ONBOARDING).
+- [x] T013 Unit tests (thêm file mới vào `test:unit`).
+- [x] T014 Integration + migration tests.
+- [x] T015 `npm run validate`, `test:unit`, `test:local:migrations`, `test:local:authorization`, spec gate; ghi kết quả thật.

@@ -60,6 +60,7 @@ Tất cả đường dẫn bên dưới dùng phương thức **GET**.
 | `supplier-school`             | `/api/supplier-schools`              | `School`, `SchoolSupplierRelationship` | `SupplierContract`, `SupplierContractItem`, `SupplierContractDocument`, `Ingredient`            |
 | `supplier-staff`              | `/api/supplier-staff`                | `User`, `UserPermissionDenial`         | —                                                                                               |
 | `authority`                   | `/api/commune-food-safety-units`     | `CommuneFoodSafetyUnit`                | `School`, `Supplier`, `SchoolSupplierRelationship`, `Location`                                  |
+| `authority-officer`           | `/api/authority-officers`            | `User`                                 | `CommuneFoodSafetyUnit`, `Location`, `Role`                                                     |
 | `class`                       | `/api/classes`                       | `Class`                                | —                                                                                               |
 | `source-facility`             | `/api/source-facilities`             | `SourceFacility`                       | —                                                                                               |
 | `supplier-certification`      | `/api/supplier-certifications`       | `SupplierCertification`                | —                                                                                               |

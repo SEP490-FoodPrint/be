@@ -77,7 +77,8 @@ export async function queueRequesterEmail(
   event: ComplaintEmailEvent,
 ): Promise<void> {
   const row = await tickets.findEmailRecipient(tx, complaintId);
-  if (!row || row.senderUser.status !== "ACTIVE") return;
+  if (!row || row.senderUser.status !== "ACTIVE" || !row.senderUser.email)
+    return;
   const latest = event === "CREATED" ? undefined : row.comments.at(0);
   const email = buildComplaintEmail(
     {
