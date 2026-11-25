@@ -5,11 +5,7 @@ import { HttpError } from "../utils/http-error";
 import { sendError } from "../utils/response";
 
 export const notFoundHandler: RequestHandler = (req, res) => {
-  return sendError(
-    res,
-    `Endpoint không tồn tại: ${req.method} ${req.path}`,
-    404,
-  );
+  return sendError(res, "Không tìm thấy chức năng này.", 404);
 };
 
 export const globalErrorHandler: ErrorRequestHandler = (
@@ -42,10 +38,11 @@ export const globalErrorHandler: ErrorRequestHandler = (
       err.code ? { code: err.code } : null,
     );
   if (
-    err instanceof Prisma.PrismaClientValidationError ||
-    (err instanceof Prisma.PrismaClientKnownRequestError &&
-      err.code === "P2002")
+    err instanceof Prisma.PrismaClientKnownRequestError &&
+    err.code === "P2002"
   )
+    return sendError(res, "Dữ liệu đã tồn tại.", 400);
+  if (err instanceof Prisma.PrismaClientValidationError)
     return sendError(res, "Dữ liệu không hợp lệ", 400);
   if (
     err !== null &&
@@ -55,6 +52,6 @@ export const globalErrorHandler: ErrorRequestHandler = (
     err.statusCode >= 400 &&
     err.statusCode < 500
   )
-    return sendError(res, "Nội dung yêu cầu không hợp lệ", err.statusCode);
-  return sendError(res, "Lỗi máy chủ nội bộ", 500);
+    return sendError(res, "Thông tin chưa đúng. Kiểm tra lại.", err.statusCode);
+  return sendError(res, "Hệ thống gặp lỗi. Vui lòng thử lại sau.", 500);
 };

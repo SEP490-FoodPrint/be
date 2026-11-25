@@ -39,7 +39,7 @@ export function listQuery(query: Record<string, unknown>) {
 function date(value: unknown): Date | null {
   if (value === undefined || value === null || value === "") return null;
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value))
-    throw new HttpError(400, "Ngày phải có định dạng YYYY-MM-DD.");
+    throw new HttpError(400, "Ngày không hợp lệ.");
   const result = new Date(`${value}T00:00:00.000Z`);
   if (
     !Number.isFinite(result.getTime()) ||
@@ -87,7 +87,7 @@ export const validateIngredientHandlingBody = (value: unknown) =>
 
 export function revision(value: unknown): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1)
-    throw new HttpError(400, "Phiên bản hồ sơ không hợp lệ.");
+    throw new HttpError(400, "Hồ sơ vừa thay đổi. Tải lại trang.");
   return value;
 }
 

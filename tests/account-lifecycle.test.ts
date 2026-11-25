@@ -231,7 +231,7 @@ void test("an ongoing order and missing management permission prevent writes", a
   f.setOngoing(true);
   await assert.rejects(
     f.service.deactivate({ userId }, testAdmin),
-    /IN_PROGRESS/,
+    /còn đơn hàng đang xử lý/,
   );
   await assert.rejects(
     f.service.deactivate({ userId }, { ...testAdmin, permissions: [] }),
@@ -239,7 +239,7 @@ void test("an ongoing order and missing management permission prevent writes", a
   );
   await assert.rejects(
     f.service.deactivate({ userId }, testStaff),
-    /System Admin/i,
+    /Quản trị hệ thống/i,
   );
   assert.equal(f.changed, 0);
 });
@@ -466,7 +466,7 @@ void test("officer deactivation is blocked by any unclosed request and affects o
   f.setOpenReports(true);
   await assert.rejects(
     f.service.deactivate({ userId }, testAdmin),
-    /chưa CLOSED/,
+    /chưa đóng/,
   );
   assert.equal(f.changed, 0);
   f.setOpenReports(false);

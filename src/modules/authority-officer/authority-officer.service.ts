@@ -83,7 +83,10 @@ export function createAuthorityOfficerService(
           role.code !== ROLES.COMMUNE_FOOD_SAFETY_OFFICER ||
           role.type !== "AUTHORITY"
         )
-          throw new HttpError(503, "Cấu hình vai trò cán bộ ATTP không hợp lệ");
+          throw new HttpError(
+            503,
+            "Chưa cấu hình vai trò cán bộ. Liên hệ quản trị.",
+          );
         if (await repository.usernameTaken(tx, input.username))
           throw new HttpError(
             409,

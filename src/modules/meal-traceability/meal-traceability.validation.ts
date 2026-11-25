@@ -12,7 +12,7 @@ export const getMealTraceabilitySchema = z
       .optional(),
     date: z
       .string()
-      .regex(/^\d{4}-\d{2}-\d{2}$/, "date phải có định dạng YYYY-MM-DD")
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "Ngày không hợp lệ.")
       .optional(),
     mealType: z.enum(["LUNCH", "AFTERNOON"]).optional(),
     mealAllocationId: z
@@ -44,7 +44,7 @@ export const getGradeMealTraceabilitySchema = z.strictObject({
   gradeId: z.string().uuid("gradeId phải là định dạng UUID hợp lệ"),
   date: z.iso.date("date phải là ngày hợp lệ theo định dạng YYYY-MM-DD"),
   mealType: z.enum(["LUNCH", "AFTERNOON"], {
-    message: "mealType chỉ nhận LUNCH hoặc AFTERNOON",
+    message: "Bữa ăn không hợp lệ.",
   }),
   schoolCode: z.string().trim().min(1).max(80).optional(),
   verify: z

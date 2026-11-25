@@ -223,7 +223,10 @@ export function createAuthorityComplaintService(
         actor.schoolId !== principal.schoolId ||
         actor.communeFoodSafetyUnitId !== principal.communeFoodSafetyUnitId
       )
-        throw new HttpError(403, "Phạm vi tài khoản đã thay đổi");
+        throw new HttpError(
+          403,
+          "Quyền tài khoản vừa thay đổi. Tải lại trang.",
+        );
       const scope = listScopes["authority-complaint"](actor);
       const target = await repository.findTicketTarget(tx, scope, id);
       if (!target) throw new HttpError(404, NOT_FOUND);
@@ -328,7 +331,10 @@ export function createAuthorityComplaintService(
         SUBMIT_PERMISSION,
         async (tx, actor, schoolId) => {
           if (!isAuthorityRequester(actor))
-            throw new HttpError(403, "Phạm vi tài khoản đã thay đổi");
+            throw new HttpError(
+              403,
+              "Quyền tài khoản vừa thay đổi. Tải lại trang.",
+            );
           const readScope = listScopes["authority-complaint"](actor);
           await repository.lockMealComplaint(tx, input.mealComplaintId);
           const source = await repository.findEscalationSource(

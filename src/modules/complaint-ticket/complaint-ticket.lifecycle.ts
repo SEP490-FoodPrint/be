@@ -140,10 +140,7 @@ export function ticketStatusFilter(
   if (!requesterOnly) return [status];
   if (status === "IN_PROGRESS") return [...REQUESTER_IN_PROGRESS_STATUSES];
   if (status === "RESOLVED" || status === "CLOSED") return [status];
-  throw new HttpError(
-    400,
-    "Trạng thái lọc chỉ nhận IN_PROGRESS, RESOLVED hoặc CLOSED",
-  );
+  throw new HttpError(400, "Bộ lọc trạng thái không hợp lệ.");
 }
 
 export function displayStatus(

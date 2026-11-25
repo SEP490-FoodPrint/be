@@ -39,7 +39,7 @@ export function solveInWorker(
     );
     const timeout = setTimeout(() => {
       void worker.terminate();
-      reject(new HttpError(409, "Tác vụ tính phương án quá thời gian"));
+      reject(new HttpError(409, "Tính quá lâu. Vui lòng thử lại."));
     }, 30000);
     worker.once(
       "message",

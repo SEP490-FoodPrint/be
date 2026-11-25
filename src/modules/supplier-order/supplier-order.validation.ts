@@ -26,13 +26,13 @@ const positiveInteger = (fallback: number) =>
     .default(fallback);
 
 const positiveDecimalQuantitySchema = z
-  .string({ error: "actualQuantity phải là chuỗi số dương" })
+  .string({ error: "Số lượng phải lớn hơn 0." })
   .regex(/^(?:0|[1-9]\d{0,10})(?:\.\d{1,3})?$/, {
     error:
       "actualQuantity chỉ nhận tối đa 11 chữ số nguyên và 3 chữ số thập phân",
   })
   .refine((value) => !/^0(?:\.0{1,3})?$/.test(value), {
-    error: "actualQuantity phải lớn hơn 0",
+    error: "Số lượng phải lớn hơn 0.",
   })
   .transform((value) =>
     value.includes(".") ? value.replace(/0+$/, "").replace(/\.$/, "") : value,
@@ -62,10 +62,10 @@ export const requiredVehiclePlateSchema = z
 export const requiredIsoDateTimeSchema = z.iso
   .datetime({
     offset: true,
-    error: "expectedArrivalAt phải là thời gian ISO8601 có múi giờ",
+    error: "Giờ dự kiến đến chưa đúng.",
   })
   .refine((value) => Number.isFinite(Date.parse(value)), {
-    error: "expectedArrivalAt không hợp lệ",
+    error: "Giờ dự kiến đến chưa đúng.",
   })
   .transform((value) => new Date(value).toISOString());
 
@@ -74,10 +74,10 @@ export const optionalIsoDateTimeSchema = z
     z.iso
       .datetime({
         offset: true,
-        error: "expectedArrivalAt phải là thời gian ISO8601 có múi giờ",
+        error: "Giờ dự kiến đến chưa đúng.",
       })
       .refine((value) => Number.isFinite(Date.parse(value)), {
-        error: "expectedArrivalAt không hợp lệ",
+        error: "Giờ dự kiến đến chưa đúng.",
       })
       .transform((value) => new Date(value).toISOString()),
     z.null(),
@@ -96,9 +96,9 @@ export const supplierOrderIdempotencyHeaderSchema = z.strictObject({
 const optionalLotDateSchema = z
   .union([
     z
-      .string({ error: "Ngày phải có định dạng YYYY-MM-DD" })
+      .string({ error: "Ngày không hợp lệ." })
       .regex(/^\d{4}-\d{2}-\d{2}$/, {
-        error: "Ngày phải có định dạng YYYY-MM-DD",
+        error: "Ngày không hợp lệ.",
       })
       .refine(
         (value) =>
@@ -140,7 +140,7 @@ export const requestSourceSelectionSchema = z
 
 export const createFromRequestBodySchema = z.strictObject({
   sourceType: z.literal("REQUEST", {
-    error: "sourceType phải là REQUEST hoặc STANDALONE",
+    error: "Loại đơn không hợp lệ.",
   }),
   supplyRequestId: requestUuidSchema,
   replacesDeliveryId: requestUuidSchema.nullable().optional(),
@@ -181,7 +181,7 @@ export const standaloneDeliveryItemSchema = z
 
 export const createStandaloneBodySchema = z.strictObject({
   sourceType: z.literal("STANDALONE", {
-    error: "sourceType phải là REQUEST hoặc STANDALONE",
+    error: "Loại đơn không hợp lệ.",
   }),
   schoolId: requestUuidSchema,
   note: optionalTrimmedText(2000, "Ghi chú"),

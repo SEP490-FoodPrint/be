@@ -94,7 +94,7 @@ function checkSameIdentity(current: AuthPrincipal, initial: AuthPrincipal) {
     current.supplierId !== initial.supplierId ||
     current.communeFoodSafetyUnitId !== initial.communeFoodSafetyUnitId
   ) {
-    throw new HttpError(403, "Phạm vi tài khoản đã thay đổi");
+    throw new HttpError(403, "Quyền tài khoản vừa thay đổi. Tải lại trang.");
   }
 }
 
@@ -135,11 +135,14 @@ export function createIntakeAccessService(
         officer.Role.type !== before.Role.type ||
         officer.communeFoodSafetyUnitId !== before.communeFoodSafetyUnitId
       )
-        throw new HttpError(409, "Phạm vi cán bộ đã thay đổi");
+        throw new HttpError(
+          409,
+          "Quyền tài khoản vừa thay đổi. Tải lại trang.",
+        );
       if (
         await repo.hasOpenReports(tx, officerId, before.communeFoodSafetyUnitId)
       )
-        throw new HttpError(409, "Cán bộ còn yêu cầu kiểm tra chưa CLOSED");
+        throw new HttpError(409, "Cán bộ còn yêu cầu kiểm tra chưa đóng.");
       return current;
     },
     /** The caller must write the forwarding in the same transaction after this check. */
@@ -156,7 +159,7 @@ export function createIntakeAccessService(
       const actor = await loadActor(initial.id, tx);
       checkSameIdentity(actor, initial);
       if (actor.orgType !== "SCHOOL" || !actor.schoolId)
-        throw new HttpError(403, "Thao tác yêu cầu phạm vi trường");
+        throw new HttpError(403, "Chức năng chỉ dành cho tài khoản trường.");
       assertPermission(actor, "food_safety_incident.forward");
       const beforeIncident = await repo.readIncident(tx, incidentId);
       if (!beforeIncident || beforeIncident.schoolId !== actor.schoolId)
@@ -191,7 +194,10 @@ export function createIntakeAccessService(
         officer.communeFoodSafetyUnitId !==
           beforeOfficer.communeFoodSafetyUnitId
       )
-        throw new HttpError(409, "Phạm vi cán bộ đã thay đổi");
+        throw new HttpError(
+          409,
+          "Quyền tài khoản vừa thay đổi. Tải lại trang.",
+        );
       if (officer.status !== "ACTIVE")
         throw new HttpError(409, "Tài khoản cán bộ không hoạt động");
       if (officer.intakeState !== "ACTIVE")
@@ -263,7 +269,10 @@ export function createIntakeAccessService(
           member.supplierId !== before.supplierId ||
           member.communeFoodSafetyUnitId !== before.communeFoodSafetyUnitId
         )
-          throw new HttpError(409, "Phạm vi thành viên đã thay đổi");
+          throw new HttpError(
+            409,
+            "Quyền tài khoản vừa thay đổi. Tải lại trang.",
+          );
       }
       const [owner, admin] =
         scope.kind === "SCHOOL"
@@ -299,7 +308,7 @@ export function createIntakeAccessService(
           "SUPPLIER_CREATE_STANDALONE_DELIVERY",
         ].includes(command.operation)
       ) {
-        throw new HttpError(403, "Thao tác chưa hỗ trợ");
+        throw new HttpError(403, "Bạn chưa thể dùng chức năng này.");
       }
       const actor = await loadActor(initial.id, tx);
       checkSameIdentity(actor, initial);
@@ -343,17 +352,11 @@ export function createIntakeAccessService(
           supplierId,
         );
         if (!school || !relationship)
-          throw new HttpError(
-            404,
-            "Không tìm thấy trường học trong tập được phép",
-          );
+          throw new HttpError(404, "Không tìm thấy trường.");
         if (!supplier)
           throw new HttpError(409, "Không tìm thấy đơn vị cung cấp");
         if (relationship.status !== "ACTIVE")
-          throw new HttpError(
-            409,
-            "Quan hệ cung ứng giữa trường và nhà cung cấp không ở trạng thái hoạt động",
-          );
+          throw new HttpError(409, "Trường và nhà cung cấp chưa hợp tác.");
         if (school.status !== "ACTIVE" || supplier.status !== "ACTIVE")
           throw new HttpError(
             409,
@@ -432,10 +435,7 @@ export function createIntakeAccessService(
       let requiredPermission: string;
       if (isContinuation) {
         if (!command.requiredPermission)
-          throw new HttpError(
-            403,
-            "Thao tác chưa hỗ trợ khi thiếu quyền nghiệp vụ",
-          );
+          throw new HttpError(403, "Bạn chưa thể dùng chức năng này.");
         if (
           (actor.orgType !== "SCHOOL" || !actor.schoolId) &&
           (actor.orgType !== "SUPPLIER" || !actor.supplierId)
@@ -461,7 +461,7 @@ export function createIntakeAccessService(
         requiredPermission = "supply_request.accept";
       } else {
         if (actor.orgType !== "SCHOOL" || !actor.schoolId)
-          throw new HttpError(403, "Thao tác yêu cầu trường học");
+          throw new HttpError(403, "Chức năng chỉ dành cho tài khoản trường.");
         requiredPermission = "supply_request.create";
       }
       assertPermission(actor, requiredPermission);
@@ -631,10 +631,7 @@ export function createIntakeAccessService(
             order.supplierId !== supplierId ||
             (order.status !== "ACCEPTED" && order.status !== "IN_PROGRESS")
           ) {
-            throw new HttpError(
-              409,
-              "Đơn đặt hàng nguồn không còn ở trạng thái được phép xuất hàng",
-            );
+            throw new HttpError(409, "Đơn này không còn được phép xuất hàng.");
           }
         }
         const school = await repo.readSchool(tx, before.schoolId);

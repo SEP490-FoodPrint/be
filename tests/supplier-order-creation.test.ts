@@ -494,8 +494,7 @@ void test("đồ lưu kho bắt buộc nhập ngày sản xuất và hạn dùng
       ),
     {
       statusCode: 422,
-      message:
-        "Đồ lưu kho cần nhập ngày sản xuất và hạn sử dụng của lô: Gạo ST25",
+      message: "Nhập ngày sản xuất và hạn dùng: Gạo ST25",
     },
   );
   assert.equal(missing.createdPayloads.length, 0);
@@ -530,7 +529,7 @@ void test("đồ lưu kho bắt buộc nhập ngày sản xuất và hạn dùng
       ),
     {
       statusCode: 422,
-      message: "Hạn sử dụng không được trước hôm nay: Gạo ST25",
+      message: "Đã hết hạn dùng: Gạo ST25",
     },
   );
   assert.equal(expired.createdPayloads.length, 0);
@@ -548,8 +547,7 @@ void test("đồ lưu kho bắt buộc nhập ngày sản xuất và hạn dùng
       ),
     {
       statusCode: 422,
-      message:
-        "Đồ lưu kho cần còn hạn sử dụng ít nhất 7 ngày kể từ hôm nay: Gạo ST25",
+      message: "Hạn dùng phải còn 7 ngày: Gạo ST25",
     },
   );
   assert.equal(shortShelf.createdPayloads.length, 0);

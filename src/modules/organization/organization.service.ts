@@ -305,7 +305,7 @@ export function createOrganizationService(
     ): Promise<OrganizationSummaryResponseDTO> {
       const scope = listScopes.organization(p);
       if (p.role !== ROLES.SYSTEM_ADMIN || p.orgType !== ORG_TYPES.SYSTEM)
-        throw new HttpError(403, "Chỉ System Admin được xem tổng quan");
+        throw new HttpError(403, "Chỉ Quản trị hệ thống được thực hiện.");
       return withReadTransaction(async (tx) => {
         if (!data.summary) throw new HttpError(503, "Không thể tải tổng quan");
         const counts = await data.summary(tx, scope);
@@ -439,7 +439,7 @@ export function createOrganizationService(
           const toInsert = input.roles.map((r) => {
             const roleId = roleIdByCode.get(r.roleCode);
             if (!roleId) {
-              throw new HttpError(400, `Không tìm thấy vai trò: ${r.roleCode}`);
+              throw new HttpError(400, "Vai trò không hợp lệ.");
             }
             return {
               roleId,
@@ -508,10 +508,7 @@ export function createOrganizationService(
     ): Promise<PublicSchoolGradeDTO[]> {
       const school = await data.findSchoolForMenu(schoolCode);
       if (!school) {
-        throw new HttpError(
-          404,
-          `Không tìm thấy trường học với mã: ${schoolCode}`,
-        );
+        throw new HttpError(404, "Không tìm thấy trường.");
       }
       if (!data.findSchoolGrades) return [];
       const grades = await data.findSchoolGrades(school.id);
@@ -539,10 +536,7 @@ export function createOrganizationService(
     ): Promise<PublicDailyMenuDTO | null> {
       const school = await data.findSchoolForMenu(schoolCode);
       if (!school) {
-        throw new HttpError(
-          404,
-          `Không tìm thấy trường học với mã: ${schoolCode}`,
-        );
+        throw new HttpError(404, "Không tìm thấy trường.");
       }
 
       let targetDate: Date;
@@ -638,10 +632,7 @@ export function createOrganizationService(
     ): Promise<PublicWeeklyMenuDTO | null> {
       const school = await data.findSchoolForMenu(schoolCode);
       if (!school) {
-        throw new HttpError(
-          404,
-          `Không tìm thấy trường học với mã: ${schoolCode}`,
-        );
+        throw new HttpError(404, "Không tìm thấy trường.");
       }
 
       const now = new Date();

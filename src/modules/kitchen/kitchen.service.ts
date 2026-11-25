@@ -1,3 +1,4 @@
+import { shortList } from "../../utils/short-list";
 import {
   allergyCountsFromGroups,
   expectedSpecialGroupCounts,
@@ -136,7 +137,7 @@ function storedQuantity(quantity: Prisma.Decimal): string {
     quantity.decimalPlaces() > 3 ||
     quantity.gte("100000000000")
   )
-    throw new HttpError(409, "Lượng phân bổ vượt độ chính xác numeric(14,3)");
+    throw new HttpError(409, "Lượng phân bổ quá lẻ hoặc quá lớn.");
   return quantity.toFixed(3);
 }
 
@@ -153,7 +154,7 @@ export function planCookingBatches(
     !recipe.length ||
     new Set(recipe.map((row) => row.ingredientEntryId)).size !== recipe.length
   )
-    throw new HttpError(409, "Recipe trống hoặc trùng nguyên liệu");
+    throw new HttpError(409, "Công thức trống hoặc trùng nguyên liệu.");
   if (new Set(stock.map((row) => row.id)).size !== stock.length)
     throw new HttpError(409, "Lô nguyên liệu bị trùng");
   const ingredients = recipe.map((row) => ({
@@ -170,10 +171,7 @@ export function planCookingBatches(
       reserved.lt(0) ||
       reserved.gt(available)
     )
-      throw new HttpError(
-        409,
-        "Tồn kho hoặc lượng giữ cho mẻ khác không nhất quán",
-      );
+      throw new HttpError(409, "Tồn kho bị lệch. Hãy kiểm tra kho.");
     return { ...lot, free: available.sub(reserved) };
   });
   const take = (lot: (typeof lots)[number], exact: Prisma.Decimal) => {
@@ -210,7 +208,9 @@ export function planCookingBatches(
       if (!needed.isZero())
         throw new HttpError(
           409,
-          `Không đủ nguyên liệu khả dụng cho nhu cầu đã chốt${ingredient.ingredientName ? `: ${ingredient.ingredientName} thiếu ${needed.toString()} ${ingredient.unit}` : ""}`,
+          ingredient.ingredientName
+            ? `Thiếu ${needed.toString()} ${ingredient.unit} ${ingredient.ingredientName}.`
+            : "Không đủ nguyên liệu.",
         );
     }
     return [plan];
@@ -250,7 +250,7 @@ export function planCookingBatches(
       }
       throw new HttpError(
         409,
-        `Không đủ nguyên liệu để nấu riêng từng lô theo số suất nguyên${ingredient.ingredientName ? `: ${ingredient.ingredientName}` : ""}`,
+        `Không đủ ${ingredient.ingredientName ?? "nguyên liệu"} để nấu riêng từng lô.`,
       );
     });
     const count = Math.min(
@@ -508,10 +508,7 @@ export async function readPlanningStock(
       lot.DeliveryItem.SupplyRequestItem?.ingredientEntryId ??
       null;
     if (!ingredientEntryId) {
-      throw new HttpError(
-        409,
-        "Lô nguyên liệu thiếu liên kết danh mục của trường",
-      );
+      throw new HttpError(409, "Nguyên liệu chưa có trong kho trường.");
     }
     return {
       id: lot.id,
@@ -591,7 +588,7 @@ export async function assertPortionGroupSafety(
   )
     throw new HttpError(
       422,
-      "Nhóm suất cần một nhóm thường, các món đã chọn và nguyên liệu cần tránh cho từng nhóm riêng",
+      "Cần một nhóm thường; nhóm riêng phải chọn món và thứ cần tránh.",
     );
   const spices = await tx.menuMealSeasoning.findMany({
     where: mealKey(meal),
@@ -616,7 +613,7 @@ export async function assertPortionGroupSafety(
     )
       throw new HttpError(
         422,
-        "Món hoặc gia vị chung chứa nguyên liệu cần tránh của nhóm suất; y tế cần điều chỉnh thực đơn",
+        "Món hoặc gia vị chung có chất gây dị ứng. Liên hệ Y tế.",
       );
   }
   return groups;
@@ -662,10 +659,7 @@ export async function readMealPortionDemand(
   for (const demand of daily) {
     if (!groups.length) {
       if (demand.portionGroups.length)
-        throw new HttpError(
-          409,
-          "Nhu cầu đã chốt theo nhóm khác; cần đối chiếu thực đơn",
-        );
+        throw new HttpError(409, "Suất riêng chưa khớp suất lớp đã chốt.");
       continue;
     }
     if (
@@ -676,10 +670,7 @@ export async function readMealPortionDemand(
       demand.portionGroups.reduce((n, p) => n + p.portionCount, 0) !==
         demand.totalPortions
     )
-      throw new HttpError(
-        409,
-        "GVCN chưa chốt đủ nhóm suất không trùng cho từng lớp trong bữa ăn",
-      );
+      throw new HttpError(409, "Còn lớp chưa chốt đủ suất ăn.");
     const countOf = (groupId: string) =>
       demand.portionGroups.find((p) => p.portionGroupId === groupId)!
         .portionCount;
@@ -703,15 +694,9 @@ export async function readMealPortionDemand(
       !uncovered &&
       [...expected].some(([groupId, count]) => countOf(groupId) !== count)
     )
-      throw new HttpError(
-        409,
-        "Nhóm suất không khớp số suất dị ứng đã chốt của lớp",
-      );
+      throw new HttpError(409, "Suất riêng chưa khớp suất lớp đã chốt.");
     if (uncovered)
-      throw new HttpError(
-        409,
-        "Thiếu xác nhận suất dị ứng tương ứng với nhóm suất",
-      );
+      throw new HttpError(409, "Suất riêng chưa khớp suất lớp đã chốt.");
   }
   return { totalPortions, dishPortions, groups, groupTotals, daily };
 }
@@ -755,10 +740,7 @@ export async function assertMealPortions(
     (!allowSurplus && portions <= 0) ||
     scoped.some((batch) => !batch.plannedPortions)
   )
-    throw new HttpError(
-      409,
-      "Số suất đã thay đổi sau khi lập mẻ; cần đối chiếu, không tự đổi kế hoạch",
-    );
+    throw new HttpError(409, "Số suất đã thay đổi. Kiểm tra lại mẻ.");
   for (const dishId of scopeDishIds) {
     const planned = scoped
       .filter((batch) => batch.dishId === dishId)
@@ -771,7 +753,7 @@ export async function assertMealPortions(
       });
       throw new HttpError(
         409,
-        `Số suất món "${dish?.name ?? "món ăn"}" trong lô (${planned}) khác số suất các lớp đã chốt (${finalized}); cần đối chiếu, không tự đổi kế hoạch`,
+        `${dish?.name ?? "Món ăn"}: số suất đã thay đổi (${planned} → ${finalized}). Kiểm tra lại mẻ.`,
       );
     }
   }
@@ -830,7 +812,7 @@ export async function reserveMealSeasonings(
   )
     throw new HttpError(
       409,
-      "Gia vị có liên quan dị ứng; cần phương án thực đơn phù hợp trước",
+      "Món có chất gây dị ứng. Cần thay món hoặc lập suất riêng.",
     );
   const previousPortions = existing[0]?.plannedPortions ?? 0;
   if (existing.length) {
@@ -844,7 +826,7 @@ export async function reserveMealSeasonings(
     )
       throw new HttpError(
         409,
-        "Số suất hoặc tiêu hao gia vị của bữa đã chốt; không tự thay đổi",
+        "Lượng gia vị chưa khớp dữ liệu đã ghi. Hãy kiểm tra lại.",
       );
     for (const standard of standards) {
       const allocated = existing.filter(
@@ -858,7 +840,7 @@ export async function reserveMealSeasonings(
       if (!sum.eq(standard.quantityPerPortion.mul(previousPortions)))
         throw new HttpError(
           409,
-          "Phân bổ gia vị khác định mức đã chốt; cần đối chiếu",
+          "Lượng gia vị chưa khớp dữ liệu đã ghi. Hãy kiểm tra lại.",
         );
     }
     if (
@@ -867,7 +849,10 @@ export async function reserveMealSeasonings(
           !standards.some((s) => s.ingredientEntryId === row.ingredientEntryId),
       )
     )
-      throw new HttpError(409, "Phân bổ gia vị không khớp thực đơn");
+      throw new HttpError(
+        409,
+        "Lượng gia vị chưa khớp dữ liệu đã ghi. Hãy kiểm tra lại.",
+      );
     await checkMealSeasoningStock(tx, meal, schoolId);
     if (previousPortions === portions) return;
   }
@@ -909,10 +894,7 @@ export async function reserveMealSeasonings(
           !stock.some((lot) => lot.ingredientEntryId === s.ingredientEntryId),
       )
     )
-      throw new HttpError(
-        409,
-        "Chế độ nấu riêng từng lô yêu cầu mỗi gia vị có một lô đủ lượng cho cả bữa",
-      );
+      throw new HttpError(409, "Mỗi gia vị cần một lô đủ cho cả bữa.");
   }
   const plans = planCookingBatches(
     additionalPortions,
@@ -987,7 +969,7 @@ export async function checkMealSeasoningStock(
   if (allocations.some((a) => a.usedAt !== null))
     throw new HttpError(
       409,
-      "Bữa đã ghi nhận tiêu hao gia vị; cần đối chiếu trạng thái mẻ",
+      "Lượng gia vị chưa khớp dữ liệu đã ghi. Hãy kiểm tra lại.",
     );
   await lockIngredientLots(
     tx,
@@ -1012,7 +994,7 @@ export async function checkMealSeasoningStock(
     throw new HttpError(409, "Lô gia vị không còn hợp lệ trong kho trường");
   const reserved = await reservedQuantities(tx, lots);
   if (lots.some((lot) => lot.availableQuantity.lt(reserved.get(lot.id)!)))
-    throw new HttpError(409, "Tồn đồ lưu khong đủ cho gia vị đã giữ");
+    throw new HttpError(409, "Không đủ gia vị trong kho.");
   return allocations;
 }
 
@@ -1078,7 +1060,7 @@ export async function consumeMealSeasonings(
   )
     throw new HttpError(
       409,
-      "Lịch sử tiêu hao gia vị cần đối chiếu; không ghi đè",
+      "Lượng gia vị chưa khớp dữ liệu đã ghi. Hãy kiểm tra lại.",
     );
   const now = new Date();
   for (const allocation of allocations) {
@@ -1104,7 +1086,7 @@ export async function consumeMealSeasonings(
       },
     });
     if (changed.count !== 1)
-      throw new HttpError(409, "Tồn gia vị đã thay đổi; chưa hoàn thành bữa");
+      throw new HttpError(409, "Tồn kho vừa thay đổi. Vui lòng thử lại.");
     await tx.inventoryTransaction.create({
       data: {
         ingredientLotId: lot.id,
@@ -1133,7 +1115,10 @@ export async function checkReservedStock(
     !new Decimal(batch.plannedPortions).gt(0) ||
     !batch.cookingBatchLots.length
   )
-    throw new HttpError(409, "Mẻ chưa có kế hoạch số suất/nguyên liệu hợp lệ");
+    throw new HttpError(
+      409,
+      "Mẻ chưa có số suất hoặc nguyên liệu. Kiểm tra lại mẻ.",
+    );
   await lockIngredientLots(
     tx,
     batch.cookingBatchLots.map((lot) => lot.ingredientLotId),
@@ -1156,20 +1141,14 @@ export async function checkReservedStock(
     lots.length !==
     new Set(batch.cookingBatchLots.map((l) => l.ingredientLotId)).size
   )
-    throw new HttpError(
-      409,
-      "Thiếu lô nguyên liệu hợp lệ trong phạm vi trường",
-    );
+    throw new HttpError(409, "Nguyên liệu chưa có trong kho trường.");
   const reserved = await reservedQuantities(tx, lots);
   for (const lot of lots) {
     if (
       lot.status !== "AVAILABLE" ||
       lot.availableQuantity.lt(reserved.get(lot.id)!)
     )
-      throw new HttpError(
-        409,
-        "Tồn đồ lưu khong đủ cho các mẻ đang giữ nguyên liệu; cần đối chiếu",
-      );
+      throw new HttpError(409, "Không đủ đồ lưu kho cho các mẻ.");
   }
   return new Map(lots.map((lot) => [lot.id, lot]));
 }
@@ -1292,7 +1271,7 @@ export async function readSchoolContext(
 ): Promise<SchoolContextResponseDTO> {
   assertPermission(principal, permission);
   if (principal.orgType !== "SCHOOL" || !principal.schoolId)
-    throw new HttpError(403, "Cần phạm vi trường");
+    throw new HttpError(403, "Chức năng chỉ dành cho tài khoản trường.");
   const school = await repository.findSchoolContext(db, principal.schoolId);
   if (!school) throw new HttpError(404, "Không tìm thấy trường hiện hành");
   const dateValid = (value: unknown): value is string =>
@@ -1525,12 +1504,8 @@ export function createKitchenLifecycle(
         if (!preview) {
           const menuDay = menu.menuDate.toISOString().slice(0, 10);
           const current = today();
-          const dmy = (iso: string) => iso.split("-").reverse().join("/");
           if (menuDay !== current)
-            throw new HttpError(
-              422,
-              `${menuDay > current ? `Chưa tới ngày ${dmy(menuDay)}` : `Ngày ${dmy(menuDay)} đã qua`}: chỉ được nấu bữa ăn của hôm nay (${dmy(current)})`,
-            );
+            throw new HttpError(422, "Chỉ được nấu bữa ăn của hôm nay.");
         }
         const missingClasses = await repository.unfinalizedClasses(
           tx,
@@ -1541,7 +1516,7 @@ export function createKitchenLifecycle(
         if (missingClasses.length)
           throw new HttpError(
             409,
-            `Chưa chốt suất ăn cho các lớp: ${missingClasses.map((row) => row.name).join(", ")}`,
+            `Còn ${missingClasses.length} lớp chưa chốt: ${shortList(missingClasses.map((row) => row.name))}`,
           );
         const demand = await readMealPortionDemand(
           tx,
@@ -1571,7 +1546,7 @@ export function createKitchenLifecycle(
             )
               throw new HttpError(
                 409,
-                "Mẻ cũ thiếu số suất kế hoạch; cần đối chiếu trước",
+                "Mẻ cũ có dữ liệu chưa khớp. Liên hệ quản trị.",
               );
             planned.set(
               dish.dishId,
@@ -1582,14 +1557,14 @@ export function createKitchenLifecycle(
           if (portions > (demand.dishPortions.get(dishId) ?? 0))
             throw new HttpError(
               409,
-              "Kế hoạch cũ vượt nhu cầu; không tự thay đổi lịch sử",
+              "Mẻ cũ có dữ liệu chưa khớp. Liên hệ quản trị.",
             );
         // A changed school policy applies to a new meal; never mix modes in an already planned meal.
         const mode = existing[0]?.cookingModeApplied ?? school.cookingMode;
         if (existing.some((child) => child.cookingModeApplied !== mode))
           throw new HttpError(
             409,
-            "Bữa đã có các chế độ chế biến khác nhau; cần đối chiếu",
+            "Mẻ cũ có dữ liệu chưa khớp. Liên hệ quản trị.",
           );
         // Gia vị của bữa gộp thành gia vị dùng chung (giữ kho qua reserveMealSeasonings),
         // nên bỏ các gia vị đó khỏi công thức từng món để không giữ kho hai lần.
@@ -1609,7 +1584,7 @@ export function createKitchenLifecycle(
               if (entries.length !== 1)
                 throw new HttpError(
                   409,
-                  "Nguyên liệu thực đơn chưa xác định được danh mục kho trường",
+                  "Nguyên liệu chưa có trong kho trường.",
                 );
               // Thực đơn lưu định lượng thành phẩm; bếp lấy hàng theo lượng sống đã tính hao hụt.
               wasteByEntry.set(entries[0].id, entries[0].wasteRate);
@@ -1666,7 +1641,7 @@ export function createKitchenLifecycle(
         )
           throw new HttpError(
             409,
-            "Nhu cầu có dị ứng liên quan recipe; cần phương án món phù hợp trước khi lập mẻ",
+            "Món có chất gây dị ứng. Cần thay món hoặc lập suất riêng.",
           );
         const stock = await readPlanningStock(
           tx,
@@ -1970,7 +1945,7 @@ export function createKitchenLifecycle(
           )
             throw new HttpError(
               409,
-              "Mẻ chưa hoàn thành nhưng đã có tiêu hao kho; cần đối chiếu lịch sử",
+              "Mẻ cũ có dữ liệu chưa khớp. Liên hệ quản trị.",
             );
           const consumption = new Map<string, Prisma.Decimal>();
           for (const allocation of batch.cookingBatchLots) {
@@ -2005,7 +1980,7 @@ export function createKitchenLifecycle(
             if (changed.count !== 1)
               throw new HttpError(
                 409,
-                "Tồn kho đã thay đổi; chưa ghi nhận hoàn thành",
+                "Tồn kho vừa thay đổi. Vui lòng thử lại.",
               );
             await tx.inventoryTransaction.create({
               data: {
@@ -2068,7 +2043,7 @@ export function createKitchenService(
     ): Promise<KitchenDayProgressResponseDTO> {
       assertPermission(principal, "cooking_batch.view");
       if (principal.orgType !== "SCHOOL" || !principal.schoolId)
-        throw new HttpError(403, "Cần phạm vi trường");
+        throw new HttpError(403, "Chức năng chỉ dành cho tài khoản trường.");
       const date = today();
       const rows = await repository.findDayProgress(
         await connect(),

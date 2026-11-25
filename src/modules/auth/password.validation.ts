@@ -13,7 +13,7 @@ export function validateNewPassword(value: unknown): string {
   )
     throw new HttpError(
       400,
-      "Mật khẩu mới cần ít nhất 8 ký tự, gồm chữ thường, chữ hoa, chữ số và ký tự đặc biệt; tối đa 72 byte UTF-8",
+      "Mật khẩu cần từ 8 ký tự, có chữ hoa, chữ thường, số, ký tự đặc biệt và không quá dài.",
     );
   return value;
 }
@@ -54,10 +54,7 @@ export function validateCurrentPassword(value: unknown): string {
     !value ||
     Buffer.byteLength(value, "utf8") > 72
   )
-    throw new HttpError(
-      400,
-      "Mật khẩu hiện tại phải có từ 1 đến 72 byte UTF-8",
-    );
+    throw new HttpError(400, "Nhập mật khẩu hiện tại hợp lệ.");
   return value;
 }
 export function validateVerifyCurrentPassword(value: unknown) {

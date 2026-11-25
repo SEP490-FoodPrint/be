@@ -90,10 +90,7 @@ export const supplyRoundRepository = {
         ? convertQuantity(sampleQuantity, unit, existing.unit)
         : sampleQuantity;
       if (increment.decimalPlaces() > 3 || sampleIncrement.decimalPlaces() > 3)
-        throw new HttpError(
-          409,
-          "Lượng nguyên liệu Đợt 2 vượt độ chính xác của lô",
-        );
+        throw new HttpError(409, "Lượng Đợt 2 quá lẻ. Kiểm tra lại.");
       await tx.cookingBatchLot.upsert({
         where,
         create: { ...key, quantityUsed, sampleQuantity, unit },

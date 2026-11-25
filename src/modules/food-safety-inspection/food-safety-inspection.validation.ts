@@ -46,7 +46,7 @@ export const planFoodSafetyInspectionSchema = z.strictObject({
   scheduledAt: z.iso
     .datetime({
       offset: true,
-      error: "Thời điểm kiểm tra phải là ISO 8601 có múi giờ",
+      error: "Thời điểm kiểm tra không hợp lệ.",
     })
     .transform((value) => new Date(value)),
 });

@@ -19,9 +19,6 @@ export function validateRoundInput<T extends z.ZodType>(
 ): z.output<T> {
   const parsed = schema.safeParse(value);
   if (!parsed.success)
-    throw new HttpError(
-      400,
-      `Tham số kế hoạch theo đợt không hợp lệ (${parsed.error.issues.map(({ path }) => path.join(".") || "dữ liệu đầu vào").join(", ")})`,
-    );
+    throw new HttpError(400, "Dữ liệu kế hoạch không hợp lệ. Tải lại trang.");
   return parsed.data;
 }

@@ -7,7 +7,7 @@ type DecimalInput = Prisma.Decimal | string | number;
 function rate(value: DecimalInput | null | undefined): Prisma.Decimal {
   const r = new Decimal(value ?? 0);
   if (!r.isFinite() || r.lt(0) || r.gte(1))
-    throw new RangeError("Tỷ lệ hao hụt phải trong khoảng 0 <= r < 1");
+    throw new RangeError("Tỷ lệ hao hụt từ 0% đến dưới 100%.");
   return r;
 }
 

@@ -77,7 +77,7 @@ export function balanceHundredths(values: string[], target: number): string[] {
     .sub(rows.reduce((sum, row) => sum.add(row.whole), new D(0)))
     .toNumber();
   if (!Number.isInteger(missing) || missing < 0 || missing > rows.length)
-    throw new HttpError(409, "Không thể bù phần trăm suất");
+    throw new HttpError(409, "Không đủ để chia đều suất.");
   const order = [...rows].sort(
     (a, b) =>
       b.fraction.cmp(a.fraction) || a.value.cmp(b.value) || a.index - b.index,
@@ -268,7 +268,7 @@ export function planMaterialAllocation(
       values.reduce((sum, v) => sum.add(v), new D(0)),
     );
     if (difference.abs().gt("0.000000001") || !values.length)
-      throw new HttpError(409, "Sai lệch nghiệm phân bổ; vui lòng tính lại");
+      throw new HttpError(409, "Chưa chia được suất. Vui lòng tính lại.");
     values[values.length - 1] = values[values.length - 1].add(difference);
     const rounded = balanceHundredths(
       values.map((value) => value.toString()),
@@ -307,16 +307,10 @@ export function planMaterialAllocation(
           }
         }
         if (required.gt(0))
-          throw new HttpError(
-            409,
-            "Nghiệm phân bổ vượt nguyên liệu; vui lòng đối soát",
-          );
+          throw new HttpError(409, "Chưa chia được suất. Vui lòng tính lại.");
       }
       if (!entry.materials.length)
-        throw new HttpError(
-          409,
-          "Lượng cấp nhỏ hơn độ chính xác lưu trữ; cần đối soát phương án",
-        );
+        throw new HttpError(409, "Lượng cấp quá nhỏ. Kiểm tra lại.");
       entries.push(entry);
     }
   }

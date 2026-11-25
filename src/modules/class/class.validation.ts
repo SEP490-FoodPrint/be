@@ -117,7 +117,7 @@ const importRowSchema = z.strictObject({
 export const IMPORT_MAX_ROWS = 300;
 export const importClassesSchema = z.strictObject({
   academicYear: academicYearSchema,
-  dryRun: z.boolean({ error: "dryRun phải là true hoặc false" }),
+  dryRun: z.boolean({ error: "Thông tin không hợp lệ." }),
   rows: z
     .array(importRowSchema, { error: "Danh sách dòng không hợp lệ" })
     .min(1, "File không có dòng dữ liệu nào")

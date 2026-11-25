@@ -315,7 +315,7 @@ void test("chỉ trừ suất dị ứng ở món khớp và không trừ lặp"
           },
         ],
       }),
-    /vượt nhu cầu món/,
+    /nhiều hơn nhu cầu/,
   );
   data.demands.forEach((demand, index) => {
     demand.MealAllocation = {

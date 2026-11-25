@@ -1066,10 +1066,7 @@ export function prepareChanges(
           entry.allocatedPortions,
         );
         if (used > batch.plannedPortions! || total > demand.totalPortions)
-          throw new HttpError(
-            409,
-            "Số suất vượt dung lượng lô hoặc nhu cầu của lớp",
-          );
+          throw new HttpError(409, "Số suất nhiều hơn lô hoặc nhu cầu lớp.");
         totalsByDemand.set(demand.id, total);
         const rows = rowsByDemand.get(demand.id) ?? [];
         for (const dishId of dishIdsByBatch.get(batch.id)!)
@@ -1088,8 +1085,7 @@ export function prepareChanges(
 
     for (const item of input.batches) {
       const rawBatch = rawBatchById.get(item.cookingBatchId);
-      if (!rawBatch)
-        throw new HttpError(400, `Lô không tồn tại: ${item.cookingBatchId}`);
+      if (!rawBatch) throw new HttpError(400, "Không tìm thấy lô nấu.");
 
       const targetDishIds = item.dishId
         ? [item.dishId]
@@ -1126,10 +1122,7 @@ export function prepareChanges(
           const maxCapacity =
             dishInBatch.plannedPortions ?? rawBatch.plannedPortions ?? 0;
           if (used > maxCapacity || currentDemandTotal > demand.totalPortions)
-            throw new HttpError(
-              409,
-              "Số suất vượt dung lượng lô hoặc nhu cầu của lớp",
-            );
+            throw new HttpError(409, "Số suất nhiều hơn lô hoặc nhu cầu lớp.");
 
           totalsByBatchDish.set(batchDishKey, used);
           totalsByDemandDish.set(demandDishKey, currentDemandTotal);
@@ -1188,7 +1181,7 @@ export function prepareChanges(
         .filter((row) => row.dishId === dishId)
         .reduce((sum, row) => addPortions(sum, row.allocatedPortions), 0);
       if (total > dishRequirement(data, demand, dishId))
-        throw new HttpError(409, "Số suất vượt nhu cầu món của lớp");
+        throw new HttpError(409, "Số suất nhiều hơn nhu cầu của lớp.");
     }
     const previous = allocation?.mealAllocationBatches ?? [];
     if (
@@ -1268,10 +1261,7 @@ export function createMealAllocationService(
               ),
             )
           )
-            throw new HttpError(
-              409,
-              "Phân bổ nguyên liệu phải được tính lại qua phương án tự động",
-            );
+            throw new HttpError(409, "Hãy bấm gợi ý phân bổ lại.");
           const changes = prepareChanges(data, view, input);
           if (changes.some((change) => !change.allocationId))
             assertPermission(actor, "meal_allocation.create");

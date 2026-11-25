@@ -502,10 +502,7 @@ function assertReceipt(
       (row.supplierId !== row.SupplyRequest.supplierId ||
         row.SupplyRequest.schoolId !== schoolId))
   )
-    throw new HttpError(
-      409,
-      "Thông tin Supplier hoặc mặt hàng giao chưa hợp lệ",
-    );
+    throw new HttpError(409, "Thông tin nhà cung cấp hoặc hàng chưa đúng.");
   const seenWorkflowPairs = new Set<string>();
   const today = new Date(now.getTime() + 7 * 3600000)
     .toISOString()
@@ -520,10 +517,7 @@ function assertReceipt(
       }
       const pairKey = `${item.ingredientId}:${item.sourceFacilityId}`;
       if (seenWorkflowPairs.has(pairKey)) {
-        throw new HttpError(
-          409,
-          "Đợt giao có cặp nguyên liệu và cơ sở cung cấp bị trùng lặp",
-        );
+        throw new HttpError(409, "Nguyên liệu và nơi cung cấp bị trùng.");
       }
       seenWorkflowPairs.add(pairKey);
     }
@@ -539,10 +533,7 @@ function assertReceipt(
         !item.actualQuantity.gt(0) ||
         !item.ingredientLots.length
       )
-        throw new HttpError(
-          409,
-          "Mặt hàng/lô giao phải khớp đơn cung ứng và trường",
-        );
+        throw new HttpError(409, "Hàng giao không khớp đơn đặt.");
     } else {
       if (
         item.supplyRequestItemId !== null ||
@@ -554,16 +545,10 @@ function assertReceipt(
         !item.actualQuantity.gt(0) ||
         !item.ingredientLots.length
       )
-        throw new HttpError(
-          409,
-          "Mặt hàng/lô giao phải khớp danh mục nguyên liệu của trường và nhà cung cấp",
-        );
+        throw new HttpError(409, "Hàng giao không khớp danh mục của trường.");
     }
     if (row.traceabilityVersion === 1 && !item.sourceFacilityId) {
-      throw new HttpError(
-        409,
-        "Mặt hàng giao v1 thiếu thông tin cơ sở cung cấp",
-      );
+      throw new HttpError(409, "Hàng giao thiếu nơi cung cấp.");
     }
     let total = new Prisma.Decimal(0);
     for (const lot of item.ingredientLots) {
@@ -573,10 +558,7 @@ function assertReceipt(
         !lot.receivedQuantity.gt(0) ||
         (lot.SourceFacility && lot.SourceFacility.supplierId !== row.supplierId)
       )
-        throw new HttpError(
-          409,
-          "Lô nhận phải đang chặn, chưa có tồn kho và đúng Supplier",
-        );
+        throw new HttpError(409, "Lô này không thể tiếp nhận.");
       if (
         row.traceabilityVersion === 1 &&
         (!lot.sourceFacilityId ||
@@ -614,7 +596,7 @@ function assertReceipt(
           throw new HttpError(
             409,
             handlingType === "DRY_STOCK"
-              ? `${lotName} (đồ lưu kho) chỉ còn hạn đến ${dmy(expiry)}; cần còn hạn ít nhất ${DRY_STOCK_MIN_SHELF_DAYS} ngày kể từ ngày nhận (đến ${dmy(minimum)})`
+              ? `${lotName}: hạn dùng còn dưới ${DRY_STOCK_MIN_SHELF_DAYS} ngày.`
               : `${lotName} đã hết hạn dùng (${dmy(expiry)})`,
           );
       }
@@ -643,10 +625,7 @@ async function verifyRequestDeliveryReceipt(
     row.supplierId,
   );
   if (!sourceItems.length) {
-    throw new HttpError(
-      409,
-      "Không tìm thấy các mặt hàng nguồn của yêu cầu cung ứng",
-    );
+    throw new HttpError(409, "Không tìm thấy hàng trong đơn đặt.");
   }
   const sourceById = new Map(sourceItems.map((item) => [item.id, item]));
   const grouped = new Map<
@@ -655,7 +634,7 @@ async function verifyRequestDeliveryReceipt(
   >();
   for (const item of row.deliveryItems) {
     if (!item.supplyRequestItemId || !item.SupplyRequestItem) {
-      throw new HttpError(409, "Thiếu dòng yêu cầu nguồn của phiếu giao");
+      throw new HttpError(409, "Không tìm thấy hàng trong đơn đặt.");
     }
     const sourceItem = sourceById.get(item.supplyRequestItemId);
     if (
@@ -663,10 +642,7 @@ async function verifyRequestDeliveryReceipt(
       sourceItem.IngredientEntry.schoolId !== schoolId ||
       sourceItem.IngredientEntry.Ingredient.supplierId !== row.supplierId
     ) {
-      throw new HttpError(
-        409,
-        "Mặt hàng giao không thuộc yêu cầu cung ứng hợp lệ",
-      );
+      throw new HttpError(409, "Hàng giao không khớp đơn đặt.");
     }
     const list = grouped.get(item.supplyRequestItemId);
     if (list) {
@@ -681,10 +657,7 @@ async function verifyRequestDeliveryReceipt(
     (grouped.size !== sourceItems.length ||
       sourceItems.some((source) => !grouped.has(source.id)))
   ) {
-    throw new HttpError(
-      409,
-      "Đợt giao phải bao gồm đầy đủ tất cả mặt hàng trong yêu cầu cung ứng",
-    );
+    throw new HttpError(409, "Đơn giao phải đủ các mặt hàng đã đặt.");
   }
   const previousRows = await inspections.receivedItemsBySourceIds(
     tx,
@@ -719,10 +692,7 @@ async function verifyRequestDeliveryReceipt(
           item.ingredientEntryId !== sourceItem.ingredientEntryId ||
           item.unit !== sourceItem.unit
         ) {
-          throw new HttpError(
-            409,
-            "Mặt hàng giao không khớp nguyên liệu, danh mục hoặc đơn vị của yêu cầu nguồn",
-          );
+          throw new HttpError(409, "Hàng giao không khớp đơn đặt.");
         }
         currentGroup = currentGroup.add(item.actualQuantity);
       } else {
@@ -735,16 +705,10 @@ async function verifyRequestDeliveryReceipt(
       sourceItem.sampleTopUpQuantity ?? 0,
     );
     if (isV2Workflow && !currentGroup.eq(expected)) {
-      throw new HttpError(
-        409,
-        "Tổng lượng giao của từng mặt hàng phải khớp số lượng được yêu cầu cung ứng",
-      );
+      throw new HttpError(409, "Số lượng giao phải bằng số lượng đặt.");
     }
     if (received.add(currentGroup).gt(expected)) {
-      throw new HttpError(
-        409,
-        "Tổng lượng tiếp nhận vượt số lượng được yêu cầu cung ứng",
-      );
+      throw new HttpError(409, "Số lượng nhận không được vượt số lượng đặt.");
     }
   }
 }
@@ -775,7 +739,7 @@ async function receiptIssue(
         (item) => byIngredient.get(item.ingredientId)?.status !== "ACTIVE",
       )
     )
-      return "Chưa cấu hình danh mục nguyên liệu đang hoạt động của trường để tiếp nhận lô";
+      return "Nguyên liệu chưa có trong danh mục của trường.";
     // Mô phỏng bước gắn danh mục của chữ ký cuối, không ghi DB.
     candidate = {
       ...row,
@@ -836,20 +800,14 @@ export function createDeliveryInspectionService(
             throw new HttpError(404, "Không tìm thấy đợt giao trong trường");
           assertVisibleTo(row, actor);
           if (row.traceabilityVersion !== 1) {
-            throw new HttpError(
-              409,
-              "Đợt giao lịch sử không hỗ trợ xác nhận đến trường qua luồng mới",
-            );
+            throw new HttpError(409, "Đợt giao cũ không hỗ trợ xác nhận.");
           }
           if (
             row.status === "CANCELLED" ||
             row.status === "CANCELLED_MEAL" ||
             row.SupplyRequest?.status === "CANCELLED"
           ) {
-            throw new HttpError(
-              409,
-              "Đợt giao hoặc yêu cầu cung ứng nguồn đã bị hủy",
-            );
+            throw new HttpError(409, "Đợt giao hoặc đơn đặt đã bị hủy.");
           }
           if (
             row.arrivedAt !== null &&
@@ -879,10 +837,7 @@ export function createDeliveryInspectionService(
             );
           }
           if (row.status !== "IN_TRANSIT" || row.arrivedAt !== null) {
-            throw new HttpError(
-              409,
-              "Trạng thái đợt giao không hợp lệ để xác nhận đến trường",
-            );
+            throw new HttpError(409, "Đợt giao này không thể xác nhận xe đến.");
           }
           const isDryOnly = isDryDelivery(row);
           const schoolTiersRows = await inspections.findSchoolInspectionTiers(
@@ -894,7 +849,7 @@ export function createDeliveryInspectionService(
             if (actor.role !== "INGREDIENT_MANAGEMENT_DEPARTMENT") {
               throw new HttpError(
                 403,
-                "Chuyến giao đồ lưu kho: chỉ Ban quản lý nguyên liệu được xác nhận xe đã đến",
+                "Đồ lưu kho do Ban quản lý nguyên liệu xác nhận.",
               );
             }
           } else {
@@ -920,7 +875,7 @@ export function createDeliveryInspectionService(
           if (updated.count !== 1) {
             throw new HttpError(
               409,
-              "Trạng thái đợt giao đã thay đổi trước khi xác nhận đến trường",
+              "Đợt giao vừa đổi trạng thái. Tải lại trang.",
             );
           }
           const roleCodes = DELIVERY_INSPECTION_ROLES;
@@ -988,10 +943,7 @@ export function createDeliveryInspectionService(
                 approval.roleId !== actor.roleId,
             )
           ) {
-            throw new HttpError(
-              409,
-              "Bạn đã ký kiểm tra đợt này với vai trò khác; không được ký thay bộ phận khác",
-            );
+            throw new HttpError(409, "Bạn đã ký với vai trò khác.");
           }
           const schoolTiersRows = await inspections.findSchoolInspectionTiers(
             tx,
@@ -1024,10 +976,7 @@ export function createDeliveryInspectionService(
               existing.reason !== input.reason ||
               (existing.photoHash ?? null) !== (photo?.photoHash ?? null)
             )
-              throw new HttpError(
-                409,
-                "Bộ phận của bạn đã ghi quyết định; không được sửa biên bản",
-              );
+              throw new HttpError(409, "Bộ phận đã ký, không sửa được.");
             return { ...inspectionDTO(row, actor, tiers), created: false };
           }
 
@@ -1046,13 +995,13 @@ export function createDeliveryInspectionService(
           )
             throw new HttpError(
               409,
-              "Đợt giao không còn được phép kiểm tra/tiếp nhận",
+              "Đợt giao không còn được kiểm tra, tiếp nhận.",
             );
           const requiredRoles = requiredInspectionRoles(row);
           if (!requiredRoles.some((role) => role === actor.role))
             throw new HttpError(
               403,
-              "Chuyến giao đồ lưu kho: chỉ Ban quản lý nguyên liệu kiểm tra và ký nhận",
+              "Đồ lưu kho do Ban quản lý nguyên liệu kiểm tra.",
             );
           if (input.decision === "APPROVE") {
             // Chặn ngay chữ ký "Đạt" khi dữ liệu không thể tiếp nhận, không đợi bộ phận bắt buộc cuối.
@@ -1094,7 +1043,7 @@ export function createDeliveryInspectionService(
                   if (!entry || entry.status !== "ACTIVE") {
                     throw new HttpError(
                       409,
-                      "Chưa cấu hình danh mục nguyên liệu đang hoạt động của trường để tiếp nhận lô",
+                      "Nguyên liệu chưa có trong danh mục của trường.",
                     );
                   }
                   if (item.ingredientEntryId !== entry.id) {
@@ -1148,7 +1097,7 @@ export function createDeliveryInspectionService(
               )
                 throw new HttpError(
                   409,
-                  "Lô đã có lịch sử kho; cần đối chiếu trước khi tiếp nhận",
+                  "Lô đã từng nhập kho. Kiểm tra lại kho.",
                 );
               for (const lot of row.deliveryItems.flatMap(
                 (item) => item.ingredientLots,
@@ -1156,7 +1105,7 @@ export function createDeliveryInspectionService(
                 if (!(await inspections.receiveLot(tx, lot, id, actor.id)))
                   throw new HttpError(
                     409,
-                    "Tồn kho lô đã thay đổi; chưa tiếp nhận",
+                    "Tồn kho lô đã thay đổi. Kiểm tra lại kho.",
                   );
               }
               await inspections.setStatus(tx, id, "RECEIVED", actor.id, now());

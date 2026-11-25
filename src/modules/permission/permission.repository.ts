@@ -203,7 +203,7 @@ export function createPermissionRepository(
         });
       } catch (error) {
         if (duplicatePermissionCode(error))
-          throw new HttpError(409, "Permission đã tồn tại");
+          throw new HttpError(409, "Quyền đã tồn tại.");
         throw error;
       }
     },

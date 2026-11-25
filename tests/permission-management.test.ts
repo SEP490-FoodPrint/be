@@ -193,7 +193,7 @@ function harness() {
     },
     create: (_scope, data) => {
       if ([...state.permissions.values()].some((p) => p.code === data.code))
-        throw new HttpError(409, "Permission đã tồn tại");
+        throw new HttpError(409, "Quyền đã tồn tại.");
       const row = { ...data, id: secondId, isActive: true };
       state.permissions.set(row.id, row);
       state.writes++;

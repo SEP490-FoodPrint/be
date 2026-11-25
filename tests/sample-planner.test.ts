@@ -293,7 +293,7 @@ void test("pha B: lô đồ khô còn chỗ thì giữ từ kho, không lấy th
       ),
     {
       statusCode: 409,
-      message: "Không đủ nguyên liệu lưu mẫu cho mẻ FP-CB-00001: Gạo",
+      message: "Không đủ Gạo để lưu mẫu cho mẻ FP-CB-00001.",
     },
   );
 });

@@ -58,8 +58,8 @@ export const validateSupplyOrderDetailQuery = (value: unknown) =>
   parseRequest(supplyOrderEmptySchema, value);
 export const freshDemandQuerySchema = z.strictObject({
   date: z
-    .string({ error: "Ngày phải có dạng YYYY-MM-DD" })
-    .regex(/^\d{4}-\d{2}-\d{2}$/, { error: "Ngày phải có dạng YYYY-MM-DD" })
+    .string({ error: "Ngày không hợp lệ." })
+    .regex(/^\d{4}-\d{2}-\d{2}$/, { error: "Ngày không hợp lệ." })
     .refine((v) => !Number.isNaN(Date.parse(`${v}T00:00:00Z`)), {
       error: "Ngày không hợp lệ",
     }),

@@ -287,7 +287,7 @@ void test("GVCN không khai vượt số suất đăng ký của lớp", async (
   await assert.rejects(
     service.saveDraft(draftInput({ totalPortions: 31 }), teacher),
     (error: unknown) =>
-      isHttp(422)(error) && /vượt số suất đăng ký/.test(String(error)),
+      isHttp(422)(error) && /Tối đa 30 suất/.test(String(error)),
   );
   assert.equal(writes.length, 0);
   const result = await service.saveDraft(
@@ -337,7 +337,7 @@ void test("GVCN chỉ khai và chốt cho hôm nay, đúng ngày học có thự
   );
   await rejects(
     build({ hasYear: false }).service.saveDraft(draftInput(), teacher),
-    /ngoài năm học/,
+    /không thuộc năm học/,
   );
   await rejects(
     build({ hasMenu: false }).service.saveDraft(draftInput(), teacher),
@@ -360,8 +360,7 @@ void test("GVCN phải nhập số suất cho mọi nhóm dị ứng của lớp
   await assert.rejects(
     service.saveDraft(draftInput({ allergies: [] }), teacher),
     (error: unknown) =>
-      isHttp(422)(error) &&
-      /Chưa nhập số suất cho nhóm dị ứng "Lạc"/.test(String(error)),
+      isHttp(422)(error) && /Nhập số suất nhóm Lạc/.test(String(error)),
   );
   // Vượt số học sinh của nhóm (nhóm 1 có 3 em) hoặc nhóm không tồn tại
   await assert.rejects(

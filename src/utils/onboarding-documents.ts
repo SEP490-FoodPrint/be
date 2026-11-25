@@ -39,7 +39,7 @@ function configuredCloudinary() {
       (value) => value.startsWith("replace-"),
     )
   )
-    throw new HttpError(503, "Chưa cấu hình Cloudinary để lưu tài liệu hồ sơ");
+    throw new HttpError(503, "Chưa lưu được tệp. Vui lòng thử lại sau.");
   cloudinary.config({
     cloud_name: CLOUDINARY_CLOUD_NAME,
     api_key: CLOUDINARY_API_KEY,
@@ -52,7 +52,7 @@ export function documentFormat(
   file: Express.Multer.File,
 ): OnboardingDocument["format"] {
   if (!file.size || file.size > MAX_DOCUMENT_BYTES)
-    throw new HttpError(413, "Tài liệu phải có dữ liệu và không quá 5 MiB");
+    throw new HttpError(413, "Tệp không được rỗng, tối đa 5 MB.");
   const data = file.buffer;
   if (
     file.mimetype === "application/pdf" &&
@@ -71,10 +71,7 @@ export function documentFormat(
     data[2] === 255
   )
     return "jpg";
-  throw new HttpError(
-    400,
-    "Chỉ nhận tài liệu PDF, PNG hoặc JPEG có nội dung khớp loại tệp",
-  );
+  throw new HttpError(400, "Chỉ nhận PDF, PNG hoặc JPEG.");
 }
 export function validateProfileFiles(
   files: Express.Multer.File[],
@@ -92,7 +89,7 @@ export function validateProfileFiles(
     );
   for (const file of files) {
     if (!allowed.has(file.fieldname))
-      throw new HttpError(400, "Tệp không thuộc trường hồ sơ");
+      throw new HttpError(400, "Tệp không thuộc hồ sơ.");
     documentFormat(file);
   }
 }
@@ -101,10 +98,10 @@ export function readDocuments(
   userId: string,
 ): OnboardingDocument[] {
   if (!Array.isArray(value) || value.length > MAX_PROFILE_DOCUMENTS)
-    throw new HttpError(503, "Metadata tài liệu không hợp lệ");
+    throw new HttpError(503, "Tài liệu không hợp lệ.");
   return value.map((item: unknown) => {
     if (!item || typeof item !== "object")
-      throw new HttpError(503, "Metadata tài liệu không hợp lệ");
+      throw new HttpError(503, "Tài liệu không hợp lệ.");
     const row = item as Record<string, unknown>;
     if (
       typeof row.id !== "string" ||
@@ -117,7 +114,7 @@ export function readDocuments(
       (row.sha256 !== undefined &&
         (typeof row.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(row.sha256)))
     )
-      throw new HttpError(503, "Metadata tài liệu không hợp lệ");
+      throw new HttpError(503, "Tài liệu không hợp lệ.");
     return {
       id: uuid(row.id),
       field: row.field,
@@ -174,7 +171,7 @@ export const documentStorage: DocumentStorage = {
       };
     } catch (error) {
       if (error instanceof HttpError) throw error;
-      throw new HttpError(503, "Không thể tải tài liệu hồ sơ lên Cloudinary");
+      throw new HttpError(503, "Chưa lưu được tệp. Vui lòng thử lại sau.");
     }
   },
   async remove(document) {

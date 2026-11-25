@@ -43,6 +43,6 @@ export function reviewVersion(row: ReviewRow): string {
 
 export function expectedReviewVersion(value: unknown): string {
   if (typeof value !== "string" || !/^[a-f0-9]{64}$/.test(value))
-    throw new HttpError(400, "Phiên bản hồ sơ không hợp lệ");
+    throw new HttpError(400, "Hồ sơ vừa thay đổi. Tải lại trang.");
   return value;
 }

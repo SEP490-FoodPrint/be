@@ -10,18 +10,14 @@ export interface ListPage<T> {
   pagination: ListQuery & { hasNext: boolean };
 }
 
-function positiveInteger(
-  value: unknown,
-  fallback: number,
-  name: string,
-): number {
+function positiveInteger(value: unknown, fallback: number): number {
   if (value === undefined) return fallback;
   if (typeof value !== "string" || !/^[1-9]\d*$/.test(value)) {
-    throw new HttpError(400, `${name} phải là số nguyên dương`);
+    throw new HttpError(400, "Yêu cầu không hợp lệ.");
   }
   const result = Number(value);
   if (!Number.isSafeInteger(result)) {
-    throw new HttpError(400, `${name} vượt giới hạn cho phép`);
+    throw new HttpError(400, "Yêu cầu không hợp lệ.");
   }
   return result;
 }
@@ -29,15 +25,12 @@ function positiveInteger(
 /** Only accept the pagination parameters supported by these sample APIs. */
 export function parseListQuery(query: Record<string, unknown>): ListQuery {
   if (Object.keys(query).some((key) => key !== "page" && key !== "limit")) {
-    throw new HttpError(400, "Chỉ hỗ trợ tham số page và limit");
+    throw new HttpError(400, "Yêu cầu không hợp lệ.");
   }
-  const page = positiveInteger(query.page, 1, "page");
-  const limit = positiveInteger(query.limit, 20, "limit");
+  const page = positiveInteger(query.page, 1);
+  const limit = positiveInteger(query.limit, 20);
   if (limit > 100 || (page - 1) * limit > 2_147_483_647) {
-    throw new HttpError(
-      400,
-      "limit tối đa 100 và page phải trong giới hạn phân trang",
-    );
+    throw new HttpError(400, "Yêu cầu không hợp lệ.");
   }
   return { page, limit };
 }

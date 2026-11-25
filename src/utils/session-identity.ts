@@ -160,6 +160,6 @@ export const emailSetupFirst = () =>
 
 export function requireSessionUser(req: Request): SessionUser {
   if (!req.sessionUser)
-    throw new HttpError(401, "Chưa xác thực phiên đăng nhập");
+    throw new HttpError(401, "Phiên đã hết hạn. Vui lòng đăng nhập lại.");
   return req.sessionUser;
 }

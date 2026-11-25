@@ -233,7 +233,7 @@ void test("legacy batch uses approved menu ingredients when snapshot is absent",
         mealType: "LUNCH",
         priorityClassIds: [],
       }),
-    /không thống nhất/,
+    /khác nhau/,
   );
 });
 

@@ -996,8 +996,9 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         (error: unknown) =>
           error instanceof HttpError &&
           error.statusCode === 422 &&
+          error.message.includes("còn 4 ngày thiếu bữa") &&
           error.message.includes("Thứ Ba (08/01)") &&
-          error.message.includes("Thứ Sáu (11/01)"),
+          error.message.includes("và 2 mục khác"),
       );
       const rejectedWeek = await menus.getOne(menu.id, health);
       assert.equal(rejectedWeek.status, "DRAFT");
@@ -9943,7 +9944,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         assert.notEqual(standaloneQrUrl, reqQrUrl);
 
         const missingEntryIssue =
-          "Chưa cấu hình danh mục nguyên liệu đang hoạt động của trường để tiếp nhận lô";
+          "Nguyên liệu chưa có trong danh mục của trường.";
         // Only the school's PRIMARY inspection role (kitchen staff by default)
         // may confirm arrival; REQUIRED/OPTIONAL roles receive 403.
         assert.equal(

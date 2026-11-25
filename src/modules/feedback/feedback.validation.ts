@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { HttpError } from "../../utils/http-error";
+import { RequestValidationError } from "../../utils/request-validation";
 import { TICKET_STATUSES } from "../complaint-ticket/complaint-ticket.lifecycle";
 import {
   ticketCommentBodySchema,
@@ -27,10 +28,8 @@ const submittableComplaintTypes = [
   "FOOD_HYGIENE",
   "OTHER",
 ] as const;
-const uuid = z.string().uuid("ID không đúng định dạng UUID");
-const date = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Ngày phải có dạng YYYY-MM-DD");
+const uuid = z.string().uuid("Mục đã chọn không hợp lệ.");
+const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Ngày không hợp lệ.");
 
 export const complaintListQuerySchema = z.strictObject({
   page: z.coerce.number().int().positive().default(1),
@@ -61,10 +60,14 @@ export const createComplaintSchema = z.strictObject({
 function parse<T>(schema: z.ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value);
   if (result.success) return result.data;
-  const details = result.error.issues
-    .map((issue) => `${issue.path.join(".") || "request"}: ${issue.message}`)
-    .join("; ");
-  throw new HttpError(400, `Dữ liệu khiếu nại không hợp lệ: ${details}`);
+  throw new RequestValidationError(
+    result.error.issues.map((issue) => ({
+      field: issue.path.join(".") || "body",
+      message: /[^\u0020-\u007E]/.test(issue.message)
+        ? issue.message
+        : "Giá trị không hợp lệ",
+    })),
+  );
 }
 
 export function validateFeedbackListQuery(value: unknown) {

@@ -54,7 +54,7 @@ export const sourceFacilityQuerySchema = z
 
 export const sourceFacilityParamsSchema = z.strictObject({
   sourceFacilityId: requestUuidSchema.refine((value) => value.length === 36, {
-    error: "ID phải là UUID hợp lệ",
+    error: "Mục đã chọn không hợp lệ.",
   }),
 });
 
