@@ -28,7 +28,7 @@ export function decimal(value: DecimalLike | null | undefined): string | null {
 export function integer(value: number | null | undefined): number | null {
   if (value === null || value === undefined) return null;
   if (!Number.isSafeInteger(value))
-    throw new Error("Payload chỉ nhận số nguyên an toàn");
+    throw new Error("Dữ liệu xác thực không hợp lệ.");
   return value;
 }
 /** Số suất mẻ: số nguyên giữ nguyên như payload cũ; số lẻ (TASK-10 v8) giữ tối đa 2 chữ số. */

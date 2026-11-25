@@ -212,7 +212,7 @@ export function createPermissionService(
       const scope = permissionCatalogScope(principal, "role_permission.manage");
       return databaseOperation(async () => {
         const role = await repo.role(scope, roleId);
-        if (!role) throw new HttpError(404, "Không tìm thấy role");
+        if (!role) throw new HttpError(404, "Không tìm thấy vai trò.");
         return {
           id: role.id,
           code: role.code,
@@ -237,12 +237,9 @@ export function createPermissionService(
         { roleId, permissionIds },
         async (tx) => {
           const role = await repo.role(scope, roleId, tx);
-          if (!role) throw new HttpError(404, "Không tìm thấy role");
+          if (!role) throw new HttpError(404, "Không tìm thấy vai trò.");
           if (role.code === ROLES.SYSTEM_ADMIN)
-            throw new HttpError(
-              403,
-              "Không được chỉnh sửa quyền role SYSTEM_ADMIN",
-            );
+            throw new HttpError(403, "Không được sửa quyền Quản trị hệ thống.");
           const permissions = await repo.permissions(scope, permissionIds, tx);
           const current = role.rolePermissions.map((row) => row.permission.id);
           const existing = new Set(current);
@@ -250,10 +247,7 @@ export function createPermissionService(
             permissions.length !== permissionIds.length ||
             permissions.some((p) => !p.isActive && !existing.has(p.id))
           )
-            throw new HttpError(
-              400,
-              "Permission không tồn tại hoặc đã ngừng hoạt động",
-            );
+            throw new HttpError(400, "Quyền không còn dùng.");
           await repo.replaceGrants(scope, roleId, permissionIds, current, tx);
           return { roleId, permissionIds };
         },
@@ -298,10 +292,7 @@ export function createPermissionService(
                 row.permission.id === permissionId && row.permission.isActive,
             )
           )
-            throw new HttpError(
-              400,
-              "Quyền phải đang hoạt động và thuộc role tài khoản",
-            );
+            throw new HttpError(400, "Quyền không thuộc vai trò này.");
           await repo.toggle(
             scope,
             target.id,

@@ -5,16 +5,17 @@ import {
 } from "../../utils/request-validation";
 import { TICKET_STATUSES } from "../complaint-ticket/complaint-ticket.lifecycle";
 import {
-  ticketCommentBodySchema,
+  evidenceFilesSchema,
+  ticketCommentInputSchema,
   ticketEmptyBodySchema,
   ticketReopenBodySchema,
-  ticketResolveBodySchema,
+  ticketResolveInputSchema,
 } from "../complaint-ticket/complaint-ticket.validation";
 
 export {
-  ticketCommentBodySchema,
+  ticketCommentInputSchema,
   ticketReopenBodySchema,
-  ticketResolveBodySchema,
+  ticketResolveInputSchema,
 };
 
 export const authorityComplaintListQuerySchema = z.strictObject({
@@ -27,10 +28,15 @@ export const authorityComplaintParamsSchema = z.strictObject({
   id: requestUuidSchema,
 });
 
-/** "Chuyển ATTP": đơn C03 gốc và lý do tùy chọn (R6b). */
+/** "Chuyển ATTP": đơn C03 gốc, lý do tùy chọn (R6b) và file bổ sung (plan v6 Q32). */
 export const escalateAuthorityComplaintSchema = z.strictObject({
   mealComplaintId: requestUuidSchema,
-  reason: ticketReopenBodySchema.shape.reason,
+  // multipart không bỏ được trường: chuỗi rỗng = không có lý do.
+  reason: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    ticketReopenBodySchema.shape.reason,
+  ),
+  files: evidenceFilesSchema,
 });
 
 export const validateAuthorityComplaintListQuery = (value: unknown) =>
@@ -40,9 +46,9 @@ export const validateAuthorityComplaintParams = (value: unknown) =>
 export const validateEscalateAuthorityComplaint = (value: unknown) =>
   parseRequest(escalateAuthorityComplaintSchema, value);
 export const validateAuthorityComplaintComment = (value: unknown) =>
-  parseRequest(ticketCommentBodySchema, value);
+  parseRequest(ticketCommentInputSchema, value);
 export const validateAuthorityComplaintResolve = (value: unknown) =>
-  parseRequest(ticketResolveBodySchema, value);
+  parseRequest(ticketResolveInputSchema, value);
 export const validateAuthorityComplaintReopen = (value: unknown) =>
   parseRequest(ticketReopenBodySchema, value ?? {});
 export const validateAuthorityComplaintEmptyBody = (value: unknown) =>

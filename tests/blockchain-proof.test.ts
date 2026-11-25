@@ -106,8 +106,8 @@ void test("payload helpers emit primitives that the shared canonical hash can en
   assert.equal(day(new Date("2026-11-01T00:00:00Z")), "2026-11-01");
   assert.equal(decimal(new Prisma.Decimal("6.1")), "6.100");
   assert.equal(decimal(null), null);
-  assert.throws(() => integer(1.5), /số nguyên/);
-  assert.throws(() => integer(Number.NaN), /số nguyên/);
+  assert.throws(() => integer(1.5), /Dữ liệu xác thực không hợp lệ/);
+  assert.throws(() => integer(Number.NaN), /Dữ liệu xác thực không hợp lệ/);
   assert.equal(integer(null), null);
 });
 

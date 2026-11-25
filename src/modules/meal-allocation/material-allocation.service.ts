@@ -197,7 +197,7 @@ function allocateEditedRows(
         );
     }
     if (!materials.length)
-      throw new HttpError(409, "Lượng cấp nhỏ hơn độ chính xác lưu trữ");
+      throw new HttpError(409, "Lượng cấp quá nhỏ. Kiểm tra lại.");
     entries.push({
       ...row,
       allocatedPortions: portions.toFixed(2),
@@ -260,7 +260,7 @@ export function buildMaterialPlan(
   )
     throw new HttpError(
       409,
-      "Phân bổ đã khóa thiếu dữ liệu nguyên liệu; cần đối soát",
+      "Phân bổ đã khóa thiếu dữ liệu nguyên liệu. Liên hệ quản trị.",
     );
   const lockedIds = new Set(
     allocations
@@ -311,7 +311,10 @@ export function buildMaterialPlan(
             used,
           )
         )
-          throw new HttpError(409, "Lịch sử cấp vượt nguồn nguyên liệu");
+          throw new HttpError(
+            409,
+            "Lượng đã cấp nhiều hơn nguyên liệu. Kiểm tra lại.",
+          );
         const remaining = Prisma.Decimal.max(0, normalized.quantity.sub(used));
         return {
           batchId: batch.id,
@@ -346,7 +349,7 @@ export function buildMaterialPlan(
     if (menus.length !== 1 || !demand.Class.gradeId)
       throw new HttpError(
         409,
-        "Nhu cầu cần đối soát thực đơn, khối hoặc nhóm dị ứng trước khi tự phân bổ",
+        "Dữ liệu chưa khớp. Kiểm tra thực đơn, khối và nhóm dị ứng.",
       );
     const dishDemands = menus[0].menuDayDishes
       .filter((dish) => dish.mealType === demand.mealType)
@@ -439,7 +442,7 @@ export function buildMaterialPlan(
       if (!recipes.length || standards.some((value) => value !== standards[0]))
         throw new HttpError(
           409,
-          "Định lượng giữa các lô không thống nhất; cần đối soát",
+          "Định lượng giữa các lô khác nhau. Kiểm tra lại.",
         );
       demands.push({
         id: demand.id,
@@ -472,10 +475,7 @@ export function buildMaterialPlan(
         dishId,
       );
     if (Date.now() >= deadline)
-      throw new HttpError(
-        409,
-        "Chưa tính xong phương án trong giới hạn thời gian; vui lòng thử lại",
-      );
+      throw new HttpError(409, "Tính quá lâu. Vui lòng thử lại.");
     return planMaterialAllocation(
       demands.filter((d) => d.dishId === dishId),
       sources.filter((s) => s.dishId === dishId),

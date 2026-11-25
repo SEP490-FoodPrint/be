@@ -77,7 +77,7 @@ export function activationDate(
 
 export function validateDocument(buffer: Buffer, originalName: string) {
   if (!buffer.length || buffer.length > 10 * 1024 * 1024)
-    throw new HttpError(400, "Tệp phải từ 1 byte đến 10 MB.");
+    throw new HttpError(400, "Tệp không được rỗng, tối đa 10 MB.");
   const mimeType =
     buffer.subarray(0, 5).toString() === "%PDF-"
       ? "application/pdf"

@@ -63,10 +63,7 @@ export function sampleAmountFor(
       ),
       unit,
     };
-  throw new HttpError(
-    409,
-    `Đơn vị mốc chuẩn của món phải là g hoặc ml (nhận “${standardUnit}”)`,
-  );
+  throw new HttpError(409, "Khẩu phần món phải tính theo g hoặc ml.");
 }
 
 /** Cảnh báo (không chặn) khi cấu hình thấp hơn mức tối thiểu của QĐ 1246 (D8). */
@@ -306,7 +303,7 @@ export function assignSampleLots(
       }
       throw new HttpError(
         409,
-        `Không đủ nguyên liệu lưu mẫu cho mẻ ${batch.label}: ${line.ingredientName ?? line.ingredientEntryId}`,
+        `Không đủ ${line.ingredientName ?? "nguyên liệu"} để lưu mẫu cho mẻ ${batch.label}.`,
       );
     }
   }

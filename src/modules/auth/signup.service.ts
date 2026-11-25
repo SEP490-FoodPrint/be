@@ -32,7 +32,7 @@ const registerApplicant: RegisterApplicant = async (input) => {
       select: { id: true, code: true, type: true },
     });
     if (!role || role.type !== input.requestType)
-      throw new HttpError(503, "Catalog role đăng ký chưa sẵn sàng");
+      throw new HttpError(503, "Chưa thể đăng ký. Vui lòng thử lại sau.");
     const user = await tx.user.create({
       data: {
         username: input.username,
@@ -73,7 +73,7 @@ export function createSignupService(
           "code" in error &&
           error.code === "P2002"
         )
-          throw new HttpError(409, "Không thể đăng ký với username/email này");
+          throw new HttpError(409, "Tên đăng nhập hoặc email không dùng được.");
         throw new HttpError(
           503,
           "Không thể xử lý đăng ký. Vui lòng thử lại sau.",

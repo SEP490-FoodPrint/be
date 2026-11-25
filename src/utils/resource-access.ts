@@ -49,7 +49,7 @@ function school(p: AuthPrincipal): string {
 }
 function supplier(p: AuthPrincipal): string {
   if (!p.supplierId || p.orgType !== "SUPPLIER")
-    throw new HttpError(403, "Không có phạm vi supplier");
+    throw new HttpError(403, "Chức năng chỉ dành cho nhà cung cấp.");
   return p.supplierId;
 }
 function authority(p: AuthPrincipal): string {
@@ -123,10 +123,7 @@ export const listScopes = {
   auth: (p: AuthPrincipal): Prisma.RoleWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["auth"]);
     if (p.orgType === "SYSTEM") return {};
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   user: (p: AuthPrincipal): Prisma.UserWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["user"]);
@@ -137,10 +134,7 @@ export const listScopes = {
     assertOrganizationManager(p);
     if (p.orgType === "SCHOOL") return { schoolId: school(p) };
     if (p.orgType === "SUPPLIER") return { supplierId: supplier(p) };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   "supplier-staff": (p: AuthPrincipal): Prisma.UserWhereInput => {
     const { supplierId } = supplierStaffManagementScope(p);
@@ -159,10 +153,7 @@ export const listScopes = {
     assertPermission(p, ...RESOURCE_PERMISSIONS["organization"]);
     if (p.orgType === "SYSTEM") return {};
     if (p.orgType === "SCHOOL") return { id: school(p) };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   ingredient: (p: AuthPrincipal): Prisma.IngredientWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["ingredient"]);
@@ -181,29 +172,20 @@ export const listScopes = {
         },
       };
     if (p.orgType === "SUPPLIER") return { supplierId: supplier(p) };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   menu: (p: AuthPrincipal): Prisma.WeeklyMenuWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["menu"]);
     if (p.orgType === "SYSTEM") return {};
     if (p.orgType === "SCHOOL") return { schoolId: school(p) };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   "supply-order": (p: AuthPrincipal): Prisma.SupplyRequestWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["supply-order"]);
     if (p.orgType === "SYSTEM") return {};
     if (p.orgType === "SCHOOL") return { schoolId: school(p) };
     if (p.orgType === "SUPPLIER") return { supplierId: supplier(p) };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   warehouse: (p: AuthPrincipal): Prisma.IngredientLotWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["warehouse"]);
@@ -214,20 +196,14 @@ export const listScopes = {
       };
     if (p.orgType === "SUPPLIER")
       return { DeliveryItem: { Delivery: { supplierId: supplier(p) } } };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   kitchen: (p: AuthPrincipal): Prisma.CookingBatchWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["kitchen"]);
     if (p.orgType === "SYSTEM") return {};
     if (p.orgType === "SCHOOL")
       return { MenuDay: { WeeklyMenu: { schoolId: school(p) } } };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   "meal-attendance": (p: AuthPrincipal): Prisma.DailyMealPortionWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["meal-attendance"]);
@@ -243,10 +219,7 @@ export const listScopes = {
           }),
         },
       };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   /** Khiếu nại suất ăn (bảng cha `complaints`, kind MEAL); trường nhận lưu ở `meal_complaints.school_id`. */
   feedback: (p: AuthPrincipal): Prisma.ComplaintWhereInput => {
@@ -312,10 +285,7 @@ export const listScopes = {
           some: authorityReports(p),
         },
       };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   supplier: (p: AuthPrincipal): Prisma.SupplierWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["supplier"]);
@@ -330,19 +300,13 @@ export const listScopes = {
           },
         },
       };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   authority: (p: AuthPrincipal): Prisma.CommuneFoodSafetyUnitWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["authority"]);
     if (p.orgType === "SYSTEM") return {};
     if (p.orgType === "AUTHORITY") return { id: authority(p) };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   /**
    * specs/authority-officer-accounts FR-009: cán bộ ATTP xem trường cùng phường/xã với đơn vị mình
@@ -357,10 +321,7 @@ export const listScopes = {
       return {
         location: { communeFoodSafetyUnits: { some: { id: authority(p) } } },
       };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   "school-grade": (p: AuthPrincipal): Prisma.SchoolGradeWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["school-grade"]);
@@ -373,10 +334,7 @@ export const listScopes = {
     assertPermission(p, ...RESOURCE_PERMISSIONS["class"]);
     if (p.orgType === "SYSTEM") return {};
     if (p.orgType === "SCHOOL") return { schoolId: school(p) };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   "source-facility": (p: AuthPrincipal): Prisma.SourceFacilityWhereInput => {
     return { supplierId: sourceFacilityManagementScope(p).supplierId };
@@ -387,18 +345,12 @@ export const listScopes = {
     assertPermission(p, ...RESOURCE_PERMISSIONS["supplier-certification"]);
     if (p.orgType === "SYSTEM") return {};
     if (p.orgType === "SUPPLIER") return { supplierId: supplier(p) };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   registration: (p: AuthPrincipal): Prisma.RegistrationRequestWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["registration"]);
     if (p.orgType === "SYSTEM") return {};
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   "school-supplier": (
     p: AuthPrincipal,
@@ -407,10 +359,7 @@ export const listScopes = {
     if (p.orgType === "SYSTEM") return {};
     if (p.orgType === "SCHOOL") return { schoolId: school(p) };
     if (p.orgType === "SUPPLIER") return { supplierId: supplier(p) };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   "supplier-school": (
     p: AuthPrincipal,
@@ -421,38 +370,26 @@ export const listScopes = {
     assertPermission(p, ...RESOURCE_PERMISSIONS["ingredient-entry"]);
     if (p.orgType === "SYSTEM") return {};
     if (p.orgType === "SCHOOL") return { schoolId: school(p) };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   allergy: (p: AuthPrincipal): Prisma.ClassAllergyWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["allergy"]);
     if (p.orgType === "SYSTEM") return {};
     if (p.orgType === "SCHOOL") return { Class: { schoolId: school(p) } };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   delivery: (p: AuthPrincipal): Prisma.DeliveryWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["delivery"]);
     if (p.orgType === "SYSTEM") return {};
     if (p.orgType === "SCHOOL") return { schoolId: school(p) };
     if (p.orgType === "SUPPLIER") return { supplierId: supplier(p) };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   dish: (p: AuthPrincipal): Prisma.DishWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["dish"]);
     if (p.orgType === "SYSTEM") return {};
     if (p.orgType === "SCHOOL") return { schoolId: school(p) };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   inventory: (p: AuthPrincipal): Prisma.InventoryTransactionWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["inventory"]);
@@ -471,10 +408,7 @@ export const listScopes = {
           DeliveryItem: { Delivery: { supplierId: supplier(p) } },
         },
       };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   "retained-sample": (
     p: AuthPrincipal,
@@ -485,20 +419,14 @@ export const listScopes = {
       return {
         CookingBatch: { MenuDay: { WeeklyMenu: { schoolId: school(p) } } },
       };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   "meal-allocation": (p: AuthPrincipal): Prisma.MealAllocationWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["meal-allocation"]);
     if (p.orgType === "SYSTEM") return {};
     if (p.orgType === "SCHOOL")
       return { DailyMealPortion: { Class: { schoolId: school(p) } } };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   "ingredient-quality-feedback": (
     p: AuthPrincipal,
@@ -531,10 +459,7 @@ export const listScopes = {
     if (p.orgType === "SCHOOL")
       return { FoodSafetyIncident: { schoolId: school(p) } };
     if (p.orgType === "AUTHORITY") return authorityReports(p);
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   "food-analysis": (p: AuthPrincipal): Prisma.FoodAnalysisResultWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["food-analysis"]);
@@ -549,19 +474,13 @@ export const listScopes = {
           },
         },
       };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   "school-alert": (p: AuthPrincipal): Prisma.IncidentSchoolAlertWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["school-alert"]);
     if (p.orgType === "SYSTEM") return {};
     if (p.orgType === "SCHOOL") return { targetSchoolId: school(p) };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   /** PR6b: System Admin xem mọi yêu cầu; cán bộ ATTP chỉ hồ sơ đơn vị đang nhận. */
   "supplier-enforcement": (
@@ -581,19 +500,13 @@ export const listScopes = {
         Incident: { recipientCommuneFoodSafetyUnitId: authority(p) },
       };
     }
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
   "menu-review": (p: AuthPrincipal): Prisma.MenuReviewRecordWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["menu-review"]);
     if (p.orgType === "SYSTEM") return {};
     if (p.orgType === "SCHOOL") return { WeeklyMenu: { schoolId: school(p) } };
-    throw new HttpError(
-      403,
-      "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-    );
+    throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
   },
 };
 export type Resource = keyof typeof listScopes;
@@ -753,10 +666,7 @@ export function blockchainProofScope(principal: AuthPrincipal): string | null {
   assertPermission(principal, ...RESOURCE_PERMISSIONS["traceability"]);
   if (principal.orgType === "SYSTEM") return null;
   if (principal.orgType === "SCHOOL") return school(principal);
-  throw new HttpError(
-    403,
-    "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-  );
+  throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
 }
 
 export type IngredientQualityFeedbackReadScope =
@@ -812,10 +722,7 @@ export function ingredientQualityFeedbackReadScope(
   );
   if (principal.orgType === "SYSTEM") {
     if (mode === "detail") {
-      throw new HttpError(
-        403,
-        "Loại tổ chức không có phạm vi truy cập chi tiết phản hồi này",
-      );
+      throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
     }
     return { kind: "SYSTEM" };
   }
@@ -835,10 +742,7 @@ export function ingredientQualityFeedbackReadScope(
     assertPermission(principal, "ingredient_quality_feedback.view_details");
     return { kind: "SUPPLIER", supplierId };
   }
-  throw new HttpError(
-    403,
-    "Loại tổ chức không có phạm vi truy cập tài nguyên này",
-  );
+  throw new HttpError(403, "Bạn không có quyền xem nội dung này.");
 }
 
 export function ingredientQualityFeedbackResponseScope(

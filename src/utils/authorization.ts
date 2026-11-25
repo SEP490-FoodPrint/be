@@ -65,7 +65,10 @@ export function principalFromIdentity(user: Identity | null): AuthPrincipal {
     (orgType === "SUPPLIER" && !user.supplierId) ||
     (orgType === "AUTHORITY" && !user.communeFoodSafetyUnitId)
   )
-    throw new HttpError(403, "Role và tổ chức của tài khoản không hợp lệ");
+    throw new HttpError(
+      403,
+      "Tài khoản chưa được cấu hình đúng. Liên hệ quản trị.",
+    );
   const denied = new Set(
     user.permissionDenials
       .filter(
@@ -181,7 +184,7 @@ export function assertSystemManager(
     principal.role !== ROLES.SYSTEM_ADMIN ||
     principal.orgType !== ORG_TYPES.SYSTEM
   )
-    throw new HttpError(403, "Chỉ System Admin được thực hiện thao tác này");
+    throw new HttpError(403, "Chỉ Quản trị hệ thống được thực hiện.");
   assertPermission(principal, code);
 }
 export function assertOrganizationManager(principal: AuthPrincipal): void {

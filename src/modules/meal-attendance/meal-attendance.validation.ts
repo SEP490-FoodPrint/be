@@ -4,7 +4,7 @@ import { calendarDate, objectBody, uuid } from "../../utils/auth-validation";
 import { HttpError } from "../../utils/http-error";
 export function validateMealSummaryQuery(query: Record<string, unknown>) {
   if (Object.keys(query).some((k) => !["date", "mealType"].includes(k)))
-    throw new HttpError(400, "Chỉ hỗ trợ date và mealType");
+    throw new HttpError(400, "Yêu cầu không hợp lệ.");
   if (query.mealType !== "LUNCH" && query.mealType !== "AFTERNOON")
     throw new HttpError(400, "Ca ăn không hợp lệ");
   return { date: calendarDate(query.date), mealType: query.mealType } as const;
@@ -155,10 +155,7 @@ export function validateClassAllergyProfile(value: unknown) {
   });
   const keys = groups.map((g) => [...g.ingredientEntryIds].sort().join("|"));
   if (new Set(keys).size !== keys.length)
-    throw new HttpError(
-      400,
-      "Hai nhóm dị ứng trùng đúng một tập nguyên liệu; hãy gộp số học sinh vào một nhóm",
-    );
+    throw new HttpError(400, "Hai nhóm dị ứng giống nhau. Hãy gộp lại.");
   return { groups };
 }
 export type ClassAllergyProfileInput = ReturnType<

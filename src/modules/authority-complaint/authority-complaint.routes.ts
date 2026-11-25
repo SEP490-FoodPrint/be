@@ -5,6 +5,7 @@ import {
   requirePermission,
   requireResource,
 } from "../../middlewares/permission.middleware";
+import { receiveEvidenceFiles } from "../../utils/evidence-files";
 import { createAuthorityComplaintController } from "./authority-complaint.controller";
 import {
   authorityComplaintService,
@@ -22,7 +23,13 @@ export function createAuthorityComplaintRouter(
   const resource = requireResource("authority-complaint");
   router.get("/", authHandler, resource, controller.getAll);
   router.get("/:id", authHandler, resource, controller.getOne);
-  router.post("/", authHandler, requester, controller.escalate);
+  router.post(
+    "/",
+    authHandler,
+    requester,
+    receiveEvidenceFiles,
+    controller.escalate,
+  );
   router.post("/:id/accept", authHandler, handler, controller.accept);
   router.post(
     "/:id/comments",
@@ -31,9 +38,16 @@ export function createAuthorityComplaintRouter(
       "authority_complaint.respond",
       "authority_complaint.submit",
     ),
+    receiveEvidenceFiles,
     controller.comment,
   );
-  router.post("/:id/resolve", authHandler, handler, controller.resolve);
+  router.post(
+    "/:id/resolve",
+    authHandler,
+    handler,
+    receiveEvidenceFiles,
+    controller.resolve,
+  );
   router.post("/:id/satisfy", authHandler, requester, controller.satisfy);
   router.post("/:id/reopen", authHandler, requester, controller.reopen);
   return router;

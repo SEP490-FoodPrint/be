@@ -18,7 +18,7 @@ function parseRefreshToken(value: string | undefined): {
   hash: string;
 } {
   if (!value || !/^[a-f0-9]{32}\.[A-Za-z0-9_-]{43}$/.test(value))
-    throw new HttpError(401, "Refresh token không hợp lệ hoặc đã hết hạn");
+    throw new HttpError(401, "Phiên đã hết hạn. Vui lòng đăng nhập lại.");
   return { id: value.slice(0, 32), hash: hashRefreshToken(value) };
 }
 
@@ -29,7 +29,7 @@ export function createAuthSessions(
   async function live(id: string): Promise<StoredSession> {
     const record = await store.get(id);
     if (!record || record.expiresAt <= Math.floor(clock() / 1000))
-      throw new HttpError(401, "Phiên đăng nhập đã hết hạn hoặc bị thu hồi");
+      throw new HttpError(401, "Phiên đã hết hạn. Vui lòng đăng nhập lại.");
     return record;
   }
   function tokens(userId: string, id: string, expiresAt: number) {
@@ -69,13 +69,10 @@ export function createAuthSessions(
         typeof payload.sid !== "string" ||
         !/^[a-f0-9]{32}$/.test(payload.sid)
       )
-        throw new HttpError(
-          401,
-          "Token thiếu phiên đăng nhập hợp lệ; vui lòng đăng nhập lại",
-        );
+        throw new HttpError(401, "Phiên đã hết hạn. Vui lòng đăng nhập lại.");
       const record = await live(payload.sid);
       if (record.userId !== uuid(payload.sub))
-        throw new HttpError(401, "Phiên đăng nhập không khớp tài khoản");
+        throw new HttpError(401, "Phiên đã hết hạn. Vui lòng đăng nhập lại.");
     },
     async refresh<T>(
       refreshToken: string | undefined,
@@ -90,10 +87,7 @@ export function createAuthSessions(
         )
       ) {
         await store.revoke(id);
-        throw new HttpError(
-          401,
-          "Refresh token đã được sử dụng; vui lòng đăng nhập lại",
-        );
+        throw new HttpError(401, "Phiên đã hết hạn. Vui lòng đăng nhập lại.");
       }
       let user: T;
       try {
@@ -107,10 +101,7 @@ export function createAuthSessions(
       if (
         !(await store.rotate(id, hash, hashRefreshToken(result.refreshToken)))
       )
-        throw new HttpError(
-          401,
-          "Refresh token đã được sử dụng; vui lòng đăng nhập lại",
-        );
+        throw new HttpError(401, "Phiên đã hết hạn. Vui lòng đăng nhập lại.");
       return { ...result, user };
     },
     async logout(refreshToken?: string, accessToken?: string): Promise<void> {

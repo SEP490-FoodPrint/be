@@ -9,7 +9,7 @@ export { parseListQuery as validateIngredientEntryListQuery } from "../../utils/
 
 export const ingredientWasteRateParamsSchema = z.strictObject({
   ingredientEntryId: requestUuidSchema.refine((value) => value.length === 36, {
-    error: "ID phải là UUID hợp lệ",
+    error: "Mục đã chọn không hợp lệ.",
   }),
 });
 

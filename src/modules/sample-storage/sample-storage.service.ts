@@ -20,15 +20,12 @@ export class SampleStorageService {
   ): string {
     if (principal.orgType === "SYSTEM") {
       if (targetSchoolId) return targetSchoolId;
-      throw new HttpError(400, "Vui lòng chỉ định trường học (schoolId)");
+      throw new HttpError(400, "Vui lòng chọn trường.");
     }
     if (principal.orgType === "SCHOOL" && principal.schoolId) {
       return principal.schoolId;
     }
-    throw new HttpError(
-      403,
-      "Chỉ tài khoản thuộc phân hệ trường học mới có quyền truy cập dữ liệu tủ lưu mẫu",
-    );
+    throw new HttpError(403, "Chỉ tài khoản trường được xem tủ mẫu.");
   }
 
   async list(principal: AuthPrincipal, query: SampleStorageQueryInput) {
@@ -147,10 +144,7 @@ export class SampleStorageService {
     if (!code) return this.repository.createWithGeneratedCode(schoolId, input);
     const existing = await this.repository.findByCode(schoolId, code);
     if (existing) {
-      throw new HttpError(
-        409,
-        `Mã tủ lưu mẫu '${code}' đã tồn tại trong trường. Vui lòng chọn mã khác.`,
-      );
+      throw new HttpError(409, `Mã tủ ${code} đã được dùng.`);
     }
 
     return this.repository.create(schoolId, { ...input, code });
@@ -172,10 +166,7 @@ export class SampleStorageService {
     if (code !== current.code) {
       const duplicate = await this.repository.findByCode(schoolId, code);
       if (duplicate && duplicate.id !== id) {
-        throw new HttpError(
-          409,
-          `Mã tủ lưu mẫu '${code}' đã được sử dụng bởi tủ khác.`,
-        );
+        throw new HttpError(409, `Mã tủ ${code} đã được dùng.`);
       }
     }
 
@@ -195,7 +186,7 @@ export class SampleStorageService {
     if (activeStoredSamples > 0) {
       throw new HttpError(
         400,
-        `Không thể xóa tủ đang chứa ${activeStoredSamples} mẫu thức ăn lưu trữ. Vui lòng chuyển vị trí lưu hoặc hủy mẫu trước khi xóa tủ.`,
+        `Tủ còn ${activeStoredSamples} mẫu. Hãy chuyển hoặc hủy mẫu trước.`,
       );
     }
 

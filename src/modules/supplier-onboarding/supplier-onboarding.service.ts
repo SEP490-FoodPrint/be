@@ -1,3 +1,4 @@
+import { shortList } from "../../utils/short-list";
 import type { Prisma } from "../../generated/prisma/client";
 import type { AuthPrincipal } from "../../types/auth";
 import {
@@ -805,7 +806,7 @@ export async function activateContract(
         "Hồ sơ đã đổi. Vui lòng tải lại trước khi xác nhận.",
       );
     const issues = currentContractIssues(contract, activationDate(contract));
-    if (issues.length) throw new HttpError(409, issues.join(" "));
+    if (issues.length) throw new HttpError(409, shortList(issues, " "));
     const contractItems = contractHandlingItems(contract.items);
     const supplier = await tx.supplier.findUniqueOrThrow({
       where: { id: contract.supplierId },
@@ -848,7 +849,7 @@ export async function activateContract(
     )
       throw new HttpError(
         409,
-        "Đã có hợp đồng hiệu lực trùng nguyên liệu và thời gian. Đóng hồ sơ cũ hoặc điều chỉnh thời hạn.",
+        "Trùng hợp đồng đang hiệu lực. Đổi thời hạn hoặc đóng hợp đồng cũ.",
       );
     let relationship = await tx.schoolSupplierRelationship.findFirst({
       where: {
@@ -1091,7 +1092,7 @@ export function createOrderIntakeService(
         if (mismatched)
           throw new HttpError(
             400,
-            `Nguyên liệu ${mismatched.Ingredient.name} không thuộc loại ${body.orderType === "DRY_STOCK" ? "Đồ lưu kho" : "Đồ tươi"} của đơn`,
+            `${mismatched.Ingredient.name} không phải ${body.orderType === "DRY_STOCK" ? "Đồ lưu kho" : "Đồ tươi"}.`,
           );
         if (body.orderType === "DIRECT_USE" && body.batchNo === 2) {
           const notFinalized = await tx.class.findMany({
@@ -1115,7 +1116,7 @@ export function createOrderIntakeService(
           if (notFinalized.length)
             throw new HttpError(
               409,
-              `Chưa thể tạo yêu cầu nhập hàng Đợt 2: còn ${notFinalized.length} lớp chưa chốt điểm danh (${notFinalized.map((c) => c.name).join(", ")})`,
+              `Còn ${notFinalized.length} lớp chưa chốt: ${shortList(notFinalized.map((c) => c.name))}`,
             );
           const round2 = await tx.supplyRound.findUnique({
             where: {
@@ -1276,7 +1277,7 @@ export function createOrderIntakeService(
           issues.push(
             "Có nguyên liệu ngoài phạm vi hợp đồng hoặc đã ngừng hoạt động.",
           );
-        if (issues.length) throw new HttpError(409, issues.join(" "));
+        if (issues.length) throw new HttpError(409, shortList(issues, " "));
         const result = await orderRepository.markSent(tx, id, contractId, {
           contractId,
           contract: contract.snapshot,
@@ -1307,7 +1308,7 @@ export async function orderEvidence(principal: AuthPrincipal, id: string) {
   else if (principal.orgType === "SUPPLIER" && principal.supplierId)
     where = { supplierId: principal.supplierId };
   else if (principal.orgType === "SYSTEM") where = {};
-  else throw new HttpError(403, "Không có phạm vi truy xuất đơn đặt hàng.");
+  else throw new HttpError(403, "Không tìm thấy đơn hàng.");
   const order = await (
     await getPrisma()
   ).supplyRequest.findFirst({
@@ -1319,11 +1320,7 @@ export async function orderEvidence(principal: AuthPrincipal, id: string) {
       contractSnapshot: true,
     },
   });
-  if (!order)
-    throw new HttpError(
-      404,
-      "Không tìm thấy đơn đặt hàng trong phạm vi tài khoản.",
-    );
+  if (!order) throw new HttpError(404, "Không tìm thấy đơn hàng.");
   return order;
 }
 
@@ -1379,9 +1376,7 @@ export function createIngredientHandlingService(
         if (blocked.length)
           throw new HttpError(
             409,
-            `Không thể đổi loại khi còn xe đã đến hoặc đang chờ duyệt có nguyên liệu này: ${blocked
-              .map((delivery) => delivery.deliveryNo)
-              .join(", ")}.`,
+            `Chưa đổi được: còn xe chờ duyệt ${shortList(blocked.map((delivery) => delivery.deliveryNo))}.`,
           );
         const changes = await syncIngredientEntries(
           tx,

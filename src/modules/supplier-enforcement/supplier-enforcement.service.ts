@@ -139,7 +139,8 @@ export function createSupplierEnforcementService(
 
   async function readAction(tx: Tx, id: string) {
     const row = await repository.readAction(tx, id);
-    if (!row) throw new HttpError(503, "Không đọc lại được yêu cầu chế tài");
+    if (!row)
+      throw new HttpError(503, "Chưa tải được hồ sơ. Vui lòng thử lại.");
     return mapAction(row);
   }
 
@@ -171,7 +172,7 @@ export function createSupplierEnforcementService(
     if (evidence?.status !== "COMPLETED" || evidence.finding !== "AT_FAULT")
       throw new HttpError(
         409,
-        "Căn cứ khóa tài khoản phải là đợt kiểm tra đã có kết luận NCC AT_FAULT",
+        "Cần đợt kiểm tra kết luận nhà cung cấp có lỗi.",
       );
   }
 
@@ -460,7 +461,7 @@ export function createSupplierEnforcementService(
             throw new RequestValidationError([
               {
                 field: "supplierId",
-                message: "NCC không thuộc chuỗi truy xuất của hồ sơ",
+                message: "Nhà cung cấp không liên quan hồ sơ này.",
               },
             ]);
           if (body.actionType === "LOCK_ACCOUNT")
@@ -627,10 +628,7 @@ export function createSupplierEnforcementService(
             action.actionType !== "LOCK_ACCOUNT" ||
             action.executionStatus !== "FAILED"
           )
-            throw new HttpError(
-              409,
-              "Chỉ chạy lại yêu cầu khóa tài khoản đang thực thi lỗi",
-            );
+            throw new HttpError(409, "Chỉ thử lại được yêu cầu bị lỗi.");
           const userIds = await repository.lockedUserIdsOfAction(tx, action.id);
           return {
             userIds,

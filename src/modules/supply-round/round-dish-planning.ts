@@ -698,7 +698,7 @@ export async function planRoundDish(
   const { schoolId, deliveryDate } = round;
   const school = await kitchenRepository.findSchoolContext(tx, schoolId);
   if (!school?.cookingMode)
-    throw new HttpError(409, "BGH cần cấu hình chế độ nấu trước");
+    throw new HttpError(409, "Chưa có chế độ nấu. Liên hệ BGH.");
   const mode: CookingMode =
     phase === "ROUND1_NO_FRESH" ? "COMBINE_LOTS" : school.cookingMode;
   const meals = occurrences.map(mealKey);
@@ -719,7 +719,7 @@ export async function planRoundDish(
     if (
       !(meal.mealType === "LUNCH" ? school.lunchTime : school.afternoonMealTime)
     )
-      throw new HttpError(409, "BGH cần cấu hình giờ phục vụ bữa ăn trước");
+      throw new HttpError(409, "Chưa có giờ phục vụ. Liên hệ BGH.");
     const menu = await kitchenRepository.findPlanMeal(
       tx,
       meal.menuDayId,
@@ -773,7 +773,7 @@ export async function planRoundDish(
     )
       throw new HttpError(
         409,
-        "Nhu cầu có dị ứng liên quan công thức; cần phương án món phù hợp trước khi lập mẻ",
+        "Món có chất gây dị ứng. Cần thay món hoặc lập suất riêng.",
       );
     const recipe = allLines.filter(
       (line) => !shared.has(line.ingredientEntryId),
@@ -791,7 +791,7 @@ export async function planRoundDish(
       };
     });
     if (!standardLines.length)
-      throw new HttpError(409, "Thiếu công thức mốc chuẩn của món");
+      throw new HttpError(409, "Món chưa có công thức.");
     const standard = occurrence.Dish.standardQuantity;
     const { amount, unit } = sampleAmountFor(
       occurrence.Dish.standardUnit,

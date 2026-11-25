@@ -12,7 +12,7 @@ export function readAuthCookie(req: Request, name: string): string | undefined {
     header.split(";").filter((part) => part.trim().split("=")[0] === name)
       .length > 1
   ) {
-    throw new HttpError(401, "Cookie xác thực không hợp lệ");
+    throw new HttpError(401, "Phiên đã hết hạn. Vui lòng đăng nhập lại.");
   }
   return parse(header)[name];
 }
@@ -22,7 +22,8 @@ export function readAccessToken(req: Request): string | undefined {
   if (cookie !== undefined) return cookie;
   if (req.headers.authorization === undefined) return undefined;
   const match = /^Bearer (\S+)$/.exec(req.headers.authorization);
-  if (!match) throw new HttpError(401, "Thông tin xác thực không hợp lệ");
+  if (!match)
+    throw new HttpError(401, "Phiên đã hết hạn. Vui lòng đăng nhập lại.");
   return match[1];
 }
 

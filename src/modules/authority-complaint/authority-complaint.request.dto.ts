@@ -3,9 +3,9 @@ import type {
   authorityComplaintListQuerySchema,
   authorityComplaintParamsSchema,
   escalateAuthorityComplaintSchema,
-  ticketCommentBodySchema,
+  ticketCommentInputSchema,
   ticketReopenBodySchema,
-  ticketResolveBodySchema,
+  ticketResolveInputSchema,
 } from "./authority-complaint.validation";
 
 export type AuthorityComplaintListQueryDTO = z.infer<
@@ -18,10 +18,10 @@ export type EscalateAuthorityComplaintRequestDTO = z.infer<
   typeof escalateAuthorityComplaintSchema
 >;
 export type AuthorityComplaintCommentRequestDTO = z.infer<
-  typeof ticketCommentBodySchema
+  typeof ticketCommentInputSchema
 >;
 export type AuthorityComplaintResolveRequestDTO = z.infer<
-  typeof ticketResolveBodySchema
+  typeof ticketResolveInputSchema
 >;
 export type AuthorityComplaintReopenRequestDTO = z.infer<
   typeof ticketReopenBodySchema

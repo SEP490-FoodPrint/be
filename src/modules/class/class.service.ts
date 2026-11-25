@@ -80,7 +80,7 @@ function classDto(row: ClassListRow, now: Date): ClassListItemResponseDTO {
 
 function schoolOf(principal: AuthPrincipal): string {
   if (principal.orgType !== "SCHOOL" || !principal.schoolId) {
-    throw new HttpError(403, "Thao tác yêu cầu phạm vi trường đã xác thực");
+    throw new HttpError(403, "Chức năng chỉ dành cho tài khoản trường.");
   }
   return principal.schoolId;
 }
@@ -103,10 +103,7 @@ async function requireWritableYear(
   now: Date,
 ): Promise<string> {
   if (!academicYear || !isAssignableAcademicYear(academicYear, now)) {
-    throw new HttpError(
-      409,
-      "Niên khóa đã kết thúc hoặc không hợp lệ, chỉ được xem lớp học",
-    );
+    throw new HttpError(409, "Niên khóa này chỉ được xem.");
   }
   const configured = await repository.findConfiguredAcademicYear(
     tx,
@@ -114,10 +111,7 @@ async function requireWritableYear(
     academicYear,
   );
   if (!configured) {
-    throw new HttpError(
-      409,
-      `Niên khóa ${academicYear} chưa được cấu hình năm học`,
-    );
+    throw new HttpError(409, `Chưa cấu hình niên khóa ${academicYear}.`);
   }
   return academicYear;
 }
@@ -194,7 +188,7 @@ async function assertTeacherFree(
   if (busy && busy.id !== classId) {
     throw new HttpError(
       409,
-      `${teacher.fullName} đang chủ nhiệm lớp ${busy.name} trong niên khóa ${academicYear}`,
+      `${teacher.fullName} đã chủ nhiệm lớp ${busy.name}.`,
     );
   }
 }

@@ -35,8 +35,8 @@ export const chainQuerySchema = z.strictObject({
 });
 
 const day = z
-  .string({ error: "Ngày phải có định dạng YYYY-MM-DD" })
-  .regex(/^\d{4}-\d{2}-\d{2}$/, { error: "Ngày phải có định dạng YYYY-MM-DD" })
+  .string({ error: "Ngày không hợp lệ." })
+  .regex(/^\d{4}-\d{2}-\d{2}$/, { error: "Ngày không hợp lệ." })
   .refine((value) => !Number.isNaN(Date.parse(`${value}T00:00:00Z`)), {
     error: "Ngày không hợp lệ",
   });

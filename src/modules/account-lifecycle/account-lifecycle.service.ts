@@ -171,7 +171,7 @@ export function createAccountLifecycleService(
             if (await repository.hasOpenReports(tx, target.id, scope.unitId))
               throw new HttpError(
                 409,
-                "Không thể vô hiệu hóa vì cán bộ còn yêu cầu kiểm tra chưa CLOSED.",
+                "Cán bộ còn yêu cầu kiểm tra chưa đóng.",
               );
             await repository.deactivateOfficer(tx, target.id);
           }
@@ -188,14 +188,11 @@ export function createAccountLifecycleService(
           if (counts.active !== 0)
             throw new HttpError(
               409,
-              "Trạng thái tài khoản trong tổ chức không nhất quán",
+              "Trạng thái tài khoản bị lệch. Liên hệ quản trị.",
             );
         } else {
           if (await repository.hasOngoingOrders(tx, trustedScope))
-            throw new HttpError(
-              409,
-              "Không thể vô hiệu hóa vì tổ chức còn đơn hàng IN_PROGRESS.",
-            );
+            throw new HttpError(409, "Tổ chức còn đơn hàng đang xử lý.");
           await repository.deactivateAccounts(tx, trustedScope);
         }
         return {
@@ -228,7 +225,7 @@ export function createAccountLifecycleService(
         )
           throw new HttpError(
             409,
-            "NCC còn hạn chế theo sự cố ATTP; cần duyệt yêu cầu khôi phục",
+            "NCC đang bị hạn chế. Cần duyệt khôi phục trước.",
           );
         if (mapLifecycle(target, scope).intakeState !== input.state) {
           await repository.setIntakeState(tx, target, input.state);

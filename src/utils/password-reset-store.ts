@@ -51,7 +51,7 @@ export function createRedisPasswordResetStore(
     } catch {
       throw new HttpError(
         503,
-        "Dịch vụ đặt lại mật khẩu tạm thời không khả dụng",
+        "Chưa đặt lại được mật khẩu. Vui lòng thử lại sau.",
       );
     }
   }

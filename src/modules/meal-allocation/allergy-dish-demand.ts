@@ -34,7 +34,7 @@ export function allergyDishDemand(
     )
       throw new HttpError(
         409,
-        "Cần đối soát số suất dị ứng của lớp " + demand.Class.name,
+        "Cần kiểm tra lại suất dị ứng của lớp" + demand.Class.name,
       );
     if (group) group.entries.push(row.IngredientEntry);
     else groups.set(groupNo, { count, entries: [row.IngredientEntry] });
@@ -43,7 +43,7 @@ export function allergyDishDemand(
   if (totalAllergy > demand.totalPortions)
     throw new HttpError(
       409,
-      "Cần đối soát số suất dị ứng của lớp " + demand.Class.name,
+      "Cần kiểm tra lại suất dị ứng của lớp" + demand.Class.name,
     );
   const entries = [...groups.values()].flatMap((group) => group.entries);
   const entryMatches = (
@@ -62,7 +62,7 @@ export function allergyDishDemand(
     )
       throw new HttpError(
         409,
-        "Cần đối soát món dùng gia vị chung " + entry.Ingredient.name,
+        "Cần kiểm tra lại món dùng gia vị chung" + entry.Ingredient.name,
       );
   }
   const dish = menu.menuDayDishes.find(
@@ -91,7 +91,7 @@ export function allergyDishDemand(
       if (!lines.length)
         throw new HttpError(
           409,
-          "Cần đối soát thành phần món " + (dish?.Dish.name ?? dishId),
+          "Cần kiểm tra lại thành phần món" + (dish?.Dish.name ?? "ăn"),
         );
       return lines;
     },

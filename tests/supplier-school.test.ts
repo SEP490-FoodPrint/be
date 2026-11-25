@@ -232,7 +232,7 @@ void test("Phase 2 validation normalizes UUIDs, applies strict pagination/empty/
     (error: unknown) => {
       assert(error instanceof RequestValidationError);
       assert.equal(error.statusCode, 400);
-      assert.equal(error.message, "Nội dung yêu cầu không hợp lệ");
+      assert.equal(error.message, "Thông tin chưa đúng. Kiểm tra lại.");
       assert.deepEqual(error.fields.map((f) => f.field).sort(), [
         "limit",
         "page",

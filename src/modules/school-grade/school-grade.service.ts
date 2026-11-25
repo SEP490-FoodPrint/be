@@ -83,7 +83,7 @@ export function createSchoolGradeService(
         if (grade._count.classes)
           throw new HttpError(
             409,
-            "Khối học còn lớp liên kết. Hãy chuyển hoặc bỏ gán khối tại Lớp học & GVCN.",
+            "Khối còn lớp. Hãy chuyển lớp trước khi xóa.",
           );
         await repository.remove(tx, schoolId, id);
         return { id };

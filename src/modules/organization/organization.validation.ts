@@ -58,11 +58,11 @@ export const mealTimesBodySchema = z
   .strictObject({
     lunchTime: z
       .string()
-      .regex(TIME_REGEX, "Giờ bữa trưa phải có định dạng HH:mm")
+      .regex(TIME_REGEX, "Giờ bữa trưa chưa đúng, ví dụ 10:30")
       .nullable(),
     afternoonMealTime: z
       .string()
-      .regex(TIME_REGEX, "Giờ bữa phụ phải có định dạng HH:mm")
+      .regex(TIME_REGEX, "Giờ bữa phụ chưa đúng, ví dụ 14:30")
       .nullable(),
   })
   .refine(
@@ -139,10 +139,10 @@ export const publicSchoolListQuerySchema = z
         })
         .optional(),
       locationId: z
-        .string({ error: "locationId phải là UUID hợp lệ" })
+        .string({ error: "Phường/xã không hợp lệ." })
         .transform((val) => val.trim())
         .refine((val) => UUID_REGEX.test(val), {
-          error: "locationId phải là UUID hợp lệ",
+          error: "Phường/xã không hợp lệ.",
         })
         .optional(),
       city: z
@@ -192,16 +192,16 @@ export const schoolCodeSchema = z
   });
 
 export const schoolIdSchema = z
-  .string({ error: "ID trường học không hợp lệ (yêu cầu UUID)" })
+  .string({ error: "Trường không hợp lệ." })
   .transform((val) => val.trim())
   .refine((val) => UUID_REGEX.test(val), {
-    error: "ID trường học không hợp lệ (yêu cầu UUID)",
+    error: "Trường không hợp lệ.",
   });
 
 export const publicDailyMenuQuerySchema = z.strictObject(
   {
     date: z
-      .string({ error: "Ngày không đúng định dạng (yêu cầu YYYY-MM-DD)" })
+      .string({ error: "Ngày không hợp lệ." })
       .transform((val) => val.trim())
       .refine(
         (val) => {
@@ -210,7 +210,7 @@ export const publicDailyMenuQuerySchema = z.strictObject(
           const parsed = new Date(`${val}T00:00:00.000Z`);
           return !Number.isNaN(parsed.getTime());
         },
-        { error: "Ngày không đúng định dạng (yêu cầu YYYY-MM-DD)" },
+        { error: "Ngày không hợp lệ." },
       )
       .transform((val) => (val === "" ? undefined : val))
       .optional(),
@@ -231,7 +231,7 @@ export const publicDailyMenuQuerySchema = z.strictObject(
 export const publicSchoolGradesQuerySchema = z.strictObject(
   {
     week: z
-      .string({ error: "Ngày tuần không đúng định dạng (yêu cầu YYYY-MM-DD)" })
+      .string({ error: "Ngày không hợp lệ." })
       .transform((val) => val.trim())
       .refine(
         (val) => {
@@ -240,7 +240,7 @@ export const publicSchoolGradesQuerySchema = z.strictObject(
           const parsed = new Date(`${val}T00:00:00.000Z`);
           return !Number.isNaN(parsed.getTime());
         },
-        { error: "Ngày tuần không đúng định dạng (yêu cầu YYYY-MM-DD)" },
+        { error: "Ngày không hợp lệ." },
       )
       .transform((val) => (val === "" ? undefined : val))
       .optional(),
@@ -251,7 +251,7 @@ export const publicSchoolGradesQuerySchema = z.strictObject(
 export const publicWeeklyMenuQuerySchema = z.strictObject(
   {
     week: z
-      .string({ error: "Ngày tuần không đúng định dạng (yêu cầu YYYY-MM-DD)" })
+      .string({ error: "Ngày không hợp lệ." })
       .transform((val) => val.trim())
       .refine(
         (val) => {
@@ -260,7 +260,7 @@ export const publicWeeklyMenuQuerySchema = z.strictObject(
           const parsed = new Date(`${val}T00:00:00.000Z`);
           return !Number.isNaN(parsed.getTime());
         },
-        { error: "Ngày tuần không đúng định dạng (yêu cầu YYYY-MM-DD)" },
+        { error: "Ngày không hợp lệ." },
       )
       .transform((val) => (val === "" ? undefined : val))
       .optional(),

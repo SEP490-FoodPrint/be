@@ -558,7 +558,7 @@ void test("không lập hoặc đổi món cho ngày đã qua, không lập ngo�
   rejects(
     () =>
       assertMenuDaysEditable([day("2027-06-07", ["rice"])], [], years, today),
-    /ngoài năm học đã cấu hình: 07\/06\/2027/,
+    /ngoài năm học: 07\/06\/2027/,
   );
 });
 

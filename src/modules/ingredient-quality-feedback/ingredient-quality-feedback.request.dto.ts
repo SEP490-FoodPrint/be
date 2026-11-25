@@ -4,9 +4,9 @@ import type {
   ingredientQualityFeedbackEmptyQuerySchema,
   ingredientQualityFeedbackListQuerySchema,
   ingredientQualityFeedbackParamsSchema,
-  ticketCommentBodySchema,
+  ticketCommentInputSchema,
   ticketReopenBodySchema,
-  ticketResolveBodySchema,
+  ticketResolveInputSchema,
 } from "./ingredient-quality-feedback.validation";
 
 export type IngredientQualityFeedbackListQueryRequest = z.infer<
@@ -22,11 +22,11 @@ export type IngredientQualityFeedbackEmptyQueryRequest = z.infer<
 >;
 
 export type FeedbackCommentBodyRequest = z.infer<
-  typeof ticketCommentBodySchema
+  typeof ticketCommentInputSchema
 >;
 
 export type FeedbackResolveBodyRequest = z.infer<
-  typeof ticketResolveBodySchema
+  typeof ticketResolveInputSchema
 >;
 
 export type FeedbackReopenBodyRequest = z.infer<typeof ticketReopenBodySchema>;

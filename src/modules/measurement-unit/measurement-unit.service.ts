@@ -68,7 +68,7 @@ export function createMeasurementUnitService(connect = getPrisma) {
           )
             throw new HttpError(
               409,
-              "Mã, ký hiệu hoặc alias đơn vị đã tồn tại",
+              "Mã, ký hiệu hoặc tên gọi khác đã tồn tại.",
             );
           throw error;
         }
@@ -80,7 +80,7 @@ export function createMeasurementUnitService(connect = getPrisma) {
         "code" in error &&
         error.code === "P2002"
       )
-        throw new HttpError(409, "Mã, ký hiệu hoặc alias đơn vị đã tồn tại");
+        throw new HttpError(409, "Mã, ký hiệu hoặc tên gọi khác đã tồn tại.");
       throw error;
     }
   }

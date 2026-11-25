@@ -26,11 +26,11 @@ export function validateSignup(value: unknown): SignupInput {
     !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{2,119}$/.test(username) ||
     !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
   )
-    throw new HttpError(400, "Username hoặc email không hợp lệ");
+    throw new HttpError(400, "Tên đăng nhập hoặc email chưa đúng.");
   const password = validateNewPassword(body.password);
   const requestType = body.requestType;
   if (requestType !== "SCHOOL" && requestType !== "SUPPLIER")
-    throw new HttpError(400, "Chỉ hỗ trợ đăng ký SCHOOL hoặc SUPPLIER");
+    throw new HttpError(400, "Chọn Trường học hoặc Nhà cung cấp.");
   return {
     username,
     email,

@@ -37,7 +37,7 @@ export function createDeliveryTraceController(
       applyPublicTraceHeaders(res);
       const negotiated = req.accepts(["application/json", "text/html"]);
       if (negotiated === false) {
-        sendError(res, "Định dạng phản hồi không được hỗ trợ", 406);
+        sendError(res, "Yêu cầu không hợp lệ.", 406);
         return;
       }
 

@@ -115,7 +115,7 @@ export const cloudinaryTransport: UploadTransport = {
     )
       throw new HttpError(
         503,
-        "Chưa cấu hình Cloudinary",
+        "Chưa lưu được tệp. Vui lòng thử lại sau.",
         "UPLOAD_NOT_CONFIGURED",
       );
     return {

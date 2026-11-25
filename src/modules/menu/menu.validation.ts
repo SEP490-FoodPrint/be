@@ -8,8 +8,8 @@ import {
 } from "../../utils/request-validation";
 
 const calendarDateSchema = z
-  .string({ error: "Ngày phải có định dạng YYYY-MM-DD" })
-  .regex(/^\d{4}-\d{2}-\d{2}$/, { error: "Ngày phải có định dạng YYYY-MM-DD" })
+  .string({ error: "Ngày không hợp lệ." })
+  .regex(/^\d{4}-\d{2}-\d{2}$/, { error: "Ngày không hợp lệ." })
   .refine(
     (value) => {
       const date = new Date(value + "T00:00:00.000Z");
@@ -167,7 +167,7 @@ const portionGroupSchema = z
   .strictObject({
     id: requestUuidSchema.optional(),
     name: requiredText(120),
-    isDefault: z.boolean({ error: "isDefault phải là boolean" }),
+    isDefault: z.boolean({ error: "Thông tin không hợp lệ." }),
     dishIds: groupDishIdsSchema,
     avoidedIngredientEntryIds: groupAvoidanceIdsSchema,
   })
@@ -237,7 +237,7 @@ const writeDishSchema = z
       context.addIssue({
         code: "custom",
         path: ["dishId"],
-        message: "Chọn dishId hoặc nhập tên món mới",
+        message: "Chọn món hoặc nhập tên món mới.",
       });
   })
   .transform((dish) => ({

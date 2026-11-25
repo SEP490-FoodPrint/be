@@ -527,7 +527,8 @@ export function createFoodSafetyIncidentService(
     id: string,
   ): Promise<FoodSafetyIncidentDetailRow> {
     const row = await repository.findDetail(tx, id, {});
-    if (!row) throw new HttpError(503, "Không đọc lại được hồ sơ sự cố");
+    if (!row)
+      throw new HttpError(503, "Chưa tải được hồ sơ. Vui lòng thử lại.");
     return row;
   }
 
@@ -692,14 +693,14 @@ export function createFoodSafetyIncidentService(
     ): Promise<FoodSafetyIncidentTraceSnapshotDTO> {
       const scope = listScopes["food-safety-incident"](principal);
       if (isReporterView(principal))
-        throw new HttpError(403, "Người báo không xem được snapshot truy xuất");
+        throw new HttpError(403, "Người báo không xem được dữ liệu truy xuất.");
       const row = await repository.findSnapshot(
         await database(),
         id,
         version,
         scope,
       );
-      if (!row) throw new HttpError(404, "Không tìm thấy snapshot truy xuất");
+      if (!row) throw new HttpError(404, "Không tìm thấy dữ liệu truy xuất.");
       return mapSnapshot(row);
     },
 

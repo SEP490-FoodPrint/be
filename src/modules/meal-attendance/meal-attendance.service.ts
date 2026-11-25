@@ -1,3 +1,4 @@
+import { shortList } from "../../utils/short-list";
 import type { AuthPrincipal } from "../../types/auth";
 import { listScopes } from "../../utils/resource-access";
 import type { Prisma, PrismaClient } from "../../generated/prisma/client";
@@ -183,8 +184,7 @@ export function createMealAttendanceService(
       key.schoolId,
       key.date,
     );
-    if (!year)
-      throw new HttpError(422, "Hôm nay nằm ngoài năm học đã cấu hình");
+    if (!year) throw new HttpError(422, "Hôm nay không thuộc năm học.");
     const holiday = expandMenuHolidays(year.holidays, iso, iso)[0];
     if (holiday)
       throw new HttpError(
@@ -215,11 +215,7 @@ export function createMealAttendanceService(
       principal.schoolId,
       currentAcademicYear(date),
     );
-    if (!assignment)
-      throw new HttpError(
-        404,
-        "GVCN chưa được phân công lớp trong niên khóa của ngày đã chọn",
-      );
+    if (!assignment) throw new HttpError(404, "Bạn chưa được phân công lớp.");
     return assignment.Class;
   }
 
@@ -314,7 +310,7 @@ export function createMealAttendanceService(
           if (totalStudents > assigned.registeredMealPortions)
             throw new HttpError(
               422,
-              `Tổng số học sinh dị ứng (${totalStudents}) vượt số suất đăng ký của lớp (${assigned.registeredMealPortions})`,
+              `Học sinh dị ứng (${totalStudents}) nhiều hơn suất của lớp (${assigned.registeredMealPortions}).`,
             );
           const current = new Set(
             assigned.classAllergies.map((row) => row.ingredientEntryId),
@@ -375,7 +371,7 @@ export function createMealAttendanceService(
           if (input.totalPortions > assigned.registeredMealPortions)
             throw new HttpError(
               422,
-              `Số suất (${input.totalPortions}) vượt số suất đăng ký của lớp (${assigned.registeredMealPortions})`,
+              `Tối đa ${assigned.registeredMealPortions} suất, đang nhập ${input.totalPortions}.`,
             );
           await assertDeclarableDay(tx, {
             schoolId: actor.schoolId!,
@@ -407,7 +403,7 @@ export function createMealAttendanceService(
             if (!master || allergy.portionCount > master.affectedCount)
               throw new HttpError(
                 422,
-                "Số suất dị ứng vượt số học sinh của nhóm dị ứng trong lớp",
+                "Suất dị ứng nhiều hơn số học sinh dị ứng.",
               );
           }
           const key = {
@@ -428,7 +424,7 @@ export function createMealAttendanceService(
           if (missing)
             throw new HttpError(
               422,
-              `Chưa nhập số suất cho nhóm dị ứng "${missing[1].names.join(", ")}" (nhập 0 nếu không có)`,
+              `Nhập số suất nhóm ${shortList(missing[1].names)} (0 nếu không có).`,
             );
           const data = {
             confirmedByUserId: actor.id,
@@ -626,7 +622,7 @@ export function createMealAttendanceService(
           )
             throw new HttpError(
               422,
-              "Các nhóm phải đầy đủ, không trùng và cộng đúng tổng số suất lớp",
+              "Các nhóm phải đủ, không trùng và bằng tổng suất của lớp.",
             );
           if (
             demand.portionGroups.some(
@@ -635,7 +631,7 @@ export function createMealAttendanceService(
           )
             throw new HttpError(
               409,
-              "Suất ăn đã được chốt cho thực đơn khác; không ghi đè",
+              "Suất ăn đã chốt cho thực đơn khác. Tải lại trang.",
             );
           // Quy suất nhóm riêng về dị ứng khai báo của lớp theo mã hoặc tên.
           const master = await tx.classAllergy.findMany({
@@ -691,7 +687,7 @@ export function createMealAttendanceService(
           )
             throw new HttpError(
               422,
-              "Nhóm suất khác số suất dị ứng đã chốt; cần đối chiếu, không tự ghi đè",
+              "Nhóm suất khác số suất dị ứng đã chốt. Tải lại trang.",
             );
           const capacity = expectedSpecialGroupCounts(
             groups,
@@ -708,7 +704,7 @@ export function createMealAttendanceService(
           )
             throw new HttpError(
               422,
-              "Số suất nhóm vượt thông tin dị ứng của lớp; cần y tế đối chiếu",
+              "Số suất chưa khớp dị ứng của lớp. Liên hệ Y tế.",
             );
           const unchanged =
             demand.portionGroups.length === groups.length &&
@@ -734,7 +730,7 @@ export function createMealAttendanceService(
           )
             throw new HttpError(
               409,
-              "Đã lấy mẫu hoặc phân phối; không thay đổi nhóm suất",
+              "Bữa đã lấy mẫu hoặc phát, không sửa được.",
             );
           const now = new Date();
           for (const group of input.groups)

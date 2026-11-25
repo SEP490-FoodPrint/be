@@ -21,7 +21,7 @@ export const permissionCreateSchema = z.strictObject({
 export const rolePermissionsSchema = z
   .strictObject({
     permissionIds: z
-      .array(requestUuidSchema, { error: "permissionIds phải là mảng UUID" })
+      .array(requestUuidSchema, { error: "Danh sách quyền không hợp lệ." })
       .max(1000, { error: "Chỉ nhận tối đa 1000 quyền" }),
   })
   .superRefine(({ permissionIds }, context) => {

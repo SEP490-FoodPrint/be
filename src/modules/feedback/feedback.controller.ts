@@ -1,5 +1,6 @@
 import { requirePrincipal } from "../../utils/authorization";
 import { asyncHandler } from "../../utils/async-handler";
+import { evidenceFilesOf } from "../../utils/evidence-files";
 import { sendSuccess } from "../../utils/response";
 import { feedbackService, type FeedbackService } from "./feedback.service";
 import {
@@ -45,7 +46,10 @@ export function createFeedbackController(
       sendSuccess(
         res,
         await service.create(
-          validateCreateComplaint(req.body),
+          validateCreateComplaint({
+            ...req.body,
+            files: evidenceFilesOf(req.files),
+          }),
           requirePrincipal(req),
         ),
         "Gửi khiếu nại thành công",
@@ -66,7 +70,10 @@ export function createFeedbackController(
         res,
         await service.comment(
           validateComplaintId(req.params.id),
-          validateComplaintComment(req.body),
+          validateComplaintComment({
+            ...req.body,
+            files: evidenceFilesOf(req.files),
+          }),
           requirePrincipal(req),
         ),
         "Gửi bình luận thành công",
@@ -78,7 +85,10 @@ export function createFeedbackController(
         res,
         await service.resolve(
           validateComplaintId(req.params.id),
-          validateComplaintResolve(req.body),
+          validateComplaintResolve({
+            ...req.body,
+            files: evidenceFilesOf(req.files),
+          }),
           requirePrincipal(req),
         ),
         "Cập nhật đã xử lý khiếu nại thành công",

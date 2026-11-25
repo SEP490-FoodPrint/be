@@ -1,3 +1,4 @@
+import { shortList } from "../../utils/short-list";
 import { createHash, randomUUID } from "node:crypto";
 import { supplyRoundService } from "../supply-round/supply-round.service";
 import { readPublicTraceOrigin } from "../../config/env";
@@ -315,7 +316,7 @@ function assertLotDates(
   if (missing.length)
     throw new HttpError(
       422,
-      `Đồ lưu kho cần nhập ngày sản xuất và hạn sử dụng của lô: ${[...new Set(missing)].join(", ")}`,
+      `Nhập ngày sản xuất và hạn dùng: ${shortList([...new Set(missing)])}`,
     );
   const today = new Date(Date.now() + 7 * 3600000).toISOString().slice(0, 10);
   const future = lines
@@ -324,7 +325,7 @@ function assertLotDates(
   if (future.length)
     throw new HttpError(
       422,
-      `Ngày sản xuất không được sau hôm nay: ${[...new Set(future)].join(", ")}`,
+      `Ngày sản xuất không được sau hôm nay: ${shortList([...new Set(future)])}`,
     );
   const beforeManufacture = lines
     .filter(
@@ -337,7 +338,7 @@ function assertLotDates(
   if (beforeManufacture.length)
     throw new HttpError(
       422,
-      `Hạn sử dụng phải sau hoặc bằng ngày sản xuất: ${[...new Set(beforeManufacture)].join(", ")}`,
+      `Hạn dùng phải từ ngày sản xuất trở đi: ${shortList([...new Set(beforeManufacture)])}`,
     );
   const expired = lines
     .filter((line) => line.expiryDate && line.expiryDate < today)
@@ -345,7 +346,7 @@ function assertLotDates(
   if (expired.length)
     throw new HttpError(
       422,
-      `Hạn sử dụng không được trước hôm nay: ${[...new Set(expired)].join(", ")}`,
+      `Đã hết hạn dùng: ${shortList([...new Set(expired)])}`,
     );
   const dryMinimumExpiry = new Date(
     Date.parse(`${today}T00:00:00.000Z`) + DRY_MIN_SHELF_DAYS * 86400000,
@@ -363,7 +364,7 @@ function assertLotDates(
   if (shortShelfLife.length)
     throw new HttpError(
       422,
-      `Đồ lưu kho cần còn hạn sử dụng ít nhất ${DRY_MIN_SHELF_DAYS} ngày kể từ hôm nay: ${[...new Set(shortShelfLife)].join(", ")}`,
+      `Hạn dùng phải còn ${DRY_MIN_SHELF_DAYS} ngày: ${shortList([...new Set(shortShelfLife)])}`,
     );
 }
 
@@ -407,16 +408,10 @@ function buildCreateReplayResult(
   fingerprint: string,
 ): SupplierOrderCreateResultDTO {
   if (existing.workflowVersion === null) {
-    throw new HttpError(
-      409,
-      "Idempotency-Key đã thuộc phiên bản đơn giao hàng cũ và không thể nâng cấp",
-    );
+    throw new HttpError(409, "Đơn này đã được gửi. Tải lại trang.");
   }
   if (existing.creationFingerprint !== fingerprint) {
-    throw new HttpError(
-      409,
-      "Idempotency-Key đã được sử dụng cho nội dung đơn giao khác",
-    );
+    throw new HttpError(409, "Đơn này đã được gửi. Tải lại trang.");
   }
   return { ...mapSupplierOrderDetail(existing, actor), created: false };
 }
@@ -504,10 +499,7 @@ export function createSupplierOrderService(
             continue;
           }
           console.error("Database operation failed");
-          throw new HttpError(
-            503,
-            "Không thể hoàn tất tạo đơn giao hàng. Vui lòng thử lại sau.",
-          );
+          throw new HttpError(503, "Chưa tạo được đơn giao. Vui lòng thử lại.");
         }
       }
     });
@@ -667,10 +659,7 @@ export function createSupplierOrderService(
         target.status !== "REJECTED" ||
         target.alreadyReplaced
       ) {
-        throw new HttpError(
-          409,
-          "Chuyến giao được thay thế không hợp lệ hoặc đã được giao lại",
-        );
+        throw new HttpError(409, "Chuyến này đã giao lại hoặc không hợp lệ.");
       }
     }
     if (requestRow.supplyRequestItems.length === 0) {
@@ -691,10 +680,7 @@ export function createSupplierOrderService(
     for (const allocation of body.sources) {
       const requestItem = requestItemById.get(allocation.supplyRequestItemId);
       if (!requestItem) {
-        throw new HttpError(
-          409,
-          "Danh sách nguồn cung ứng phải khớp chính xác toàn bộ dòng của yêu cầu cung ứng",
-        );
+        throw new HttpError(409, "Đơn giao phải đủ các mặt hàng đã đặt.");
       }
       const group = groupedByRequestItem.get(requestItem.id) ?? [];
       group.push(allocation);
@@ -702,10 +688,7 @@ export function createSupplierOrderService(
 
       const ingredientFacilityKey = `${requestItem.IngredientEntry.ingredientId}:${allocation.sourceFacilityId}`;
       if (seenIngredientFacilityPairs.has(ingredientFacilityKey)) {
-        throw new HttpError(
-          409,
-          "Không thể phân bổ trùng cặp nguyên liệu và cơ sở cung cấp trong cùng đơn giao",
-        );
+        throw new HttpError(409, "Nguyên liệu và nơi cung cấp bị trùng.");
       }
       seenIngredientFacilityPairs.add(ingredientFacilityKey);
     }
@@ -716,10 +699,7 @@ export function createSupplierOrderService(
         (item) => !groupedByRequestItem.has(item.id),
       )
     ) {
-      throw new HttpError(
-        409,
-        "Danh sách nguồn cung ứng phải khớp chính xác toàn bộ dòng của yêu cầu cung ứng",
-      );
+      throw new HttpError(409, "Đơn giao phải đủ các mặt hàng đã đặt.");
     }
 
     for (const requestItem of requestRow.supplyRequestItems) {
@@ -730,10 +710,7 @@ export function createSupplierOrderService(
         new Prisma.Decimal(0),
       );
       if (!totalAllocated.eq(requestItem.requestedQuantity)) {
-        throw new HttpError(
-          409,
-          "Tổng số lượng phân bổ theo từng dòng yêu cầu phải bằng đúng số lượng yêu cầu",
-        );
+        throw new HttpError(409, "Số lượng giao phải bằng số lượng đặt.");
       }
     }
 
@@ -854,10 +831,7 @@ export function createSupplierOrderService(
     for (const item of body.items) {
       const pairKey = `${item.ingredientId}:${item.sourceFacilityId}`;
       if (seenPairs.has(pairKey)) {
-        throw new HttpError(
-          409,
-          "Không thể phân bổ trùng cặp nguyên liệu và cơ sở cung cấp trong cùng đơn giao",
-        );
+        throw new HttpError(409, "Nguyên liệu và nơi cung cấp bị trùng.");
       }
       seenPairs.add(pairKey);
     }
@@ -881,10 +855,7 @@ export function createSupplierOrderService(
         throw new HttpError(409, "Nguyên liệu đang ngừng hoạt động");
       }
       if (item.unit !== ingredient.defaultUnit) {
-        throw new HttpError(
-          409,
-          "Đơn vị tính phải khớp đơn vị mặc định của nguyên liệu",
-        );
+        throw new HttpError(409, "Dùng đúng đơn vị của nguyên liệu.");
       }
     }
 
@@ -1063,10 +1034,7 @@ export function createSupplierOrderService(
         ) {
           throw new HttpError(409, "Yêu cầu cung ứng này đã có đợt giao");
         }
-        throw new HttpError(
-          503,
-          "Không thể hoàn tất tạo đơn giao hàng do xung đột đồng thời. Vui lòng thử lại sau.",
-        );
+        throw new HttpError(503, "Chưa tạo được đơn giao. Vui lòng thử lại.");
       }
     },
 
@@ -1154,7 +1122,7 @@ export function createSupplierOrderService(
         );
       }
       if (delivery.traceabilityVersion !== 1) {
-        throw new HttpError(409, "Đơn lịch sử chưa có nhãn QR theo dòng");
+        throw new HttpError(409, "Đơn cũ chưa có nhãn QR.");
       }
 
       const window = listWindow(query);
@@ -1170,7 +1138,7 @@ export function createSupplierOrderService(
 
       for (const item of page.items) {
         if (!item.qrUrl || !item.sourceFacilityNameSnapshot) {
-          throw new HttpError(409, "Đơn lịch sử chưa có nhãn QR theo dòng");
+          throw new HttpError(409, "Đơn cũ chưa có nhãn QR.");
         }
       }
 
@@ -1436,10 +1404,7 @@ export function createSupplierOrderService(
           continuation.delivery.workflowVersion !== 2 ||
           continuation.delivery.traceabilityVersion !== 1
         ) {
-          throw new HttpError(
-            409,
-            "Đơn giao hàng thuộc phiên bản cũ không thể cập nhật xuất kho hai bước",
-          );
+          throw new HttpError(409, "Đơn cũ không hỗ trợ bước này.");
         }
         if (continuation.delivery.status === "CANCELLED") {
           throw new HttpError(
@@ -1496,10 +1461,7 @@ export function createSupplierOrderService(
             current.workflowVersion !== 2 ||
             current.traceabilityVersion !== 1
           ) {
-            throw new HttpError(
-              409,
-              "Đơn giao hàng thuộc phiên bản cũ không thể cập nhật xuất kho hai bước",
-            );
+            throw new HttpError(409, "Đơn cũ không hỗ trợ bước này.");
           }
           if (
             current.status === "CANCELLED" &&

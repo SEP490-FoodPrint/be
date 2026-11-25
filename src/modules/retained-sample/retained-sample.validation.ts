@@ -9,14 +9,14 @@ import {
 /** QĐ 1246/QĐ-BYT: mẫu thức ăn đặc tối thiểu 100 g, thức ăn lỏng tối thiểu 150 ml. */
 export const MINIMUM_SAMPLE_QUANTITY = { g: 100, ml: 150 } as const;
 const timestampSchema = z
-  .string({ error: "Thời gian phải là ISO 8601 có múi giờ" })
+  .string({ error: "Thời gian không hợp lệ." })
   .transform((value, context) => {
     try {
       return isoTimestamp(value);
     } catch {
       context.addIssue({
         code: "custom",
-        message: "Thời gian phải là ISO 8601 hợp lệ có múi giờ",
+        message: "Thời gian không hợp lệ.",
       });
       return z.NEVER;
     }

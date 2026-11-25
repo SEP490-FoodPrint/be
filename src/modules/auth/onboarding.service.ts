@@ -64,12 +64,9 @@ function applicant(user: SessionUser): "SCHOOL" | "SUPPLIER" {
     user.status !== "UNVERIFIED" ||
     !["SCHOOL", "SUPPLIER"].includes(user.orgType)
   )
-    throw new HttpError(403, "Chỉ tài khoản đăng ký UNVERIFIED được nộp hồ sơ");
+    throw new HttpError(403, "Chỉ tài khoản chưa xác minh được nộp hồ sơ.");
   if (user.schoolId || user.supplierId || user.communeFoodSafetyUnitId)
-    throw new HttpError(
-      409,
-      "Tài khoản đã gắn tổ chức; cần kiểm tra trước khi nộp hồ sơ",
-    );
+    throw new HttpError(409, "Tài khoản đã thuộc một tổ chức.");
   return user.orgType as "SCHOOL" | "SUPPLIER";
 }
 function view(
@@ -157,7 +154,7 @@ async function createOrganization<T>(operation: () => Promise<T>): Promise<T> {
     )
       throw new HttpError(
         409,
-        "Mã trường hoặc mã số thuế đã tồn tại; cần kiểm tra hồ sơ",
+        "Mã trường hoặc mã số thuế đã tồn tại.",
         "ORGANIZATION_CONFLICT",
       );
     throw error;
@@ -414,7 +411,7 @@ export function createOnboardingService(
           if (!selected || !isActiveWard(selected))
             throw new HttpError(
               409,
-              "Phường/xã trong hồ sơ không còn hoạt động; cần từ chối để người nộp chọn lại",
+              "Phường/xã đã ngừng hoạt động. Hãy từ chối hồ sơ.",
               "REGISTRATION_LOCATION_INACTIVE",
             );
           location = toWardLocation(selected);

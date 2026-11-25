@@ -28,7 +28,7 @@ export const onboardingUpload: RequestHandler = (req, res, next) => {
       next(
         new HttpError(
           error.code === "LIMIT_FILE_SIZE" ? 413 : 400,
-          "Tệp hoặc multipart vượt giới hạn hồ sơ",
+          "Tệp vượt dung lượng cho phép.",
         ),
       );
     } else next(error);

@@ -13,7 +13,7 @@ export function createCsrfProtection(
       req.get("X-CSRF-Protection") !== "1" ||
       (origin !== undefined && origin !== clientOrigin)
     ) {
-      sendError(res, "Yêu cầu không vượt qua kiểm tra CSRF/origin", 403);
+      sendError(res, "Yêu cầu bị từ chối. Tải lại trang.", 403);
       return;
     }
     next();

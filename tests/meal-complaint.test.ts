@@ -63,13 +63,22 @@ void test("create rejects server-owned fields and HEALTH_ISSUE (Q21)", () => {
   const valid = {
     dailyMealPortionId: "10000000-0000-4000-8000-000000000020",
     complaintType: "MEAL_QUALITY",
+    title: "Suất ăn có mùi lạ",
     description: "Suất ăn có mùi bất thường.",
   };
   assert.deepEqual(validateCreateComplaint(valid), valid);
+  assert.equal(
+    validateCreateComplaint({ ...valid, title: "  Cơm bị sống  " }).title,
+    "Cơm bị sống",
+  );
   for (const extra of [
     { senderUserId: principal().id },
     { status: "RESOLVED" },
-    { title: "Tự đặt tiêu đề" },
+    { code: "FP-MC-00001" },
+    { title: undefined },
+    { title: "Ngắn" },
+    { title: "ạ".repeat(256) },
+    { files: "not-a-file" },
   ])
     assert.throws(() => validateCreateComplaint({ ...valid, ...extra }), {
       statusCode: 400,
@@ -220,6 +229,7 @@ void test("RESOLVED: người gửi có 48h để Hài lòng / Yêu cầu xử l
               status: "RESOLVED",
               lastResolvedAt,
               resolvedCount: 1,
+              attachments: [],
               comments: [],
             }),
           ),

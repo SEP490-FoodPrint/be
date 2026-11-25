@@ -7,12 +7,16 @@ import {
 } from "../../utils/authorization";
 import { currentAcademicYear } from "../class/academic-year";
 import { getPrisma } from "../../utils/database";
+import {
+  cloudinaryEvidenceStorage,
+  withStoredEvidence,
+  type EvidenceStorage,
+} from "../../utils/evidence-files";
 import { HttpError } from "../../utils/http-error";
 import { isComplaintSubmitter, listScopes } from "../../utils/resource-access";
 import {
   assertTicketAction,
   feedbackWindowStart,
-  mealComplaintTitle,
   ticketConflictMessage,
   ticketStatusFilter,
   toTicketStatus,
@@ -26,7 +30,9 @@ import {
   type TicketActor,
 } from "../complaint-ticket/complaint-ticket.repository";
 import {
-  mapTicketComment,
+  addCommentWithEvidence,
+  mapTicketAttachments,
+  mapTicketComments,
   mapTicketFields,
   queueRequesterEmail,
 } from "../complaint-ticket/complaint-ticket.service";
@@ -139,10 +145,12 @@ function toDetail(
   row: ComplaintDetailRow,
   principal: AuthPrincipal,
   now: Date,
+  storage: Pick<EvidenceStorage, "url">,
 ): ComplaintDetailResponseDTO {
   return {
     ...toResponse(row, principal, now, row.comments.at(-1)?.authorSide ?? null),
-    comments: row.comments.map(mapTicketComment),
+    attachments: mapTicketAttachments(row.attachments, storage),
+    comments: mapTicketComments(row.comments, storage),
   };
 }
 
@@ -151,6 +159,7 @@ export function createFeedbackService(
   connect: () => Promise<PrismaClient> = getPrisma,
   now = () => new Date(),
   tickets: ComplaintTicketRepository = complaintTicketRepository,
+  storage: EvidenceStorage = cloudinaryEvidenceStorage,
 ) {
   const formatDate = new Intl.DateTimeFormat("sv-SE", {
     timeZone: "Asia/Ho_Chi_Minh",
@@ -186,7 +195,7 @@ export function createFeedbackService(
       throw new HttpError(
         classes.length ? 409 : 404,
         classes.length
-          ? "Phân công chủ nhiệm đang có mâu thuẫn"
+          ? "Lớp có phân công chủ nhiệm bị trùng."
           : "Chưa có phân công chủ nhiệm trong niên khóa hiện tại",
       );
     return {
@@ -276,7 +285,7 @@ export function createFeedbackService(
         await run(tx, target, { userId: actor.id, roleCode: actor.role }, at);
         const row = await repository.findOne(tx, scope, id);
         if (!row) throw new HttpError(404, NOT_FOUND);
-        return toDetail(row, actor, at);
+        return toDetail(row, actor, at, storage);
       },
     );
   }
@@ -345,64 +354,70 @@ export function createFeedbackService(
         id,
       );
       if (!row) throw new HttpError(404, NOT_FOUND);
-      return toDetail(row, principal, now());
+      return toDetail(row, principal, now(), storage);
     },
     async create(input: CreateComplaintRequestDTO, principal: AuthPrincipal) {
       if (!isComplaintSubmitter(principal.role))
         throw new HttpError(403, "Vai trò không được phép gửi khiếu nại");
-      return withSchoolTransaction(
-        await connect(),
-        principal,
-        "meal_complaint.submit",
-        async (tx, actor, schoolId) => {
-          const options = await readMealOptions(tx, actor);
-          const match = options.classes
-            .flatMap((item) =>
-              [item.lunch, item.afternoon].map((option, index) => ({
-                option,
-                className: item.className,
-                mealType: index === 0 ? "LUNCH" : "AFTERNOON",
-              })),
-            )
-            .find(
-              ({ option }) =>
-                option?.dailyMealPortionId === input.dailyMealPortionId,
+      const db = await connect();
+      return withStoredEvidence(storage, input.files, principal.id, (files) =>
+        withSchoolTransaction(
+          db,
+          principal,
+          "meal_complaint.submit",
+          async (tx, actor, schoolId) => {
+            const options = await readMealOptions(tx, actor);
+            const match = options.classes
+              .flatMap((item) =>
+                [item.lunch, item.afternoon].map((option, index) => ({
+                  option,
+                  className: item.className,
+                  mealType: index === 0 ? "LUNCH" : "AFTERNOON",
+                })),
+              )
+              .find(
+                ({ option }) =>
+                  option?.dailyMealPortionId === input.dailyMealPortionId,
+              );
+            if (!match?.option)
+              throw new HttpError(
+                404,
+                "Suất ăn không thuộc phạm vi được gửi hôm nay",
+              );
+            if (!match.option.canComplain)
+              throw new HttpError(409, "Bữa ăn chưa được xác nhận giao");
+            const code = await tickets.allocateCode(tx, "MC");
+            const created = await repository.create(tx, {
+              code,
+              title: input.title,
+              description: input.description,
+              senderUserId: actor.id,
+              senderRoleCode: actor.role,
+              schoolId,
+              dailyMealPortionId: input.dailyMealPortionId,
+              complaintType: input.complaintType,
+            });
+            await tickets.addAttachments(tx, {
+              complaintId: created.id,
+              commentId: null,
+              uploaderUserId: actor.id,
+              side: "REQUESTER",
+              files,
+            });
+            await tickets.recordCreated(tx, created.id, {
+              userId: actor.id,
+              roleCode: actor.role,
+            });
+            await queueRequesterEmail(tx, tickets, created.id, "CREATED");
+            const row = await repository.findOne(
+              tx,
+              listScopes.feedback(actor),
+              created.id,
             );
-          if (!match?.option)
-            throw new HttpError(
-              404,
-              "Suất ăn không thuộc phạm vi được gửi hôm nay",
-            );
-          if (!match.option.canComplain)
-            throw new HttpError(409, "Bữa ăn chưa được xác nhận giao");
-          const code = await tickets.allocateCode(tx, "MC");
-          const created = await repository.create(tx, {
-            code,
-            title: mealComplaintTitle({
-              className: match.className,
-              mealType: match.mealType,
-              mealDate: new Date(`${options.mealDate}T00:00:00.000Z`),
-            }),
-            description: input.description,
-            senderUserId: actor.id,
-            senderRoleCode: actor.role,
-            schoolId,
-            dailyMealPortionId: input.dailyMealPortionId,
-            complaintType: input.complaintType,
-          });
-          await tickets.recordCreated(tx, created.id, {
-            userId: actor.id,
-            roleCode: actor.role,
-          });
-          await queueRequesterEmail(tx, tickets, created.id, "CREATED");
-          const row = await repository.findOne(
-            tx,
-            listScopes.feedback(actor),
-            created.id,
-          );
-          if (!row) throw new HttpError(503, CORRUPT_DATA);
-          return toDetail(row, actor, now());
-        },
+            if (!row) throw new HttpError(503, CORRUPT_DATA);
+            return toDetail(row, actor, now(), storage);
+          },
+        ),
       );
     },
     accept(id: string, principal: AuthPrincipal) {
@@ -416,39 +431,50 @@ export function createFeedbackService(
       principal: AuthPrincipal,
     ) {
       const side = sideOf(principal);
-      return act(id, principal, side, "COMMENT", async (tx, target, actor) => {
-        await tickets.addComment(tx, {
-          complaintId: target.id,
-          actor,
-          side,
-          type: "MESSAGE",
-          content: input.content,
-        });
-        if (side === "HANDLER")
-          await queueRequesterEmail(tx, tickets, target.id, "HANDLER_COMMENT");
-      });
+      return withStoredEvidence(storage, input.files, principal.id, (files) =>
+        act(id, principal, side, "COMMENT", async (tx, target, actor) => {
+          await addCommentWithEvidence(tx, tickets, {
+            complaintId: target.id,
+            actor,
+            side,
+            type: "MESSAGE",
+            content: input.content,
+            files,
+          });
+          if (side === "HANDLER")
+            await queueRequesterEmail(
+              tx,
+              tickets,
+              target.id,
+              "HANDLER_COMMENT",
+            );
+        }),
+      );
     },
     resolve(
       id: string,
       input: ComplaintResolveRequestDTO,
       principal: AuthPrincipal,
     ) {
-      return act(
-        id,
-        principal,
-        "HANDLER",
-        "RESOLVE",
-        async (tx, target, actor, at) => {
-          await transition(tx, target, actor, at, "RESOLVE");
-          await tickets.addComment(tx, {
-            complaintId: target.id,
-            actor,
-            side: "HANDLER",
-            type: "RESOLUTION",
-            content: input.content,
-          });
-          await queueRequesterEmail(tx, tickets, target.id, "RESOLVED");
-        },
+      return withStoredEvidence(storage, input.files, principal.id, (files) =>
+        act(
+          id,
+          principal,
+          "HANDLER",
+          "RESOLVE",
+          async (tx, target, actor, at) => {
+            await transition(tx, target, actor, at, "RESOLVE");
+            await addCommentWithEvidence(tx, tickets, {
+              complaintId: target.id,
+              actor,
+              side: "HANDLER",
+              type: "RESOLUTION",
+              content: input.content,
+              files,
+            });
+            await queueRequesterEmail(tx, tickets, target.id, "RESOLVED");
+          },
+        ),
       );
     },
     satisfy(id: string, principal: AuthPrincipal) {

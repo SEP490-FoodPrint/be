@@ -3,7 +3,7 @@ import { HttpError } from "./http-error";
 
 export class RequestValidationError extends HttpError {
   constructor(public readonly fields: { field: string; message: string }[]) {
-    super(400, "Nội dung yêu cầu không hợp lệ");
+    super(400, "Thông tin chưa đúng. Kiểm tra lại.");
   }
 }
 
@@ -18,7 +18,7 @@ export function parseRequest<T extends z.ZodType>(
       if (issue.code === "unrecognized_keys") {
         return issue.keys.map((key) => ({
           field: [...issue.path, key].join("."),
-          message: "Trường không được phép",
+          message: "Thông tin không hợp lệ",
         }));
       }
       return [
@@ -42,8 +42,8 @@ export function requiredText(maximum: number) {
 }
 
 export const requestUuidSchema = z
-  .string({ error: "ID phải là UUID hợp lệ" })
+  .string({ error: "Mục đã chọn không hợp lệ." })
   .regex(/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i, {
-    error: "ID phải là UUID hợp lệ",
+    error: "Mục đã chọn không hợp lệ.",
   })
   .transform((value) => value.toLowerCase());

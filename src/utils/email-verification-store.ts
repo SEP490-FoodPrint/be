@@ -102,7 +102,7 @@ export function createRedisEmailVerificationStore(
     } catch {
       throw new HttpError(
         503,
-        "Dịch vụ xác minh email tạm thời không khả dụng",
+        "Chưa xác minh được email. Vui lòng thử lại sau.",
       );
     }
   }

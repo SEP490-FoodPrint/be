@@ -90,7 +90,7 @@ export const reportFoodSafetyIncidentSchema = z.strictObject({
   occurredAt: z.iso
     .datetime({
       offset: true,
-      error: "Thời điểm xảy ra phải là ISO 8601 có múi giờ",
+      error: "Thời điểm xảy ra không hợp lệ.",
     })
     .transform((value) => new Date(value))
     .optional(),

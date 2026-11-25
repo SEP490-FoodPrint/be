@@ -115,7 +115,7 @@ export function createOrganizationController(
       const code = validateSchoolCode(req.params.code);
       const school = await service.getPublicSchoolByCode(code);
       if (!school) {
-        throw new HttpError(404, `Không tìm thấy trường học với mã: ${code}`);
+        throw new HttpError(404, "Không tìm thấy trường.");
       }
       sendSuccess(res, school, "Lấy chi tiết trường học thành công");
     }),
@@ -124,7 +124,7 @@ export function createOrganizationController(
       const id = validateSchoolId(req.params.id);
       const school = await service.getPublicSchoolById(id);
       if (!school) {
-        throw new HttpError(404, `Không tìm thấy trường học với ID: ${id}`);
+        throw new HttpError(404, "Không tìm thấy trường.");
       }
       sendSuccess(res, school, "Lấy chi tiết trường học thành công");
     }),
