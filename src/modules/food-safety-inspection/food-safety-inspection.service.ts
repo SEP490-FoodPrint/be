@@ -135,7 +135,8 @@ export function createFoodSafetyInspectionService(
 
   async function readInspection(tx: Tx, id: string) {
     const row = await repository.readInspection(tx, id);
-    if (!row) throw new HttpError(503, "Không đọc lại được đợt kiểm tra");
+    if (!row)
+      throw new HttpError(503, "Chưa tải được hồ sơ. Vui lòng thử lại.");
     return mapInspection(row);
   }
 

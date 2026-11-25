@@ -186,7 +186,7 @@ export function createFeedbackService(
       throw new HttpError(
         classes.length ? 409 : 404,
         classes.length
-          ? "Phân công chủ nhiệm đang có mâu thuẫn"
+          ? "Lớp có phân công chủ nhiệm bị trùng."
           : "Chưa có phân công chủ nhiệm trong niên khóa hiện tại",
       );
     return {
@@ -369,10 +369,7 @@ export function createFeedbackService(
                 option?.dailyMealPortionId === input.dailyMealPortionId,
             );
           if (!match?.option)
-            throw new HttpError(
-              404,
-              "Suất ăn không thuộc phạm vi được gửi hôm nay",
-            );
+            throw new HttpError(404, "Suất ăn này chưa thể khiếu nại hôm nay.");
           if (!match.option.canComplain)
             throw new HttpError(409, "Bữa ăn chưa được xác nhận giao");
           const code = await tickets.allocateCode(tx, "MC");

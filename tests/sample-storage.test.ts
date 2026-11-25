@@ -293,7 +293,7 @@ void test("SampleStorageService.delete guards against deleting storage unit cont
   // Should reject deletion with 400
   await assert.rejects(() => service.delete(kitchenStaff, "unit-busy-id"), {
     statusCode: 400,
-    message: /Không thể xóa/,
+    message: /Tủ còn 3 mẫu/,
   });
 });
 

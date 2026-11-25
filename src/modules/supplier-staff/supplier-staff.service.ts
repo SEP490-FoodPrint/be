@@ -119,7 +119,7 @@ export function createSupplierStaffService(
         )
           throw new HttpError(
             403,
-            "Phạm vi hoặc vai trò tài khoản đã thay đổi",
+            "Quyền tài khoản vừa thay đổi. Tải lại trang.",
           );
         const beforeTarget = targetId
           ? found(await repo.find(original, targetId, tx))
@@ -134,7 +134,7 @@ export function createSupplierStaffService(
         )
           throw new HttpError(
             403,
-            "Phạm vi hoặc vai trò tài khoản đã thay đổi",
+            "Quyền tài khoản vừa thay đổi. Tải lại trang.",
           );
         const target = targetId
           ? found(await repo.find(scope, targetId, tx))

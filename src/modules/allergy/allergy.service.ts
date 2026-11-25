@@ -66,7 +66,7 @@ export function createAllergyCatalogService(read = readAllergyCatalog) {
     async getAll(query: AllergyCatalogQuery, principal: AuthPrincipal) {
       assertPermission(principal, "class_allergy.view");
       if (principal.orgType !== "SCHOOL" || !principal.schoolId)
-        throw new HttpError(403, "Danh mục dị ứng yêu cầu phạm vi trường");
+        throw new HttpError(403, "Chức năng chỉ dành cho tài khoản trường.");
       const schoolId = principal.schoolId;
       const page = await readListPage(
         () => read(schoolId, listWindow(query)),

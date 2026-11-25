@@ -99,7 +99,7 @@ void test("forwarding binds a live eligible officer and rejects ownership or map
   changeUnit = true;
   await assert.rejects(
     () => guard.assertOfficerForwarding(tx, actor, "incident-1", "officer-1"),
-    /đã thay đổi/,
+    /vừa thay đổi/,
   );
 });
 
@@ -348,13 +348,13 @@ void test("unknown and future operations fail closed", async () => {
       operation: "START_ORDER_PROCESSING",
       orderId,
     }),
-    /chưa hỗ trợ/i,
+    /chưa thể dùng/i,
   );
   await assert.rejects(
     f.service.assertAccess(tx, schoolActor, {
       operation: "UNKNOWN",
     } as unknown as IntakeOperation),
-    /chưa hỗ trợ/i,
+    /chưa thể dùng/i,
   );
 });
 
@@ -674,7 +674,7 @@ void test("membership guard rejects a member whose organization changes while lo
       "ACTIVE",
       "member-1",
     ),
-    /đã thay đổi/i,
+    /vừa thay đổi/i,
   );
 });
 
@@ -699,7 +699,7 @@ void test("an officer with unclosed reports cannot be reassigned", async () => {
   );
   await assert.rejects(
     service.assertOfficerReassignment(tx, testAdmin, officerId),
-    /chưa CLOSED/i,
+    /chưa đóng/i,
   );
 });
 

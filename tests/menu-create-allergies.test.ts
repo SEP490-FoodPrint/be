@@ -52,7 +52,7 @@ void test("category operations are school-scoped and refuse deleting a reference
   const service = createDishRecipeService(() => Promise.resolve(f.db));
   await assert.rejects(
     service.removeCategory(id(90), f.principal),
-    /Nhóm đang có món ăn/,
+    /Nhóm còn món/,
   );
   await assert.rejects(
     service.removeCategory(id(91), f.principal),
@@ -864,7 +864,7 @@ void test("five saved weekdays with lunch only cannot be submitted or approved",
       { decision: "APPROVED", feedback: null, menuDayId: null },
       reviewer,
     ),
-    /chưa đầy đủ/,
+    /ngày thiếu bữa/,
   );
   assert.equal(f.submission.mock.callCount(), 0);
 });
@@ -1064,7 +1064,7 @@ void test("grade batch rolls all prior writes back when a later grade has no rec
   const before = structuredClone(f.menu);
   await assert.rejects(
     f.service.saveGradeBatch(f.batch, f.principal),
-    /Khối 4–5.*chưa có khẩu phần/,
+    /Khối 4–5.*thiếu khẩu phần/,
   );
   assert.equal(f.writes.length, 1);
   assert.equal(f.counts().committedWrites, 0);

@@ -7,14 +7,14 @@ import {
 } from "../../utils/request-validation";
 
 const calendarDateSchema = z
-  .string({ error: "Ngày phải có định dạng YYYY-MM-DD" })
+  .string({ error: "Ngày không hợp lệ." })
   .transform((value, context) => {
     try {
       return calendarDate(value);
     } catch {
       context.addIssue({
         code: "custom",
-        message: "Ngày phải có định dạng YYYY-MM-DD và tồn tại trên lịch",
+        message: "Ngày không hợp lệ.",
       });
       return z.NEVER;
     }
@@ -87,7 +87,7 @@ export const kitchenFiltersSchema = paginationSchema
       .transform((value) => value || undefined)
       .optional(),
     hasSample: z
-      .enum(["true", "false"], { error: "hasSample phải là true hoặc false" })
+      .enum(["true", "false"], { error: "Thông tin không hợp lệ." })
       .transform((value) => value === "true")
       .optional(),
   })

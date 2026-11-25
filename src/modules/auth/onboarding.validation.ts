@@ -23,7 +23,7 @@ const calendarDate = optionalText(10).refine(
       date.toISOString().slice(0, 10) === value
     );
   },
-  { error: "Ngày phải là ngày lịch hợp lệ theo YYYY-MM-DD" },
+  { error: "Ngày không hợp lệ." },
 );
 
 export const certificationSchema = z

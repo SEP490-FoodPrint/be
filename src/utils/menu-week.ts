@@ -1,3 +1,4 @@
+import { shortList } from "./short-list";
 import type { Prisma } from "../generated/prisma/client";
 import { getSchoolWeekSchedule } from "./date-time";
 import { HttpError } from "./http-error";
@@ -79,7 +80,7 @@ export function assertNoHolidayMenuDays(
   };
   throw new HttpError(
     422,
-    `Không lập thực đơn vào ngày nghỉ: ${blocked.map(label).join(", ")}`,
+    `Không lập thực đơn vào ngày nghỉ: ${shortList(blocked.map(label))}`,
   );
 }
 
@@ -148,7 +149,7 @@ export function assertMenuDaysEditable(
   if (outside.length)
     throw new HttpError(
       422,
-      `Ngày nằm ngoài năm học đã cấu hình: ${[...new Set(outside)].sort().map(dmy).join(", ")}`,
+      `Ngày ngoài năm học: ${shortList([...new Set(outside)].sort().map(dmy))}`,
     );
   const added: string[] = [];
   const changed: string[] = [];
@@ -172,12 +173,12 @@ export function assertMenuDaysEditable(
   if (added.length)
     throw new HttpError(
       422,
-      `Không lập thực đơn cho ngày đã qua: ${added.sort().map(dmy).join(", ")}`,
+      `Không lập thực đơn cho ngày đã qua: ${shortList(added.sort().map(dmy))}`,
     );
   if (changed.length)
     throw new HttpError(
       422,
-      `Không sửa thực đơn của ngày đã qua: ${changed.sort().map(dmy).join(", ")}`,
+      `Không sửa thực đơn của ngày đã qua: ${shortList(changed.sort().map(dmy))}`,
     );
 }
 
@@ -224,6 +225,6 @@ export function assertCompleteMenuWeek(
   if (missing.length)
     throw new HttpError(
       422,
-      `Thực đơn từ ${week.weekStartDate} đến ${week.weekEndDate} chưa đầy đủ các ngày/bữa phục vụ ăn. Còn thiếu: ${missing.join("; ")}. Vui lòng bổ sung trước khi gửi hoặc phê duyệt.`,
+      `Thực đơn còn ${missing.length} ngày thiếu bữa: ${shortList(missing, "; ")}`,
     );
 }

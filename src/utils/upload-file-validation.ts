@@ -44,7 +44,7 @@ export async function validateUploadFiles(
     )
       invalid(field, "Tệp không hợp lệ");
     if (file.size > MAX_UPLOAD_BYTES)
-      throw new HttpError(413, "Tệp vượt quá 5 MiB");
+      throw new HttpError(413, "Tệp tối đa 5 MB.");
     if (
       kind === "document" &&
       file.mimeType === "application/pdf" &&

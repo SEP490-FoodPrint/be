@@ -1,3 +1,4 @@
+import { shortList } from "../../utils/short-list";
 import { resolveMeasurementUnit } from "../measurement-unit/measurement-unit.service";
 import { allergenMatches, avoidanceCovers } from "../../utils/allergy-match";
 import { kitchenRepository } from "../kitchen/kitchen.repository";
@@ -210,7 +211,7 @@ function schoolScope(principal: AuthPrincipal) {
   assertPermission(principal, "menu.view");
 
   if (principal.orgType !== "SCHOOL" || !principal.schoolId)
-    throw new HttpError(403, "Định mức thực đơn yêu cầu phạm vi trường");
+    throw new HttpError(403, "Chức năng chỉ dành cho tài khoản trường.");
 
   return principal.schoolId;
 }
@@ -315,7 +316,7 @@ async function validateIngredientSources(
     throw new HttpError(
       422,
 
-      "Nguyên liệu chính phải từ Supplier đang liên kết với trường",
+      "Chọn nguyên liệu của nhà cung cấp đang hợp tác.",
     );
 
   const seasoningIds = input.seasonings.map((row) => row.ingredientEntryId);
@@ -343,7 +344,7 @@ async function validateIngredientSources(
     const names = await repository.ingredientEntryNames(tx, invalid, schoolId);
     throw new HttpError(
       422,
-      `Gia vị phải thuộc danh mục đồ lưu kho của trường${names.length ? `: ${names.join(", ")} không phải đồ lưu kho đang dùng` : ""}`,
+      `Gia vị không có trong đồ lưu kho${names.length ? `: ${shortList(names)}` : ""}`,
     );
   }
 
@@ -416,7 +417,7 @@ function createIngredientOperations(
             throw new HttpError(
               409,
 
-              "Nhóm suất đã gửi duyệt, đã được chốt hoặc lập mẻ; không được thay đổi",
+              "Thực đơn đã gửi duyệt hoặc đã dùng, không sửa được.",
             );
 
           const old = await repository.portionGroupIds(tx, meal);
@@ -438,7 +439,7 @@ function createIngredientOperations(
             throw new HttpError(
               422,
 
-              "Các nhóm phải chọn đúng và bao phủ các món trong bữa",
+              "Chọn đủ món cho từng nhóm suất.",
             );
 
           const avoided = [
@@ -531,7 +532,7 @@ function createIngredientOperations(
             throw new HttpError(
               422,
 
-              "Nguyên liệu phải thuộc Supplier đang liên kết với trường",
+              "Chọn nguyên liệu của nhà cung cấp đang hợp tác.",
             );
 
           // Chỉ giữ dị ứng khớp TÊN với ít nhất một nguyên liệu đang kiểm tra.
@@ -683,7 +684,7 @@ function createIngredientOperations(
             throw new HttpError(
               409,
 
-              "Định mức đã gửi duyệt, đã duyệt hoặc đã dùng để lập mẻ; không được thay đổi",
+              "Thực đơn đã gửi duyệt hoặc đã dùng, không sửa được.",
             );
 
           const expected = new Set(
@@ -1278,7 +1279,7 @@ function createMenuOperations(
       throw new HttpError(
         409,
 
-        "Ngày thực đơn đã được dùng lập mẻ; không được sửa hoặc xóa",
+        "Thực đơn đã gửi duyệt hoặc đã dùng, không sửa được.",
       );
   }
 
@@ -1342,7 +1343,7 @@ function createMenuOperations(
         throw new HttpError(
           409,
 
-          "Không xóa ngày đã gửi duyệt hoặc có lịch sử duyệt",
+          "Thực đơn đã gửi duyệt, không xóa được.",
         );
 
       await assertUnused(tx, old.id);
@@ -1490,7 +1491,10 @@ function createMenuOperations(
         };
 
         if (canonical(supplied) !== canonical(expected))
-          throw new HttpError(409, "Không sửa ngày đã gửi duyệt hoặc đã duyệt");
+          throw new HttpError(
+            409,
+            "Thực đơn đã gửi duyệt hoặc đã dùng, không sửa được.",
+          );
 
         continue;
       }
@@ -1586,7 +1590,7 @@ function createMenuOperations(
           if (!dish && item.name)
             throw new HttpError(
               422,
-              `Món “${item.name}” chưa có trong danh mục; hãy tạo món kèm mốc chuẩn trước`,
+              `Món “${item.name}” chưa có. Hãy tạo món trước.`,
             );
 
           if (!dish || dish.status !== "ACTIVE")
@@ -1657,7 +1661,7 @@ function createMenuOperations(
           if (await repository.dailyGroupCount(tx, key))
             throw new HttpError(
               409,
-              "Nhóm suất đã được giáo viên chốt; không được thay đổi",
+              "Giáo viên đã chốt suất ăn, không sửa được.",
             );
           const expected = new Set(dishes.map((d) => d.dishId));
           if (
@@ -1670,10 +1674,7 @@ function createMenuOperations(
                   !meal.portionGroups!.some((g) => g.dishIds.includes(id)),
               ))
           )
-            throw new HttpError(
-              422,
-              "Nhóm suất phải chọn đúng và bao phủ các món của bữa",
-            );
+            throw new HttpError(422, "Chọn đủ món cho từng nhóm suất.");
           const oldGroups = await repository.portionGroupIds(tx, key);
           if (
             meal.portionGroups.some(
@@ -1729,7 +1730,7 @@ function createMenuOperations(
         throw new HttpError(
           409,
 
-          "Cần điều chỉnh nhóm suất trước khi bỏ món đang được nhóm sử dụng",
+          "Món đang dùng cho suất riêng. Sửa nhóm suất trước.",
         );
 
       if (oldDishes.length)
@@ -1770,7 +1771,7 @@ function createMenuOperations(
         throw new HttpError(
           422,
 
-          "Mỗi món cần đầy đủ định mức trước khi gửi duyệt",
+          "Còn món chưa có định lượng.",
         );
 
       for (const mealType of new Set(day.menuDayDishes.map((d) => d.mealType)))
@@ -1886,10 +1887,7 @@ function createMenuOperations(
               ),
           )
         )
-          throw new HttpError(
-            422,
-            "Thực đơn có nguyên liệu gây dị ứng chưa được bố trí nhóm suất riêng an toàn",
-          );
+          throw new HttpError(422, "Có món gây dị ứng. Hãy thêm suất riêng.");
       }
     }
   }
@@ -2050,10 +2048,7 @@ function createMenuOperations(
       if (
         JSON.stringify(existingGrades) !== JSON.stringify([...gradeIds].sort())
       )
-        throw new HttpError(
-          409,
-          "Khối đã có thực đơn trong tuần này; hãy sửa thực đơn hiện có hoặc chọn các khối khác",
-        );
+        throw new HttpError(409, "Khối đã có thực đơn tuần này.");
     }
 
     if (existingWeekly) {
@@ -2077,7 +2072,7 @@ function createMenuOperations(
         throw new HttpError(
           409,
 
-          `Thực đơn tuần này (${input.weekStartDate.toISOString().slice(0, 10)}) đã ở trạng thái ${existingWeekly.status}, không thể thêm ngày mới.`,
+          "Thực đơn tuần này đã duyệt, không thể thêm ngày.",
         );
       }
 

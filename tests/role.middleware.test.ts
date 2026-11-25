@@ -26,7 +26,7 @@ const policies: Policy[] = [
     claimValue: "SCHOOL_ADMINISTRATION",
     legacyClaim: "SCHOOL_ADMIN",
     disallowed: ROLES.SYSTEM_ADMIN,
-    message: "Bạn không có quyền thực hiện thao tác này (403)",
+    message: "Bạn không có quyền thực hiện.",
     requiredKey: "requiredRoles",
     currentKey: "currentRole",
   },
@@ -36,7 +36,7 @@ const policies: Policy[] = [
     allowed: ORG_TYPES.SCHOOL,
     claimValue: "SCHOOL",
     disallowed: ORG_TYPES.SUPPLIER,
-    message: "Tài khoản không thuộc phân hệ tổ chức này (403)",
+    message: "Tài khoản không dùng được chức năng này.",
     requiredKey: "requiredOrgs",
     currentKey: "currentOrg",
   },
@@ -47,7 +47,7 @@ const policies: Policy[] = [
     claimValue: "COMMUNE_FOOD_SAFETY_OFFICER",
     legacyClaim: "HEALTH_OFFICER",
     disallowed: ROLES.SCHOOL_ADMINISTRATION,
-    message: "Bạn không có quyền thực hiện thao tác này (403)",
+    message: "Bạn không có quyền thực hiện.",
     requiredKey: "requiredRoles",
     currentKey: "currentRole",
   },
@@ -58,7 +58,7 @@ const policies: Policy[] = [
     claimValue: "AUTHORITY",
     legacyClaim: "GOVERNMENT",
     disallowed: ORG_TYPES.SCHOOL,
-    message: "Tài khoản không thuộc phân hệ tổ chức này (403)",
+    message: "Tài khoản không dùng được chức năng này.",
     requiredKey: "requiredOrgs",
     currentKey: "currentOrg",
   },
@@ -92,7 +92,7 @@ for (const policy of policies) {
       assert.deepEqual(response.body, {
         success: false,
         statusCode: 401,
-        message: "Chưa xác thực người dùng",
+        message: "Vui lòng đăng nhập.",
       });
     }
   });

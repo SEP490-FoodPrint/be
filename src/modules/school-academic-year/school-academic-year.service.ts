@@ -118,10 +118,7 @@ export function createSchoolAcademicYearService(
     ) {
       requireBoard(principal, MANAGE_PERMISSION);
       if (!isAssignableAcademicYear(input.academicYear, clock()))
-        throw new HttpError(
-          409,
-          "Không thể tạo niên khóa đã qua, chỉ được tạo niên khóa hiện tại hoặc sắp tới",
-        );
+        throw new HttpError(409, "Không tạo được niên khóa đã qua.");
       try {
         return await withSchoolTransaction(
           await connect(),

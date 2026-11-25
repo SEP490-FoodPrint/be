@@ -17,12 +17,11 @@ export function retainDocuments(
   if (retained.length + files.length > MAX_PROFILE_DOCUMENTS)
     throw new HttpError(
       400,
-      `Hồ sơ chỉ nhận tối đa ${MAX_PROFILE_DOCUMENTS} tệp, gồm cả tệp giữ lại`,
+      `Hồ sơ tối đa ${MAX_PROFILE_DOCUMENTS} tệp, tính cả tệp cũ.`,
     );
   return retained.map(({ id, field }) => {
     const document = existing.find((document) => document.id === id);
-    if (!document)
-      throw new HttpError(400, "Tệp giữ lại không thuộc hồ sơ của bạn");
+    if (!document) throw new HttpError(400, "Tệp cũ không thuộc hồ sơ này.");
     return { ...document, field };
   });
 }

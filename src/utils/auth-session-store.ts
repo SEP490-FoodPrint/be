@@ -92,10 +92,7 @@ export function createRedisAuthSessionStore(
       if (!client.isReady) throw new Error("Redis offline");
       return await client.sendCommand(args);
     } catch {
-      throw new HttpError(
-        503,
-        "Dịch vụ phiên đăng nhập tạm thời không khả dụng",
-      );
+      throw new HttpError(503, "Chưa đăng nhập được. Vui lòng thử lại sau.");
     }
   }
   return {

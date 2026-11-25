@@ -148,7 +148,8 @@ const defaultChain: ProofChain = {
       )) as ContractTransactionResponse;
       await onSubmitted(tx.hash, deployment.address);
       const receipt = await tx.wait(1, receiptTimeoutMs());
-      if (!receipt) throw new Error("Không nhận được biên nhận giao dịch");
+      if (!receipt)
+        throw new Error("Chưa xác thực được. Vui lòng thử lại sau.");
       return {
         txHash: tx.hash,
         blockNumber: receipt.blockNumber,
@@ -1136,20 +1137,14 @@ export function createBlockchainProofService(
     if (row.transactionStatus !== "CONFIRMED")
       throw new HttpError(409, "Bằng chứng chưa được xác nhận trên blockchain");
     if (row.networkName !== network())
-      throw new HttpError(
-        409,
-        "Bằng chứng thuộc mạng khác mạng blockchain đang cấu hình",
-      );
+      throw new HttpError(409, "Bằng chứng không khớp hệ thống hiện tại.");
     const configured = chain.contractAddress();
     if (
       row.contractAddress &&
       configured &&
       !same(row.contractAddress, configured)
     )
-      throw new HttpError(
-        409,
-        "Bằng chứng thuộc contract khác contract đang cấu hình",
-      );
+      throw new HttpError(409, "Bằng chứng không khớp hệ thống hiện tại.");
 
     const current = await rebuild(db, row);
     const recomputed = hashPayload(current);

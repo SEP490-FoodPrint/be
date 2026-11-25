@@ -173,7 +173,7 @@ export function createSupplyOrderService(
       }
       const scope = listScopes["supply-order"](principal);
       if (query.status !== undefined)
-        throw new HttpError(400, "Chỉ hỗ trợ tham số page và limit");
+        throw new HttpError(400, "Yêu cầu không hợp lệ.");
       if (query.include === "items") {
         const detailed = await readListPage(
           () => repository.listWithItems(query, scope),
@@ -305,7 +305,10 @@ export function createSupplyOrderService(
           actor.role !== principal.role ||
           actor.roleId !== principal.roleId
         )
-          throw new HttpError(403, "Phạm vi nhà cung cấp đã thay đổi");
+          throw new HttpError(
+            403,
+            "Quyền tài khoản vừa thay đổi. Tải lại trang.",
+          );
         const order = await repository.findForSupplier(
           tx,
           params.id,

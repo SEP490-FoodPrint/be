@@ -7,6 +7,7 @@
  * - Cùng một số suất của khối áp cho cả bữa chính và bữa xế. Không làm tròn số lượng đặt.
  * - TASK-09: định lượng công thức là thành phẩm; lượng đặt là lượng sống = thành phẩm / (1 − tỷ lệ hao hụt).
  */
+import { shortList } from "../../utils/short-list";
 import type { Prisma } from "../../generated/prisma/client";
 import type { AuthPrincipal } from "../../types/auth";
 import { grossFromNet } from "../../utils/waste-rate";
@@ -413,10 +414,13 @@ export async function loadFreshDemand(
   if (noGrade.length)
     throw new HttpError(
       422,
-      `Lớp chưa gán khối: ${noGrade.map((c) => c.name).join(", ")}`,
+      `Còn ${noGrade.length} lớp chưa xếp khối: ${shortList(noGrade.map((c) => c.name))}`,
     );
   if (menus.length === 0)
-    throw new HttpError(422, `Không có thực đơn đã duyệt cho ngày ${date}`);
+    throw new HttpError(
+      422,
+      `Chưa có thực đơn duyệt ngày ${date.split("-").reverse().join("/")}.`,
+    );
 
   const planned = new Map<string, number>();
   const actual = new Map<string, number>();
@@ -433,7 +437,7 @@ export async function loadFreshDemand(
   if (batchNo === 2 && notFinalized.length)
     throw new HttpError(
       409,
-      `Chưa thể tính Đợt 2: còn ${notFinalized.length} lớp chưa chốt điểm danh (${notFinalized.sort().join(", ")})`,
+      `Còn ${notFinalized.length} lớp chưa chốt: ${shortList(notFinalized.sort())}`,
     );
 
   const menuInputs = menus.map((m) => ({

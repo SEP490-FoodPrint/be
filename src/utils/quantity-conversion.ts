@@ -37,7 +37,7 @@ export function convertQuantity(
   if (!left || !right || left.dimension !== right.dimension)
     throw new HttpError(
       409,
-      `Không thể quy đổi đơn vị “${from.trim()}” sang “${to.trim()}”. Vui lòng kiểm tra đơn vị nguyên liệu.`,
+      `Không đổi được “${from.trim()}” sang “${to.trim()}”. Kiểm tra đơn vị.`,
     );
   return quantity.mul(left.factor).div(right.factor);
 }

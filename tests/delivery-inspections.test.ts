@@ -816,11 +816,7 @@ void test("invalid lot totals, ownership and expiry roll back the final approval
 void test("hạn dùng: đồ lưu kho còn ít nhất 7 ngày kể từ ngày nhận, đồ tươi chỉ cần còn hạn hôm nay", async () => {
   // Đồng hồ fixture: 13/11/2026 (giờ VN).
   const cases = [
-    [
-      "DRY_STOCK",
-      "2026-11-19",
-      "Lô (đồ lưu kho) chỉ còn hạn đến 19/11/2026; cần còn hạn ít nhất 7 ngày kể từ ngày nhận (đến 20/11/2026)",
-    ],
+    ["DRY_STOCK", "2026-11-19", "Lô: hạn dùng còn dưới 7 ngày."],
     ["DRY_STOCK", "2026-11-20", null],
     ["DIRECT_USE", "2026-11-12", "Lô đã hết hạn dùng (12/11/2026)"],
     ["DIRECT_USE", "2026-11-13", null],
@@ -857,8 +853,7 @@ void test("chuyến chỉ có đồ lưu kho: chỉ Ban quản lý nguyên liệ
       () => f.service.decide(delivery.id, approve(), actor),
       {
         statusCode: 403,
-        message:
-          "Chuyến giao đồ lưu kho: chỉ Ban quản lý nguyên liệu kiểm tra và ký nhận",
+        message: "Đồ lưu kho do Ban quản lý nguyên liệu kiểm tra.",
       },
     );
   assert.equal(f.data.decisions.length, 0);
@@ -1084,7 +1079,7 @@ void test("standalone deliveries list, inspect, attach IngredientEntry on final 
   if (["ARRIVED", "PENDING_APPROVAL"].includes(detailResult.status))
     assert.equal(
       detailResult.receiptIssue,
-      "Chưa cấu hình danh mục nguyên liệu đang hoạt động của trường để tiếp nhận lô",
+      "Nguyên liệu chưa có trong danh mục của trường.",
     );
 
   const setupStandaloneHarness = (activeEntry: boolean) => {
@@ -1367,8 +1362,7 @@ void test("standalone deliveries list, inspect, attach IngredientEntry on final 
       () => missingEntry.service.decide(deliveryId, approve(), actor),
       {
         statusCode: 409,
-        message:
-          "Chưa cấu hình danh mục nguyên liệu đang hoạt động của trường để tiếp nhận lô",
+        message: "Nguyên liệu chưa có trong danh mục của trường.",
       },
     );
   }

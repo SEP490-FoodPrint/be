@@ -179,7 +179,7 @@ void test("combined kitchen plan identifies the ingredient and shortage", () => 
       error instanceof Error &&
       "statusCode" in error &&
       error.statusCode === 409 &&
-      error.message.includes("Rau muống sạch thiếu 49360 g"),
+      error.message.includes("Thiếu 49360 g Rau muống sạch"),
   );
 });
 
@@ -252,16 +252,16 @@ void test("grade recipe selection rejects differing portions and grades without 
   assert.equal(selectDishGradeRecipes(rows, ["small", "same"]).length, 1);
   assert.throws(() => selectDishGradeRecipes(rows, ["small", "large"]), {
     statusCode: 422,
-    message: /hãy tách thực đơn/,
+    message: /Hãy tách thực đơn/,
   });
   assert.throws(() => selectDishGradeRecipes(rows, ["missing"]), {
     statusCode: 422,
-    message: /chưa có khẩu phần/,
+    message: /thiếu khẩu phần/,
   });
   const tiny = scaledDish([{ gradeId: "tiny", portion: "0.01" }]);
   assert.throws(() => selectDishGradeRecipes(tiny, ["tiny"]), {
     statusCode: 422,
-    message: /bằng 0 sau khi làm tròn/,
+    message: /quá nhỏ/,
   });
 });
 

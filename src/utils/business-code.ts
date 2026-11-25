@@ -177,7 +177,7 @@ const defaultDeps: BusinessCodeDeps = {
 function exhausted(type: BusinessCodeType): HttpError {
   return new HttpError(
     503,
-    `Đã hết dải mã ${BUSINESS_CODE_TYPES[type]}. Vui lòng liên hệ quản trị hệ thống.`,
+    `Đã hết mã ${BUSINESS_CODE_TYPES[type]}. Liên hệ quản trị.`,
   );
 }
 

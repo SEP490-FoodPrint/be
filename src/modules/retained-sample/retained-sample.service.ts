@@ -119,10 +119,7 @@ export function createRetainedSampleService(
             dish.sampleUnit !== undefined;
           if (hasPlannedSample) {
             if (input.quantity !== undefined || input.unit !== undefined)
-              throw new HttpError(
-                400,
-                "Mẻ đã ấn định lượng mẫu khi lập kế hoạch; không gửi lượng hoặc đơn vị",
-              );
+              throw new HttpError(400, "Lượng mẫu đã được định sẵn.");
           } else if (input.quantity === undefined || input.unit === undefined) {
             throw new HttpError(400, "Vui lòng nhập lượng mẫu và đơn vị");
           }
@@ -156,10 +153,7 @@ export function createRetainedSampleService(
               +existing.sampledAt !== +input.sampledAt ||
               (existing.photoHash ?? null) !== (photo?.photoHash ?? null)
             ) {
-              throw new HttpError(
-                409,
-                "Mẻ đã có mẫu lưu; không ghi đè thông tin mẫu",
-              );
+              throw new HttpError(409, "Mẻ đã có mẫu lưu.");
             }
             return { ...mapSample(existing), created: false };
           }
@@ -252,7 +246,7 @@ export function createRetainedSampleService(
               Number(sample.disposedAt) !== +input.disposedAt ||
               sample.disposalNote !== input.disposalNote
             )
-              throw new HttpError(409, "Mẫu đã tiêu hủy; không ghi đè lịch sử");
+              throw new HttpError(409, "Mẫu đã tiêu hủy.");
             return mapSample(sample);
           }
           const expires = +sample.sampledAt + 24 * 3600000,
@@ -275,7 +269,7 @@ export function createRetainedSampleService(
           if (hold)
             throw new HttpError(
               409,
-              "Mẫu liên quan sự cố ATTP chưa kết thúc; cần tiếp tục bảo quản",
+              "Mẫu đang dùng điều tra sự cố, chưa được hủy.",
             );
           const disposed = await repository.dispose(tx, id, input);
           proof = await proofs.prepareSampleDisposed(tx, id, actor.id);

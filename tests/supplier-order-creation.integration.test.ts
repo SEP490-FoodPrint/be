@@ -1539,8 +1539,7 @@ void test("supplier order creation end-to-end integration on disposable PostgreS
     receiptIssue: string | null;
   }>(arrivalRes.body);
   assert.equal(arrivedBody.status, "ARRIVED");
-  const missingEntryIssue =
-    "Chưa cấu hình danh mục nguyên liệu đang hoạt động của trường để tiếp nhận lô";
+  const missingEntryIssue = "Nguyên liệu chưa có trong danh mục của trường.";
   // FR-014: the missing school ingredient entry is reported on arrival.
   assert.equal(arrivedBody.receiptIssue, missingEntryIssue);
   const arrivalReplay = await apiRequest(

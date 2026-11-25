@@ -17,8 +17,8 @@ function isCalendarDate(value: string) {
 }
 
 export const dateOnlySchema = z
-  .string({ error: "Ngày phải là chuỗi YYYY-MM-DD" })
-  .refine(isCalendarDate, "Ngày không hợp lệ, cần dùng định dạng YYYY-MM-DD");
+  .string({ error: "Ngày không hợp lệ." })
+  .refine(isCalendarDate, "Ngày không hợp lệ.");
 
 export const holidaySchema = z.strictObject({
   startDate: dateOnlySchema,

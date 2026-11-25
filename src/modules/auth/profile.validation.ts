@@ -15,7 +15,7 @@ export const profileUpdateSchema = z
       .optional(),
   })
   .refine((value) => Object.keys(value).length > 0, {
-    error: "Cần cung cấp fullName hoặc phone để cập nhật",
+    error: "Nhập họ tên hoặc số điện thoại.",
   });
 export function validateProfileUpdate(value: unknown) {
   return parseRequest(profileUpdateSchema, value);

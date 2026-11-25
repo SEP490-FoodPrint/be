@@ -850,14 +850,8 @@ void test("blockchain proof is prepared only on the first completion of a batch"
 void test("chỉ được nấu bữa của hôm nay; xem trước thì mọi ngày", async () => {
   // Thực đơn của fixture là ngày 11/11/2026.
   for (const [today, reason] of [
-    [
-      "2026-11-10",
-      "Chưa tới ngày 11/11/2026: chỉ được nấu bữa ăn của hôm nay (10/11/2026)",
-    ],
-    [
-      "2026-11-12",
-      "Ngày 11/11/2026 đã qua: chỉ được nấu bữa ăn của hôm nay (12/11/2026)",
-    ],
+    ["2026-11-10", "Chỉ được nấu bữa ăn của hôm nay."],
+    ["2026-11-12", "Chỉ được nấu bữa ăn của hôm nay."],
   ] as const) {
     const f = fixture("COMBINE_LOTS", false, undefined, today);
     await assert.rejects(f.service.plan(validateKitchenPlan(meal), principal), {

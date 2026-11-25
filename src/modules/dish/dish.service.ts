@@ -157,10 +157,7 @@ export function aggregateDishRecipes(rows: RecipeRows) {
         (r) => !["MAIN", "SEASONING"].includes(r.ingredientRole ?? ""),
       )
     )
-      throw new HttpError(
-        422,
-        `Công thức món “${d.name}” thiếu định lượng hoặc chưa phân loại nguyên liệu/gia vị`,
-      );
+      throw new HttpError(422, `Món “${d.name}”: công thức chưa đầy đủ.`);
     const ingredients: {
       ingredientId: string;
       quantityPerPortion: string;
@@ -188,10 +185,7 @@ export function aggregateDishRecipes(rows: RecipeRows) {
           seasoningUnit,
         ).add(old?.quantityPerPortion ?? 0);
         if (total.decimalPlaces() > 3 || total.gte("100000000000"))
-          throw new HttpError(
-            422,
-            "Tổng gia vị vượt độ chính xác lưu trữ; hãy kiểm tra đơn vị công thức",
-          );
+          throw new HttpError(422, "Lượng gia vị quá lẻ. Kiểm tra đơn vị.");
         seasonings.set(r.ingredientEntryId, {
           ingredientEntryId: r.ingredientEntryId,
           name: r.IngredientEntry.Ingredient.name,
@@ -230,7 +224,7 @@ export function selectDishGradeRecipes(
           if (portion === undefined)
             throw new HttpError(
               422,
-              `Món “${dish.name}” chưa có khẩu phần cho một trong các khối đã chọn`,
+              `Món “${dish.name}” thiếu khẩu phần của khối đã chọn.`,
             );
           return portion;
         })
@@ -260,13 +254,13 @@ export function selectDishGradeRecipes(
     if (scaled.some((lines) => canonical(lines) !== canonical(scaled[0])))
       throw new HttpError(
         422,
-        `Các khối có định lượng khác nhau cho món “${dish.name}”; hãy tách thực đơn`,
+        `Món “${dish.name}” khác định lượng giữa các khối. Hãy tách thực đơn.`,
       );
     const tooSmall = scaled[0].find((line) => !line.requiredQuantity.gt(0));
     if (tooSmall)
       throw new HttpError(
         422,
-        `Định lượng “${tooSmall.IngredientEntry.Ingredient.name}” của món “${dish.name}” bằng 0 sau khi làm tròn; hãy kiểm tra mốc chuẩn và khẩu phần`,
+        `Lượng “${tooSmall.IngredientEntry.Ingredient.name}” trong món “${dish.name}” quá nhỏ. Kiểm tra khẩu phần.`,
       );
     return { ...dish, dishIngredientEntries: scaled[0] };
   });
@@ -280,10 +274,7 @@ export async function readDatabaseMealRecipe(
 ) {
   let rows = await recipes.recipes(tx, schoolId, ids);
   if (rows.length !== ids.length || new Set(ids).size !== ids.length)
-    throw new HttpError(
-      422,
-      "Món phải đang hoạt động, không trùng và thuộc trường",
-    );
+    throw new HttpError(422, "Món bị trùng hoặc không còn dùng.");
   rows = selectDishGradeRecipes(rows, gradeIds);
   const entries = await recipes.entries(tx, schoolId, [
     ...new Set(
@@ -354,7 +345,7 @@ export function createDishRecipeService(
           if (item._count.dishes)
             throw new HttpError(
               409,
-              "Nhóm đang có món ăn; hãy chuyển các món sang nhóm khác trước khi xóa",
+              "Nhóm còn món. Hãy chuyển món trước khi xóa.",
             );
           await recipes.deleteCategory(tx, id);
           return { id };
@@ -370,10 +361,7 @@ export function createDishRecipeService(
           const dish = await recipes.removable(tx, schoolId, id);
           if (!dish) throw new HttpError(404, "Không tìm thấy món của trường");
           if (Object.values(dish._count).some((count) => count > 0))
-            throw new HttpError(
-              409,
-              "Món đã được sử dụng trong thực đơn hoặc mẻ chế biến; không được xóa",
-            );
+            throw new HttpError(409, "Món đã được dùng, không xóa được.");
           return recipes.remove(tx, id);
         },
       );
@@ -474,10 +462,7 @@ export function createDishRecipeService(
               input.lines,
             );
             if (scaled.some((line) => !line.requiredQuantity.gt(0)))
-              throw new HttpError(
-                422,
-                "Khẩu phần quá nhỏ: có nguyên liệu bằng 0 sau khi làm tròn 3 chữ số thập phân",
-              );
+              throw new HttpError(422, "Khẩu phần quá nhỏ. Kiểm tra lại.");
           }
           if (input.gradeRecipes?.length) {
             const grades = await recipes.grades(

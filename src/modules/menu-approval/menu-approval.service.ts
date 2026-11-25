@@ -253,7 +253,7 @@ function assertReady(menu: ApprovalDecisionRow): void {
         ),
     )
   ) {
-    throw new HttpError(422, "Mỗi món cần đầy đủ định mức trước khi phê duyệt");
+    throw new HttpError(422, "Còn món chưa có định lượng.");
   }
 }
 
