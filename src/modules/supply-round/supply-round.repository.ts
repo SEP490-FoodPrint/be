@@ -1,3 +1,4 @@
+import { addPortion } from "../../utils/portions";
 import { Prisma } from "../../generated/prisma/client";
 import { convertQuantity } from "../../utils/quantity-conversion";
 import { HttpError } from "../../utils/http-error";
@@ -57,12 +58,14 @@ export const supplyRoundRepository = {
       lots: {
         ingredientLotId: string;
         quantityUsed: Prisma.Decimal;
+        sampleQuantity: Prisma.Decimal;
         unit: string;
       }[];
     },
     at: Date,
   ) {
     const dish = { cookingBatchId: part.cookingBatchId, dishId: part.dishId };
+    // Nấu chung: phần mẫu đặt ở Đợt 2 đi theo dòng lô của phần gộp (TASK-10 v8, V14).
     await tx.cookingBatchDish.update({
       where: { cookingBatchId_dishId: dish },
       data: { plannedPortions: { increment: part.plannedPortions } },
@@ -73,6 +76,7 @@ export const supplyRoundRepository = {
     });
     for (const lot of part.lots) {
       const { ingredientLotId, quantityUsed, unit } = lot;
+      const sampleQuantity = lot.sampleQuantity ?? new Prisma.Decimal(0);
       const key = { ...dish, ingredientLotId };
       const where = { cookingBatchId_dishId_ingredientLotId: key };
       const existing = await tx.cookingBatchLot.findUnique({
@@ -82,15 +86,21 @@ export const supplyRoundRepository = {
       const increment = existing
         ? convertQuantity(quantityUsed, unit, existing.unit)
         : quantityUsed;
-      if (increment.decimalPlaces() > 3)
+      const sampleIncrement = existing
+        ? convertQuantity(sampleQuantity, unit, existing.unit)
+        : sampleQuantity;
+      if (increment.decimalPlaces() > 3 || sampleIncrement.decimalPlaces() > 3)
         throw new HttpError(
           409,
           "Lượng nguyên liệu Đợt 2 vượt độ chính xác của lô",
         );
       await tx.cookingBatchLot.upsert({
         where,
-        create: { ...key, quantityUsed, unit },
-        update: { quantityUsed: { increment } },
+        create: { ...key, quantityUsed, sampleQuantity, unit },
+        update: {
+          quantityUsed: { increment },
+          sampleQuantity: { increment: sampleIncrement },
+        },
       });
     }
     await tx.cookingBatchRoundPart.update({
@@ -384,12 +394,23 @@ export const supplyRoundRepository = {
       supplyRoundId: string;
       cookingBatchId: string;
       dishId: string;
-      plannedPortions: number;
+      plannedPortions: number | string | Prisma.Decimal;
     },
-    lots: { ingredientLotId: string; quantityUsed: string; unit: string }[],
+    lots: {
+      ingredientLotId: string;
+      quantityUsed: string;
+      sampleQuantity?: string;
+      unit: string;
+    }[],
+    approvedByUserId: string | null = null,
   ) {
     const part = await tx.cookingBatchRoundPart.create({
-      data: { ...input, status: "PENDING_APPROVAL" },
+      data: {
+        ...input,
+        ...(approvedByUserId
+          ? { status: "APPROVED", approvedByUserId, approvedAt: new Date() }
+          : { status: "PENDING_APPROVAL" }),
+      },
       select: { id: true },
     });
     if (lots.length) {
@@ -502,9 +523,9 @@ export const supplyRoundRepository = {
         select: { plannedPortions: true },
       }),
     ]);
-    return (
-      batches.reduce((sum, b) => sum + (b.plannedPortions ?? 0), 0) +
-      parts.reduce((sum, p) => sum + p.plannedPortions, 0)
+    return [...batches, ...parts].reduce(
+      (sum, row) => addPortion(sum, row.plannedPortions),
+      0,
     );
   },
   async hasReplanRequiredRound2(tx: Tx, schoolId: string, deliveryDate: Date) {
@@ -653,6 +674,304 @@ export const supplyRoundRepository = {
         },
       });
     }
+  },
+};
+
+export const roundSampleRepository = {
+  /** Lô của các chuyến thuộc đợt (đồ tươi theo đợt), kể cả lô đã khai báo chưa nhận (Đợt 2 nấu riêng). */
+  async roundLots(tx: Tx, key: RoundKey, entryIds: string[]) {
+    if (!entryIds.length) return [];
+    const rows = await tx.ingredientLot.findMany({
+      where: {
+        OR: [
+          { status: "AVAILABLE", availableQuantity: { gt: 0 } },
+          { status: "BLOCKED", receivedQuantity: { gt: 0 } },
+        ],
+        DeliveryItem: {
+          OR: [
+            { ingredientEntryId: { in: entryIds } },
+            { SupplyRequestItem: { ingredientEntryId: { in: entryIds } } },
+          ],
+          Delivery: {
+            schoolId: key.schoolId,
+            creationMode: "REQUEST",
+            status: { notIn: ["REJECTED", "CANCELLED"] },
+            SupplyRequest: {
+              orderType: "DIRECT_USE",
+              requestedDeliveryDate: key.deliveryDate,
+              batchNo: key.batchNo,
+              status: { notIn: ["DRAFT", "CANCELLED"] },
+            },
+          },
+        },
+      },
+      orderBy: [
+        { expiryDate: { sort: "asc", nulls: "last" } },
+        { createdAt: "asc" },
+        { id: "asc" },
+      ],
+      select: {
+        id: true,
+        unit: true,
+        status: true,
+        availableQuantity: true,
+        receivedQuantity: true,
+        sourceFacilityId: true,
+        DeliveryItem: {
+          select: {
+            ingredientEntryId: true,
+            sourceFacilityId: true,
+            SupplyRequestItem: { select: { ingredientEntryId: true } },
+            Delivery: { select: { status: true } },
+          },
+        },
+      },
+    });
+    return rows.flatMap((row) => {
+      const ingredientEntryId =
+        row.DeliveryItem.ingredientEntryId ??
+        row.DeliveryItem.SupplyRequestItem?.ingredientEntryId;
+      if (!ingredientEntryId) return [];
+      const incoming = row.status === "BLOCKED";
+      // Lô bị khóa của chuyến đã nhận là lô từ chối/khóa kho: bỏ qua.
+      if (incoming && row.DeliveryItem.Delivery.status === "RECEIVED")
+        return [];
+      return [
+        {
+          id: row.id,
+          ingredientEntryId,
+          unit: row.unit,
+          incoming,
+          quantity: incoming ? row.receivedQuantity : row.availableQuantity,
+          sourceFacilityId:
+            row.sourceFacilityId ?? row.DeliveryItem.sourceFacilityId ?? null,
+        },
+      ];
+    });
+  },
+  activeLeftovers(tx: Tx, round1Id: string, meal: RoundMeal, dishId: string) {
+    return tx.supplyRoundLeftover.findMany({
+      where: { supplyRoundId: round1Id, ...meal, dishId, releasedAt: null },
+      orderBy: { id: "asc" },
+      select: {
+        id: true,
+        ingredientLotId: true,
+        quantity: true,
+        unit: true,
+        ingredientLot: {
+          select: {
+            sourceFacilityId: true,
+            DeliveryItem: {
+              select: {
+                ingredientEntryId: true,
+                sourceFacilityId: true,
+                SupplyRequestItem: { select: { ingredientEntryId: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+  },
+  createLeftovers(
+    tx: Tx,
+    rows: {
+      supplyRoundId: string;
+      menuDayId: string;
+      mealType: "LUNCH" | "AFTERNOON";
+      dishId: string;
+      ingredientLotId: string;
+      quantity: Prisma.Decimal;
+      unit: string;
+    }[],
+  ) {
+    return rows.length
+      ? tx.supplyRoundLeftover.createMany({ data: rows })
+      : Promise.resolve({ count: 0 });
+  },
+  releaseLeftovers(tx: Tx, ids: string[], at: Date) {
+    return ids.length
+      ? tx.supplyRoundLeftover.updateMany({
+          where: { id: { in: ids }, releasedAt: null },
+          data: { releasedAt: at },
+        })
+      : Promise.resolve({ count: 0 });
+  },
+  releaseRoundLeftovers(tx: Tx, round1Id: string, at: Date) {
+    return tx.supplyRoundLeftover.updateMany({
+      where: { supplyRoundId: round1Id, releasedAt: null },
+      data: { releasedAt: at },
+    });
+  },
+  /** Phần dư Đợt 1 (dùng khi Đợt 2 không cần: hiển thị thừa, V37). */
+  leftoversOfRound(tx: Tx, round1Id: string) {
+    return tx.supplyRoundLeftover.findMany({
+      where: { supplyRoundId: round1Id },
+      orderBy: { id: "asc" },
+      select: {
+        quantity: true,
+        unit: true,
+        mealType: true,
+        releasedAt: true,
+        dish: { select: { name: true } },
+        ingredientLot: {
+          select: {
+            lotCode: true,
+            DeliveryItem: {
+              select: {
+                ingredientNameSnapshot: true,
+                sourceFacilityNameSnapshot: true,
+              },
+            },
+          },
+        },
+      },
+    });
+  },
+  async replaceCompensations(
+    tx: Tx,
+    supplyRoundId: string,
+    rows: {
+      ingredientEntryId: string;
+      kind: "FRESH" | "STOCK";
+      sampleQuantity: Prisma.Decimal;
+      unit: string;
+    }[],
+  ) {
+    await tx.supplyRoundCompensation.deleteMany({ where: { supplyRoundId } });
+    const data = rows.filter((row) => row.sampleQuantity.gt(0));
+    if (data.length)
+      await tx.supplyRoundCompensation.createMany({
+        data: data.map((row) => ({ ...row, supplyRoundId })),
+      });
+  },
+  compensations(tx: Tx, supplyRoundId: string) {
+    return tx.supplyRoundCompensation.findMany({
+      where: { supplyRoundId },
+      select: {
+        ingredientEntryId: true,
+        kind: true,
+        sampleQuantity: true,
+        unit: true,
+      },
+    });
+  },
+  /** Mẻ Đợt 1 đã cắt mẫu: dòng lô có phần mẫu, kèm loại xử lý của nguyên liệu. */
+  cutSampleRows(tx: Tx, supplyRoundId: string) {
+    return tx.cookingBatchLot.findMany({
+      where: {
+        sampleQuantity: { gt: 0 },
+        CookingBatch: {
+          BatchGroup: { supplyRoundId },
+          sampleStrategy: "CUT",
+          status: { notIn: ["CANCELLED", "COMPLETED"] },
+        },
+      },
+      select: {
+        cookingBatchId: true,
+        dishId: true,
+        ingredientLotId: true,
+        sampleQuantity: true,
+        unit: true,
+        IngredientLot: {
+          select: {
+            DeliveryItem: {
+              select: {
+                ingredientEntryId: true,
+                SupplyRequestItem: { select: { ingredientEntryId: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+  },
+  entryKinds(tx: Tx, ids: string[]) {
+    return tx.ingredientEntry.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, handlingType: true },
+    });
+  },
+  /** Còn lớp đăng ký suất ăn chưa chốt điểm danh bữa trưa của ngày. */
+  attendancePending(tx: Tx, schoolId: string, deliveryDate: Date) {
+    return tx.class.count({
+      where: {
+        schoolId,
+        status: "ACTIVE",
+        registeredMealPortions: { gt: 0 },
+        NOT: {
+          dailyMealPortions: {
+            some: {
+              mealDate: deliveryDate,
+              mealType: "LUNCH",
+              status: "FINALIZED",
+            },
+          },
+        },
+      },
+    });
+  },
+  cookingMode(tx: Tx, schoolId: string) {
+    return tx.school
+      .findUnique({ where: { id: schoolId }, select: { cookingMode: true } })
+      .then((row) => row?.cookingMode ?? null);
+  },
+  /** Đợt 2 nấu riêng lập lại một món: xóa phần/mẻ Đợt 2 còn lại của món và trả phần dư Đợt 1 (V35). */
+  async resetRound2Dish(
+    tx: Tx,
+    round2Id: string,
+    round1Id: string | null,
+    dishId: string,
+  ) {
+    await tx.cookingBatchRoundPart.deleteMany({
+      where: { supplyRoundId: round2Id, dishId, status: { not: "MERGED" } },
+    });
+    const batches = await tx.cookingBatch.findMany({
+      where: {
+        dishId,
+        BatchGroup: { supplyRoundId: round2Id },
+        status: { in: ["PENDING_APPROVAL", "ROUND2_APPROVED"] },
+      },
+      select: { id: true, batchGroupId: true },
+    });
+    const ids = batches.map(({ id }) => id);
+    if (ids.length) {
+      await tx.cookingBatchLot.deleteMany({
+        where: { cookingBatchId: { in: ids } },
+      });
+      await tx.cookingBatchDish.deleteMany({
+        where: { cookingBatchId: { in: ids } },
+      });
+      await tx.cookingBatch.deleteMany({ where: { id: { in: ids } } });
+      const groups = [
+        ...new Set(
+          batches
+            .map(({ batchGroupId }) => batchGroupId)
+            .filter((id): id is string => Boolean(id)),
+        ),
+      ];
+      if (groups.length)
+        await tx.cookingBatchGroup.deleteMany({
+          where: { id: { in: groups }, cookingBatches: { none: {} } },
+        });
+    }
+    if (round1Id)
+      await tx.supplyRoundLeftover.updateMany({
+        where: { supplyRoundId: round1Id, dishId, releasedAt: { not: null } },
+        data: { releasedAt: null },
+      });
+  },
+  markRoundBatchesStatus(
+    tx: Tx,
+    supplyRoundId: string,
+    dishId: string,
+    from: "PENDING_APPROVAL",
+    to: "ROUND1_APPROVED" | "ROUND2_APPROVED",
+  ) {
+    return tx.cookingBatch.updateMany({
+      where: { BatchGroup: { supplyRoundId }, dishId, status: from },
+      data: { status: to },
+    });
   },
 };
 

@@ -1,3 +1,4 @@
+import { portionsOrNull } from "../../utils/portions";
 import type {
   BlockchainProofEntityType,
   BlockchainProofEventType,
@@ -305,7 +306,7 @@ async function mealSubjects(db: Db, where: Prisma.MealAllocationWhereInput) {
         batchCode: batch.batchCode,
         status: batch.status,
         dishes: [],
-        plannedPortions: batch.plannedPortions,
+        plannedPortions: portionsOrNull(batch.plannedPortions),
         allocatedPortions: 0,
         completedAt: iso(batch.completedAt),
       };
@@ -672,7 +673,9 @@ export function createBlockchainProofRepository() {
         where: { id: { in: [...new Set(cookingBatchIds)] } },
         select: { id: true, plannedPortions: true },
       });
-      return new Map(rows.map((row) => [row.id, row.plannedPortions]));
+      return new Map(
+        rows.map((row) => [row.id, portionsOrNull(row.plannedPortions)]),
+      );
     },
     distributionSubject,
     latestRegistrationVersion(db: Db, registrationRequestId: string) {

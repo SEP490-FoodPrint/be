@@ -1,3 +1,4 @@
+import { portionsOrNull } from "../../utils/portions";
 import type {
   GetGradeMealTraceabilityRequestDto,
   GetMealTraceabilityRequestDto,
@@ -424,7 +425,7 @@ export const mealTraceabilityService = {
           quantityPerPortion: m.quantityPerPortion.toFixed(9),
           unit: m.unit,
         })),
-        plannedPortions: cbd.plannedPortions,
+        plannedPortions: portionsOrNull(cbd.plannedPortions),
         status: cb.status,
         confirmedAt: iso(cb.confirmedAt),
         completedAt: iso(cb.completedAt),

@@ -58,6 +58,7 @@ import { recordPhotoUrl } from "../../utils/record-photo";
 import { grossFromNet, netFromGross } from "../../utils/waste-rate";
 import { gradeDishLines } from "../../utils/dish-portion";
 import { convertQuantity } from "../../utils/quantity-conversion";
+import { addPortion, portionsOrNull } from "../../utils/portions";
 
 const Decimal = Prisma.Decimal;
 export interface RecipeLine {
@@ -374,6 +375,20 @@ export async function reservedQuantities(
       where: { ...where, usedAt: null },
       select,
     })),
+    // Phần dư Đợt 1 giữ cho Đợt 2 của cùng món/bữa (TASK-10 v8, V35).
+    ...(tx.supplyRoundLeftover?.findMany
+      ? (
+          await tx.supplyRoundLeftover.findMany({
+            where: { ...where, releasedAt: null },
+            select: { ingredientLotId: true, quantity: true, unit: true },
+          })
+        ).map((row) => ({
+          ingredientLotId: row.ingredientLotId,
+          quantityUsed: row.quantity,
+          sampleQuantity: new Prisma.Decimal(0),
+          unit: row.unit,
+        }))
+      : []),
   ];
   const byId = new Map(lots.map((lot) => [lot.id, lot]));
   for (const row of rows) {
@@ -747,7 +762,7 @@ export async function assertMealPortions(
   for (const dishId of scopeDishIds) {
     const planned = scoped
       .filter((batch) => batch.dishId === dishId)
-      .reduce((sum, batch) => sum + (batch.plannedPortions ?? 0), 0);
+      .reduce((sum, batch) => addPortion(sum, batch.plannedPortions), 0);
     const finalized = demand.dishPortions.get(dishId) ?? 0;
     if (allowSurplus ? planned < finalized : planned !== finalized) {
       const dish = await tx.dish.findUnique({
@@ -1030,7 +1045,7 @@ export async function consumeMealSeasonings(
     dishes.some((dish) => {
       const rows = batches.filter((batch) => batch.dishId === dish.dishId);
       const planned = rows.reduce(
-        (total, batch) => total + (batch.plannedPortions ?? 0),
+        (total, batch) => addPortion(total, batch.plannedPortions),
         0,
       );
       const finalized = demand.dishPortions.get(dish.dishId) ?? 0;
@@ -1115,7 +1130,7 @@ export async function checkReservedStock(
 ) {
   if (
     !batch.plannedPortions ||
-    batch.plannedPortions <= 0 ||
+    !new Decimal(batch.plannedPortions).gt(0) ||
     !batch.cookingBatchLots.length
   )
     throw new HttpError(409, "Mẻ chưa có kế hoạch số suất/nguyên liệu hợp lệ");
@@ -1212,7 +1227,7 @@ function dto(batch: Detail): CookingBatchDetailDTO {
     dishId: batch.dishId,
     cookingModeApplied: batch.cookingModeApplied,
     status: batch.status,
-    plannedPortions: batch.plannedPortions,
+    plannedPortions: portionsOrNull(batch.plannedPortions),
     note: batch.note,
     confirmedAt: batch.confirmedAt?.toISOString() ?? null,
     completedAt: batch.completedAt?.toISOString() ?? null,
@@ -1223,7 +1238,7 @@ function dto(batch: Detail): CookingBatchDetailDTO {
     dishes: batch.dishes.map((d) => ({
       dishId: d.dishId,
       name: d.Dish?.name ?? "",
-      plannedPortions: d.plannedPortions,
+      plannedPortions: portionsOrNull(d.plannedPortions),
       ...(d.sampleQuantity !== null && d.sampleQuantity !== undefined
         ? {
             sampleQuantity: d.sampleQuantity.toString(),
@@ -1550,14 +1565,17 @@ export function createKitchenLifecycle(
         const planned = new Map<string, number>();
         for (const child of existing)
           for (const dish of child.dishes) {
-            if (!dish.plannedPortions || dish.plannedPortions <= 0)
+            if (
+              !dish.plannedPortions ||
+              !new Decimal(dish.plannedPortions).gt(0)
+            )
               throw new HttpError(
                 409,
                 "Mẻ cũ thiếu số suất kế hoạch; cần đối chiếu trước",
               );
             planned.set(
               dish.dishId,
-              (planned.get(dish.dishId) ?? 0) + dish.plannedPortions,
+              addPortion(planned.get(dish.dishId) ?? 0, dish.plannedPortions),
             );
           }
         for (const [dishId, portions] of planned)

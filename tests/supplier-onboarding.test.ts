@@ -431,7 +431,21 @@ function draftService(
           batch1Saved: true,
           schoolWide: true,
           grades: [],
-          items: [],
+          // V15: số lượng đơn đồ tươi theo đợt phải đúng lượng hệ thống tính.
+          items: [
+            {
+              ingredientEntryId: id,
+              ingredientId: id,
+              name: "Cá",
+              unit: "kg",
+              supplierId: id,
+              supplierName: "NCC",
+              quantity: 1,
+              carryOverQuantity: 0,
+              orderQuantity: 1,
+              details: [],
+            },
+          ],
         }),
       saveBatch1: () => Promise.resolve(),
     },

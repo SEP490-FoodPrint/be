@@ -333,7 +333,7 @@ function listRow(): SupplierOrderListRow {
     updatedAt: timestamp,
     requestedDeliveryDate: new Date("2026-11-20T00:00:00.000Z"),
     sentAt: timestamp,
-    School: { id: testStaff.schoolId!, name: "Trường A" },
+    School: { id: testStaff.schoolId!, name: "Trường A", cookingMode: null },
     _count: { deliveries: 0 },
     deliveries: [],
   };
@@ -350,6 +350,8 @@ function detailRow(): SupplierOrderDetailRow {
           ingredientEntryId: "00000000-0000-4000-8000-000000000011",
           requestedQuantity: new Prisma.Decimal("99999999999.123"),
           sampleTopUpQuantity: new Prisma.Decimal(0),
+          carryOverQuantity: new Prisma.Decimal(0),
+          sampleCompensationQuantity: new Prisma.Decimal(0),
           unit: "kg",
           note: null,
           IngredientEntry: {
