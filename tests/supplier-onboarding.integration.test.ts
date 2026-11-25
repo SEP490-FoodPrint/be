@@ -2225,6 +2225,7 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
             create: {
               deliveryId: input.deliveryId,
               ingredientLotId: input.ingredientLotId ?? null,
+              issueType: "SPOILED_OR_NOT_FRESH",
             },
           },
         },
@@ -2376,7 +2377,9 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
               senderRoleCode: schActor1.roleCode,
               title: "Rolled back complaint",
               description: "Must not persist",
-              ingredientQualityFeedback: { create: { deliveryId: del1.id } },
+              ingredientQualityFeedback: {
+                create: { deliveryId: del1.id, issueType: "OTHER" },
+              },
             },
           });
           throw new Error("SIMULATED_PRODUCER_ROLLBACK");
