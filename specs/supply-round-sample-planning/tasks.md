@@ -84,3 +84,10 @@ Chi tiết từng task ở [plan.md](plan.md). Mỗi PR đánh dấu xong khi đ
 - [x] T060 Test.
 - [x] T061 FE NCC giao lại bằng chuyến `REQUEST`.
 - [x] T062 FE trường bỏ `RE_DELIVER` và logic hủy phía FE.
+
+## Hồi quy thực đơn, gia vị và phân bổ
+
+- [x] T061 Kiểm tra gửi duyệt từ FE cho cả tuần và nhiều khối với đơn vị tính lặp lại, xác nhận tính nguyên tử.
+- [x] T062 Kiểm tra gia vị dùng chung với mốc 32 suất và phần phát sinh 28 suất, giữ số lượng và mẫu qua lần lập lại.
+- [x] T063 Kiểm tra phân bổ cho mẻ theo đợt dùng bản chụp mới và cũ, giữ kiểm tra nguồn nguyên liệu chính.
+- [x] T064 Chạy lại demo FE tới bàn giao, lưu ảnh và xác minh xóa database test.

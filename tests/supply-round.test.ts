@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ROLES } from "../src/constants/roles";
 import { Prisma } from "../src/generated/prisma/client";
+import { reserveMealSeasonings } from "../src/modules/kitchen/kitchen.service";
 import { supplyRoundService } from "../src/modules/supply-round/supply-round.service";
 import {
   roundApprovalSchema,
@@ -25,6 +26,89 @@ const board: AuthPrincipal = {
 };
 const hasStatus = (status: number) => (error: unknown) =>
   error instanceof HttpError && error.statusCode === status;
+
+void test("round two extends shared seasoning once and preserves the retained sample", async () => {
+  const decimal = (value: number) => new Prisma.Decimal(value);
+  const date = new Date("2026-12-07T00:00:00Z");
+  const meal = { menuDayId: "menu", mealType: "LUNCH" } as const;
+  const row = {
+    id: "reservation",
+    ingredientEntryId: "seasoning",
+    ingredientLotId: "lot",
+    plannedPortions: 32,
+    quantityUsed: decimal(32),
+    sampleQuantity: decimal(5),
+    unit: "g",
+    usedAt: null,
+  };
+  const lot = {
+    id: "lot",
+    unit: "g",
+    availableQuantity: decimal(64),
+    DeliveryItem: { ingredientEntryId: "seasoning" },
+  };
+  let quantityWrites = 0;
+  const tx = {
+    menuMealSeasoning: {
+      findMany: () =>
+        Promise.resolve([
+          {
+            ingredientEntryId: "seasoning",
+            ingredientEntry: {
+              schoolId: board.schoolId,
+              handlingType: "DRY_STOCK",
+            },
+            quantityPerPortion: decimal(1),
+            unit: "g",
+          },
+        ]),
+    },
+    dailyAllergyPortion: { findFirst: () => Promise.resolve(null) },
+    menuDay: { findUniqueOrThrow: () => Promise.resolve({ menuDate: date }) },
+    menuMealSeasoningLot: {
+      findMany: () => Promise.resolve([row]),
+      updateMany: ({ data }: { data: { plannedPortions: number } }) => {
+        row.plannedPortions = data.plannedPortions;
+        return Promise.resolve({ count: 1 });
+      },
+      update: ({
+        data,
+      }: {
+        data: { quantityUsed: { increment: Prisma.Decimal } };
+      }) => {
+        quantityWrites += 1;
+        row.quantityUsed = row.quantityUsed.add(data.quantityUsed.increment);
+        return Promise.resolve(row);
+      },
+    },
+    ingredientLot: { findMany: () => Promise.resolve([lot]) },
+    cookingBatchLot: { findMany: () => Promise.resolve([]) },
+    $queryRawUnsafe: () => Promise.resolve([]),
+  } as unknown as Prisma.TransactionClient;
+  const reserve = (extend: boolean) =>
+    reserveMealSeasonings(
+      tx,
+      meal,
+      board.schoolId!,
+      date,
+      60,
+      "SEPARATE_BY_LOT",
+      { extend },
+    );
+
+  await assert.rejects(reserve(false), hasStatus(409));
+  await assert.rejects(reserve(true), hasStatus(409));
+  assert.equal(row.plannedPortions, 32);
+  assert.equal(quantityWrites, 0);
+
+  lot.availableQuantity = decimal(65);
+  await reserve(true);
+  await reserve(true);
+  assert.equal(row.plannedPortions, 60);
+  assert.equal(row.quantityUsed.toString(), "60");
+  assert.equal(row.sampleQuantity.toString(), "5");
+  assert.equal(quantityWrites, 1);
+});
 
 void test("round batch becomes official only after the last required receipt and stock check", async () => {
   const date = new Date("2026-11-25T00:00:00.000Z");

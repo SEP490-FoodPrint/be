@@ -236,6 +236,45 @@ void test("legacy batch uses approved menu ingredients when snapshot is absent",
     /không thống nhất/,
   );
 });
+
+void test("older round snapshots allocate main ingredients while shared seasonings stay in the meal", () => {
+  const data = fixture();
+  data.day.menus[0].mealSeasonings = [
+    {
+      mealType: "LUNCH",
+      ingredientEntry: { ingredientId: "salt", Ingredient: { name: "Muối" } },
+    },
+  ];
+  const snapshot = {
+    version: 1,
+    profiles: [],
+    fallback: [
+      { ingredientId: "beef", quantityPerPortion: "60", unit: "g" },
+      { ingredientId: "salt", quantityPerPortion: "1", unit: "g" },
+    ],
+  };
+  for (const [index, batch] of data.batches.entries()) {
+    batch.supplyBatchNo = index + 1;
+    batch.dishes[0].allocationRecipeSnapshot = snapshot;
+  }
+  const input = { mealType: "LUNCH" as const, priorityClassIds: [] };
+  const plan = buildMaterialPlan(data, "2026-11-20", input);
+  assert.deepEqual(
+    [
+      ...new Set(
+        plan.entries.flatMap(({ materials }) =>
+          materials.map(({ ingredientId }) => ingredientId),
+        ),
+      ),
+    ],
+    ["beef"],
+  );
+  for (const batch of data.batches) batch.supplyBatchNo = null;
+  assert.throws(
+    () => buildMaterialPlan(data, "2026-11-20", input),
+    /không đáp ứng đủ nhu cầu/,
+  );
+});
 void test("legacy missing snapshot and unfinished cooking block preview", () => {
   const data = fixture();
   data.batches[0].dishes[0].allocationRecipeSnapshot = null;

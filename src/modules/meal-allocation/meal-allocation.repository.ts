@@ -22,7 +22,19 @@ export async function readAllocationDay(
             isSchoolWide: true,
             grades: {
               orderBy: { gradeId: "asc" },
-              select: { gradeId: true, grade: { select: { name: true } } },
+              select: {
+                gradeId: true,
+                grade: {
+                  select: {
+                    name: true,
+                    classes: {
+                      where: { status: "ACTIVE" },
+                      take: 1,
+                      select: { id: true },
+                    },
+                  },
+                },
+              },
             },
           },
         },
@@ -245,7 +257,15 @@ export type AllocationDay = Omit<
     > & {
       ingredients?: RawAllocationDay["menus"][number]["menuDayDishes"][number]["ingredients"];
     })[];
-    WeeklyMenu?: RawAllocationDay["menus"][number]["WeeklyMenu"];
+    WeeklyMenu?: Omit<
+      NonNullable<RawAllocationDay["menus"][number]["WeeklyMenu"]>,
+      "grades"
+    > & {
+      grades: {
+        gradeId: string;
+        grade: { name: string; classes?: { id: string }[] };
+      }[];
+    };
     portionGroups: (Omit<
       RawAllocationDay["menus"][number]["portionGroups"][number],
       "dishes"
@@ -366,6 +386,7 @@ export async function readMaterialAllocationData(
       menuDayId: true,
       batchNumber: true,
       status: true,
+      supplyBatchNo: true,
       MenuDay: {
         select: {
           menuDayDishes: {

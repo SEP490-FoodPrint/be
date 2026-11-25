@@ -368,6 +368,19 @@ export function projectAllocationDay(
         (demand) =>
           demand.mealType === mealType && menuAcceptsDemand(menu, demand),
       );
+      if (
+        !daily.length &&
+        !rawBatches.length &&
+        menu.WeeklyMenu?.isSchoolWide === false &&
+        menu.WeeklyMenu.grades.length > 0 &&
+        menu.WeeklyMenu.grades.every(
+          (grade) =>
+            Array.isArray(grade.grade.classes) &&
+            grade.grade.classes.length === 0,
+        )
+      ) {
+        return [];
+      }
       const groups =
         menu?.portionGroups.filter((group) => group.mealType === mealType) ??
         [];

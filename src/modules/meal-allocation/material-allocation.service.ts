@@ -359,6 +359,11 @@ export function buildMaterialPlan(
         409,
         "Lớp " + demand.Class.name + " không còn món có thể phục vụ.",
       );
+    const sharedSeasoningIds = new Set(
+      (menus[0].mealSeasonings ?? [])
+        .filter((seasoning) => seasoning.mealType === demand.mealType)
+        .map((seasoning) => seasoning.ingredientEntry.ingredientId),
+    );
     for (const { dish, portions } of dishDemands) {
       if (portions <= 0) continue;
       const recipes = batches
@@ -389,13 +394,27 @@ export function buildMaterialPlan(
                   unit: recipeLine.unit,
                 }))
               : undefined;
-          const lines = parsed.success
+          const recipeLines = parsed.success
             ? (parsed.data.profiles.find(
                 (profile) => profile.gradeId === demand.Class.gradeId,
               )?.lines ?? parsed.data.fallback)
             : gradeLines?.length
               ? gradeLines
               : fallback;
+          // Older round snapshots include shared seasonings held outside the batch.
+          const lines =
+            batch.supplyBatchNo == null
+              ? recipeLines
+              : recipeLines.filter(
+                  ({ ingredientId }) =>
+                    !sharedSeasoningIds.has(ingredientId) ||
+                    sources.some(
+                      (source) =>
+                        source.batchId === batch.id &&
+                        source.dishId === dish.dishId &&
+                        source.ingredientId === ingredientId,
+                    ),
+                );
           if (!lines.length || !z.array(line).min(1).safeParse(lines).success)
             throw new HttpError(
               409,
