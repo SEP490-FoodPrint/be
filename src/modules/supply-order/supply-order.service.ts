@@ -205,6 +205,16 @@ export function createSupplyOrderService(
               ...(item.sampleTopUpQuantity?.gt(0)
                 ? { sampleTopUpQuantity: item.sampleTopUpQuantity.toString() }
                 : {}),
+              // V4: phần tách của Đợt 2 chỉ kho trường thấy.
+              ...(item.carryOverQuantity?.gt(0)
+                ? { carryOverQuantity: item.carryOverQuantity.toString() }
+                : {}),
+              ...(item.sampleCompensationQuantity?.gt(0)
+                ? {
+                    sampleCompensationQuantity:
+                      item.sampleCompensationQuantity.toString(),
+                  }
+                : {}),
               unit: item.unit,
               note: item.note,
             })),
@@ -268,6 +278,11 @@ export function createSupplyOrderService(
       if (!order) throw new HttpError(404, "Không tìm thấy đơn đặt hàng");
       return {
         ...mapSupplierList(order, principal),
+        // TASK-10 v8: chỉ Đợt 2 của trường nấu riêng có bước NCC xác nhận bổ sung lưu mẫu (4 bước).
+        requiresSampleStep:
+          order.orderType === "DIRECT_USE" &&
+          order.batchNo === 2 &&
+          order.School.cookingMode === "SEPARATE_BY_LOT",
         note: order.note,
         acceptedByUserId: order.acceptedByUserId,
         items: (order.supplyRequestItems ?? []).map((item) => ({

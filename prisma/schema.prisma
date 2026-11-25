@@ -178,7 +178,8 @@ model CookingBatchDish {
   dishId                String                @map("dish_id") @db.Uuid
   menuDayId             String                @map("menu_day_id") @db.Uuid
   mealType              MealType              @map("meal_type")
-  plannedPortions       Int?                  @map("planned_portions") @db.Integer
+  /// Fractional since TASK-10 v8: batches are split by ingredient lots, the allocation step serves portions.
+  plannedPortions       Decimal?              @map("planned_portions") @db.Decimal(20, 2)
   /// Retained-sample snapshot taken when the batch was planned by a supply round; all four are NULL for older/manual batches (CHECK).
   /// Sample amount M* in sample_unit, already rounded up for count-unit recipe lines.
   sampleQuantity        Decimal?              @map("sample_quantity") @db.Decimal(14, 3)
@@ -217,7 +218,8 @@ model CookingBatch {
   createdByUserId       String                @map("created_by_user_id") @db.Uuid
   status                CookingBatchStatus    @default(UNCONFIRMED)
   /// Backend-computed portions from finalized demand; completion uses this confirmed plan.
-  plannedPortions       Int?                  @map("planned_portions") @db.Integer
+  /// Fractional since TASK-10 v8: batches are split by ingredient lots, the allocation step serves portions.
+  plannedPortions       Decimal?              @map("planned_portions") @db.Decimal(20, 2)
   /// Legacy database-only column, retained during phase 1 for older Backend versions.
   preparedPortions      Int?                  @map("prepared_portions") @ignore @db.Integer
   note                  String?               @db.Text
@@ -229,6 +231,8 @@ model CookingBatch {
   completedAt           DateTime?             @map("completed_at") @db.Timestamptz(6)
   /// Supply round (1|2) that created this child; NULL for manually planned batches (CHECK 1 or 2).
   supplyBatchNo         Int?                  @map("supply_batch_no") @db.SmallInt
+  /// How the retained sample of a supply-round batch is sourced (TASK-10 v8). NULL for manual/older batches.
+  sampleStrategy        SampleStrategy?       @map("sample_strategy")
   createdAt             DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt             DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   MenuDay               MenuDay               @relation("cooking_batches_menu_day_id__menu_days", fields: [menuDayId], references: [id], onDelete: Restrict, onUpdate: NoAction)
@@ -545,6 +549,7 @@ model Dish {
   cookingBatches        CookingBatch[]        @relation("cooking_batches_dish_id__dishes")
   cookingBatchDishes    CookingBatchDish[]
   supplyRoundDishPlans  SupplyRoundDishPlan[]
+  supplyRoundLeftovers SupplyRoundLeftover[]
 
   @@unique([id, schoolId])
   @@unique([schoolId, name])
@@ -930,6 +935,7 @@ model IngredientEntry {
 
   batch1Carryovers SupplyBatch1Carryover[]
 
+  supplyRoundCompensations SupplyRoundCompensation[]
   @@unique([schoolId, ingredientId])
   @@index([schoolId], map: "idx_ingredient_entries_school_id")
   @@index([ingredientId], map: "idx_ingredient_entries_ingredient_id")
@@ -966,6 +972,7 @@ model IngredientLot {
   roundPartLots             CookingBatchRoundPartLot[]
 
   @@unique([qrToken])
+  supplyRoundLeftovers SupplyRoundLeftover[]
   @@unique([deliveryItemId, lotCode])
   @@index([sourceFacilityId], map: "idx_ingredient_lots_source_facility")
   @@index([deliveryItemId], map: "idx_ingredient_lots_delivery_item")
@@ -1280,6 +1287,7 @@ model MenuDay {
   cookingBatchGroups CookingBatchGroup[]
   mealSeasonings     MenuMealSeasoning[]
   portionGroups      MenuMealPortionGroup[]
+  supplyRoundLeftovers SupplyRoundLeftover[]
 
   @@unique([weeklyMenuId, menuDate])
   @@index([weeklyMenuId, menuDate], map: "idx_menu_days_menu_date")
@@ -1683,6 +1691,10 @@ model SupplyRequestItem {
   requestedQuantity Decimal         @map("requested_quantity") @db.Decimal(14, 3)
   /// Extra quantity ordered from the supplier for retained samples; written by the system on top-up confirmation, never used to split cooking batches. Purchased quantity = requested + sample_top_up.
   sampleTopUpQuantity Decimal       @default(0) @map("sample_top_up_quantity") @db.Decimal(14, 3)
+  /// Round 2 display only (warehouse): part of requested_quantity carried from round 1 rounding down.
+  carryOverQuantity Decimal         @default(0) @map("carry_over_quantity") @db.Decimal(14, 3)
+  /// Round 2 display only (warehouse): part of requested_quantity compensating retained samples (cut in round 1 or ordered for COMBINE_LOTS).
+  sampleCompensationQuantity Decimal @default(0) @map("sample_compensation_quantity") @db.Decimal(14, 3)
   unit              String          @db.VarChar(30)
   note              String?         @db.Text
   SupplyRequest     SupplyRequest   @relation("supply_request_items_supply_request_id__supply_requests", fields: [supplyRequestId], references: [id], onDelete: Cascade, onUpdate: NoAction)
@@ -2170,6 +2182,30 @@ enum DeliveryPreparationStage {
   READY_TO_DISPATCH
 
   @@map("delivery_preparation_stage")
+  @@schema("foodprint")
+}
+
+enum SampleStrategy {
+  /// Sample cut out of the batch's own lots (SEPARATE_BY_LOT round 1, round 2 batches using round 1 leftovers).
+  CUT
+  /// Sample topped up by the supplier on the batch's incoming lots (SEPARATE_BY_LOT round 2 new batches).
+  TOP_UP
+  /// Sample ordered in round 2 and assigned when the round 2 part merges (COMBINE_LOTS).
+  ROUND2_ORDER
+  /// Sample reserved straight from warehouse stock (day without fresh ingredients).
+  STOCK
+
+  @@map("sample_strategy")
+  @@schema("foodprint")
+}
+
+enum SupplyCompensationKind {
+  /// Ordered from the supplier in round 2.
+  FRESH
+  /// Reserved again from warehouse stock when round 2 merges (seasonings, dry stock).
+  STOCK
+
+  @@map("supply_compensation_kind")
   @@schema("foodprint")
 }
 
@@ -2807,6 +2843,8 @@ model SupplyRound {
   dishPlans          SupplyRoundDishPlan[]
   cookingBatchGroups CookingBatchGroup[]
   roundParts         CookingBatchRoundPart[]
+  compensations      SupplyRoundCompensation[]
+  leftovers          SupplyRoundLeftover[]
 
   @@unique([schoolId, deliveryDate, batchNo], map: "uq_supply_rounds_school_date_batch")
   @@map("supply_rounds")
@@ -2842,7 +2880,7 @@ model CookingBatchRoundPart {
   cookingBatchId   String                     @map("cooking_batch_id") @db.Uuid
   dishId           String                     @map("dish_id") @db.Uuid
   supplyRoundId    String                     @map("supply_round_id") @db.Uuid
-  plannedPortions  Int                        @map("planned_portions") @db.Integer
+  plannedPortions  Decimal                    @map("planned_portions") @db.Decimal(20, 2)
   status           RoundPartStatus            @default(PENDING_APPROVAL)
   approvedByUserId String?                    @map("approved_by_user_id") @db.Uuid
   approvedAt       DateTime?                  @map("approved_at") @db.Timestamptz(6)
@@ -2864,6 +2902,8 @@ model CookingBatchRoundPartLot {
   roundPartId     String                @map("round_part_id") @db.Uuid
   ingredientLotId String                @map("ingredient_lot_id") @db.Uuid
   quantityUsed    Decimal               @map("quantity_used") @db.Decimal(14, 3)
+  /// COMBINE_LOTS round 2: retained-sample share taken from this lot, merged into cooking_batch_lots.sample_quantity.
+  sampleQuantity  Decimal               @default(0) @map("sample_quantity") @db.Decimal(14, 3)
   unit            String                @db.VarChar(30)
   roundPart       CookingBatchRoundPart @relation(fields: [roundPartId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   ingredientLot   IngredientLot         @relation(fields: [ingredientLotId], references: [id], onDelete: Restrict, onUpdate: NoAction)
@@ -2871,5 +2911,45 @@ model CookingBatchRoundPartLot {
   @@id([roundPartId, ingredientLotId])
   @@index([ingredientLotId], map: "idx_cooking_batch_round_part_lots_lot")
   @@map("cooking_batch_round_part_lots")
+  @@schema("foodprint")
+}
+
+/// Retained-sample quantity cut from round 1 batches, per ingredient, to be compensated in round 2 (TASK-10 v8). CHECK constraints are defined in the migration SQL.
+model SupplyRoundCompensation {
+  supplyRoundId     String                 @map("supply_round_id") @db.Uuid
+  ingredientEntryId String                 @map("ingredient_entry_id") @db.Uuid
+  kind              SupplyCompensationKind
+  sampleQuantity    Decimal                @map("sample_quantity") @db.Decimal(14, 3)
+  unit              String                 @db.VarChar(30)
+  createdAt         DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  supplyRound       SupplyRound            @relation(fields: [supplyRoundId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  ingredientEntry   IngredientEntry        @relation(fields: [ingredientEntryId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@id([supplyRoundId, ingredientEntryId])
+  @@map("supply_round_compensations")
+  @@schema("foodprint")
+}
+
+/// Round 1 lot quantity that could not be paired into a batch (recipe ratio mismatch), held for round 2 of the same dish/meal (TASK-10 v8, V35). Reserved while released_at IS NULL.
+model SupplyRoundLeftover {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  supplyRoundId   String        @map("supply_round_id") @db.Uuid
+  menuDayId       String        @map("menu_day_id") @db.Uuid
+  mealType        MealType      @map("meal_type")
+  dishId          String        @map("dish_id") @db.Uuid
+  ingredientLotId String        @map("ingredient_lot_id") @db.Uuid
+  quantity        Decimal       @db.Decimal(14, 3)
+  unit            String        @db.VarChar(30)
+  /// Set when round 2 consumed the leftover or decided it is surplus.
+  releasedAt      DateTime?     @map("released_at") @db.Timestamptz(6)
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  supplyRound     SupplyRound   @relation(fields: [supplyRoundId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  menuDay         MenuDay       @relation(fields: [menuDayId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  dish            Dish          @relation(fields: [dishId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  ingredientLot   IngredientLot @relation(fields: [ingredientLotId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([supplyRoundId], map: "idx_supply_round_leftovers_round")
+  @@index([ingredientLotId], map: "idx_supply_round_leftovers_lot")
+  @@map("supply_round_leftovers")
   @@schema("foodprint")
 }

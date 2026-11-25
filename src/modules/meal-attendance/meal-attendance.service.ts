@@ -458,7 +458,12 @@ export function createMealAttendanceService(
     },
 
     async finalize(id: string, principal: AuthPrincipal) {
-      return withSchoolTransaction(
+      let dayFinalized: {
+        schoolId: string;
+        deliveryDate: Date;
+        actorId: string;
+      } | null = null;
+      const result = await withSchoolTransaction(
         await connect(),
         principal,
         "daily_meal_portion.update",
@@ -497,17 +502,26 @@ export function createMealAttendanceService(
               },
             },
           });
-          if (pending === 0) {
-            await supplyRoundService.evaluateAndSkipBatch2IfReady(
-              tx,
-              actor.schoolId!,
-              demand.mealDate,
-              now,
-            );
-          }
+          if (pending === 0)
+            dayFinalized = {
+              schoolId: actor.schoolId!,
+              deliveryDate: demand.mealDate,
+              actorId: actor.id,
+            };
           return finalized;
         },
       );
+      if (dayFinalized) {
+        // Sau khi commit: ngày không đồ tươi thì tạo mẻ; đủ điều kiện thì kết luận Đợt 2 (V20, V34).
+        try {
+          await supplyRoundService.afterDayProgress(dayFinalized);
+        } catch (error) {
+          console.warn("Supply round hook could not process attendance", {
+            name: error instanceof Error ? error.name : "unknown",
+          });
+        }
+      }
+      return result;
     },
 
     async getPortionGroups(id: string, principal: AuthPrincipal) {

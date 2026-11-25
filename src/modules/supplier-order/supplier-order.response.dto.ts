@@ -62,6 +62,23 @@ export interface SupplierOrderDetailDTO extends SupplierOrderSummaryDTO {
     lotCode: string;
     unit: string;
     sampleTopUpQuantity: string;
+    /** TASK-10 v8: để FE nhóm theo nguyên liệu và hiện nguồn cung. */
+    deliveryItemId?: string;
+    ingredientEntryId?: string | null;
+    ingredientName?: string;
+    sourceFacilityName?: string | null;
+  }[];
+  /**
+   * Đợt 2 nấu riêng (V22, V24, V31): trạng thái theo nguyên liệu của chuyến.
+   * `ready`: mọi món chứa nguyên liệu đã lập mẻ (NCC thấy lượng cần thêm);
+   * `approved`: kho đã duyệt các món đó. Nút xác nhận bật khi mọi nguyên liệu `approved`.
+   */
+  topUpReadiness?: {
+    ingredientEntryId: string;
+    ingredientName: string;
+    ready: boolean;
+    approved: boolean;
+    waitingFor: string[];
   }[];
 }
 

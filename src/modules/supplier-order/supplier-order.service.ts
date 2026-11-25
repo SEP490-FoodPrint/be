@@ -733,6 +733,18 @@ export function createSupplierOrderService(
       sourceFacilityIds,
     );
     const deliveryNo = await reserveNextDeliveryNo(tx);
+    // TASK-10 v8: chỉ Đợt 2 của trường nấu riêng có bước NCC xác nhận bổ sung lưu mẫu.
+    // Đợt 1 (cả hai chế độ) và Đợt 2 nấu chung: khai báo lô xong điền xe luôn, mẻ lập sau khi nhận hàng.
+    const needsSampleStep =
+      requestRow.orderType === "DIRECT_USE" &&
+      requestRow.batchNo === 2 &&
+      Boolean(requestRow.requestedDeliveryDate) &&
+      (
+        await tx.school.findUnique({
+          where: { id: requestRow.schoolId },
+          select: { cookingMode: true },
+        })
+      )?.cookingMode === "SEPARATE_BY_LOT";
 
     const created = await repository.createDeliveryWithItems(tx, {
       deliveryNo,
@@ -741,9 +753,7 @@ export function createSupplierOrderService(
       creationFingerprint: fingerprint,
       traceabilityVersion: 1,
       workflowVersion: 2,
-      ...(requestRow.orderType === "DIRECT_USE" &&
-      (requestRow.batchNo === 1 || requestRow.batchNo === 2) &&
-      requestRow.requestedDeliveryDate
+      ...(needsSampleStep
         ? { preparationStage: "LOTS_DECLARED" as const }
         : {}),
       schoolId: requestRow.schoolId,
@@ -982,7 +992,8 @@ export function createSupplierOrderService(
         });
         if (
           result.orderType === "DIRECT_USE" &&
-          (result.batchNo === 1 || result.batchNo === 2) &&
+          result.batchNo === 2 &&
+          result.preparationStage === "LOTS_DECLARED" &&
           repository === supplierOrderRepository
         ) {
           try {
@@ -1204,21 +1215,47 @@ export function createSupplierOrderService(
         );
       }
       const detail = mapSupplierOrderDetail(row, principal);
-      if (row.preparationStage === "TOP_UP_PENDING") {
+      if (
+        row.preparationStage &&
+        row.preparationStage !== "READY_TO_DISPATCH" &&
+        row.status === "PREPARING"
+      ) {
+        const db = await repository.connect();
+        // V24: NCC thấy lượng cần thêm ngay khi món đã lập mẻ, theo nguyên liệu đã sẵn sàng.
+        const readiness = await supplyRoundService.deliveryTopUpStatus(
+          db,
+          params.id,
+        );
+        const ready = new Set(
+          readiness
+            .filter((row) => row.ready)
+            .map((row) => row.ingredientEntryId),
+        );
         const lots = await supplierTopUpRepository.lots(
-          await repository.connect(),
+          db,
           params.id,
           scope,
+          row.preparationStage !== "TOP_UP_PENDING",
         );
+        detail.topUpReadiness = readiness;
         detail.topUpLots = lots.flatMap((lot) => {
           const quantity = plannedTopUp(lot);
-          return quantity.gt(0)
+          const entryId = lot.DeliveryItem.ingredientEntryId;
+          return quantity.gt(0) &&
+            (row.preparationStage === "TOP_UP_PENDING" ||
+              (entryId !== null && ready.has(entryId)))
             ? [
                 {
                   ingredientLotId: lot.id,
                   lotCode: lot.lotCode,
                   unit: lot.unit,
                   sampleTopUpQuantity: quantity.toString(),
+                  deliveryItemId: lot.DeliveryItem.id,
+                  ingredientEntryId: entryId,
+                  ingredientName:
+                    lot.DeliveryItem.ingredientNameSnapshot ?? "Nguyên liệu",
+                  sourceFacilityName:
+                    lot.DeliveryItem.sourceFacilityNameSnapshot,
                 },
               ]
             : [];

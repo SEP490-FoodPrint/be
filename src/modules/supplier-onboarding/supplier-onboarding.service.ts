@@ -1132,6 +1132,10 @@ export function createOrderIntakeService(
             throw new HttpError(409, "Đợt 2 không cần đặt thêm hàng");
         }
         // TASK-08: Đợt 1 lưu mốc suất theo khối (dùng chung cho mọi NCC cùng ngày); Đợt 2 bắt buộc đã có mốc.
+        let split = new Map<
+          string,
+          { carryOverQuantity: number; sampleCompensationQuantity: number }
+        >();
         if (body.orderType === "DIRECT_USE" && body.batchNo) {
           const date = body.deliveryDate.toISOString().slice(0, 10);
           const demand = await freshDemand.load(
@@ -1148,6 +1152,34 @@ export function createOrderIntakeService(
             demand.grades,
             body.batchNo === 1 ? demand.items : [],
           );
+          // V15: số lượng đơn đồ tươi theo đợt cố định theo hệ thống tính, không cho sửa.
+          const round3 = (value: number) => Number(value.toFixed(3));
+          for (const item of body.items) {
+            const expected = demand.items.find(
+              (row) => row.ingredientEntryId === item.ingredientEntryId,
+            );
+            if (
+              !expected ||
+              Math.abs(round3(item.quantity) - round3(expected.orderQuantity)) >
+                0.0005
+            )
+              throw new HttpError(
+                400,
+                `Số lượng ${expected?.name ?? "nguyên liệu"} phải đúng lượng hệ thống tính cho đợt (không được sửa)`,
+              );
+          }
+          if (body.batchNo === 2)
+            split = new Map(
+              demand.items.map((row) => [
+                row.ingredientEntryId,
+                {
+                  carryOverQuantity: round3(row.carryOverQuantity),
+                  sampleCompensationQuantity: round3(
+                    row.sampleCompensationQuantity ?? 0,
+                  ),
+                },
+              ]),
+            );
         }
         const result = await orderRepository.createDraft(tx, {
           schoolId,
@@ -1160,6 +1192,7 @@ export function createOrderIntakeService(
           note: body.note,
           items: body.items.map((item) => ({
             ...item,
+            ...split.get(item.ingredientEntryId),
             unit: entries.find((entry) => entry.id === item.ingredientEntryId)!
               .Ingredient.defaultUnit,
           })),

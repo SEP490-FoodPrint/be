@@ -59,7 +59,12 @@ export type DemandItem = {
    * Đợt 2: phần lẻ Đợt 1 đã lưu, cộng vào lượng đặt.
    */
   carryOverQuantity: number;
-  /** Lượng đặt: Đợt 1 = floor(quantity); Đợt 2 = quantity + carryOverQuantity. */
+  /**
+   * Đợt 2 (TASK-10 v8): phần bù lưu mẫu — nấu riêng: phần đã cắt khỏi mẻ Đợt 1;
+   * nấu chung: phần mẫu của mẻ (mỗi món mỗi bữa một mẫu). Chỉ để kho xem, NCC thấy tổng.
+   */
+  sampleCompensationQuantity?: number;
+  /** Lượng đặt: Đợt 1 = floor(quantity); Đợt 2 = quantity + carryOverQuantity + sampleCompensationQuantity. */
   orderQuantity: number;
   details: DemandDetail[];
 };
@@ -264,6 +269,7 @@ export function computeFreshDemand(
             supplierName: line.supplierName,
             quantity: 0,
             carryOverQuantity: 0,
+            sampleCompensationQuantity: 0,
             orderQuantity: 0,
             details: [],
           };
@@ -326,14 +332,84 @@ export function applyCarryOver(
       supplierName: c.supplierName,
       quantity: 0,
       carryOverQuantity: 0,
+      sampleCompensationQuantity: 0,
       orderQuantity: 0,
       details: [],
     };
     item.carryOverQuantity = add(item.carryOverQuantity, c.quantity);
-    item.orderQuantity = add(item.quantity, item.carryOverQuantity);
+    item.orderQuantity = add(
+      add(item.quantity, item.carryOverQuantity),
+      item.sampleCompensationQuantity ?? 0,
+    );
     byEntry.set(c.ingredientEntryId, item);
   }
   return [...byEntry.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Đợt 2: cộng phần bù lưu mẫu của Đợt 1 (V5) vào lượng đặt; đơn vị đổi về đơn vị đặt. */
+export function applySampleCompensation(
+  items: DemandItem[],
+  rows: (CarryOverRow & { sourceUnit: string })[],
+): DemandItem[] {
+  const byEntry = new Map(items.map((i) => [i.ingredientEntryId, i]));
+  for (const row of rows) {
+    const factor = unitFactor(row.sourceUnit, row.unit);
+    if (factor === null) continue;
+    const quantity = Number(mul(row.quantity, factor).toFixed(3));
+    if (!(quantity > 0)) continue;
+    const item = byEntry.get(row.ingredientEntryId) ?? {
+      ingredientEntryId: row.ingredientEntryId,
+      ingredientId: row.ingredientId,
+      name: row.name,
+      unit: row.unit,
+      supplierId: row.supplierId,
+      supplierName: row.supplierName,
+      quantity: 0,
+      carryOverQuantity: 0,
+      sampleCompensationQuantity: 0,
+      orderQuantity: 0,
+      details: [],
+    };
+    item.sampleCompensationQuantity = add(
+      item.sampleCompensationQuantity ?? 0,
+      quantity,
+    );
+    item.orderQuantity = add(
+      add(item.quantity, item.carryOverQuantity),
+      item.sampleCompensationQuantity,
+    );
+    byEntry.set(row.ingredientEntryId, item);
+  }
+  return [...byEntry.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Phần bù lưu mẫu đồ tươi của Đợt 1 theo nguyên liệu (đơn vị gốc của bảng phần bù). */
+async function freshCompensations(tx: Tx, schoolId: string, day: Date) {
+  if (!tx.supplyRoundCompensation?.findMany) return [];
+  return tx.supplyRoundCompensation.findMany({
+    where: {
+      kind: "FRESH",
+      supplyRound: { schoolId, deliveryDate: day, batchNo: 1 },
+    },
+    select: {
+      ingredientEntryId: true,
+      sampleQuantity: true,
+      unit: true,
+      ingredientEntry: {
+        select: {
+          Ingredient: {
+            select: {
+              id: true,
+              name: true,
+              defaultUnit: true,
+              supplierId: true,
+              Supplier: { select: { name: true } },
+            },
+          },
+        },
+      },
+    },
+  });
 }
 
 // ---------- Nạp dữ liệu ----------
@@ -439,6 +515,36 @@ export async function loadFreshDemand(
       409,
       `Còn ${notFinalized.length} lớp chưa chốt: ${shortList(notFinalized.sort())}`,
     );
+  if (batchNo === 2 && tx.supplyRound?.findUnique) {
+    // V6: phần bù lưu mẫu chỉ biết khi mẻ Đợt 1 đã tạo (Đợt 1 nhận đủ hàng).
+    const round1 = await tx.supplyRound.findUnique({
+      where: {
+        schoolId_deliveryDate_batchNo: {
+          schoolId,
+          deliveryDate: day,
+          batchNo: 1,
+        },
+      },
+      select: { status: true },
+    });
+    if (
+      (await tx.supplyRequest.count({
+        where: {
+          schoolId,
+          requestedDeliveryDate: day,
+          orderType: "DIRECT_USE",
+          batchNo: 1,
+          status: { notIn: ["DRAFT", "CANCELLED"] },
+        },
+      })) > 0 &&
+      round1?.status !== "READY" &&
+      round1?.status !== "CLOSED"
+    )
+      throw new HttpError(
+        409,
+        "Đợt 1 chưa nhận đủ hàng và lập mẻ, chưa tạo được đơn Đợt 2",
+      );
+  }
 
   const menuInputs = menus.map((m) => ({
     id: m.id,
@@ -596,6 +702,22 @@ export async function loadFreshDemand(
         quantity: Number(r.quantity),
       })),
     );
+    result.items = applySampleCompensation(
+      result.items,
+      (await freshCompensations(tx, schoolId, day)).map((row) => ({
+        ingredientEntryId: row.ingredientEntryId,
+        ingredientId: row.ingredientEntry.Ingredient.id,
+        name: row.ingredientEntry.Ingredient.name,
+        unit:
+          result.items.find(
+            (i) => i.ingredientEntryId === row.ingredientEntryId,
+          )?.unit ?? row.ingredientEntry.Ingredient.defaultUnit,
+        sourceUnit: row.unit,
+        supplierId: row.ingredientEntry.Ingredient.supplierId,
+        supplierName: row.ingredientEntry.Ingredient.Supplier.name,
+        quantity: Number(row.sampleQuantity),
+      })),
+    );
     return {
       date,
       schoolWide: menus.every((m) => m.isSchoolWide),
@@ -682,6 +804,21 @@ async function evaluateBatch2DecisionFromLoaded(
       add(
         orderedByEntry.get(row.ingredientEntryId) ?? 0,
         Number(row.requestedQuantity),
+      ),
+    );
+  }
+  // TASK-10 v8 (V13, V19): phần mẫu đã cắt (nấu riêng) hoặc cần lấy (nấu chung) trừ vào lượng đã đặt.
+  for (const row of await freshCompensations(tx, schoolId, day)) {
+    const target =
+      needed.get(row.ingredientEntryId)?.unit ??
+      row.ingredientEntry.Ingredient.defaultUnit;
+    const factor = unitFactor(row.unit, target);
+    if (factor === null) continue;
+    orderedByEntry.set(
+      row.ingredientEntryId,
+      add(
+        orderedByEntry.get(row.ingredientEntryId) ?? 0,
+        -mul(Number(row.sampleQuantity), factor),
       ),
     );
   }

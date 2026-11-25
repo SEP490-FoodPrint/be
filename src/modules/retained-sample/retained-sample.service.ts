@@ -1,4 +1,5 @@
-﻿import type { PrismaClient } from "../../generated/prisma/client";
+﻿import { portionsOrNull } from "../../utils/portions";
+import type { PrismaClient } from "../../generated/prisma/client";
 import type { AuthPrincipal } from "../../types/auth";
 import { queueAllocationDraft } from "../meal-allocation/material-allocation-runtime";
 import { recordPhotoUrl, type RecordPhoto } from "../../utils/record-photo";
@@ -50,7 +51,7 @@ function mapSample(row: SampleRow): RetainedSampleResponseDTO {
     CookingBatch: {
       batchCode: row.CookingBatch.batchCode,
       mealType: row.CookingBatch.mealType,
-      plannedPortions: row.CookingBatchDish.plannedPortions,
+      plannedPortions: portionsOrNull(row.CookingBatchDish.plannedPortions),
       BatchGroup: {
         id: row.CookingBatch.BatchGroup.id,
         batchCode: row.CookingBatch.BatchGroup.batchCode,

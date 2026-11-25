@@ -917,6 +917,11 @@ export function createDeliveryInspectionService(
     ) {
       inspectionScope(principal);
       let proof: ProofRef | null = null;
+      let roundReceipt: {
+        schoolId: string;
+        deliveryDate: Date;
+        actorId: string;
+      } | null = null;
       const result = await withSchoolTransaction(
         await connect(),
         principal,
@@ -1055,11 +1060,20 @@ export function createDeliveryInspectionService(
                 }
               }
               assertReceipt(row, schoolId, now());
+              // TASK-10 v8: mọi chuyến của đơn đồ tươi theo đợt đều tham gia lập mẻ khi nhận hàng
+              // (Đợt 1 không còn preparationStage).
               const roundDate =
-                row.preparationStage === "READY_TO_DISPATCH" &&
-                row.SupplyRequest?.orderType === "DIRECT_USE"
+                row.SupplyRequest?.orderType === "DIRECT_USE" &&
+                (row.SupplyRequest.batchNo === 1 ||
+                  row.SupplyRequest.batchNo === 2)
                   ? row.SupplyRequest.requestedDeliveryDate
                   : null;
+              if (roundDate)
+                roundReceipt = {
+                  schoolId,
+                  deliveryDate: roundDate,
+                  actorId: actor.id,
+                };
               if (roundDate) {
                 await supplyRoundRepository.lock(tx, {
                   schoolId,
@@ -1154,6 +1168,16 @@ export function createDeliveryInspectionService(
         },
       );
       proofs.scheduleAnchor(proof);
+      if (roundReceipt) {
+        // Sau khi commit: Đợt 1 nhận đủ hàng thì tạo mẻ, cắt mẫu; rồi xét Đợt 2 (V11, V20).
+        try {
+          await supplyRoundService.afterDayProgress(roundReceipt);
+        } catch (error) {
+          console.warn("Supply round hook could not process receipt", {
+            name: error instanceof Error ? error.name : "unknown",
+          });
+        }
+      }
       return result;
     },
     async list(query: DeliveryInspectionQueryDTO, principal: AuthPrincipal) {

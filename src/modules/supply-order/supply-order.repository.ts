@@ -43,6 +43,8 @@ const schoolListWithItemsSelect = {
       ingredientEntryId: true,
       requestedQuantity: true,
       sampleTopUpQuantity: true,
+      carryOverQuantity: true,
+      sampleCompensationQuantity: true,
       unit: true,
       note: true,
       IngredientEntry: {
@@ -70,7 +72,7 @@ const supplierListSelect = {
   ...listSelect,
   requestedDeliveryDate: true,
   sentAt: true,
-  School: { select: { id: true, name: true } },
+  School: { select: { id: true, name: true, cookingMode: true } },
   _count: { select: { deliveries: true } },
   deliveries: {
     where: { creationMode: "REQUEST" as const },
@@ -93,6 +95,8 @@ const supplierDetailSelect = {
       ingredientEntryId: true,
       requestedQuantity: true,
       sampleTopUpQuantity: true,
+      carryOverQuantity: true,
+      sampleCompensationQuantity: true,
       unit: true,
       note: true,
       IngredientEntry: {

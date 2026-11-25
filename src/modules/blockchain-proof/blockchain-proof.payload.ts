@@ -31,6 +31,16 @@ export function integer(value: number | null | undefined): number | null {
     throw new Error("Dữ liệu xác thực không hợp lệ.");
   return value;
 }
+/** Số suất mẻ: số nguyên giữ nguyên như payload cũ; số lẻ (TASK-10 v8) giữ tối đa 2 chữ số. */
+export function portionValue(
+  value: number | DecimalLike | null | undefined,
+): number | null {
+  if (value === null || value === undefined) return null;
+  const numeric = Math.round(Number(value) * 100) / 100;
+  if (!Number.isFinite(numeric) || numeric < 0)
+    throw new Error("Payload số suất không hợp lệ");
+  return Number.isInteger(numeric) ? integer(numeric) : numeric;
+}
 const byKey =
   <T>(...keys: ((item: T) => string)[]) =>
   (left: T, right: T) => {
@@ -339,10 +349,10 @@ export type CookingCompletedInput = {
   menuDayId: string;
   mealType: string;
   cookingModeApplied: string;
-  plannedPortions: number | null;
+  plannedPortions: number | DecimalLike | null;
   completedAt: Date | null;
   completedByUserId: string | null;
-  dishes: { dishId: string; plannedPortions: number | null }[];
+  dishes: { dishId: string; plannedPortions: number | DecimalLike | null }[];
   lots: {
     ingredientLotId: string;
     dishId: string;
@@ -364,14 +374,14 @@ export function buildCookingCompletedPayload(
     menuDayId: input.menuDayId,
     mealType: input.mealType,
     cookingMode: input.cookingModeApplied,
-    plannedPortions: integer(input.plannedPortions),
+    plannedPortions: portionValue(input.plannedPortions),
     completedAt: iso(input.completedAt),
     completedByUserId: input.completedByUserId,
     dishes: [...input.dishes]
       .sort(byKey((dish) => dish.dishId))
       .map((dish) => ({
         dishId: dish.dishId,
-        plannedPortions: integer(dish.plannedPortions),
+        plannedPortions: portionValue(dish.plannedPortions),
       })),
     lots: [...input.lots]
       .sort(

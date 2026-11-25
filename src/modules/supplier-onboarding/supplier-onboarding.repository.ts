@@ -47,7 +47,14 @@ type DraftInput = {
   orderType: "DIRECT_USE" | "DRY_STOCK";
   batchNo: 1 | 2 | null;
   note?: string;
-  items: { ingredientEntryId: string; quantity: number; unit: string }[];
+  items: {
+    ingredientEntryId: string;
+    quantity: number;
+    unit: string;
+    /** Đợt 2 (TASK-10 v8): phần tách chỉ để kho xem, đã nằm trong `quantity`. */
+    carryOverQuantity?: number;
+    sampleCompensationQuantity?: number;
+  }[];
 };
 
 export const supplierOrderRepository = {
@@ -92,6 +99,8 @@ export const supplierOrderRepository = {
             ingredientEntryId: item.ingredientEntryId,
             requestedQuantity: item.quantity,
             unit: item.unit,
+            carryOverQuantity: item.carryOverQuantity ?? 0,
+            sampleCompensationQuantity: item.sampleCompensationQuantity ?? 0,
           })),
         },
       },

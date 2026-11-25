@@ -1,3 +1,4 @@
+import { portionsOrNull } from "../../utils/portions";
 import type { Prisma } from "../../generated/prisma/client";
 
 export async function readAllocationDay(
@@ -185,7 +186,15 @@ export async function readAllocationDay(
   ]);
   return {
     menus,
-    batches,
+    // Số suất mẻ là numeric(20,2) (TASK-10 v8); phân bổ tính bằng số thực làm tròn 0,01.
+    batches: batches.map((batch) => ({
+      ...batch,
+      plannedPortions: portionsOrNull(batch.plannedPortions),
+      dishes: batch.dishes.map((dish) => ({
+        ...dish,
+        plannedPortions: portionsOrNull(dish.plannedPortions),
+      })),
+    })),
     demands: demands.map((demand) => ({
       ...demand,
       MealAllocation: demand.MealAllocation

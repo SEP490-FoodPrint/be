@@ -671,10 +671,16 @@ void test("single-dish samples are idempotent and historical multi-dish samples 
               batchCode: child.batchCode,
               BatchGroup: child.BatchGroup,
               mealType: child.mealType,
-              plannedPortions: child.plannedPortions,
+              plannedPortions:
+                child.plannedPortions === null
+                  ? null
+                  : new Prisma.Decimal(child.plannedPortions),
             },
             CookingBatchDish: {
-              plannedPortions: dish.plannedPortions,
+              plannedPortions:
+                dish.plannedPortions === null
+                  ? null
+                  : new Prisma.Decimal(dish.plannedPortions),
               Dish: dish.Dish,
             },
           };

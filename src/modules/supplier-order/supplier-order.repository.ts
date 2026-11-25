@@ -68,7 +68,12 @@ export const supplierTopUpRepository = {
       select: { status: true, preparationStage: true, topUpConfirmedAt: true },
     });
   },
-  lots(db: SupplierOrderDb, id: string, scope: SupplierOrderScope) {
+  lots(
+    db: SupplierOrderDb,
+    id: string,
+    scope: SupplierOrderScope,
+    preview = false,
+  ) {
     return db.ingredientLot.findMany({
       where: { DeliveryItem: { deliveryId: id, Delivery: scope } },
       orderBy: { id: "asc" },
@@ -84,13 +89,21 @@ export const supplierTopUpRepository = {
             supplyRequestItemId: true,
             unit: true,
             ingredientNameSnapshot: true,
+            ingredientEntryId: true,
+            sourceFacilityNameSnapshot: true,
           },
         },
         cookingBatchLots: {
           where: {
             sampleQuantity: { gt: 0 },
             CookingBatch: {
-              status: { in: ["ROUND1_APPROVED", "ROUND2_APPROVED"] },
+              // Lấy thêm chỉ áp cho mẻ TOP_UP (mẻ cắt mẫu không làm lô tăng).
+              sampleStrategy: { not: "CUT" },
+              status: {
+                in: preview
+                  ? ["PENDING_APPROVAL", "ROUND1_APPROVED", "ROUND2_APPROVED"]
+                  : ["ROUND1_APPROVED", "ROUND2_APPROVED"],
+              },
             },
           },
           select: { unit: true, sampleQuantity: true },
