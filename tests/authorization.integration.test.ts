@@ -2305,7 +2305,12 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         );
         assert.deepEqual(
           Object.keys(record(record(response.body).data)).sort(),
-          ["items", "pagination"],
+          ["items", "pagination", "supplierIntakeState"],
+        );
+        // specs/frontend-api-gaps FR-003: trạng thái tiếp nhận của chính NCC
+        assert.equal(
+          record(record(response.body).data).supplierIntakeState,
+          "ACTIVE",
         );
         for (const item of items) {
           assert.deepEqual(Object.keys(item).sort(), [

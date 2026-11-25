@@ -4,6 +4,7 @@ import {
   ticketCommentsArgs,
 } from "../complaint-ticket/complaint-ticket.repository";
 import type { ComplaintListQueryDTO } from "./feedback.request.dto";
+import type { TicketStatus } from "../complaint-ticket/complaint-ticket.lifecycle";
 type Db = PrismaClient | Prisma.TransactionClient;
 
 const mealSelect = {
@@ -77,6 +78,7 @@ export function createFeedbackRepository() {
       db: Db,
       scope: Prisma.ComplaintWhereInput,
       query: ComplaintListQueryDTO,
+      statuses?: readonly TicketStatus[],
     ) {
       const from = query.from
         ? new Date(`${query.from}T00:00:00.000Z`)
@@ -84,7 +86,7 @@ export function createFeedbackRepository() {
       const to = query.to ? new Date(`${query.to}T23:59:59.999Z`) : undefined;
       const where = scoped(
         scope,
-        query.status ? { status: query.status } : {},
+        statuses ? { status: { in: [...statuses] } } : {},
         query.complaintType
           ? { mealComplaint: { is: { complaintType: query.complaintType } } }
           : {},

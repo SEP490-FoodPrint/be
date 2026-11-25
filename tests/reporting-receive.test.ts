@@ -331,3 +331,37 @@ void test("HTTP report receive validates input and preserves the response envelo
   assert.equal(body.data.recipientUserId, officer.id);
   assert.equal(f.changed, 1);
 });
+
+void test("report list exposes receivedAt so officers can tell received reports apart", async () => {
+  const f = setup();
+  const base = {
+    incidentId: "incident",
+    recipientCommuneFoodSafetyUnitId: unitId,
+    recipientOrganization: "Đơn vị ATTP phường A",
+    referenceNumber: "FP-IC-12345",
+    status: "SENT" as const,
+    attemptedAt: new Date("2026-11-25T01:00:00.000Z"),
+    forwardedAt: new Date("2026-11-25T01:00:00.000Z"),
+    createdAt: new Date("2026-11-25T00:59:00.000Z"),
+  };
+  const service = createReportingService({
+    ...f.repository,
+    list: () =>
+      Promise.resolve([
+        { ...base, id, receivedAt: new Date("2026-11-25T02:00:00.000Z") },
+        {
+          ...base,
+          id: "00000000-0000-4000-8000-000000000007",
+          receivedAt: null,
+        },
+      ]),
+  });
+  const result = await service.getAll(
+    { page: 1, limit: 20 },
+    { ...officer, permissions: ["food_safety_report.view"] },
+  );
+  assert.deepEqual(
+    result.items.map((item) => item.receivedAt),
+    ["2026-11-25T02:00:00.000Z", null],
+  );
+});

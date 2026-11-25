@@ -10,7 +10,9 @@ type Tx = Prisma.TransactionClient;
 export interface AuthorityComplaintListFilter {
   page: number;
   limit: number;
-  status?: "NEW" | "IN_PROGRESS" | "REOPENED" | "RESOLVED" | "CLOSED";
+  statuses?: readonly (
+    "NEW" | "IN_PROGRESS" | "REOPENED" | "RESOLVED" | "CLOSED"
+  )[];
 }
 
 const refSelect = { select: { id: true, name: true } } as const;
@@ -128,7 +130,10 @@ export function createAuthorityComplaintRepository() {
       query: AuthorityComplaintListFilter,
     ): Promise<AuthorityComplaintRow[]> {
       return db.complaint.findMany({
-        where: scoped(scope, query.status ? { status: query.status } : {}),
+        where: scoped(
+          scope,
+          query.statuses ? { status: { in: [...query.statuses] } } : {},
+        ),
         skip: (query.page - 1) * query.limit,
         take: query.limit + 1,
         select: authorityComplaintSelect,

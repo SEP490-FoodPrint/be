@@ -1,4 +1,4 @@
-import type { AccountStatus } from "../../generated/prisma/enums";
+import type { AccountStatus, IntakeState } from "../../generated/prisma/enums";
 
 export interface StaffListItem {
   id: string;
@@ -18,6 +18,11 @@ export interface StaffDetail extends StaffListItem {
 }
 
 export interface StaffList {
+  /**
+   * Trạng thái tiếp nhận của NCC; `PAUSED_FOR_FOOD_SAFETY_INSPECTION` khi đang bị
+   * chế tài, lúc đó tạo/mở khóa nhân viên trả 409 (specs/frontend-api-gaps FR-003).
+   */
+  supplierIntakeState: IntakeState;
   items: StaffListItem[];
   pagination: {
     page: number;
