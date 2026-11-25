@@ -1,6 +1,7 @@
 import { Prisma } from "../../generated/prisma/client";
 import { HttpError } from "../../utils/http-error";
 import { convertQuantity } from "../../utils/quantity-conversion";
+import { isScaledUnit } from "../../utils/dish-portion";
 
 /**
  * Chia mẻ theo nguyên liệu (TASK-10 v8, V23–V30, V35–V36).
@@ -94,6 +95,13 @@ function toThree(value: D) {
   return value.toDecimalPlaces(3, Decimal.ROUND_HALF_UP);
 }
 
+/** Đơn vị đếm (hộp, quả…) không chia lẻ: làm tròn tới số nguyên; g/kg/ml/l giữ 3 chữ số. */
+function toUnitPrecision(value: D, unit: string) {
+  return isScaledUnit(unit)
+    ? toThree(value)
+    : value.toDecimalPlaces(0, Decimal.ROUND_HALF_UP);
+}
+
 interface Group {
   key: string;
   ingredientEntryId: string;
@@ -149,7 +157,10 @@ function takeFromGroup(
       );
       const part = Decimal.min(available, needed);
       amount = Decimal.min(
-        toThree(convertQuantity(part, line.unit, slice.lot.unit)),
+        toUnitPrecision(
+          convertQuantity(part, line.unit, slice.lot.unit),
+          slice.lot.unit,
+        ),
         slice.remaining,
       );
       needed = needed.sub(part);
@@ -269,11 +280,9 @@ function allocateStock(batches: PlannedBatch[], stock: readonly StockLine[]) {
         if (!remaining.gt(0)) continue;
         const available = convertQuantity(remaining, lot.unit, line.unit);
         const part = Decimal.min(available, needed);
+        const raw = convertQuantity(part, line.unit, lot.unit);
         const amount = Decimal.min(
-          convertQuantity(part, line.unit, lot.unit).toDecimalPlaces(
-            3,
-            Decimal.ROUND_UP,
-          ),
+          raw.toDecimalPlaces(isScaledUnit(lot.unit) ? 3 : 0, Decimal.ROUND_UP),
           remaining,
         );
         if (!amount.gt(0)) continue;
@@ -488,7 +497,11 @@ export function planBatchesByLots(input: LotPlanInput): LotPlanResult {
  * Chia lượng của một lô cho nhiều người dùng (món × bữa) theo tỉ lệ nhu cầu (V27).
  * Người cuối nhận phần còn lại để tổng khớp đúng lượng lô.
  */
-export function splitLotByDemand(quantity: D, demands: readonly D[]): D[] {
+export function splitLotByDemand(
+  quantity: D,
+  demands: readonly D[],
+  unit = "kg",
+): D[] {
   const total = demands.reduce((sum, value) => sum.add(value), new Decimal(0));
   if (!demands.length) return [];
   if (!total.gt(0)) {
@@ -499,7 +512,10 @@ export function splitLotByDemand(quantity: D, demands: readonly D[]): D[] {
   let rest = quantity;
   return demands.map((demand, index) => {
     if (index === demands.length - 1) return rest;
-    const share = toThree(quantity.mul(demand).div(total));
+    const share = Decimal.min(
+      toUnitPrecision(quantity.mul(demand).div(total), unit),
+      rest,
+    );
     rest = rest.sub(share);
     return share;
   });

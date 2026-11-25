@@ -91,6 +91,7 @@ export const supplierTopUpRepository = {
             ingredientNameSnapshot: true,
             ingredientEntryId: true,
             sourceFacilityNameSnapshot: true,
+            Ingredient: { select: { name: true } },
           },
         },
         cookingBatchLots: {

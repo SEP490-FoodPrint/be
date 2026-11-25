@@ -1285,7 +1285,8 @@ export function createSupplierOrderService(
                   deliveryItemId: lot.DeliveryItem.id,
                   ingredientEntryId: entryId,
                   ingredientName:
-                    lot.DeliveryItem.ingredientNameSnapshot ?? "Nguyên liệu",
+                    lot.DeliveryItem.ingredientNameSnapshot ??
+                    lot.DeliveryItem.Ingredient.name,
                   sourceFacilityName:
                     lot.DeliveryItem.sourceFacilityNameSnapshot,
                 },

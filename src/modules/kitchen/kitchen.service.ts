@@ -375,6 +375,16 @@ export async function reservedQuantities(
       where: { ...where, usedAt: null },
       select,
     })),
+    // Phần Đợt 2 chưa gộp vào mẻ vẫn giữ lô (spec 8.2); phần đã gộp nằm ở cooking_batch_lots.
+    ...(tx.cookingBatchRoundPartLot?.findMany
+      ? await tx.cookingBatchRoundPartLot.findMany({
+          where: {
+            ...where,
+            roundPart: { status: { in: ["PENDING_APPROVAL", "APPROVED"] } },
+          },
+          select,
+        })
+      : []),
     // Phần dư Đợt 1 giữ cho Đợt 2 của cùng món/bữa (TASK-10 v8, V35).
     ...(tx.supplyRoundLeftover?.findMany
       ? (

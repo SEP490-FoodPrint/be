@@ -213,3 +213,29 @@ void test("chia suất 2 chữ số theo phần dư lớn nhất, tổng khớp"
     ["3.000", "7.000"],
   );
 });
+
+void test("đơn vị đếm (hộp) chia nguyên giữa các món/bữa và trong mẻ", () => {
+  const shares = splitLotByDemand(D(308), [D(215.6), D(92.4)], "hộp");
+  assert.deepEqual(
+    shares.map((share) => share.toString()),
+    ["216", "92"],
+  );
+  const result = planBatchesByLots({
+    portions: D(309),
+    mode: "SEPARATE_BY_LOT",
+    fresh: [
+      {
+        ingredientEntryId: "sua",
+        perPortion: D(1),
+        unit: "hộp",
+        lots: [
+          { ...lot("x", "sua", "93"), unit: "hộp" },
+          { ...lot("y", "sua", "217"), unit: "hộp" },
+        ],
+      },
+    ],
+    stock: [],
+  });
+  for (const batch of result.batches)
+    for (const row of batch.lots) assert.equal(row.quantity.decimalPlaces(), 0);
+});

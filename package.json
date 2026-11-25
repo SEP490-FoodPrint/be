@@ -16,6 +16,7 @@
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "db:check": "tsx src/scripts/check-db.ts",
+    "demo:sample-cut": "tsx src/scripts/demo-supply-round-sample-cut.ts",
     "db:account-lifecycle:check": "tsx src/scripts/check-account-lifecycle-data.ts",
     "lint": "eslint . --max-warnings=0",
     "lint:fix": "npm run lint -- --fix",
