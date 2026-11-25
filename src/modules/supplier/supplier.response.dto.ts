@@ -1,3 +1,4 @@
+import type { WardLocationDTO } from "../../utils/ward-location";
 export interface SupplierItemResponseDTO {
   id: string;
   name: string;
@@ -5,6 +6,8 @@ export interface SupplierItemResponseDTO {
   email: string | null;
   phone: string | null;
   address: string | null;
+  /** Phường/xã của tổ chức; chưa gắn → `null`. */
+  location: WardLocationDTO | null;
   status: string;
   createdAt: string;
   updatedAt: string;

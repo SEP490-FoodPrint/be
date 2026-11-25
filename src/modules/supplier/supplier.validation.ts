@@ -2,6 +2,7 @@ import { z } from "zod";
 import {
   paginationSchema,
   emptyQuerySchema,
+  hasLocationSchema,
   idParamsSchema,
   parse,
 } from "../../utils/directory-validation";
@@ -15,6 +16,7 @@ export const supplierListQuerySchema = paginationSchema.safeExtend({
   status: z
     .enum(["ACTIVE", "INACTIVE"], { error: "Trạng thái không hợp lệ" })
     .optional(),
+  hasLocation: hasLocationSchema,
 });
 export const supplierSummaryQuerySchema = emptyQuerySchema;
 export const supplierDetailParamsSchema = idParamsSchema;

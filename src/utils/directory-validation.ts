@@ -19,6 +19,11 @@ export const paginationSchema = z
     path: ["page"],
     error: "page vượt giới hạn phân trang",
   });
+/** `hasLocation=false`: tổ chức chưa gắn phường/xã (specs/authority-officer-accounts FR-012). */
+export const hasLocationSchema = z
+  .enum(["true", "false"], { error: "hasLocation phải là true hoặc false" })
+  .transform((value) => value === "true")
+  .optional();
 export const emptyQuerySchema = z.strictObject({});
 export const idParamsSchema = z.strictObject({ id: requestUuidSchema });
 export const parse = parseRequest;
