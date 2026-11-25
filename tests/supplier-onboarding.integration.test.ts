@@ -3546,8 +3546,13 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
             login(u.email),
           ),
         );
+      // Tiêu đề và loại vấn đề bắt buộc từ specs/complaint-attachments (Q33, Q34).
       const submit = (cookie: string, body: Record<string, unknown>) =>
-        call("/ingredient-quality-feedback", cookie, "POST", body);
+        call("/ingredient-quality-feedback", cookie, "POST", {
+          title: "Rau cải bị dập",
+          issueType: "SPOILED_OR_NOT_FRESH",
+          ...body,
+        });
       const countBefore = await db.complaint.count({
         where: { kind: "INGREDIENT" },
       });
@@ -3569,6 +3574,16 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
         ],
         [kitchenC, { deliveryId: received.id, description: "ngắn" }, 400],
         [kitchenC, { deliveryId: received.id, description, title: "x" }, 400],
+        [
+          kitchenC,
+          { deliveryId: received.id, description, issueType: "BROKEN" },
+          400,
+        ],
+        [
+          kitchenC,
+          { deliveryId: received.id, description, code: "FP-CP-1" },
+          400,
+        ],
         [teacherC, { deliveryId: received.id, description }, 403],
         [supC, { deliveryId: received.id, description }, 403],
       ] as const) {
@@ -3587,10 +3602,9 @@ void test("supplier onboarding with real login, PostgreSQL migration, files, con
       });
       assert.equal(byKitchen.status, 201);
       assert.match(String(byKitchen.data.code), /^FP-CP-\d{5}$/);
-      assert.equal(
-        byKitchen.data.title,
-        "Phản ánh chất lượng nguyên liệu chuyến giao FP-DE-70001",
-      );
+      assert.equal(byKitchen.data.title, "Rau cải bị dập");
+      assert.equal(byKitchen.data.issueType, "SPOILED_OR_NOT_FRESH");
+      assert.deepEqual(byKitchen.data.attachments, []);
       assert.equal(byKitchen.data.description, description);
       assert.equal(byKitchen.data.displayStatus, "IN_PROGRESS");
       assert.deepEqual(byKitchen.data.ingredientLot, {
