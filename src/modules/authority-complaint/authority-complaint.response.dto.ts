@@ -1,4 +1,5 @@
 import type {
+  TicketAttachmentDTO,
   TicketCommentDTO,
   TicketFieldsDTO,
 } from "../complaint-ticket/complaint-ticket.response.dto";
@@ -38,6 +39,8 @@ export interface AuthorityComplaintSourceDTO {
     mealDate: string;
     mealType: string;
   };
+  /** File gửi kèm lúc tạo C03 gốc (plan v6 Q32); file trong bình luận nằm ở `comments[].attachments`. */
+  attachments: TicketAttachmentDTO[];
   comments: TicketCommentDTO[];
 }
 
@@ -46,6 +49,8 @@ export interface AuthorityComplaintDetailResponseDTO extends Omit<
   "escalatedFrom"
 > {
   escalatedFrom: AuthorityComplaintSourceDTO;
+  /** File phụ huynh gửi kèm khi Chuyển ATTP. */
+  attachments: TicketAttachmentDTO[];
   comments: TicketCommentDTO[];
 }
 

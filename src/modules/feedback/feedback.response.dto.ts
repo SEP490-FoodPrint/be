@@ -1,4 +1,5 @@
 import type {
+  TicketAttachmentDTO,
   TicketCommentDTO,
   TicketFieldsDTO,
 } from "../complaint-ticket/complaint-ticket.response.dto";
@@ -27,6 +28,8 @@ export interface ComplaintResponseDTO extends TicketFieldsDTO {
   escalatedAuthorityComplaint: { id: string; code: string } | null;
 }
 export interface ComplaintDetailResponseDTO extends ComplaintResponseDTO {
+  /** File gửi kèm lúc tạo đơn (specs/complaint-attachments). */
+  attachments: TicketAttachmentDTO[];
   comments: TicketCommentDTO[];
 }
 export interface ComplaintListResponseDTO {

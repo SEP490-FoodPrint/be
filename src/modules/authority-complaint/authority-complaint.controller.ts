@@ -1,6 +1,7 @@
 import type { Response } from "express";
 import { asyncHandler } from "../../utils/async-handler";
 import { requirePrincipal } from "../../utils/authorization";
+import { evidenceFilesOf } from "../../utils/evidence-files";
 import { sendSuccess } from "../../utils/response";
 import {
   authorityComplaintService,
@@ -52,7 +53,10 @@ export function createAuthorityComplaintController(
       privateResult(
         res,
         await service.escalate(
-          validateEscalateAuthorityComplaint(req.body),
+          validateEscalateAuthorityComplaint({
+            ...req.body,
+            files: evidenceFilesOf(req.files),
+          }),
           requirePrincipal(req),
         ),
         "Đã chuyển khiếu nại lên ATTP",
@@ -74,7 +78,10 @@ export function createAuthorityComplaintController(
         res,
         await service.comment(
           id,
-          validateAuthorityComplaintComment(req.body),
+          validateAuthorityComplaintComment({
+            ...req.body,
+            files: evidenceFilesOf(req.files),
+          }),
           requirePrincipal(req),
         ),
         "Gửi bình luận thành công",
@@ -87,7 +94,10 @@ export function createAuthorityComplaintController(
         res,
         await service.resolve(
           id,
-          validateAuthorityComplaintResolve(req.body),
+          validateAuthorityComplaintResolve({
+            ...req.body,
+            files: evidenceFilesOf(req.files),
+          }),
           requirePrincipal(req),
         ),
         "Cập nhật đã xử lý khiếu nại thành công",

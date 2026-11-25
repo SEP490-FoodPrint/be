@@ -2,16 +2,16 @@ import type { z } from "zod";
 import type {
   complaintListQuerySchema,
   createComplaintSchema,
-  ticketCommentBodySchema,
+  ticketCommentInputSchema,
   ticketReopenBodySchema,
-  ticketResolveBodySchema,
+  ticketResolveInputSchema,
 } from "./feedback.validation";
 export type CreateComplaintRequestDTO = z.infer<typeof createComplaintSchema>;
 export type ComplaintListQueryDTO = z.infer<typeof complaintListQuerySchema>;
 export type ComplaintCommentRequestDTO = z.infer<
-  typeof ticketCommentBodySchema
+  typeof ticketCommentInputSchema
 >;
 export type ComplaintResolveRequestDTO = z.infer<
-  typeof ticketResolveBodySchema
+  typeof ticketResolveInputSchema
 >;
 export type ComplaintReopenRequestDTO = z.infer<typeof ticketReopenBodySchema>;

@@ -8,8 +8,6 @@ import {
   FEEDBACK_WINDOW_MS,
   feedbackDeadline,
   hasNewMessage,
-  ingredientFeedbackTitle,
-  mealComplaintTitle,
   TICKET_STATUSES,
 } from "../src/modules/complaint-ticket/complaint-ticket.lifecycle";
 import {
@@ -88,31 +86,6 @@ void test("two display layers and the new-message label", () => {
   assert.equal(hasNewMessage("HANDLER", "IN_PROGRESS", "HANDLER"), false);
   assert.equal(hasNewMessage("HANDLER", "NEW", "REQUESTER"), false);
   assert.equal(hasNewMessage("REQUESTER", "IN_PROGRESS", "REQUESTER"), false);
-});
-
-void test("system-generated titles", () => {
-  assert.equal(
-    mealComplaintTitle({
-      className: "5A",
-      mealType: "AFTERNOON",
-      mealDate: new Date("2026-11-05T00:00:00.000Z"),
-    }),
-    "Khiếu nại suất ăn lớp 5A - Bữa chiều ngày 05/11/2026",
-  );
-  assert.equal(
-    ingredientFeedbackTitle("FP-DE-12345"),
-    "Phản ánh chất lượng nguyên liệu chuyến giao FP-DE-12345",
-  );
-  assert.equal(
-    Array.from(
-      mealComplaintTitle({
-        className: "Ả".repeat(400),
-        mealType: "LUNCH",
-        mealDate: NOW,
-      }),
-    ).length,
-    255,
-  );
 });
 
 void test("transition writes conditional update + history, or reports a lost race", async () => {

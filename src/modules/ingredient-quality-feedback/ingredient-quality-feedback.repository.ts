@@ -12,6 +12,7 @@ import type {
 } from "../../utils/resource-access";
 import { createIntakeAccessRepository } from "../account-lifecycle/intake-access.repository";
 import {
+  complaintAttachmentsArgs,
   complaintTicketRepository,
   latestCommentSideSelect,
   ticketCommentsArgs,
@@ -76,6 +77,7 @@ const feedbackListSelect = {
     select: {
       deliveryId: true,
       ingredientLotId: true,
+      issueType: true,
       Delivery: { select: deliveryRefSelect },
     },
   },
@@ -90,6 +92,7 @@ const feedbackDetailSelect = {
   ...feedbackListSelect,
   description: true,
   senderUser: { select: { id: true, fullName: true } },
+  attachments: complaintAttachmentsArgs,
   comments: ticketCommentsArgs,
 } as const satisfies Prisma.ComplaintSelect;
 
@@ -181,6 +184,7 @@ export function createIngredientQualityFeedbackRepository(connect = getPrisma) {
         senderSchoolId: string;
         deliveryId: string;
         ingredientLotId: string | null;
+        issueType: IngredientIssueTypeValue;
       },
     ): Promise<{ id: string }> {
       return tx.complaint.create({
@@ -197,6 +201,7 @@ export function createIngredientQualityFeedbackRepository(connect = getPrisma) {
             create: {
               deliveryId: data.deliveryId,
               ingredientLotId: data.ingredientLotId,
+              issueType: data.issueType,
             },
           },
         },
@@ -375,6 +380,14 @@ export function createIngredientQualityFeedbackRepository(connect = getPrisma) {
     },
   };
 }
+
+export type IngredientIssueTypeValue =
+  | "SPOILED_OR_NOT_FRESH"
+  | "QUANTITY_MISMATCH"
+  | "WRONG_SPECIFICATION"
+  | "EXPIRED_OR_MISSING_LABEL"
+  | "LATE_DELIVERY"
+  | "OTHER";
 
 export type IngredientQualityFeedbackRepository = ReturnType<
   typeof createIngredientQualityFeedbackRepository

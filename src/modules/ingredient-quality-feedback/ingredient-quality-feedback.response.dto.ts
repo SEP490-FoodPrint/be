@@ -1,4 +1,5 @@
 import type {
+  TicketAttachmentDTO,
   TicketCommentDTO,
   TicketFieldsDTO,
 } from "../complaint-ticket/complaint-ticket.response.dto";
@@ -35,6 +36,8 @@ export interface FeedbackListItem extends TicketFieldsDTO {
   /** `FP-CP-NNNNN` (hoặc mã tuần tự cũ). */
   code: string;
   title: string;
+  /** Loại vấn đề (plan v6 Q34); `null` với đơn tạo trước khi có trường này. */
+  issueType: string | null;
   school: FeedbackSchoolRefDto;
   delivery: FeedbackDeliveryRefDto;
   submittedAt: string;
@@ -50,5 +53,7 @@ export interface FeedbackDetail extends FeedbackListItem {
   description: string;
   submittedBy: FeedbackUserRefDto;
   ingredientLot: FeedbackIngredientLotRefDto | null;
+  /** File gửi kèm lúc tạo đơn (specs/complaint-attachments). */
+  attachments: TicketAttachmentDTO[];
   comments: TicketCommentDTO[];
 }

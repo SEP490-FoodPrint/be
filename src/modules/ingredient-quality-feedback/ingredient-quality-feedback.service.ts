@@ -7,6 +7,11 @@ import {
 } from "../../utils/authorization";
 import { isStoredBusinessCode } from "../../utils/business-code";
 import { getPrisma } from "../../utils/database";
+import {
+  cloudinaryEvidenceStorage,
+  withStoredEvidence,
+  type EvidenceStorage,
+} from "../../utils/evidence-files";
 import { HttpError } from "../../utils/http-error";
 import { RequestValidationError } from "../../utils/request-validation";
 import { listWindow, readListPage } from "../../utils/list-query";
@@ -19,7 +24,6 @@ import {
 import {
   assertTicketAction,
   feedbackWindowStart,
-  ingredientFeedbackTitle,
   ticketConflictMessage,
   toTicketStatus,
   TICKET_TRANSITIONS,
@@ -32,7 +36,9 @@ import {
   type TicketActor,
 } from "../complaint-ticket/complaint-ticket.repository";
 import {
-  mapTicketComment,
+  addCommentWithEvidence,
+  mapTicketAttachments,
+  mapTicketComments,
   mapTicketFields,
   queueRequesterEmail,
 } from "../complaint-ticket/complaint-ticket.service";
@@ -102,6 +108,7 @@ function mapListItem(
     id: row.id,
     code: assertStoredComplaintCode(row.code),
     title: row.title,
+    issueType: child.issueType ?? null,
     school: {
       id: child.Delivery.School.id,
       name: child.Delivery.School.name,
@@ -122,6 +129,7 @@ function mapFeedbackDetail(
   lot: FeedbackLotRow | null,
   principal: AuthPrincipal,
   now: Date,
+  storage: Pick<EvidenceStorage, "url">,
 ): FeedbackDetail {
   if (row.ingredientQualityFeedback?.ingredientLotId && lot === null) {
     throw new HttpError(503, CORRUPT_DATA_MESSAGE);
@@ -139,7 +147,8 @@ function mapFeedbackDetail(
       fullName: row.senderUser.fullName,
     },
     ingredientLot: lot ? { id: lot.id, lotCode: lot.lotCode } : null,
-    comments: row.comments.map(mapTicketComment),
+    attachments: mapTicketAttachments(row.attachments, storage),
+    comments: mapTicketComments(row.comments, storage),
   };
 }
 
@@ -174,6 +183,7 @@ export function createIngredientQualityFeedbackService(
   connect = getPrisma,
   now = () => new Date(),
   tickets: ComplaintTicketRepository = complaintTicketRepository,
+  storage: EvidenceStorage = cloudinaryEvidenceStorage,
 ) {
   async function readAndMapDetail(
     tx: IngredientQualityFeedbackTx,
@@ -195,7 +205,7 @@ export function createIngredientQualityFeedbackService(
             scope,
           )
         : null;
-    return mapFeedbackDetail(row, lot, principal, at);
+    return mapFeedbackDetail(row, lot, principal, at, storage);
   }
 
   async function transition(
@@ -335,60 +345,74 @@ export function createIngredientQualityFeedbackService(
       body: CreateIngredientQualityFeedbackRequest,
       principal: AuthPrincipal,
     ): Promise<FeedbackDetail> {
-      return withSchoolTransaction(
-        await databaseOperation(() => connect()),
-        principal,
-        REQUESTER_PERMISSION,
-        async (tx, actor, schoolId) => {
-          const readScope = ingredientQualityFeedbackReadScope(actor, "detail");
-          const delivery = await repository.findDeliveryForFeedback(
-            tx,
-            body.deliveryId,
-            schoolId,
-          );
-          if (!delivery)
-            throw new HttpError(
-              404,
-              "Không tìm thấy chuyến giao trong phạm vi được phép",
+      const db = await databaseOperation(() => connect());
+      return withStoredEvidence(storage, body.files, principal.id, (files) =>
+        withSchoolTransaction(
+          db,
+          principal,
+          REQUESTER_PERMISSION,
+          async (tx, actor, schoolId) => {
+            const readScope = ingredientQualityFeedbackReadScope(
+              actor,
+              "detail",
             );
-          if (!FEEDBACK_DELIVERY_STATUSES.includes(delivery.status))
-            throw new HttpError(
-              409,
-              "Chỉ phản ánh được chuyến giao đã nhận hoặc đã từ chối",
-            );
-          const ingredientLotId = body.ingredientLotId ?? null;
-          if (
-            ingredientLotId !== null &&
-            !(await repository.findLotInDelivery(
+            const delivery = await repository.findDeliveryForFeedback(
               tx,
+              body.deliveryId,
+              schoolId,
+            );
+            if (!delivery)
+              throw new HttpError(
+                404,
+                "Không tìm thấy chuyến giao trong phạm vi được phép",
+              );
+            if (!FEEDBACK_DELIVERY_STATUSES.includes(delivery.status))
+              throw new HttpError(
+                409,
+                "Chỉ phản ánh được chuyến giao đã nhận hoặc đã từ chối",
+              );
+            const ingredientLotId = body.ingredientLotId ?? null;
+            if (
+              ingredientLotId !== null &&
+              !(await repository.findLotInDelivery(
+                tx,
+                ingredientLotId,
+                delivery.id,
+                readScope,
+              ))
+            )
+              throw new RequestValidationError([
+                {
+                  field: "ingredientLotId",
+                  message: "Lô nguyên liệu không thuộc chuyến giao đã chọn",
+                },
+              ]);
+            const created = await repository.create(tx, {
+              code: await tickets.allocateCode(tx, "CP"),
+              title: body.title,
+              description: body.description,
+              senderUserId: actor.id,
+              senderRoleCode: actor.role,
+              senderSchoolId: schoolId,
+              deliveryId: delivery.id,
               ingredientLotId,
-              delivery.id,
-              readScope,
-            ))
-          )
-            throw new RequestValidationError([
-              {
-                field: "ingredientLotId",
-                message: "Lô nguyên liệu không thuộc chuyến giao đã chọn",
-              },
-            ]);
-          const created = await repository.create(tx, {
-            code: await tickets.allocateCode(tx, "CP"),
-            title: ingredientFeedbackTitle(delivery.deliveryNo),
-            description: body.description,
-            senderUserId: actor.id,
-            senderRoleCode: actor.role,
-            senderSchoolId: schoolId,
-            deliveryId: delivery.id,
-            ingredientLotId,
-          });
-          await tickets.recordCreated(tx, created.id, {
-            userId: actor.id,
-            roleCode: actor.role,
-          });
-          await queueRequesterEmail(tx, tickets, created.id, "CREATED");
-          return readAndMapDetail(tx, created.id, readScope, actor, now());
-        },
+              issueType: body.issueType,
+            });
+            await tickets.addAttachments(tx, {
+              complaintId: created.id,
+              commentId: null,
+              uploaderUserId: actor.id,
+              side: "REQUESTER",
+              files,
+            });
+            await tickets.recordCreated(tx, created.id, {
+              userId: actor.id,
+              roleCode: actor.role,
+            });
+            await queueRequesterEmail(tx, tickets, created.id, "CREATED");
+            return readAndMapDetail(tx, created.id, readScope, actor, now());
+          },
+        ),
       );
     },
     async getAll(
@@ -433,21 +457,24 @@ export function createIngredientQualityFeedbackService(
       body: FeedbackResolveBodyRequest,
       principal: AuthPrincipal,
     ): Promise<FeedbackDetail> {
-      return supplierAct(
-        params,
-        principal,
-        "RESOLVE",
-        async (tx, target, actor, at) => {
-          await transition(tx, target, actor, at, "RESOLVE");
-          await tickets.addComment(tx, {
-            complaintId: target.id,
-            actor,
-            side: "HANDLER",
-            type: "RESOLUTION",
-            content: body.content,
-          });
-          await queueRequesterEmail(tx, tickets, target.id, "RESOLVED");
-        },
+      return withStoredEvidence(storage, body.files, principal.id, (files) =>
+        supplierAct(
+          params,
+          principal,
+          "RESOLVE",
+          async (tx, target, actor, at) => {
+            await transition(tx, target, actor, at, "RESOLVE");
+            await addCommentWithEvidence(tx, tickets, {
+              complaintId: target.id,
+              actor,
+              side: "HANDLER",
+              type: "RESOLUTION",
+              content: body.content,
+              files,
+            });
+            await queueRequesterEmail(tx, tickets, target.id, "RESOLVED");
+          },
+        ),
       );
     },
     comment(
@@ -457,20 +484,28 @@ export function createIngredientQualityFeedbackService(
     ): Promise<FeedbackDetail> {
       const side: Side =
         principal.orgType === ORG_TYPES.SUPPLIER ? "HANDLER" : "REQUESTER";
-      const run: TicketRun = async (tx, target, actor) => {
-        await tickets.addComment(tx, {
-          complaintId: target.id,
-          actor,
-          side,
-          type: "MESSAGE",
-          content: body.content,
-        });
-        if (side === "HANDLER")
-          await queueRequesterEmail(tx, tickets, target.id, "HANDLER_COMMENT");
-      };
-      return side === "HANDLER"
-        ? supplierAct(params, principal, "COMMENT", run)
-        : requesterAct(params, principal, "COMMENT", run);
+      return withStoredEvidence(storage, body.files, principal.id, (files) => {
+        const run: TicketRun = async (tx, target, actor) => {
+          await addCommentWithEvidence(tx, tickets, {
+            complaintId: target.id,
+            actor,
+            side,
+            type: "MESSAGE",
+            content: body.content,
+            files,
+          });
+          if (side === "HANDLER")
+            await queueRequesterEmail(
+              tx,
+              tickets,
+              target.id,
+              "HANDLER_COMMENT",
+            );
+        };
+        return side === "HANDLER"
+          ? supplierAct(params, principal, "COMMENT", run)
+          : requesterAct(params, principal, "COMMENT", run);
+      });
     },
     satisfy(
       params: IngredientQualityFeedbackParamsRequest,

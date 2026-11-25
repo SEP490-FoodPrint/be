@@ -989,6 +989,8 @@ model IngredientQualityFeedback {
   kind            ComplaintKind  @default(INGREDIENT)
   deliveryId      String         @map("delivery_id") @db.Uuid
   ingredientLotId String?        @map("ingredient_lot_id") @db.Uuid
+  /// NULL cho đơn cũ; CHECK NOT VALID `ingredient_quality_feedback_issue_type_required` buộc đơn mới có giá trị.
+  issueType       IngredientIssueType? @map("issue_type")
   Complaint       Complaint      @relation(fields: [id, kind], references: [id, kind], onDelete: Restrict, onUpdate: NoAction, map: "ingredient_quality_feedback_id_kind_fkey")
   Delivery        Delivery       @relation("ingredient_quality_feedback_delivery_id__deliveries", fields: [deliveryId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   IngredientLot   IngredientLot? @relation("ingredient_quality_feedback_ingredient_lot_id__ingredient_lots", fields: [ingredientLotId], references: [id], onDelete: Restrict, onUpdate: NoAction)
@@ -1198,6 +1200,7 @@ model Complaint {
   ingredientQualityFeedback     IngredientQualityFeedback?
   authorityComplaint            AuthorityComplaint?
   comments                      ComplaintComment[]
+  attachments                   ComplaintAttachment[]
   statusHistories               ComplaintStatusHistory[]
   emailOutbox                   EmailOutbox[]
 
@@ -1223,9 +1226,34 @@ model ComplaintComment {
   Complaint      Complaint            @relation(fields: [complaintId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   authorUser     User                 @relation("complaint_comments_author_user_id__users", fields: [authorUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   authorRole     Role                 @relation("complaint_comments_author_role_code__roles", fields: [authorRoleCode], references: [code], onDelete: Restrict, onUpdate: NoAction)
+  attachments    ComplaintAttachment[]
 
   @@index([complaintId, createdAt, id], map: "idx_complaint_comments_complaint")
   @@map("complaint_comments")
+  @@schema("foodprint")
+}
+
+/// File ảnh/PDF chứng cứ của đơn khiếu nại (specs/complaint-attachments). Append-only.
+/// `commentId` NULL = file lúc tạo đơn / Chuyển ATTP. CHECK (MIME, kích thước, sha256, file cấp đơn do người gửi) chỉ có trong SQL migration.
+model ComplaintAttachment {
+  id               String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  complaintId      String               @map("complaint_id") @db.Uuid
+  commentId        String?              @map("comment_id") @db.Uuid
+  uploadedByUserId String               @map("uploaded_by_user_id") @db.Uuid
+  uploaderSide     ComplaintCommentSide @map("uploader_side")
+  storagePublicId  String               @unique(map: "complaint_attachments_storage_public_id_key") @map("storage_public_id") @db.Text
+  mimeType         String               @map("mime_type") @db.VarChar(32)
+  sizeBytes        Int                  @map("size_bytes")
+  originalFilename String               @map("original_filename") @db.VarChar(255)
+  sha256           String               @db.VarChar(64)
+  createdAt        DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  Complaint        Complaint            @relation(fields: [complaintId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  Comment          ComplaintComment?    @relation(fields: [commentId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  uploadedByUser   User                 @relation("complaint_attachments_uploaded_by_user_id__users", fields: [uploadedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([complaintId, createdAt, id], map: "idx_complaint_attachments_complaint")
+  @@index([commentId], map: "idx_complaint_attachments_comment")
+  @@map("complaint_attachments")
   @@schema("foodprint")
 }
 
@@ -1802,6 +1830,7 @@ model User {
   complaintsAsSender                           Complaint[]                  @relation("complaints_sender_user_id__users")
   complaintsAsClosedBy                         Complaint[]                  @relation("complaints_closed_by_user_id__users")
   complaintComments                            ComplaintComment[]           @relation("complaint_comments_author_user_id__users")
+  complaintAttachments                         ComplaintAttachment[]        @relation("complaint_attachments_uploaded_by_user_id__users")
   complaintStatusHistories                     ComplaintStatusHistory[]     @relation("complaint_status_histories_actor_user_id__users")
   foodSafetyIncidents                          FoodSafetyIncident[]         @relation("food_safety_incidents_reported_by_user_id__users")
   foodSafetyIncidentsReviewed                  FoodSafetyIncident[]         @relation("food_safety_incidents_school_reviewed_by")
@@ -2096,6 +2125,18 @@ enum ComplaintCloseReason {
   AUTO_CLOSED
 
   @@map("complaint_close_reason")
+  @@schema("foodprint")
+}
+
+enum IngredientIssueType {
+  SPOILED_OR_NOT_FRESH
+  QUANTITY_MISMATCH
+  WRONG_SPECIFICATION
+  EXPIRED_OR_MISSING_LABEL
+  LATE_DELIVERY
+  OTHER
+
+  @@map("ingredient_issue_type")
   @@schema("foodprint")
 }
 

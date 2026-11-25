@@ -3,16 +3,18 @@ import { HttpError } from "../../utils/http-error";
 import { RequestValidationError } from "../../utils/request-validation";
 import { TICKET_STATUSES } from "../complaint-ticket/complaint-ticket.lifecycle";
 import {
-  ticketCommentBodySchema,
+  evidenceFilesSchema,
+  ticketCommentInputSchema,
   ticketEmptyBodySchema,
   ticketReopenBodySchema,
-  ticketResolveBodySchema,
+  ticketResolveInputSchema,
+  ticketTitleSchema,
 } from "../complaint-ticket/complaint-ticket.validation";
 
 export {
-  ticketCommentBodySchema,
+  ticketCommentInputSchema,
   ticketReopenBodySchema,
-  ticketResolveBodySchema,
+  ticketResolveInputSchema,
 };
 
 /** Loại khiếu nại được lọc (kể cả `HEALTH_ISSUE` của dữ liệu cũ). */
@@ -50,11 +52,13 @@ export const createComplaintSchema = z.strictObject({
   complaintType: z.enum(submittableComplaintTypes, {
     error: "Loại khiếu nại không hợp lệ; vấn đề sức khỏe gửi qua báo cáo sự cố",
   }),
+  title: ticketTitleSchema,
   description: z
     .string()
     .trim()
     .min(10, "Nội dung tối thiểu 10 ký tự")
     .max(2000),
+  files: evidenceFilesSchema,
 });
 
 function parse<T>(schema: z.ZodType<T>, value: unknown): T {
@@ -80,9 +84,9 @@ export const validateCreateComplaint = (value: unknown) =>
   parse(createComplaintSchema, value);
 export const validateComplaintId = (value: unknown) => parse(uuid, value);
 export const validateComplaintComment = (value: unknown) =>
-  parse(ticketCommentBodySchema, value);
+  parse(ticketCommentInputSchema, value);
 export const validateComplaintResolve = (value: unknown) =>
-  parse(ticketResolveBodySchema, value);
+  parse(ticketResolveInputSchema, value);
 export const validateComplaintReopen = (value: unknown) =>
   parse(ticketReopenBodySchema, value ?? {});
 export const validateComplaintEmptyBody = (value: unknown) =>

@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient } from "../../generated/prisma/client";
 import {
+  complaintAttachmentsArgs,
   latestCommentSideSelect,
   ticketCommentsArgs,
 } from "../complaint-ticket/complaint-ticket.repository";
@@ -48,6 +49,7 @@ export type ComplaintRow = Prisma.ComplaintGetPayload<{
 
 const complaintDetailSelect = {
   ...complaintSelect,
+  attachments: complaintAttachmentsArgs,
   comments: ticketCommentsArgs,
 } as const satisfies Prisma.ComplaintSelect;
 export type ComplaintDetailRow = Prisma.ComplaintGetPayload<{

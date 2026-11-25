@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient } from "../../generated/prisma/client";
 import {
+  complaintAttachmentsArgs,
   latestCommentSideSelect,
   ticketCommentsArgs,
 } from "../complaint-ticket/complaint-ticket.repository";
@@ -76,6 +77,7 @@ const authorityComplaintDetailSelect = {
               title: true,
               description: true,
               submittedAt: true,
+              attachments: complaintAttachmentsArgs,
               comments: ticketCommentsArgs,
             },
           },
@@ -83,6 +85,7 @@ const authorityComplaintDetailSelect = {
       },
     },
   },
+  attachments: complaintAttachmentsArgs,
   comments: ticketCommentsArgs,
 } as const satisfies Prisma.ComplaintSelect;
 export type AuthorityComplaintDetailRow = Prisma.ComplaintGetPayload<{

@@ -8,6 +8,11 @@ import {
   withSchoolTransaction,
 } from "../../utils/authorization";
 import { getPrisma } from "../../utils/database";
+import {
+  cloudinaryEvidenceStorage,
+  withStoredEvidence,
+  type EvidenceStorage,
+} from "../../utils/evidence-files";
 import { HttpError } from "../../utils/http-error";
 import { listScopes } from "../../utils/resource-access";
 import {
@@ -27,7 +32,9 @@ import {
   type TicketActor,
 } from "../complaint-ticket/complaint-ticket.repository";
 import {
-  mapTicketComment,
+  addCommentWithEvidence,
+  mapTicketAttachments,
+  mapTicketComments,
   mapTicketFields,
   queueRequesterEmail,
 } from "../complaint-ticket/complaint-ticket.service";
@@ -152,6 +159,7 @@ function toDetail(
   row: AuthorityComplaintDetailRow,
   principal: AuthPrincipal,
   now: Date,
+  storage: Pick<EvidenceStorage, "url">,
 ): AuthorityComplaintDetailResponseDTO {
   const { response } = baseResponse(
     row,
@@ -178,9 +186,11 @@ function toDetail(
         mealDate: portion.mealDate.toISOString().slice(0, 10),
         mealType: portion.mealType,
       },
-      comments: source.Complaint.comments.map(mapTicketComment),
+      attachments: mapTicketAttachments(source.Complaint.attachments, storage),
+      comments: mapTicketComments(source.Complaint.comments, storage),
     },
-    comments: row.comments.map(mapTicketComment),
+    attachments: mapTicketAttachments(row.attachments, storage),
+    comments: mapTicketComments(row.comments, storage),
   };
 }
 
@@ -197,6 +207,7 @@ export function createAuthorityComplaintService(
   connect: () => Promise<PrismaClient> = getPrisma,
   now = () => new Date(),
   tickets: ComplaintTicketRepository = complaintTicketRepository,
+  storage: EvidenceStorage = cloudinaryEvidenceStorage,
 ) {
   /**
    * Khung chung cho thao tác ticket C05: nạp lại actor trong transaction, kiểm tra vai trò/quyền/phạm vi/trạng thái,
@@ -245,7 +256,7 @@ export function createAuthorityComplaintService(
       await run(tx, target, { userId: actor.id, roleCode: actor.role }, at);
       const row = await repository.findOne(tx, scope, id);
       if (!row) throw new HttpError(404, NOT_FOUND);
-      return toDetail(row, actor, at);
+      return toDetail(row, actor, at, storage);
     });
   }
 
@@ -312,7 +323,7 @@ export function createAuthorityComplaintService(
         id,
       );
       if (!row) throw new HttpError(404, NOT_FOUND);
-      return toDetail(row, principal, now());
+      return toDetail(row, principal, now(), storage);
     },
     /**
      * "Chuyển ATTP" (FR-003, FR-004): đóng C03 gốc `ESCALATED` và tạo C05 trong cùng transaction.
@@ -325,82 +336,88 @@ export function createAuthorityComplaintService(
       if (!isAuthorityRequester(principal))
         throw new HttpError(403, "Chỉ phụ huynh gửi đơn được chuyển ATTP");
       const db = await databaseOperation(() => connect());
-      return withSchoolTransaction(
-        db,
-        principal,
-        SUBMIT_PERMISSION,
-        async (tx, actor, schoolId) => {
-          if (!isAuthorityRequester(actor))
-            throw new HttpError(
-              403,
-              "Quyền tài khoản vừa thay đổi. Tải lại trang.",
+      return withStoredEvidence(storage, input.files, principal.id, (files) =>
+        withSchoolTransaction(
+          db,
+          principal,
+          SUBMIT_PERMISSION,
+          async (tx, actor, schoolId) => {
+            if (!isAuthorityRequester(actor))
+              throw new HttpError(403, "Phạm vi tài khoản đã thay đổi");
+            const readScope = listScopes["authority-complaint"](actor);
+            await repository.lockMealComplaint(tx, input.mealComplaintId);
+            const source = await repository.findEscalationSource(
+              tx,
+              input.mealComplaintId,
+              { schoolId, senderUserId: actor.id },
             );
-          const readScope = listScopes["authority-complaint"](actor);
-          await repository.lockMealComplaint(tx, input.mealComplaintId);
-          const source = await repository.findEscalationSource(
-            tx,
-            input.mealComplaintId,
-            { schoolId, senderUserId: actor.id },
-          );
-          if (!source || source.senderRoleCode !== ROLES.PARENTS_COMMITTEE)
-            throw new HttpError(404, SOURCE_NOT_FOUND);
-          if (source.mealComplaint?.authorityEscalation)
-            throw new HttpError(409, "Khiếu nại đã được chuyển ATTP");
-          const at = now();
-          assertTicketAction(
-            "REQUESTER",
-            {
-              status: toTicketStatus(source.status),
-              lastResolvedAt: source.lastResolvedAt,
-            },
-            "ESCALATE",
-            at,
-            { canEscalate: true },
-          );
-          const locationId = await repository.findSchoolLocationId(
-            tx,
-            schoolId,
-          );
-          if (!locationId)
-            throw new HttpError(
-              409,
-              "Trường chưa được gắn phường/xã nên chưa thể chuyển ATTP",
+            if (!source || source.senderRoleCode !== ROLES.PARENTS_COMMITTEE)
+              throw new HttpError(404, SOURCE_NOT_FOUND);
+            if (source.mealComplaint?.authorityEscalation)
+              throw new HttpError(409, "Khiếu nại đã được chuyển ATTP");
+            const at = now();
+            assertTicketAction(
+              "REQUESTER",
+              {
+                status: toTicketStatus(source.status),
+                lastResolvedAt: source.lastResolvedAt,
+              },
+              "ESCALATE",
+              at,
+              { canEscalate: true },
             );
-          const unit = await repository.findRecipientUnit(tx, locationId);
-          if (!unit)
-            throw new HttpError(
-              409,
-              "Phường/xã của trường chưa có đơn vị ATTP đang hoạt động",
+            const locationId = await repository.findSchoolLocationId(
+              tx,
+              schoolId,
             );
-          const ticketActor = { userId: actor.id, roleCode: actor.role };
-          await transition(tx, source, "MEAL", ticketActor, at, "ESCALATE");
-          if (input.reason)
-            await tickets.addComment(tx, {
-              complaintId: source.id,
-              actor: ticketActor,
-              side: "REQUESTER",
-              type: "ESCALATION_NOTE",
-              content: input.reason,
+            if (!locationId)
+              throw new HttpError(
+                409,
+                "Trường chưa được gắn phường/xã nên chưa thể chuyển ATTP",
+              );
+            const unit = await repository.findRecipientUnit(tx, locationId);
+            if (!unit)
+              throw new HttpError(
+                409,
+                "Phường/xã của trường chưa có đơn vị ATTP đang hoạt động",
+              );
+            const ticketActor = { userId: actor.id, roleCode: actor.role };
+            await transition(tx, source, "MEAL", ticketActor, at, "ESCALATE");
+            if (input.reason)
+              await tickets.addComment(tx, {
+                complaintId: source.id,
+                actor: ticketActor,
+                side: "REQUESTER",
+                type: "ESCALATION_NOTE",
+                content: input.reason,
+              });
+            const created = await repository.create(tx, {
+              code: await tickets.allocateCode(tx, "AC"),
+              title: authorityComplaintTitle(source.code),
+              description: authorityComplaintDescription(
+                source.description,
+                input.reason,
+              ),
+              senderUserId: actor.id,
+              senderRoleCode: actor.role,
+              schoolId,
+              recipientCommuneFoodSafetyUnitId: unit.id,
+              escalatedFromMealComplaintId: source.id,
             });
-          const created = await repository.create(tx, {
-            code: await tickets.allocateCode(tx, "AC"),
-            title: authorityComplaintTitle(source.code),
-            description: authorityComplaintDescription(
-              source.description,
-              input.reason,
-            ),
-            senderUserId: actor.id,
-            senderRoleCode: actor.role,
-            schoolId,
-            recipientCommuneFoodSafetyUnitId: unit.id,
-            escalatedFromMealComplaintId: source.id,
-          });
-          await tickets.recordCreated(tx, created.id, ticketActor);
-          await queueRequesterEmail(tx, tickets, created.id, "CREATED");
-          const row = await repository.findOne(tx, readScope, created.id);
-          if (!row) throw new HttpError(503, CORRUPT_DATA);
-          return toDetail(row, actor, at);
-        },
+            await tickets.addAttachments(tx, {
+              complaintId: created.id,
+              commentId: null,
+              uploaderUserId: actor.id,
+              side: "REQUESTER",
+              files,
+            });
+            await tickets.recordCreated(tx, created.id, ticketActor);
+            await queueRequesterEmail(tx, tickets, created.id, "CREATED");
+            const row = await repository.findOne(tx, readScope, created.id);
+            if (!row) throw new HttpError(503, CORRUPT_DATA);
+            return toDetail(row, actor, at, storage);
+          },
+        ),
       );
     },
     accept(id: string, principal: AuthPrincipal) {
@@ -414,39 +431,50 @@ export function createAuthorityComplaintService(
       principal: AuthPrincipal,
     ) {
       const side = sideOf(principal);
-      return act(id, principal, side, "COMMENT", async (tx, target, actor) => {
-        await tickets.addComment(tx, {
-          complaintId: target.id,
-          actor,
-          side,
-          type: "MESSAGE",
-          content: input.content,
-        });
-        if (side === "HANDLER")
-          await queueRequesterEmail(tx, tickets, target.id, "HANDLER_COMMENT");
-      });
+      return withStoredEvidence(storage, input.files, principal.id, (files) =>
+        act(id, principal, side, "COMMENT", async (tx, target, actor) => {
+          await addCommentWithEvidence(tx, tickets, {
+            complaintId: target.id,
+            actor,
+            side,
+            type: "MESSAGE",
+            content: input.content,
+            files,
+          });
+          if (side === "HANDLER")
+            await queueRequesterEmail(
+              tx,
+              tickets,
+              target.id,
+              "HANDLER_COMMENT",
+            );
+        }),
+      );
     },
     resolve(
       id: string,
       input: AuthorityComplaintResolveRequestDTO,
       principal: AuthPrincipal,
     ) {
-      return act(
-        id,
-        principal,
-        "HANDLER",
-        "RESOLVE",
-        async (tx, target, actor, at) => {
-          await transition(tx, target, "AUTHORITY", actor, at, "RESOLVE");
-          await tickets.addComment(tx, {
-            complaintId: target.id,
-            actor,
-            side: "HANDLER",
-            type: "RESOLUTION",
-            content: input.content,
-          });
-          await queueRequesterEmail(tx, tickets, target.id, "RESOLVED");
-        },
+      return withStoredEvidence(storage, input.files, principal.id, (files) =>
+        act(
+          id,
+          principal,
+          "HANDLER",
+          "RESOLVE",
+          async (tx, target, actor, at) => {
+            await transition(tx, target, "AUTHORITY", actor, at, "RESOLVE");
+            await addCommentWithEvidence(tx, tickets, {
+              complaintId: target.id,
+              actor,
+              side: "HANDLER",
+              type: "RESOLUTION",
+              content: input.content,
+              files,
+            });
+            await queueRequesterEmail(tx, tickets, target.id, "RESOLVED");
+          },
+        ),
       );
     },
     satisfy(id: string, principal: AuthPrincipal) {
