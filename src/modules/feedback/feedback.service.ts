@@ -113,12 +113,14 @@ function toResponse(
       mealDate: portion.mealDate.toISOString().slice(0, 10),
       mealType: portion.mealType,
     },
-    escalatedAuthorityComplaint: child.authorityEscalation
-      ? {
-          id: child.authorityEscalation.id,
-          code: child.authorityEscalation.Complaint.code,
-        }
-      : null,
+    // Chỉ người gửi thấy hồ sơ C05 đã chuyển; BGH không xem thông tin leo thang (specs/board-escalation-view FR-002).
+    escalatedAuthorityComplaint:
+      child.authorityEscalation && row.senderUserId === principal.id
+        ? {
+            id: child.authorityEscalation.id,
+            code: child.authorityEscalation.Complaint.code,
+          }
+        : null,
     ...mapTicketFields(viewerOf(row, principal), row, latestCommentSide, now, {
       canEscalate: canEscalate(row, principal),
     }),

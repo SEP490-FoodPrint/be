@@ -277,11 +277,10 @@ export function createAuthorityComplaintService(
       principal: AuthPrincipal,
     ): Promise<AuthorityComplaintListResponseDTO> {
       const scope = listScopes["authority-complaint"](principal);
-      // Vai trò trường khác BGH chỉ xem đơn mình gửi (listScopes): lọc theo trạng thái hiển thị.
+      // Vai trò trường chỉ xem đơn mình gửi (listScopes): lọc theo trạng thái hiển thị.
       const statuses = ticketStatusFilter(
         query.status,
-        principal.orgType === ORG_TYPES.SCHOOL &&
-          principal.role !== ROLES.SCHOOL_MANAGEMENT_BOARD,
+        principal.orgType === ORG_TYPES.SCHOOL,
       );
       const rows = await repository.list(await connect(), scope, {
         page: query.page,
