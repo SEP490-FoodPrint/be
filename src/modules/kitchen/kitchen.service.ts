@@ -67,6 +67,7 @@ export interface RecipeLine {
   unit: string;
 }
 export interface PlanningLot {
+  incoming?: boolean;
   lotCode?: string;
   ingredientName?: string;
   id: string;
@@ -80,6 +81,37 @@ export interface PlanningLot {
 export interface BatchPlan {
   plannedPortions: number;
   lots: { ingredientLotId: string; quantityUsed: string; unit: string }[];
+}
+
+export function planMealDishes(
+  recipes: readonly {
+    dishId: string;
+    portions: number;
+    recipe: RecipeLine[];
+  }[],
+  mode: CookingMode,
+  stock: PlanningLot[],
+) {
+  const byId = new Map(stock.map((lot) => [lot.id, lot]));
+  const dishPlans = recipes.map(({ dishId, portions, recipe }) => {
+    const plans = planCookingBatches(portions, mode, recipe, stock);
+    for (const plan of plans) {
+      for (const allocation of plan.lots) {
+        const lot = byId.get(allocation.ingredientLotId)!;
+        lot.reservedQuantity = new Decimal(lot.reservedQuantity)
+          .add(
+            convertQuantity(
+              new Decimal(allocation.quantityUsed),
+              allocation.unit,
+              lot.unit,
+            ),
+          )
+          .toString();
+      }
+    }
+    return { dishId, plans };
+  });
+  return groupDishPlans(dishPlans, mode);
 }
 
 function positive(value: string): Prisma.Decimal {
@@ -317,13 +349,24 @@ export async function reservedQuantities(
   const select = {
     ingredientLotId: true,
     quantityUsed: true,
+    sampleQuantity: true,
     unit: true,
   } as const;
   const rows = [
     ...(await tx.cookingBatchLot.findMany({
       where: {
         ...where,
-        CookingBatch: { status: { in: ["UNCONFIRMED", "CONFIRMED"] } },
+        CookingBatch: {
+          status: {
+            in: [
+              "UNCONFIRMED",
+              "CONFIRMED",
+              "PENDING_APPROVAL",
+              "ROUND1_APPROVED",
+              "ROUND2_APPROVED",
+            ],
+          },
+        },
       },
       select,
     })),
@@ -335,13 +378,12 @@ export async function reservedQuantities(
   const byId = new Map(lots.map((lot) => [lot.id, lot]));
   for (const row of rows) {
     const lot = byId.get(row.ingredientLotId);
-    if (!lot || !row.quantityUsed.gt(0))
+    const quantity = row.quantityUsed.add(row.sampleQuantity ?? 0);
+    if (!lot || !quantity.gt(0))
       throw new HttpError(409, "Lượng nguyên liệu đã giữ không hợp lệ");
     totals.set(
       lot.id,
-      totals
-        .get(lot.id)!
-        .add(convertQuantity(row.quantityUsed, row.unit, lot.unit)),
+      totals.get(lot.id)!.add(convertQuantity(quantity, row.unit, lot.unit)),
     );
   }
   return totals;
@@ -353,14 +395,46 @@ export async function readPlanningStock(
   menuDate: Date,
   entryIds: readonly string[],
   lock = false,
+  round?: { batchNo: number },
 ): Promise<PlanningLot[]> {
   if (!entryIds.length) return [];
   const where: Prisma.IngredientLotWhereInput = {
-    status: "AVAILABLE",
-    availableQuantity: { gt: 0 },
     OR: [{ expiryDate: null }, { expiryDate: { gte: menuDate } }],
+    ...(round
+      ? ({
+          AND: [
+            {
+              OR: [
+                {
+                  status: "AVAILABLE",
+                  availableQuantity: { gt: 0 },
+                  DeliveryItem: { Delivery: { status: "RECEIVED" } },
+                },
+                {
+                  status: "BLOCKED",
+                  receivedQuantity: { gt: 0 },
+                  DeliveryItem: {
+                    Delivery: {
+                      status: { notIn: ["RECEIVED", "REJECTED", "CANCELLED"] },
+                      preparationStage: { not: null },
+                      SupplyRequest: {
+                        orderType: "DIRECT_USE",
+                        requestedDeliveryDate: menuDate,
+                        batchNo: round.batchNo,
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          ],
+        } satisfies Prisma.IngredientLotWhereInput)
+      : ({
+          status: "AVAILABLE",
+          availableQuantity: { gt: 0 },
+        } satisfies Prisma.IngredientLotWhereInput)),
     DeliveryItem: {
-      Delivery: { status: "RECEIVED", schoolId },
+      Delivery: round ? { schoolId } : { status: "RECEIVED", schoolId },
       OR: [
         { ingredientEntryId: { in: [...entryIds] } },
         { SupplyRequestItem: { ingredientEntryId: { in: [...entryIds] } } },
@@ -383,6 +457,8 @@ export async function readPlanningStock(
       id: true,
       unit: true,
       availableQuantity: true,
+      receivedQuantity: true,
+      status: true,
       lotCode: true,
       sourceFacilityId: true,
       DeliveryItem: {
@@ -432,7 +508,11 @@ export async function readPlanningStock(
         "",
       unit: lot.unit,
       ingredientEntryId,
-      availableQuantity: lot.availableQuantity.toString(),
+      ...(round ? { incoming: lot.status === "BLOCKED" } : {}),
+      availableQuantity: (round && lot.status === "BLOCKED"
+        ? lot.receivedQuantity
+        : lot.availableQuantity
+      ).toString(),
       reservedQuantity: reserved.get(lot.id)!.toString(),
       sourceFacilityId:
         lot.sourceFacilityId ?? lot.DeliveryItem.sourceFacilityId ?? null,
@@ -632,6 +712,7 @@ export async function assertMealPortions(
   meal: Meal,
   schoolId: string,
   batchId?: string,
+  allowSurplus = false,
 ) {
   if (!(await tx.menuDayDishIngredient.count({ where: mealKey(meal) }))) return;
   const day = await tx.menuDay.findUniqueOrThrow({
@@ -655,7 +736,10 @@ export async function assertMealPortions(
         ]),
       ];
   const scoped = batches.filter((batch) => scopeDishIds.includes(batch.dishId));
-  if (portions <= 0 || scoped.some((batch) => !batch.plannedPortions))
+  if (
+    (!allowSurplus && portions <= 0) ||
+    scoped.some((batch) => !batch.plannedPortions)
+  )
     throw new HttpError(
       409,
       "Số suất đã thay đổi sau khi lập mẻ; cần đối chiếu, không tự đổi kế hoạch",
@@ -665,7 +749,7 @@ export async function assertMealPortions(
       .filter((batch) => batch.dishId === dishId)
       .reduce((sum, batch) => sum + (batch.plannedPortions ?? 0), 0);
     const finalized = demand.dishPortions.get(dishId) ?? 0;
-    if (planned !== finalized) {
+    if (allowSurplus ? planned < finalized : planned !== finalized) {
       const dish = await tx.dish.findUnique({
         where: { id: dishId },
         select: { name: true },
@@ -883,6 +967,7 @@ export async function consumeMealSeasonings(
   meal: Meal,
   schoolId: string,
   actorId: string,
+  allowSurplus = false,
 ) {
   const allocations = await tx.menuMealSeasoningLot.findMany({
     where: mealKey(meal),
@@ -904,16 +989,18 @@ export async function consumeMealSeasonings(
     !dishes.length ||
     dishes.some((dish) => {
       const rows = batches.filter((batch) => batch.dishId === dish.dishId);
+      const planned = rows.reduce(
+        (total, batch) => total + (batch.plannedPortions ?? 0),
+        0,
+      );
+      const finalized = demand.dishPortions.get(dish.dishId) ?? 0;
       return (
         ((demand.dishPortions.get(dish.dishId) ?? 0) > 0 && !rows.length) ||
         rows.some(
           (batch) =>
             batch.CookingBatch.status !== "COMPLETED" || !batch.plannedPortions,
         ) ||
-        rows.reduce(
-          (total, batch) => total + (batch.plannedPortions ?? 0),
-          0,
-        ) !== (demand.dishPortions.get(dish.dishId) ?? 0)
+        (allowSurplus ? planned < finalized : planned !== finalized)
       );
     })
   )
@@ -921,7 +1008,10 @@ export async function consumeMealSeasonings(
   await checkMealSeasoningStock(tx, meal, schoolId);
   if (
     allocations.some(
-      (a) => a.plannedPortions !== portions || a.usedAt !== null,
+      (a) =>
+        (allowSurplus
+          ? a.plannedPortions < portions
+          : a.plannedPortions !== portions) || a.usedAt !== null,
     ) ||
     (await tx.inventoryTransaction.count({
       where: {
@@ -941,7 +1031,7 @@ export async function consumeMealSeasonings(
       where: { id: allocation.ingredientLotId },
     });
     const used = convertQuantity(
-      allocation.quantityUsed,
+      allocation.quantityUsed.add(allocation.sampleQuantity ?? 0),
       allocation.unit,
       lot.unit,
     );
@@ -976,6 +1066,57 @@ export async function consumeMealSeasonings(
       data: { usedAt: now },
     });
   }
+}
+
+export async function checkReservedStock(
+  tx: Tx,
+  batch: Detail,
+  schoolId: string,
+) {
+  if (
+    !batch.plannedPortions ||
+    batch.plannedPortions <= 0 ||
+    !batch.cookingBatchLots.length
+  )
+    throw new HttpError(409, "Mẻ chưa có kế hoạch số suất/nguyên liệu hợp lệ");
+  await lockIngredientLots(
+    tx,
+    batch.cookingBatchLots.map((lot) => lot.ingredientLotId),
+  );
+  const day = await tx.menuDay.findUniqueOrThrow({
+    where: { id: batch.menuDayId },
+    select: { menuDate: true },
+  });
+  const lots = await tx.ingredientLot.findMany({
+    where: {
+      id: { in: batch.cookingBatchLots.map((lot) => lot.ingredientLotId) },
+      OR: [{ expiryDate: null }, { expiryDate: { gte: day.menuDate } }],
+      DeliveryItem: {
+        Delivery: { status: "RECEIVED", schoolId },
+      },
+    },
+    select: { id: true, unit: true, availableQuantity: true, status: true },
+  });
+  if (
+    lots.length !==
+    new Set(batch.cookingBatchLots.map((l) => l.ingredientLotId)).size
+  )
+    throw new HttpError(
+      409,
+      "Thiếu lô nguyên liệu hợp lệ trong phạm vi trường",
+    );
+  const reserved = await reservedQuantities(tx, lots);
+  for (const lot of lots) {
+    if (
+      lot.status !== "AVAILABLE" ||
+      lot.availableQuantity.lt(reserved.get(lot.id)!)
+    )
+      throw new HttpError(
+        409,
+        "Tồn đồ lưu khong đủ cho các mẻ đang giữ nguyên liệu; cần đối chiếu",
+      );
+  }
+  return new Map(lots.map((lot) => [lot.id, lot]));
 }
 
 type Detail = KitchenDetailRow;
@@ -1022,6 +1163,9 @@ function dto(batch: Detail): CookingBatchDetailDTO {
     BatchGroup: {
       id: batch.BatchGroup.id,
       batchCode: batch.BatchGroup.batchCode,
+      ...(batch.BatchGroup.supplyRoundId
+        ? { supplyRoundId: batch.BatchGroup.supplyRoundId }
+        : {}),
     },
     menuDayId: batch.menuDayId,
     mealType: batch.mealType,
@@ -1040,6 +1184,15 @@ function dto(batch: Detail): CookingBatchDetailDTO {
       dishId: d.dishId,
       name: d.Dish?.name ?? "",
       plannedPortions: d.plannedPortions,
+      ...(d.sampleQuantity !== null && d.sampleQuantity !== undefined
+        ? {
+            sampleQuantity: d.sampleQuantity.toString(),
+            sampleUnit: d.sampleUnit ?? null,
+            sampleRatio: d.sampleRatio?.toString() ?? null,
+            standardQuantitySnapshot:
+              d.standardQuantitySnapshot?.toString() ?? null,
+          }
+        : {}),
       cookingBatchLots: lots.filter((l) => l.dishId === d.dishId),
     })),
     cookingBatchLots: lots,
@@ -1264,65 +1417,6 @@ export function createKitchenLifecycle(
     return batch;
   }
 
-  async function reservations(tx: Tx, lots: { id: string; unit: string }[]) {
-    return reservedQuantities(tx, lots);
-  }
-
-  async function lockLots(tx: Tx, ids: string[]) {
-    for (const id of [...new Set(ids)].sort())
-      await tx.$queryRaw`SELECT id FROM foodprint.ingredient_lots WHERE id = ${id}::uuid FOR UPDATE`;
-  }
-
-  async function checkReservedStock(tx: Tx, batch: Detail, schoolId: string) {
-    if (
-      !batch.plannedPortions ||
-      batch.plannedPortions <= 0 ||
-      !batch.cookingBatchLots.length
-    )
-      throw new HttpError(
-        409,
-        "Mẻ chưa có kế hoạch số suất/nguyên liệu hợp lệ",
-      );
-    await lockLots(
-      tx,
-      batch.cookingBatchLots.map((lot) => lot.ingredientLotId),
-    );
-    const day = await tx.menuDay.findUniqueOrThrow({
-      where: { id: batch.menuDayId },
-      select: { menuDate: true },
-    });
-    const lots = await tx.ingredientLot.findMany({
-      where: {
-        id: { in: batch.cookingBatchLots.map((lot) => lot.ingredientLotId) },
-        OR: [{ expiryDate: null }, { expiryDate: { gte: day.menuDate } }],
-        DeliveryItem: {
-          Delivery: { status: "RECEIVED", schoolId },
-        },
-      },
-      select: { id: true, unit: true, availableQuantity: true, status: true },
-    });
-    if (
-      lots.length !==
-      new Set(batch.cookingBatchLots.map((l) => l.ingredientLotId)).size
-    )
-      throw new HttpError(
-        409,
-        "Thiếu lô nguyên liệu hợp lệ trong phạm vi trường",
-      );
-    const reserved = await reservations(tx, lots);
-    for (const lot of lots) {
-      if (
-        lot.status !== "AVAILABLE" ||
-        lot.availableQuantity.lt(reserved.get(lot.id)!)
-      )
-        throw new HttpError(
-          409,
-          "Tồn đồ lưu khong đủ cho các mẻ đang giữ nguyên liệu; cần đối chiếu",
-        );
-    }
-    return new Map(lots.map((lot) => [lot.id, lot]));
-  }
-
   async function executePlan(
     input: PlanInput,
     principal: AuthPrincipal,
@@ -1406,6 +1500,13 @@ export function createKitchenLifecycle(
             "Chưa có nhu cầu suất ăn đã chốt cho bữa này",
           );
         const existing = await repository.listMealBatches(tx, meal);
+        if (
+          existing.some(
+            (batch) =>
+              batch.BatchGroup?.supplyRoundId && batch.status !== "CANCELLED",
+          )
+        )
+          throw new HttpError(409, "Bữa ăn đã có kế hoạch mẻ theo đợt giao");
         const planned = new Map<string, number>();
         for (const child of existing)
           for (const dish of child.dishes) {
@@ -1516,33 +1617,7 @@ export function createKitchenLifecycle(
           entryIds,
           !preview,
         );
-        const dishPlans: DishPlans[] = [];
-        for (const dish of recipes) {
-          const plans = planCookingBatches(
-            dish.portions,
-            mode,
-            dish.recipe,
-            stock,
-          );
-          dishPlans.push({ dishId: dish.dishId, plans });
-          // Recipes can share a stock lot. Later dishes see reservations made by earlier dishes.
-          for (const plan of plans)
-            for (const allocation of plan.lots) {
-              const lot = stock.find(
-                (l) => l.id === allocation.ingredientLotId,
-              )!;
-              lot.reservedQuantity = new Decimal(lot.reservedQuantity)
-                .add(
-                  convertQuantity(
-                    new Decimal(allocation.quantityUsed),
-                    allocation.unit,
-                    lot.unit,
-                  ),
-                )
-                .toString();
-            }
-        }
-        const children = groupDishPlans(dishPlans, mode);
+        const children = planMealDishes(recipes, mode, stock);
         const seasonings =
           (await reserveMealSeasonings(
             tx,
@@ -1819,7 +1894,13 @@ export function createKitchenLifecycle(
           }
           if (batch.status !== "CONFIRMED")
             throw new HttpError(409, "Phải xác nhận nấu trước khi hoàn thành");
-          await assertMealPortions(tx, batch, schoolId, batch.id);
+          await assertMealPortions(
+            tx,
+            batch,
+            schoolId,
+            batch.id,
+            Boolean(batch.BatchGroup.supplyRoundId),
+          );
           const stock = await checkReservedStock(tx, batch, schoolId);
           if (
             await tx.inventoryTransaction.count({
@@ -1838,7 +1919,7 @@ export function createKitchenLifecycle(
           for (const allocation of batch.cookingBatchLots) {
             const lot = stock.get(allocation.ingredientLotId)!;
             const used = convertQuantity(
-              allocation.quantityUsed,
+              allocation.quantityUsed.add(allocation.sampleQuantity ?? 0),
               allocation.unit,
               lot.unit,
             );
@@ -1891,7 +1972,13 @@ export function createKitchenLifecycle(
             },
             select: detailSelect,
           });
-          await consumeMealSeasonings(tx, batch, schoolId, actor.id);
+          await consumeMealSeasonings(
+            tx,
+            batch,
+            schoolId,
+            actor.id,
+            Boolean(batch.BatchGroup.supplyRoundId),
+          );
           proof = await proofs.prepareCookingCompleted(tx, id, actor.id);
           return completionResult(tx, completed);
         },
@@ -2030,6 +2117,9 @@ export function createKitchenService(
           BatchGroup: {
             id: batch.BatchGroup.id,
             batchCode: batch.BatchGroup.batchCode,
+            ...(batch.BatchGroup.supplyRoundId
+              ? { supplyRoundId: batch.BatchGroup.supplyRoundId }
+              : {}),
           },
           menuDayId: batch.menuDayId,
           dishId: batch.dishId,
@@ -2041,6 +2131,15 @@ export function createKitchenService(
             dishId: d.dishId,
             name: d.Dish?.name ?? "",
             plannedPortions: d.plannedPortions,
+            ...(d.sampleQuantity !== null && d.sampleQuantity !== undefined
+              ? {
+                  sampleQuantity: d.sampleQuantity.toString(),
+                  sampleUnit: d.sampleUnit ?? null,
+                  sampleRatio: d.sampleRatio?.toString() ?? null,
+                  standardQuantitySnapshot:
+                    d.standardQuantitySnapshot?.toString() ?? null,
+                }
+              : {}),
           })),
           confirmedAt: batch.confirmedAt?.toISOString() ?? null,
           completedAt: batch.completedAt?.toISOString() ?? null,

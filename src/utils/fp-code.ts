@@ -47,10 +47,20 @@ export async function reserveFpCodes(
   await db.$queryRaw`SELECT 1 AS "locked" FROM pg_advisory_xact_lock(hashtext(${lockKey}))`;
   const pattern = `^FP-${type}-[0-9]{5,}$`;
   // Lọc bằng regex trước khi ép kiểu numeric để mã cũ không làm lỗi truy vấn.
+  // Với CB, kết hợp thêm business_code_counters để mã FP-CB- đã xóa không bị tái sử dụng.
   const rows = await db.$queryRaw<{ maxSeq: string | null }[]>(
-    Prisma.sql`SELECT MAX(substring(${Prisma.raw(column)} FROM 7)::numeric)::text AS "maxSeq"
-      FROM foodprint.${Prisma.raw(table)}
-      WHERE ${Prisma.raw(column)} ~ ${pattern}`,
+    type === "CB"
+      ? Prisma.sql`SELECT GREATEST(
+          COALESCE((SELECT MAX(substring(${Prisma.raw(column)} FROM 7)::numeric)
+            FROM foodprint.${Prisma.raw(table)}
+            WHERE ${Prisma.raw(column)} ~ ${pattern}), 0),
+          COALESCE((SELECT last_sequence::numeric
+            FROM foodprint.business_code_counters
+            WHERE code_type = 'CB'), 0)
+        )::text AS "maxSeq"`
+      : Prisma.sql`SELECT MAX(substring(${Prisma.raw(column)} FROM 7)::numeric)::text AS "maxSeq"
+          FROM foodprint.${Prisma.raw(table)}
+          WHERE ${Prisma.raw(column)} ~ ${pattern}`,
   );
   const rawMax = Array.isArray(rows) ? rows[0]?.maxSeq : null;
   const start = (rawMax ? BigInt(rawMax) : 0n) + 1n;

@@ -202,6 +202,9 @@ export function createSupplyOrderService(
               ingredientName: item.IngredientEntry.Ingredient.name,
               handlingType: item.IngredientEntry.handlingType,
               requestedQuantity: item.requestedQuantity.toString(),
+              ...(item.sampleTopUpQuantity?.gt(0)
+                ? { sampleTopUpQuantity: item.sampleTopUpQuantity.toString() }
+                : {}),
               unit: item.unit,
               note: item.note,
             })),
@@ -275,6 +278,9 @@ export function createSupplyOrderService(
           // Đồ lưu kho (DRY_STOCK) bắt buộc NCC nhập ngày sản xuất và hạn dùng của lô khi tạo chuyến giao.
           handlingType: item.IngredientEntry?.handlingType ?? null,
           requestedQuantity: item.requestedQuantity.toString(),
+          ...(item.sampleTopUpQuantity?.gt(0)
+            ? { sampleTopUpQuantity: item.sampleTopUpQuantity.toString() }
+            : {}),
           unit: item.unit,
           note: item.note,
         })),

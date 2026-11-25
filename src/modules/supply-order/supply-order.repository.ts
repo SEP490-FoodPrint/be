@@ -42,6 +42,7 @@ const schoolListWithItemsSelect = {
       id: true,
       ingredientEntryId: true,
       requestedQuantity: true,
+      sampleTopUpQuantity: true,
       unit: true,
       note: true,
       IngredientEntry: {
@@ -91,6 +92,7 @@ const supplierDetailSelect = {
       id: true,
       ingredientEntryId: true,
       requestedQuantity: true,
+      sampleTopUpQuantity: true,
       unit: true,
       note: true,
       IngredientEntry: {

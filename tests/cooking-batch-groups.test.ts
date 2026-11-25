@@ -214,6 +214,7 @@ function fixture(
       dishId: string;
       ingredientLotId: string;
       quantityUsed: Prisma.Decimal;
+      sampleQuantity?: Prisma.Decimal;
       unit: string;
     }[];
   };
@@ -559,6 +560,20 @@ void test("two single-dish children sharing one lot each post their own stock us
   assert.equal(f.usage[0].quantity.toString(), "100");
   assert.equal(f.lots[0].availableQuantity.toString(), "0");
   assert.equal(f.lots[0].status, "DEPLETED");
+});
+
+void test("completion consumes both cooking and sample quantities exactly once", async () => {
+  const f = fixture("COMBINE_LOTS", true);
+  f.lots[0].availableQuantity = new Prisma.Decimal(225);
+  await f.service.plan(validateKitchenPlan(meal), principal);
+  const batch = f.children[0];
+  batch.cookingBatchLots[0].sampleQuantity = new Prisma.Decimal(25);
+  await f.service.confirm(batch.id, principal);
+  await f.service.complete(batch.id, principal);
+  await f.service.complete(batch.id, principal);
+  assert.equal(f.usage.length, 1);
+  assert.equal(f.usage[0].quantity.toString(), "125");
+  assert.equal(f.lots[0].availableQuantity.toString(), "100");
 });
 
 void test("cross-dish stock shortage fails before persisting a parent or child", async () => {

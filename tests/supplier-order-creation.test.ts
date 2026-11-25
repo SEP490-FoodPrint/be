@@ -27,6 +27,7 @@ import {
   validateSupplierOrderListQuery,
   validateSupplierOrderOptionsQuery,
   validateSupplierSchoolOptionsQuery,
+  validateSupplierTopUp,
 } from "../src/modules/supplier-order/supplier-order.validation";
 import { HttpError } from "../src/utils/http-error";
 import { RequestValidationError } from "../src/utils/request-validation";
@@ -55,6 +56,147 @@ const sourceFacilityId = uid(109);
 const sourceFacilityIdNullCode = uid(110);
 const idemKey1 = uid(201);
 const idemKey2 = uid(202);
+
+void test("dispatch compare-and-set permits legacy or ready-to-dispatch deliveries", async () => {
+  const db = {
+    delivery: {
+      updateMany: (args: { where: { AND: { OR?: unknown }[] } }) => {
+        assert.deepEqual(args.where.AND[1].OR, [
+          { preparationStage: null },
+          { preparationStage: "READY_TO_DISPATCH" },
+        ]);
+        return Promise.resolve({ count: 1 });
+      },
+    },
+  } as unknown as Prisma.TransactionClient;
+  assert.equal(
+    await supplierOrderRepository.dispatchDelivery(db, {
+      scope: { supplierId },
+      deliveryId,
+      expectedArrivalAt: new Date("2026-11-25T06:00:00.000Z"),
+      vehiclePlate: "29C-12345",
+    }),
+    1,
+  );
+});
+
+void test("round delivery top-up checks exact lots and only increments once on replay", async () => {
+  const actor = makeSupplierActor();
+  const ingredientLotId = uid(8101);
+  let confirmedAt: Date | null = null;
+  let added = new Prisma.Decimal(0);
+  const increments: string[] = [];
+  const tx = {
+    delivery: {
+      findFirst: () =>
+        Promise.resolve({
+          status: "PREPARING",
+          preparationStage: confirmedAt
+            ? "READY_TO_DISPATCH"
+            : "TOP_UP_PENDING",
+          topUpConfirmedAt: confirmedAt,
+        }),
+      update: () => {
+        confirmedAt = new Date();
+        return Promise.resolve({});
+      },
+    },
+    ingredientLot: {
+      findMany: () =>
+        Promise.resolve([
+          {
+            id: ingredientLotId,
+            lotCode: "FP-LO-8101",
+            unit: "kg",
+            status: "BLOCKED",
+            sampleTopUpQuantity: added,
+            DeliveryItem: {
+              id: uid(8102),
+              supplyRequestItemId: requestItemId,
+              unit: "kg",
+            },
+            cookingBatchLots: [
+              { unit: "g", sampleQuantity: new Prisma.Decimal(125) },
+            ],
+          },
+        ]),
+      update: (args: {
+        data: { receivedQuantity: { increment: Prisma.Decimal } };
+      }) => {
+        added = added.add(args.data.receivedQuantity.increment);
+        increments.push("lot");
+        return Promise.resolve({});
+      },
+    },
+    deliveryItem: {
+      update: () => {
+        increments.push("delivery-item");
+        return Promise.resolve({});
+      },
+    },
+    supplyRequestItem: {
+      update: () => {
+        increments.push("request-item");
+        return Promise.resolve({});
+      },
+    },
+  } as unknown as Prisma.TransactionClient;
+  const service = createSupplierOrderService(
+    {
+      ...supplierOrderRepository,
+      findManagementDeliveryById: () =>
+        Promise.resolve({
+          id: deliveryId,
+          deliveryNo: "FP-DE-8101",
+          creationMode: "REQUEST",
+          traceabilityVersion: 1,
+          workflowVersion: 2,
+          schoolId,
+          supplierId,
+          supplyRequestId,
+          status: "PREPARING",
+          preparationStage: "READY_TO_DISPATCH",
+          expectedArrivalAt: null,
+          arrivedAt: null,
+          receivedAt: null,
+          vehiclePlate: null,
+          note: null,
+          createdByUserId: actor.id,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          creationFingerprint: null,
+          School: { name: "Trường" },
+          SupplyRequest: null,
+          deliveryItems: [],
+        }),
+    },
+    {
+      transaction: (operation) => operation(tx),
+      guard: {
+        assertAccess: () => Promise.reject(new Error("Unexpected guard")),
+        assertDeliveryContinuation: () =>
+          Promise.resolve({ actor, replayed: false, delivery: {} as never }),
+      },
+    },
+  );
+  const post = (quantity: string) =>
+    service.confirmTopUp(
+      { id: deliveryId },
+      validateSupplierTopUp({
+        lots: [{ ingredientLotId, sampleTopUpQuantity: quantity }],
+      }),
+      actor,
+    );
+  const conflict = (error: unknown) =>
+    error instanceof HttpError && error.statusCode === 409;
+  await assert.rejects(post("0.120"), conflict);
+  assert.deepEqual(increments, []);
+  await post("0.125");
+  await post("0.125");
+  await assert.rejects(post("0.126"), conflict);
+  assert.equal(added.toString(), "0.125");
+  assert.deepEqual(increments, ["lot", "delivery-item", "request-item"]);
+});
 
 function makeSupplierActor(
   role:
@@ -118,6 +260,9 @@ function makeSupplyRequestRecord(
   return {
     id: supplyRequestId,
     requestNo: "SR-2026-001",
+    requestedDeliveryDate: null,
+    orderType: null,
+    batchNo: null,
     schoolId,
     supplierId,
     status,
@@ -190,6 +335,7 @@ function setupUs1Harness(options?: {
     createDeliveryWithItems: (_db, input) => {
       createdPayloads.push(input);
       const record: SupplierOrderDetailRecord = {
+        preparationStage: null,
         id: deliveryId,
         deliveryNo: input.deliveryNo,
         creationMode: input.creationMode,
@@ -218,6 +364,7 @@ function setupUs1Harness(options?: {
             }
           : null,
         deliveryItems: input.items.map((item, idx) => ({
+          sampleTopUpQuantity: new Prisma.Decimal(0),
           id: uid(500 + idx),
           ingredientId: item.ingredientId,
           ingredientEntryId: item.ingredientEntryId,
@@ -1013,7 +1160,10 @@ void test("US1 repository queries enforce supplier scope, ordering, locks, FP-LO
     },
     delivery: {
       findFirst: ({ where }: { where: Record<string, unknown> }) => {
-        assert.deepEqual(where, { supplyRequestId });
+        assert.deepEqual(where, {
+          supplyRequestId,
+          status: { notIn: ["REJECTED", "CANCELLED"] },
+        });
         return Promise.resolve(null);
       },
       findMany: ({ where }: { where: { deliveryNo: { in: string[] } } }) => {
@@ -1269,6 +1419,7 @@ void test("T111 REQUEST multi-source allocation supports 6A+4B split, prevents c
       createdPayloads.push(input);
       const now = new Date("2026-11-15T05:00:00Z");
       const rec: SupplierOrderDetailRecord = {
+        preparationStage: null,
         id: deliveryId,
         deliveryNo: input.deliveryNo,
         creationMode: input.creationMode,
@@ -1295,6 +1446,7 @@ void test("T111 REQUEST multi-source allocation supports 6A+4B split, prevents c
           batchNo: null,
         },
         deliveryItems: input.items.map((item, idx) => ({
+          sampleTopUpQuantity: new Prisma.Decimal(0),
           id: item.id ?? uid(5500 + idx),
           ingredientId: item.ingredientId,
           ingredientEntryId: item.ingredientEntryId,
@@ -2182,6 +2334,7 @@ void test("US2 creates STANDALONE delivery for both supplier roles, links only e
         const deliverySeqIndex = createdPayloads.length;
         createdPayloads.push(input);
         return Promise.resolve({
+          preparationStage: null,
           id: deliverySeqIndex === 0 ? deliveryId : uid(900 + deliverySeqIndex),
           deliveryNo: input.deliveryNo,
           creationMode: input.creationMode,
@@ -2203,6 +2356,7 @@ void test("US2 creates STANDALONE delivery for both supplier roles, links only e
           School: { name: "Tiểu học Hoa Mai" },
           SupplyRequest: null,
           deliveryItems: input.items.map((item, idx) => ({
+            sampleTopUpQuantity: new Prisma.Decimal(0),
             id: uid(600 + idx),
             ingredientId: item.ingredientId,
             ingredientEntryId: item.ingredientEntryId,
@@ -2954,6 +3108,7 @@ void test("US4 source-facility options and labels endpoints enforce scope, snaps
   ];
   const labelItemRows = [
     {
+      sampleTopUpQuantity: new Prisma.Decimal(0),
       id: uid(910),
       deliveryId,
       sourceFacilityId,
@@ -2966,6 +3121,7 @@ void test("US4 source-facility options and labels endpoints enforce scope, snaps
       Ingredient: { name: "Gạo ST25 Đã Đổi Tên" },
     },
     {
+      sampleTopUpQuantity: new Prisma.Decimal(0),
       id: uid(911),
       deliveryId,
       sourceFacilityId: sourceFacilityIdNullCode,
@@ -3378,6 +3534,7 @@ void test("US3 idempotent replay returns 200 without re-creating, checks live ac
     createDeliveryWithItems: (_db, input) => {
       createCalls += 1;
       const record: SupplierOrderDetailRecord = {
+        preparationStage: null,
         id: deliveryId,
         deliveryNo: input.deliveryNo,
         creationMode: input.creationMode,
@@ -3399,6 +3556,7 @@ void test("US3 idempotent replay returns 200 without re-creating, checks live ac
         School: { name: "Tiểu học Hoa Mai" },
         SupplyRequest: null,
         deliveryItems: input.items.map((item, idx) => ({
+          sampleTopUpQuantity: new Prisma.Decimal(0),
           id: uid(700 + idx),
           ingredientId: item.ingredientId,
           ingredientEntryId: item.ingredientEntryId,
@@ -3554,6 +3712,7 @@ void test("US3 idempotent replay returns 200 without re-creating, checks live ac
 void test("US3 lists, filters legacy+standalone deliveries, returns detail and enforces foreign 404 & HTTP replay statuses", async (context) => {
   const now = new Date("2026-11-15T04:00:00Z");
   const legacyRecord = {
+    preparationStage: null,
     id: deliveryId,
     deliveryNo: "DG-LEGACY-1",
     creationMode: null,
@@ -3581,6 +3740,7 @@ void test("US3 lists, filters legacy+standalone deliveries, returns detail and e
     },
   };
   const standaloneRecord: SupplierOrderDetailRecord = {
+    preparationStage: null,
     id: uid(199),
     deliveryNo: "DG-STD-2",
     creationMode: "STANDALONE",
@@ -3603,6 +3763,7 @@ void test("US3 lists, filters legacy+standalone deliveries, returns detail and e
     SupplyRequest: null,
     deliveryItems: [
       {
+        sampleTopUpQuantity: new Prisma.Decimal(0),
         id: uid(801),
         ingredientId,
         ingredientEntryId: null,
@@ -3710,6 +3871,7 @@ void test("US3 lists, filters legacy+standalone deliveries, returns detail and e
         creationFingerprint: input.creationFingerprint,
         createdByUserId: input.createdByUserId,
         deliveryItems: input.items.map((item, idx) => ({
+          sampleTopUpQuantity: new Prisma.Decimal(0),
           id: uid(850 + idx),
           ingredientId: item.ingredientId,
           ingredientEntryId: item.ingredientEntryId,
@@ -3855,6 +4017,7 @@ void test("US3 read matrix covers supplier roles with view-or-manage permission,
 
   const records: SupplierOrderDetailRecord[] = [
     {
+      preparationStage: null,
       id: v1StandaloneDeliveryId,
       deliveryNo: "FP-DE-00001",
       creationMode: "STANDALONE",
@@ -3877,6 +4040,7 @@ void test("US3 read matrix covers supplier roles with view-or-manage permission,
       SupplyRequest: null,
       deliveryItems: [
         {
+          sampleTopUpQuantity: new Prisma.Decimal(0),
           id: uid(9910),
           ingredientId,
           ingredientEntryId: null,
@@ -3895,6 +4059,7 @@ void test("US3 read matrix covers supplier roles with view-or-manage permission,
       ],
     },
     {
+      preparationStage: null,
       id: legacyReqDeliveryId,
       deliveryNo: "DG-LEGACY-99",
       creationMode: null,
@@ -3922,6 +4087,7 @@ void test("US3 read matrix covers supplier roles with view-or-manage permission,
       },
       deliveryItems: [
         {
+          sampleTopUpQuantity: new Prisma.Decimal(0),
           id: uid(9911),
           ingredientId,
           ingredientEntryId: entryId,
@@ -3939,6 +4105,7 @@ void test("US3 read matrix covers supplier roles with view-or-manage permission,
       ],
     },
     {
+      preparationStage: null,
       id: otherSupplierSameNoId,
       deliveryNo: "FP-DE-00001",
       creationMode: "STANDALONE",
@@ -4282,6 +4449,7 @@ void test("US3 canonical v2 equivalence, field-level conflict matrix, legacy bas
       if (!found) return Promise.resolve([]);
       return Promise.resolve(
         found.deliveryItems.map((item) => ({
+          sampleTopUpQuantity: new Prisma.Decimal(0),
           id: item.id,
           deliveryId: cmd.deliveryId,
           ingredientId: item.ingredientId,
@@ -4301,6 +4469,7 @@ void test("US3 canonical v2 equivalence, field-level conflict matrix, legacy bas
       seq += 1n;
       const now = new Date("2026-11-15T04:00:00Z");
       const record: SupplierOrderDetailRecord = {
+        preparationStage: null,
         id: uid(9950 + Number(seq)),
         deliveryNo: input.deliveryNo,
         creationMode: input.creationMode,
@@ -4329,6 +4498,7 @@ void test("US3 canonical v2 equivalence, field-level conflict matrix, legacy bas
             }
           : null,
         deliveryItems: input.items.map((item, idx) => ({
+          sampleTopUpQuantity: new Prisma.Decimal(0),
           id: uid(9970 + idx + Number(seq) * 10),
           ingredientId: item.ingredientId,
           ingredientEntryId: item.ingredientEntryId,
@@ -4615,6 +4785,7 @@ void test("US3 canonical v2 equivalence, field-level conflict matrix, legacy bas
 
   const legacyKey = uid(9983);
   const legacyBaselineRow: SupplierOrderDetailRecord = {
+    preparationStage: null,
     id: uid(9984),
     deliveryNo: "DG-BASELINE-1",
     creationMode: "STANDALONE",
@@ -4759,6 +4930,7 @@ void test("US6 HTTP contract enforces dispatch strict validation, mount order, m
     "delivery.manage",
   ]);
   const storedRow: SupplierOrderDetailRecord = {
+    preparationStage: null,
     id: deliveryId,
     deliveryNo: "FP-DE-00777",
     creationMode: "STANDALONE",
@@ -4781,6 +4953,7 @@ void test("US6 HTTP contract enforces dispatch strict validation, mount order, m
     SupplyRequest: null,
     deliveryItems: [
       {
+        sampleTopUpQuantity: new Prisma.Decimal(0),
         id: uid(7703),
         ingredientId: uid(7704),
         ingredientNameSnapshot: "Gạo tám",
@@ -5119,6 +5292,7 @@ void test("US6 dispatch service handles continuation policy, all-state replay/40
   const makeRow = (
     overrides: Partial<SupplierOrderDetailRecord> = {},
   ): SupplierOrderDetailRecord => ({
+    preparationStage: null,
     id: uid(7802),
     deliveryNo: "FP-DE-00888",
     creationMode: "REQUEST",
@@ -5146,6 +5320,7 @@ void test("US6 dispatch service handles continuation policy, all-state replay/40
     },
     deliveryItems: [
       {
+        sampleTopUpQuantity: new Prisma.Decimal(0),
         id: uid(7804),
         ingredientId: uid(7805),
         ingredientNameSnapshot: "Thịt gà",
@@ -5682,6 +5857,7 @@ void test("US4 labels support PREPARING 6A+4B multi-source items with distinct U
       capturedLabelOrderBy = cmd;
       return Promise.resolve([
         {
+          sampleTopUpQuantity: new Prisma.Decimal(0),
           id: itemAId,
           deliveryId,
           sourceFacilityId: facilityA,
@@ -5694,6 +5870,7 @@ void test("US4 labels support PREPARING 6A+4B multi-source items with distinct U
           Ingredient: { name: "Thịt gà sạch" },
         },
         {
+          sampleTopUpQuantity: new Prisma.Decimal(0),
           id: itemBId,
           deliveryId,
           sourceFacilityId: facilityB,
@@ -5784,6 +5961,7 @@ void test("US3 management list/detail enforce PREPARING filter, nextAction read/
       vehiclePlate: string | null;
     }> = {},
   ) => ({
+    preparationStage: null,
     id,
     deliveryNo: overrides.deliveryNo ?? "FP-DE-00901",
     creationMode:
@@ -5861,6 +6039,7 @@ void test("US3 management list/detail enforce PREPARING filter, nextAction read/
     creationFingerprint: "v3:secret-fingerprint",
     deliveryItems: [
       {
+        sampleTopUpQuantity: new Prisma.Decimal(0),
         id: itemAId,
         ingredientId,
         ingredientEntryId: entryId,
@@ -5876,6 +6055,7 @@ void test("US3 management list/detail enforce PREPARING filter, nextAction read/
         Ingredient: { name: "Gạo ST25" },
       },
       {
+        sampleTopUpQuantity: new Prisma.Decimal(0),
         id: itemBId,
         ingredientId,
         ingredientEntryId: entryId,

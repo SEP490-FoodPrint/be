@@ -62,6 +62,7 @@ export interface DeliveryInspectionDTO {
     ingredientName: string;
     category: string | null;
     actualQuantity: string;
+    sampleTopUpQuantity?: string;
     unit: string;
     sourceFacility: {
       id: string | null;
@@ -106,6 +107,7 @@ export interface DeliveryApprovalItemDTO {
 export interface DeliveryItemSummaryDTO {
   id: string;
   actualQuantity: string;
+  sampleTopUpQuantity?: string;
   unit: string;
   note: string | null;
   requestedQuantity: string | null;

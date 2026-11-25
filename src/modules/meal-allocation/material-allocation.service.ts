@@ -268,57 +268,61 @@ export function buildMaterialPlan(
       .map((a) => a.dailyMealPortionId),
   );
   const sources: MaterialSource[] = batches.flatMap((batch) =>
-    batch.cookingBatchLots.map((lot) => {
-      const ingredientId =
-        lot.IngredientLot.DeliveryItem.IngredientEntry?.ingredientId ??
-        lot.IngredientLot.DeliveryItem.SupplyRequestItem?.IngredientEntry
-          ?.ingredientId;
-      if (!ingredientId)
-        throw new HttpError(
-          409,
-          "Nguồn nguyên liệu chưa xác định được danh mục",
+    batch.cookingBatchLots
+      .filter((lot) => new Prisma.Decimal(lot.quantityUsed).gt(0))
+      .map((lot) => {
+        const ingredientId =
+          lot.IngredientLot.DeliveryItem.IngredientEntry?.ingredientId ??
+          lot.IngredientLot.DeliveryItem.SupplyRequestItem?.IngredientEntry
+            ?.ingredientId;
+        if (!ingredientId)
+          throw new HttpError(
+            409,
+            "Nguồn nguyên liệu chưa xác định được danh mục",
+          );
+        // Lô trừ kho theo lượng sống; phân bổ cho lớp theo thành phẩm = sống × (1 − tỷ lệ hao hụt hiện tại).
+        const wasteRate =
+          lot.IngredientLot.DeliveryItem.IngredientEntry?.wasteRate ??
+          lot.IngredientLot.DeliveryItem.SupplyRequestItem?.IngredientEntry
+            ?.wasteRate ??
+          0;
+        const normalized = canonicalAmount(
+          netFromGross(lot.quantityUsed, wasteRate).toString(),
+          lot.unit,
         );
-      // Lô trừ kho theo lượng sống; phân bổ cho lớp theo thành phẩm = sống × (1 − tỷ lệ hao hụt hiện tại).
-      const wasteRate =
-        lot.IngredientLot.DeliveryItem.IngredientEntry?.wasteRate ??
-        lot.IngredientLot.DeliveryItem.SupplyRequestItem?.IngredientEntry
-          ?.wasteRate ??
-        0;
-      const normalized = canonicalAmount(
-        netFromGross(lot.quantityUsed, wasteRate).toString(),
-        lot.unit,
-      );
-      const used = locked
-        .flatMap((a) => a.mealAllocationBatches)
-        .flatMap((row) => row.materials)
-        .filter(
-          (m) =>
-            m.cookingBatchId === batch.id &&
-            m.dishId === lot.dishId &&
-            m.ingredientLotId === lot.ingredientLotId,
+        const used = locked
+          .flatMap((a) => a.mealAllocationBatches)
+          .flatMap((row) => row.materials)
+          .filter(
+            (m) =>
+              m.cookingBatchId === batch.id &&
+              m.dishId === lot.dishId &&
+              m.ingredientLotId === lot.ingredientLotId,
+          )
+          .reduce(
+            (sum, m) =>
+              sum.add(canonicalAmount(m.quantity.toString(), m.unit).quantity),
+            new Prisma.Decimal(0),
+          );
+        // Lượng đã cấp không thể vượt lượng sống của lô. Nếu trường tăng tỷ lệ hao hụt sau khi đã
+        // khóa phân bổ, thành phẩm còn lại chỉ về 0 chứ không coi là lỗi lịch sử.
+        if (
+          canonicalAmount(lot.quantityUsed.toString(), lot.unit).quantity.lt(
+            used,
+          )
         )
-        .reduce(
-          (sum, m) =>
-            sum.add(canonicalAmount(m.quantity.toString(), m.unit).quantity),
-          new Prisma.Decimal(0),
-        );
-      // Lượng đã cấp không thể vượt lượng sống của lô. Nếu trường tăng tỷ lệ hao hụt sau khi đã
-      // khóa phân bổ, thành phẩm còn lại chỉ về 0 chứ không coi là lỗi lịch sử.
-      if (
-        canonicalAmount(lot.quantityUsed.toString(), lot.unit).quantity.lt(used)
-      )
-        throw new HttpError(409, "Lịch sử cấp vượt nguồn nguyên liệu");
-      const remaining = Prisma.Decimal.max(0, normalized.quantity.sub(used));
-      return {
-        batchId: batch.id,
-        ingredientName: lot.IngredientLot.DeliveryItem.Ingredient?.name,
-        dishId: lot.dishId,
-        ingredientLotId: lot.ingredientLotId,
-        ingredientId,
-        quantity: remaining.toString(),
-        unit: normalized.unit,
-      };
-    }),
+          throw new HttpError(409, "Lịch sử cấp vượt nguồn nguyên liệu");
+        const remaining = Prisma.Decimal.max(0, normalized.quantity.sub(used));
+        return {
+          batchId: batch.id,
+          ingredientName: lot.IngredientLot.DeliveryItem.Ingredient?.name,
+          dishId: lot.dishId,
+          ingredientLotId: lot.ingredientLotId,
+          ingredientId,
+          quantity: remaining.toString(),
+          unit: normalized.unit,
+        };
+      }),
   );
   const demands: MaterialDemand[] = [];
   const ordered = [...day.demands].sort((a, b) => {

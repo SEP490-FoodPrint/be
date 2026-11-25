@@ -4666,6 +4666,65 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   );
 
   await context.test(
+    "supply round approval isolates schools and rejects a stale version",
+    async () => {
+      const warehouse = await user("INGREDIENT_MANAGEMENT_DEPARTMENT", {
+        schoolId: schoolA.id,
+      });
+      const otherWarehouse = await user("INGREDIENT_MANAGEMENT_DEPARTMENT", {
+        schoolId: schoolB.id,
+      });
+      for (const account of [warehouse, otherWarehouse]) {
+        const session = await authSessions.issue(account.id);
+        issued.set(account.id, session);
+        refreshTokens.push(session.refreshToken);
+      }
+
+      const round = await db.supplyRound.create({
+        data: {
+          schoolId: schoolA.id,
+          deliveryDate: new Date("2027-02-08T00:00:00.000Z"),
+          batchNo: 1,
+          status: "IN_REVIEW",
+        },
+      });
+      const dish = await db.dish.create({
+        data: {
+          schoolId: schoolA.id,
+          name: "Món kiểm thử duyệt kế hoạch mẻ",
+          standardQuantity: 100,
+          standardUnit: "g",
+        },
+      });
+      const planVersion = "a".repeat(32);
+      const key = { supplyRoundId: round.id, dishId: dish.id };
+      await db.supplyRoundDishPlan.create({
+        data: { ...key, status: "PENDING_WAREHOUSE", planVersion },
+      });
+      const route = `/api/supply-rounds/${round.id}/dishes/${dish.id}/approve`;
+      assert.equal(
+        (await request(route, otherWarehouse.id, "POST", { planVersion }))
+          .status,
+        404,
+      );
+      assert.equal(
+        (
+          await request(route, warehouse.id, "POST", {
+            planVersion: "b".repeat(32),
+          })
+        ).status,
+        409,
+      );
+      const plan = await db.supplyRoundDishPlan.findUniqueOrThrow({
+        where: { supplyRoundId_dishId: key },
+      });
+      assert.equal(plan.status, "PENDING_WAREHOUSE");
+      assert.equal(plan.planVersion, planVersion);
+      assert.equal(plan.approvedByUserId, null);
+    },
+  );
+
+  await context.test(
     "school grades are isolated and can be detached from historical classes",
     async () => {
       const route = "/api/school-grades";

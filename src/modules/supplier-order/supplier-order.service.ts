@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { supplyRoundService } from "../supply-round/supply-round.service";
 import { readPublicTraceOrigin } from "../../config/env";
 import { Prisma } from "../../generated/prisma/client";
 import {
@@ -13,6 +14,7 @@ import {
   resolveSupplierDeliveryNextAction,
 } from "../../utils/delivery-status";
 import { HttpError } from "../../utils/http-error";
+import { convertQuantity } from "../../utils/quantity-conversion";
 import { listWindow, readListPage } from "../../utils/list-query";
 import {
   buildDeliveryTraceUrl,
@@ -30,6 +32,7 @@ import {
 import { createIntakeAccessService } from "../account-lifecycle/intake-access.service";
 import {
   supplierOrderRepository,
+  supplierTopUpRepository,
   type SupplierOrderDb,
   type SupplierOrderDetailRecord,
   type SupplierOrderIngredientOptionRecord,
@@ -45,6 +48,7 @@ import type {
   CreateSupplierOrderRequestDTO,
   DispatchSupplierOrderBodyDTO,
   SupplierOrderDetailParamsDTO,
+  SupplierTopUpDTO,
   SupplierOrderLabelsQueryDTO,
   SupplierOrderListQueryDTO,
   SupplierOrderOptionsQueryDTO,
@@ -127,6 +131,9 @@ function mapSupplierOrderItem(
         : null,
     traceUrl: item.qrUrl ?? null,
     actualQuantity: item.actualQuantity.toString(),
+    ...(item.sampleTopUpQuantity?.gt(0)
+      ? { sampleTopUpQuantity: item.sampleTopUpQuantity.toString() }
+      : {}),
     unit: item.unit,
     note: item.note,
   };
@@ -157,6 +164,7 @@ function mapSupplierOrderSummary(
     orderType: row.SupplyRequest?.orderType ?? null,
     batchNo: row.SupplyRequest?.batchNo ?? null,
     status: row.status,
+    ...(row.preparationStage ? { preparationStage: row.preparationStage } : {}),
     statusLabel: getDeliveryStatusLabel(row.status),
     expectedArrivalAt: row.expectedArrivalAt?.toISOString() ?? null,
     arrivedAt: row.arrivedAt?.toISOString() ?? null,
@@ -177,6 +185,30 @@ function mapSupplierOrderDetail(
     ...mapSupplierOrderSummary(row, principal),
     items: row.deliveryItems.map(mapSupplierOrderItem),
   };
+}
+
+type TopUpLot = Awaited<
+  ReturnType<typeof supplierTopUpRepository.lots>
+>[number];
+
+function plannedTopUp(lot: TopUpLot) {
+  return lot.cookingBatchLots.reduce(
+    (total, line) =>
+      total.add(convertQuantity(line.sampleQuantity ?? 0, line.unit, lot.unit)),
+    new Prisma.Decimal(0),
+  );
+}
+
+function topUpFingerprint(
+  lots: { ingredientLotId: string; sampleTopUpQuantity: string }[],
+) {
+  const canonical = lots
+    .map(({ ingredientLotId, sampleTopUpQuantity }) => [
+      ingredientLotId,
+      canonicalDecimalString(sampleTopUpQuantity),
+    ])
+    .sort(([left], [right]) => left.localeCompare(right));
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
 
 function mapSchoolOption(
@@ -623,6 +655,24 @@ export function createSupplierOrderService(
     if (await repository.hasDeliveryForRequest(tx, requestRow.id)) {
       throw new HttpError(409, "Yêu cầu cung ứng này đã có đợt giao");
     }
+    if (body.replacesDeliveryId && repository.findReplacementTarget) {
+      const target = await repository.findReplacementTarget(
+        tx,
+        body.replacesDeliveryId,
+      );
+      if (
+        !target ||
+        target.creationMode !== "REQUEST" ||
+        target.supplyRequestId !== requestRow.id ||
+        target.status !== "REJECTED" ||
+        target.alreadyReplaced
+      ) {
+        throw new HttpError(
+          409,
+          "Chuyến giao được thay thế không hợp lệ hoặc đã được giao lại",
+        );
+      }
+    }
     if (requestRow.supplyRequestItems.length === 0) {
       throw new HttpError(
         409,
@@ -714,9 +764,15 @@ export function createSupplierOrderService(
       creationFingerprint: fingerprint,
       traceabilityVersion: 1,
       workflowVersion: 2,
+      ...(requestRow.orderType === "DIRECT_USE" &&
+      (requestRow.batchNo === 1 || requestRow.batchNo === 2) &&
+      requestRow.requestedDeliveryDate
+        ? { preparationStage: "LOTS_DECLARED" as const }
+        : {}),
       schoolId: requestRow.schoolId,
       supplierId: liveScope.supplierId,
       supplyRequestId: requestRow.id,
+      replacesDeliveryId: body.replacesDeliveryId ?? null,
       createdByUserId: actor.id,
       expectedArrivalAt: null,
       vehiclePlate: null,
@@ -921,7 +977,7 @@ export function createSupplierOrderService(
       );
 
       try {
-        return await transaction(async (tx) => {
+        const result = await transaction(async (tx) => {
           const existing = await repository.findByCreationKey(
             tx,
             scope.supplierId,
@@ -953,6 +1009,21 @@ export function createSupplierOrderService(
             candidates,
           );
         });
+        if (
+          result.orderType === "DIRECT_USE" &&
+          (result.batchNo === 1 || result.batchNo === 2) &&
+          repository === supplierOrderRepository
+        ) {
+          try {
+            await supplyRoundService.onLotsDeclared(result.id);
+          } catch (error) {
+            console.warn("Supply round hook could not reconcile declaration", {
+              deliveryId: result.id,
+              name: error instanceof Error ? error.name : "unknown",
+            });
+          }
+        }
+        return result;
       } catch (error) {
         if (!isUniqueConstraintError(error)) throw error;
         const resolved = await databaseOperation(async () => {
@@ -976,6 +1047,7 @@ export function createSupplierOrderService(
         const constraint = getUniqueConstraintName(error);
         if (
           constraint === "uq_deliveries_request_mode" ||
+          constraint === "uq_deliveries_request_active" ||
           (canonicalBody.sourceType === "REQUEST" && !constraint)
         ) {
           throw new HttpError(409, "Yêu cầu cung ứng này đã có đợt giao");
@@ -1163,7 +1235,106 @@ export function createSupplierOrderService(
           "Không tìm thấy đơn giao hàng thuộc nhà cung cấp",
         );
       }
-      return mapSupplierOrderDetail(row, principal);
+      const detail = mapSupplierOrderDetail(row, principal);
+      if (row.preparationStage === "TOP_UP_PENDING") {
+        const lots = await supplierTopUpRepository.lots(
+          await repository.connect(),
+          params.id,
+          scope,
+        );
+        detail.topUpLots = lots.flatMap((lot) => {
+          const quantity = plannedTopUp(lot);
+          return quantity.gt(0)
+            ? [
+                {
+                  ingredientLotId: lot.id,
+                  lotCode: lot.lotCode,
+                  unit: lot.unit,
+                  sampleTopUpQuantity: quantity.toString(),
+                },
+              ]
+            : [];
+        });
+      }
+      return detail;
+    },
+
+    async confirmTopUp(
+      params: SupplierOrderDetailParamsDTO,
+      body: SupplierTopUpDTO,
+      principal: AuthPrincipal,
+    ) {
+      supplierOrderManagementScope(principal);
+      return transaction(async (tx) => {
+        const continuation = await assertDeliveryContinuation(tx, principal, {
+          deliveryId: params.id,
+          requiredPermission: "delivery.manage",
+          isReplay: () => false,
+        });
+        const scope = supplierOrderManagementScope(continuation.actor);
+        const delivery = await supplierTopUpRepository.findDelivery(
+          tx,
+          params.id,
+          scope,
+        );
+        if (!delivery) throw new HttpError(404, "Không tìm thấy chuyến giao");
+        const confirmed = delivery.topUpConfirmedAt !== null;
+        if (
+          !confirmed &&
+          (delivery.status !== "PREPARING" ||
+            delivery.preparationStage !== "TOP_UP_PENDING")
+        )
+          throw new HttpError(409, "Chuyến chưa chờ xác nhận lấy thêm");
+        const lots = await supplierTopUpRepository.lots(tx, params.id, scope);
+        const expected = lots
+          .map((lot) => ({
+            lot,
+            quantity: confirmed ? lot.sampleTopUpQuantity : plannedTopUp(lot),
+          }))
+          .filter(({ quantity }) => quantity.gt(0));
+        const expectedFingerprint = topUpFingerprint(
+          expected.map(({ lot, quantity }) => ({
+            ingredientLotId: lot.id,
+            sampleTopUpQuantity: quantity.toString(),
+          })),
+        );
+        if (topUpFingerprint(body.lots) !== expectedFingerprint)
+          throw new HttpError(
+            409,
+            "Phần lấy thêm không khớp với kế hoạch đã duyệt",
+          );
+        if (!confirmed) {
+          for (const { lot, quantity } of expected) {
+            const { id, supplyRequestItemId, unit } = lot.DeliveryItem;
+            if (
+              !supplyRequestItemId ||
+              lot.status !== "BLOCKED" ||
+              lot.unit !== unit
+            )
+              throw new HttpError(409, "Lô lấy thêm không hợp lệ");
+            await supplierTopUpRepository.confirmLot(
+              tx,
+              lot.id,
+              id,
+              supplyRequestItemId,
+              quantity,
+            );
+          }
+          await supplierTopUpRepository.confirm(
+            tx,
+            params.id,
+            continuation.actor.id,
+            now(),
+          );
+        }
+        const row = await repository.findManagementDeliveryById(
+          tx,
+          scope,
+          params.id,
+        );
+        if (!row) throw new HttpError(404, "Không tìm thấy chuyến giao");
+        return mapSupplierOrderDetail(row, continuation.actor);
+      });
     },
 
     async dispatch(

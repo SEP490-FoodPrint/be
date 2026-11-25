@@ -50,12 +50,14 @@ export const foodSampleSchema = z
         (value) =>
           /^(?:0|[1-9]\d{0,8})(?:\.\d{1,3})?$/.test(value) && Number(value) > 0,
         { error: "Lượng mẫu phải dương, tối đa 3 chữ số thập phân" },
-      ),
+      )
+      .optional(),
     unit: requiredText(30)
       .toLowerCase()
       .refine((value) => ["g", "ml"].includes(value), {
         error: "Đơn vị mẫu lưu phải là g hoặc ml",
-      }),
+      })
+      .optional(),
     /** Tủ lưu mẫu của trường (bắt buộc); hệ thống kiểm tra trạng thái và sức chứa. */
     storageUnitId: requestUuidSchema,
     /** Ngăn đã khai báo của tủ; số ngăn tối đa được kiểm tra theo tủ trong service. */
@@ -65,6 +67,17 @@ export const foodSampleSchema = z
     sampledAt: timestampSchema,
   })
   .superRefine((sample, context) => {
+    const hasQuantity = sample.quantity !== undefined;
+    const hasUnit = sample.unit !== undefined;
+    if (hasQuantity !== hasUnit) {
+      context.addIssue({
+        code: "custom",
+        path: [hasQuantity ? "unit" : "quantity"],
+        message: "Lượng mẫu và đơn vị phải được cung cấp cùng nhau",
+      });
+      return;
+    }
+    if (!hasQuantity || !hasUnit) return;
     const minimum =
       MINIMUM_SAMPLE_QUANTITY[
         sample.unit as keyof typeof MINIMUM_SAMPLE_QUANTITY

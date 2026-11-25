@@ -3,6 +3,7 @@ import { allocateBusinessCode } from "../../utils/business-code";
 import {
   Prisma,
   type DeliveryCreationMode,
+  type DeliveryPreparationStage,
   type DeliveryStatus,
   type PrismaClient,
 } from "../../generated/prisma/client";
@@ -21,6 +22,7 @@ export const supplierOrderSummarySelect = {
   supplierId: true,
   supplyRequestId: true,
   status: true,
+  preparationStage: true,
   expectedArrivalAt: true,
   arrivedAt: true,
   receivedAt: true,
@@ -51,12 +53,88 @@ export const supplierOrderDetailSelect = {
       ingredientNameSnapshot: true,
       qrUrl: true,
       actualQuantity: true,
+      sampleTopUpQuantity: true,
       unit: true,
       note: true,
       Ingredient: { select: { name: true } },
     },
   },
 } satisfies Prisma.DeliverySelect;
+
+export const supplierTopUpRepository = {
+  findDelivery(db: SupplierOrderDb, id: string, scope: SupplierOrderScope) {
+    return db.delivery.findFirst({
+      where: { AND: [scope, { id }] },
+      select: { status: true, preparationStage: true, topUpConfirmedAt: true },
+    });
+  },
+  lots(db: SupplierOrderDb, id: string, scope: SupplierOrderScope) {
+    return db.ingredientLot.findMany({
+      where: { DeliveryItem: { deliveryId: id, Delivery: scope } },
+      orderBy: { id: "asc" },
+      select: {
+        id: true,
+        lotCode: true,
+        unit: true,
+        status: true,
+        sampleTopUpQuantity: true,
+        DeliveryItem: {
+          select: {
+            id: true,
+            supplyRequestItemId: true,
+            unit: true,
+            ingredientNameSnapshot: true,
+          },
+        },
+        cookingBatchLots: {
+          where: {
+            sampleQuantity: { gt: 0 },
+            CookingBatch: {
+              status: { in: ["ROUND1_APPROVED", "ROUND2_APPROVED"] },
+            },
+          },
+          select: { unit: true, sampleQuantity: true },
+        },
+      },
+    });
+  },
+  async confirmLot(
+    db: SupplierOrderDb,
+    lotId: string,
+    itemId: string,
+    requestItemId: string,
+    quantity: Prisma.Decimal,
+  ) {
+    await db.ingredientLot.update({
+      where: { id: lotId },
+      data: {
+        sampleTopUpQuantity: { increment: quantity },
+        receivedQuantity: { increment: quantity },
+      },
+    });
+    await db.deliveryItem.update({
+      where: { id: itemId },
+      data: {
+        sampleTopUpQuantity: { increment: quantity },
+        actualQuantity: { increment: quantity },
+      },
+    });
+    await db.supplyRequestItem.update({
+      where: { id: requestItemId },
+      data: { sampleTopUpQuantity: { increment: quantity } },
+    });
+  },
+  confirm(db: SupplierOrderDb, id: string, actorId: string, confirmedAt: Date) {
+    return db.delivery.update({
+      where: { id },
+      data: {
+        preparationStage: "READY_TO_DISPATCH",
+        topUpConfirmedByUserId: actorId,
+        topUpConfirmedAt: confirmedAt,
+      },
+    });
+  },
+};
 
 export const supplierOrderSourceFacilityOptionSelect = {
   id: true,
@@ -99,6 +177,9 @@ export const supplierOrderSupplyRequestSelect = {
   schoolId: true,
   supplierId: true,
   status: true,
+  orderType: true,
+  batchNo: true,
+  requestedDeliveryDate: true,
   School: { select: { name: true } },
   supplyRequestItems: {
     orderBy: [{ id: "asc" as const }],
@@ -222,9 +303,11 @@ export interface SupplierOrderCreateDeliveryInput {
   creationFingerprint: string;
   traceabilityVersion: number | null;
   workflowVersion?: number | null;
+  preparationStage?: DeliveryPreparationStage;
   schoolId: string;
   supplierId: string;
   supplyRequestId: string | null;
+  replacesDeliveryId?: string | null;
   createdByUserId: string;
   expectedArrivalAt: Date | null;
   vehiclePlate: string | null;
@@ -289,6 +372,16 @@ export interface SupplierOrderRepository {
     db: SupplierOrderDb,
     supplyRequestId: string,
   ): Promise<boolean>;
+  findReplacementTarget?(
+    db: SupplierOrderDb,
+    deliveryId: string,
+  ): Promise<{
+    id: string;
+    status: DeliveryStatus;
+    creationMode: DeliveryCreationMode | null;
+    supplyRequestId: string | null;
+    alreadyReplaced: boolean;
+  } | null>;
   /** Cấp mã chuyến giao mới FP-DE-NNNNN (hậu tố Feistel) trong transaction tạo chuyến giao. */
   allocateDeliveryNo(db: Prisma.TransactionClient): Promise<string>;
   lockSourceFacilities(
@@ -374,10 +467,39 @@ export const supplierOrderRepository: SupplierOrderRepository = {
 
   async hasDeliveryForRequest(db, supplyRequestId) {
     const existing = await db.delivery.findFirst({
-      where: { supplyRequestId },
+      where: {
+        supplyRequestId,
+        status: { notIn: ["REJECTED", "CANCELLED"] },
+      },
       select: { id: true },
     });
     return existing !== null;
+  },
+
+  async findReplacementTarget(db, deliveryId) {
+    const [target, replacement] = await Promise.all([
+      db.delivery.findUnique({
+        where: { id: deliveryId },
+        select: {
+          id: true,
+          status: true,
+          creationMode: true,
+          supplyRequestId: true,
+        },
+      }),
+      db.delivery.findFirst({
+        where: {
+          replacesDeliveryId: deliveryId,
+          status: { not: "CANCELLED" },
+        },
+        select: { id: true },
+      }),
+    ]);
+    if (!target) return null;
+    return {
+      ...target,
+      alreadyReplaced: replacement !== null,
+    };
   },
 
   allocateDeliveryNo(db) {
@@ -419,9 +541,11 @@ export const supplierOrderRepository: SupplierOrderRepository = {
         creationFingerprint: input.creationFingerprint,
         traceabilityVersion: input.traceabilityVersion,
         workflowVersion: input.workflowVersion ?? null,
+        preparationStage: input.preparationStage,
         schoolId: input.schoolId,
         supplierId: input.supplierId,
         supplyRequestId: input.supplyRequestId,
+        replacesDeliveryId: input.replacesDeliveryId ?? null,
         createdByUserId: input.createdByUserId,
         expectedArrivalAt: input.expectedArrivalAt,
         vehiclePlate: input.vehiclePlate,
@@ -618,6 +742,10 @@ export const supplierOrderRepository: SupplierOrderRepository = {
             status: "PREPARING",
             expectedArrivalAt: null,
             vehiclePlate: null,
+            OR: [
+              { preparationStage: null },
+              { preparationStage: "READY_TO_DISPATCH" },
+            ],
           },
         ],
       },

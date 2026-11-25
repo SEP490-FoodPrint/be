@@ -7,11 +7,15 @@ export type Tx = Prisma.TransactionClient;
 export const kitchenDetailSelect = {
   id: true,
   batchGroupId: true,
-  BatchGroup: { select: { id: true, batchCode: true } },
+  BatchGroup: { select: { id: true, batchCode: true, supplyRoundId: true } },
   dishes: {
     select: {
       dishId: true,
       plannedPortions: true,
+      sampleQuantity: true,
+      sampleUnit: true,
+      sampleRatio: true,
+      standardQuantitySnapshot: true,
       Dish: { select: { name: true } },
     },
     orderBy: { dishId: "asc" },
@@ -36,6 +40,7 @@ export const kitchenDetailSelect = {
       dishId: true,
       ingredientLotId: true,
       quantityUsed: true,
+      sampleQuantity: true,
       unit: true,
       IngredientLot: {
         select: {
@@ -101,11 +106,15 @@ export const kitchenListSelect = {
 export const kitchenSummarySelect = {
   id: true,
   batchGroupId: true,
-  BatchGroup: { select: { id: true, batchCode: true } },
+  BatchGroup: kitchenDetailSelect.BatchGroup,
   dishes: {
     select: {
       dishId: true,
       plannedPortions: true,
+      sampleQuantity: true,
+      sampleUnit: true,
+      sampleRatio: true,
+      standardQuantitySnapshot: true,
       Dish: { select: { name: true } },
     },
     orderBy: { dishId: "asc" },
@@ -159,7 +168,9 @@ interface KitchenFilterValues {
   startDate?: Date;
   endDate?: Date;
   mealType?: "LUNCH" | "AFTERNOON";
-  status?: "UNCONFIRMED" | "CONFIRMED" | "COMPLETED";
+  status?: NonNullable<
+    Extract<Prisma.CookingBatchWhereInput["status"], string>
+  >;
   menuDayId?: string;
   dishId?: string;
   cookingModeApplied?: "COMBINE_LOTS" | "SEPARATE_BY_LOT";
@@ -298,7 +309,7 @@ export const kitchenRepository = {
     meal: { menuDayId: string; mealType: "LUNCH" | "AFTERNOON" },
   ) {
     return client.cookingBatchDish.findMany({
-      where: { CookingBatch: meal },
+      where: { CookingBatch: { ...meal, status: { not: "CANCELLED" } } },
       select: {
         dishId: true,
         plannedPortions: true,
@@ -379,7 +390,15 @@ export const kitchenRepository = {
   ) {
     return client.cookingBatch.findMany({
       where: meal,
-      select: kitchenDetailSelect,
+      select: {
+        ...kitchenDetailSelect,
+        BatchGroup: {
+          select: {
+            ...kitchenDetailSelect.BatchGroup.select,
+            supplyRoundId: true,
+          },
+        },
+      },
       orderBy: { id: "asc" },
     });
   },
@@ -414,6 +433,7 @@ export const kitchenRepository = {
       mealType: "LUNCH" | "AFTERNOON";
       createdByUserId: string;
       batchCode: string;
+      supplyRoundId?: string;
     },
   ) {
     return client.cookingBatchGroup.create({
@@ -428,6 +448,7 @@ export const kitchenRepository = {
       dishId: string;
       ingredientLotId: string;
       quantityUsed: string;
+      sampleQuantity?: string;
       unit: string;
     }[],
   ) {

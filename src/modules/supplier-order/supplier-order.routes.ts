@@ -29,6 +29,7 @@ export function createSupplierOrderRouter(
   router.get("/:id/labels", authHandler, controller.listLabels);
   router.get("/:id", authHandler, controller.detail);
   router.post("/:id/dispatch", authHandler, controller.dispatch);
+  router.post("/:id/top-up", authHandler, controller.confirmTopUp);
   router.post("/", authHandler, controller.create);
 
   return router;

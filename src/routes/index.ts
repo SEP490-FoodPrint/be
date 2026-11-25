@@ -1,4 +1,5 @@
 import { createMeasurementUnitRouter } from "../modules/measurement-unit/measurement-unit.routes";
+import { createSupplyRoundRouter } from "../modules/supply-round/supply-round.routes";
 import { createSupplierStaffRouter } from "../modules/supplier-staff/supplier-staff.routes";
 import { createSupplierSchoolRouter } from "../modules/supplier-school/supplier-school.routes";
 import { createClassSchoolRouter } from "../modules/class/class.routes";
@@ -137,6 +138,7 @@ export function createApiRouter(
   );
   router.use("/ingredient-lots", createWarehouseRouter(undefined, authHandler));
   router.use("/cooking-batches", createKitchenRouter(undefined, authHandler));
+  router.use("/supply-rounds", createSupplyRoundRouter(authHandler));
   router.use(
     "/meal-portions",
     createMealAttendanceRouter(undefined, authHandler),

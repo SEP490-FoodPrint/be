@@ -123,6 +123,26 @@ void test("plan serves scope-local classes, source totals and stable plan identi
     buildMaterialPlan(data, "2026-11-20", input).revision,
   );
 });
+
+void test("retained sample quantities and sample-only lots are excluded from material allocation", () => {
+  const data = fixture();
+  const batch = data.batches[0];
+  const cookingLot = {
+    ...batch.cookingBatchLots[0],
+    sampleQuantity: new Prisma.Decimal(300),
+  };
+  const sampleOnly = {
+    ...cookingLot,
+    ingredientLotId: "sample-only",
+    quantityUsed: new Prisma.Decimal(0),
+  };
+  batch.cookingBatchLots = [cookingLot, sampleOnly];
+  const plan = buildMaterialPlan(data, "2026-11-20", {
+    mealType: "LUNCH",
+    priorityClassIds: [],
+  });
+  assert.equal(plan.groups[0].allocatedMassKg, "3.000000000");
+});
 void test("draft worker solves off the API thread using serialized quantities", async () => {
   const plan = await solveInWorker(fixture(), "2026-11-20", "LUNCH");
   assert.equal(plan.groups[0].allocatedPortions, "50.00");

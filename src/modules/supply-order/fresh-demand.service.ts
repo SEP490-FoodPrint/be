@@ -18,6 +18,7 @@ import {
 import { getPrisma } from "../../utils/database";
 import { HttpError } from "../../utils/http-error";
 import { scaleDishLines } from "../../utils/dish-portion";
+import { batch2Decision } from "../kitchen/sample-planner";
 
 type Tx = Prisma.TransactionClient;
 type MealType = "LUNCH" | "AFTERNOON";
@@ -78,6 +79,14 @@ export type FreshDemandResult = {
   batch1Saved: boolean;
   /** Mọi thực đơn áp dụng trong ngày đều là toàn trường. */
   schoolWide: boolean;
+  batch2NotNeeded?: boolean;
+  surplusByGrade?: { gradeId: string; gradeName: string; surplus: number }[];
+  shortages?: {
+    ingredientEntryId: string;
+    name: string;
+    unit: string;
+    missing: number;
+  }[];
   grades: GradePortion[];
   items: DemandItem[];
 };
@@ -531,26 +540,46 @@ export async function loadFreshDemand(
     recipes,
   });
   if (batchNo === 2) {
-    const carryRows = await tx.supplyBatch1Carryover.findMany({
-      where: { schoolId, deliveryDate: day },
-      select: {
-        ingredientEntryId: true,
-        quantity: true,
-        unit: true,
-        entry: {
-          select: {
-            Ingredient: {
-              select: {
-                id: true,
-                name: true,
-                supplierId: true,
-                Supplier: { select: { name: true } },
+    const [carryRows, round2, decision] = await Promise.all([
+      tx.supplyBatch1Carryover.findMany({
+        where: { schoolId, deliveryDate: day },
+        select: {
+          ingredientEntryId: true,
+          quantity: true,
+          unit: true,
+          entry: {
+            select: {
+              Ingredient: {
+                select: {
+                  id: true,
+                  name: true,
+                  supplierId: true,
+                  Supplier: { select: { name: true } },
+                },
               },
             },
           },
         },
-      },
-    });
+      }),
+      tx.supplyRound.findUnique({
+        where: {
+          schoolId_deliveryDate_batchNo: {
+            schoolId,
+            deliveryDate: day,
+            batchNo: 2,
+          },
+        },
+        select: { status: true },
+      }),
+      evaluateBatch2DecisionFromLoaded(
+        tx,
+        schoolId,
+        day,
+        result.grades,
+        menuInputs,
+        recipes,
+      ),
+    ]);
     result.items = applyCarryOver(
       result.items,
       carryRows.map((r) => ({
@@ -563,12 +592,280 @@ export async function loadFreshDemand(
         quantity: Number(r.quantity),
       })),
     );
+    return {
+      date,
+      schoolWide: menus.every((m) => m.isSchoolWide),
+      batch2NotNeeded: round2?.status === "NOT_NEEDED",
+      surplusByGrade: decision.surplusByGrade,
+      shortages: decision.shortages.map((s) => ({
+        ingredientEntryId: s.ingredientEntryId,
+        name: s.name,
+        unit: s.unit,
+        missing: Number(s.missing.toString()),
+      })),
+      ...result,
+    };
   }
   return {
     date,
     schoolWide: menus.every((m) => m.isSchoolWide),
     ...result,
   };
+}
+
+async function evaluateBatch2DecisionFromLoaded(
+  tx: Tx,
+  schoolId: string,
+  day: Date,
+  grades: GradePortion[],
+  menus: CalcInput["menus"],
+  recipes: CalcInput["recipes"],
+) {
+  const needed = new Map<
+    string,
+    { ingredientEntryId: string; name: string; unit: string; needed: number }
+  >();
+  for (const g of grades) {
+    const actualPortions = g.actualPortions ?? 0;
+    for (const mealType of ["LUNCH", "AFTERNOON"] as const) {
+      const covering = menus.filter(
+        (m) =>
+          (m.isSchoolWide || m.gradeIds.includes(g.gradeId)) &&
+          m.dishes.some((d) => d.mealType === mealType),
+      );
+      if (covering.length !== 1) continue;
+      for (const dish of covering[0].dishes.filter(
+        (d) => d.mealType === mealType,
+      )) {
+        const lines = recipes.get(recipeKey(dish.dishId, g.gradeId)) ?? [];
+        for (const line of lines) {
+          if (line.handlingType !== "DIRECT_USE" || !line.active) continue;
+          const factor = unitFactor(line.unit, line.orderUnit);
+          if (factor === null) continue;
+          const perPortion = mul(
+            grossFromNet(line.requiredQuantity, line.wasteRate ?? 0).toNumber(),
+            factor,
+          );
+          const qty = mul(perPortion, actualPortions);
+          const cur = needed.get(line.ingredientEntryId) ?? {
+            ingredientEntryId: line.ingredientEntryId,
+            name: line.name,
+            unit: line.orderUnit,
+            needed: 0,
+          };
+          cur.needed = add(cur.needed, qty);
+          needed.set(line.ingredientEntryId, cur);
+        }
+      }
+    }
+  }
+  const orderedRows = await tx.supplyRequestItem.findMany({
+    where: {
+      SupplyRequest: {
+        schoolId,
+        requestedDeliveryDate: day,
+        orderType: "DIRECT_USE",
+        batchNo: 1,
+        status: { notIn: ["DRAFT", "CANCELLED"] },
+      },
+    },
+    select: { ingredientEntryId: true, requestedQuantity: true },
+  });
+  const orderedByEntry = new Map<string, number>();
+  for (const row of orderedRows) {
+    orderedByEntry.set(
+      row.ingredientEntryId,
+      add(
+        orderedByEntry.get(row.ingredientEntryId) ?? 0,
+        Number(row.requestedQuantity),
+      ),
+    );
+  }
+  return batch2Decision(
+    grades.map((g) => ({
+      gradeId: g.gradeId,
+      gradeName: g.gradeName,
+      batch1Portions: g.batch1Portions,
+      actualPortions: g.actualPortions ?? 0,
+    })),
+    [...needed.values()].map((item) => ({
+      ...item,
+      ordered: orderedByEntry.get(item.ingredientEntryId) ?? 0,
+    })),
+  );
+}
+
+/** Đánh giá tự động bỏ qua Đợt 2 theo sĩ số thực tế (D30). */
+export async function evaluateBatch2Skip(
+  tx: Tx,
+  schoolId: string,
+  date: string,
+) {
+  const day = dateOnly(date);
+  const [classes, gradeRows, menus, saved] = await Promise.all([
+    tx.class.findMany({
+      where: { schoolId, status: "ACTIVE", registeredMealPortions: { gt: 0 } },
+      select: {
+        gradeId: true,
+        registeredMealPortions: true,
+        dailyMealPortions: {
+          where: { mealDate: day, mealType: "LUNCH", status: "FINALIZED" },
+          select: { totalPortions: true },
+        },
+      },
+    }),
+    tx.schoolGrade.findMany({
+      where: { schoolId },
+      select: { id: true, name: true },
+      orderBy: { name: "asc" },
+    }),
+    tx.weeklyMenu.findMany({
+      where: {
+        schoolId,
+        status: "APPROVED",
+        menuDays: { some: { menuDate: day } },
+      },
+      select: {
+        id: true,
+        title: true,
+        isSchoolWide: true,
+        grades: { select: { gradeId: true } },
+        menuDays: {
+          where: { menuDate: day },
+          select: {
+            menuDayDishes: {
+              select: {
+                dishId: true,
+                mealType: true,
+                Dish: { select: { name: true } },
+              },
+              orderBy: { displayOrder: "asc" },
+            },
+          },
+        },
+      },
+    }),
+    tx.supplyBatch1GradePortion.findMany({
+      where: { schoolId, deliveryDate: day },
+      select: { gradeId: true, portions: true },
+    }),
+  ]);
+  if (!saved.length || classes.some((c) => c.dailyMealPortions.length === 0))
+    return null;
+  const actual = new Map<string, number>();
+  for (const c of classes) {
+    if (!c.gradeId) return null;
+    actual.set(
+      c.gradeId,
+      (actual.get(c.gradeId) ?? 0) +
+        c.dailyMealPortions.reduce((s, p) => s + p.totalPortions, 0),
+    );
+  }
+  const savedMap = new Map(saved.map((s) => [s.gradeId, s.portions]));
+  const activeGrades = gradeRows.filter((g) => savedMap.has(g.id));
+  const menuInputs: CalcInput["menus"] = menus.map((m) => ({
+    id: m.id,
+    title: m.title,
+    isSchoolWide: m.isSchoolWide,
+    gradeIds: m.grades.map((g) => g.gradeId),
+    dishes: m.menuDays.flatMap((md) =>
+      md.menuDayDishes.map((d) => ({
+        dishId: d.dishId,
+        dishName: d.Dish.name,
+        mealType: d.mealType,
+      })),
+    ),
+  }));
+  const dishIds = [
+    ...new Set(menuInputs.flatMap((m) => m.dishes.map((d) => d.dishId))),
+  ];
+  const gradeRecipes = dishIds.length
+    ? await tx.dishGradeRecipe.findMany({
+        where: {
+          dishId: { in: dishIds },
+          gradeId: { in: activeGrades.map((g) => g.id) },
+        },
+        select: {
+          dishId: true,
+          gradeId: true,
+          portionQuantity: true,
+          dish: {
+            select: {
+              standardQuantity: true,
+              dishIngredientEntries: {
+                select: {
+                  ingredientEntryId: true,
+                  ingredientRole: true,
+                  requiredQuantity: true,
+                  unit: true,
+                  IngredientEntry: {
+                    select: {
+                      handlingType: true,
+                      status: true,
+                      wasteRate: true,
+                      Ingredient: {
+                        select: {
+                          id: true,
+                          name: true,
+                          defaultUnit: true,
+                          supplierId: true,
+                          Supplier: { select: { name: true } },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      })
+    : [];
+  const recipes: CalcInput["recipes"] = new Map();
+  for (const recipe of gradeRecipes) {
+    for (const line of scaleDishLines(
+      recipe.dish.standardQuantity,
+      recipe.portionQuantity,
+      recipe.dish.dishIngredientEntries,
+    )) {
+      const key = recipeKey(recipe.dishId, recipe.gradeId);
+      const list = recipes.get(key) ?? [];
+      list.push({
+        ingredientEntryId: line.ingredientEntryId,
+        ingredientId: line.IngredientEntry.Ingredient.id,
+        name: line.IngredientEntry.Ingredient.name,
+        handlingType: line.IngredientEntry.handlingType,
+        active: line.IngredientEntry.status === "ACTIVE",
+        requiredQuantity: Number(line.requiredQuantity),
+        wasteRate: Number(line.IngredientEntry.wasteRate),
+        unit: line.unit,
+        orderUnit: line.IngredientEntry.Ingredient.defaultUnit,
+        supplierId: line.IngredientEntry.Ingredient.supplierId,
+        supplierName: line.IngredientEntry.Ingredient.Supplier.name,
+      });
+      recipes.set(key, list);
+    }
+  }
+  const grades: GradePortion[] = activeGrades.map((g) => {
+    const b1 = savedMap.get(g.id) ?? 0;
+    const act = actual.get(g.id) ?? 0;
+    return {
+      gradeId: g.id,
+      gradeName: g.name,
+      plannedPortions: b1,
+      batch1Portions: b1,
+      actualPortions: act,
+      batchPortions: Math.max(0, act - b1),
+    };
+  });
+  return evaluateBatch2DecisionFromLoaded(
+    tx,
+    schoolId,
+    day,
+    grades,
+    menuInputs,
+    recipes,
+  );
 }
 
 /**

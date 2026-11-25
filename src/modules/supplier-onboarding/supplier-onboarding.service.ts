@@ -1117,6 +1117,18 @@ export function createOrderIntakeService(
               409,
               `Chưa thể tạo yêu cầu nhập hàng Đợt 2: còn ${notFinalized.length} lớp chưa chốt điểm danh (${notFinalized.map((c) => c.name).join(", ")})`,
             );
+          const round2 = await tx.supplyRound.findUnique({
+            where: {
+              schoolId_deliveryDate_batchNo: {
+                schoolId,
+                deliveryDate: body.deliveryDate,
+                batchNo: 2,
+              },
+            },
+            select: { status: true },
+          });
+          if (round2?.status === "NOT_NEEDED")
+            throw new HttpError(409, "Đợt 2 không cần đặt thêm hàng");
         }
         // TASK-08: Đợt 1 lưu mốc suất theo khối (dùng chung cho mọi NCC cùng ngày); Đợt 2 bắt buộc đã có mốc.
         if (body.orderType === "DIRECT_USE" && body.batchNo) {

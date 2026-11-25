@@ -7,6 +7,8 @@ import {
   withSchoolTransaction,
 } from "../../utils/authorization";
 import { HttpError } from "../../utils/http-error";
+import { supplyRoundService } from "../supply-round/supply-round.service";
+import { supplyRoundRepository } from "../supply-round/supply-round.repository";
 import { getDeliveryStatusLabel } from "../../utils/delivery-status";
 import { ROLE_LABELS, ROLES } from "../../constants/roles";
 import {
@@ -128,6 +130,9 @@ export function createDeliveryService(
             row.deliveryItems?.map((di) => ({
               id: di.id,
               actualQuantity: di.actualQuantity.toString(),
+              ...(di.sampleTopUpQuantity?.gt(0)
+                ? { sampleTopUpQuantity: di.sampleTopUpQuantity.toString() }
+                : {}),
               unit: di.unit,
               note: di.note ?? null,
               requestedQuantity:
@@ -424,6 +429,9 @@ function inspectionDetailDTO(
           ?.categoryName ??
         null,
       actualQuantity: item.actualQuantity.toString(),
+      ...(item.sampleTopUpQuantity?.gt(0)
+        ? { sampleTopUpQuantity: item.sampleTopUpQuantity.toString() }
+        : {}),
       unit: item.unit,
       sourceFacility: item.sourceFacilityNameSnapshot
         ? {
@@ -723,13 +731,16 @@ async function verifyRequestDeliveryReceipt(
         );
       }
     }
-    if (isV2Workflow && !currentGroup.eq(sourceItem.requestedQuantity)) {
+    const expected = sourceItem.requestedQuantity.add(
+      sourceItem.sampleTopUpQuantity ?? 0,
+    );
+    if (isV2Workflow && !currentGroup.eq(expected)) {
       throw new HttpError(
         409,
         "Tổng lượng giao của từng mặt hàng phải khớp số lượng được yêu cầu cung ứng",
       );
     }
-    if (received.add(currentGroup).gt(sourceItem.requestedQuantity)) {
+    if (received.add(currentGroup).gt(expected)) {
       throw new HttpError(
         409,
         "Tổng lượng tiếp nhận vượt số lượng được yêu cầu cung ứng",
@@ -1095,6 +1106,23 @@ export function createDeliveryInspectionService(
                 }
               }
               assertReceipt(row, schoolId, now());
+              const roundDate =
+                row.preparationStage === "READY_TO_DISPATCH" &&
+                row.SupplyRequest?.orderType === "DIRECT_USE"
+                  ? row.SupplyRequest.requestedDeliveryDate
+                  : null;
+              if (roundDate) {
+                await supplyRoundRepository.lock(tx, {
+                  schoolId,
+                  deliveryDate: roundDate,
+                  batchNo: 1,
+                });
+                await supplyRoundRepository.lock(tx, {
+                  schoolId,
+                  deliveryDate: roundDate,
+                  batchNo: 2,
+                });
+              }
               if (row.supplyRequestId !== null) {
                 await verifyRequestDeliveryReceipt(tx, row, schoolId);
               }
@@ -1124,6 +1152,13 @@ export function createDeliveryInspectionService(
                   tx,
                   row.supplyRequestId,
                 );
+              if (roundDate)
+                await supplyRoundService.finalizeReceivedDay(
+                  tx,
+                  schoolId,
+                  roundDate,
+                  now(),
+                );
             } else {
               await inspections.setStatus(
                 tx,
@@ -1147,13 +1182,20 @@ export function createDeliveryInspectionService(
             input.reason,
             photo,
           );
-          if (
-            input.decision === "REJECT" &&
-            actorTier !== "OPTIONAL" &&
-            row.supplyRequestId !== null &&
-            (await inspections.rejectedCount(tx, row.supplyRequestId)) > 2
-          )
-            await inspections.cancelRemainder(tx, row.supplyRequestId);
+          if (input.decision === "REJECT" && actorTier !== "OPTIONAL") {
+            await inspections.blockDeliveryLots(tx, id);
+            const rejectedOverLimit =
+              row.supplyRequestId !== null &&
+              (await inspections.rejectedCount(tx, row.supplyRequestId)) > 2;
+            await supplyRoundService.onDeliveryRejected(
+              tx,
+              id,
+              rejectedOverLimit,
+            );
+            if (rejectedOverLimit && row.supplyRequestId !== null) {
+              await inspections.cancelRemainder(tx, row.supplyRequestId);
+            }
+          }
           const saved = (await inspections.detail(tx, schoolId, id))!;
           proof =
             saved.status === "RECEIVED" || saved.status === "REJECTED"
