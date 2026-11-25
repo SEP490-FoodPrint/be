@@ -2981,6 +2981,93 @@ void test("versioned migrations on a fresh disposable local PostgreSQL database"
           ),
           /invalid input value for enum/,
         );
+
+        // specs/remove-system-complaints: migration gỡ C06 xóa dữ liệu FP-SC, giữ đơn loại khác.
+        await client.query(
+          `INSERT INTO foodprint.complaint_comments(complaint_id,author_user_id,author_role_code,author_side,comment_type,content)
+           VALUES($1,$2,'INGREDIENT_SUPPLIER_STAFF','REQUESTER','MESSAGE','Bổ sung')`,
+          [systemId, userId],
+        );
+        await client.query(
+          `INSERT INTO foodprint.complaint_status_histories(complaint_id,to_status,actor_type,actor_user_id,actor_role_code)
+           VALUES($1,'NEW','USER',$2,'INGREDIENT_SUPPLIER_STAFF')`,
+          [systemId, userId],
+        );
+        const grant = await client.query<{ id: string }>(`
+          WITH permission AS (
+            INSERT INTO foodprint.permissions(code,name,module,action)
+            VALUES ('system_complaint.submit','Gửi','system_complaint','submit') RETURNING id
+          )
+          INSERT INTO foodprint.role_permissions(role_id,permission_id)
+          SELECT role.id, permission.id FROM foodprint.roles role, permission
+          WHERE role.code = 'INGREDIENT_SUPPLIER_STAFF' RETURNING permission_id AS id
+        `);
+        assert.equal(grant.rowCount, 1);
+        const removal = "20261209000100_remove_system_complaints";
+        await client.query("SET search_path = foodprint, public;");
+        for (const version of migrationNames.filter(
+          (value) => value > migration && value <= removal,
+        )) {
+          if (version === "20261203000100_complaint_email_outbox") {
+            await client.query(
+              await readFile(
+                path.join(root, "prisma/migrations", version, "migration.sql"),
+                "utf8",
+              ),
+            );
+            await client.query(
+              `INSERT INTO foodprint.email_outbox(complaint_id,complaint_event,recipient_email,subject,text,html)
+               VALUES($1,'CREATED','sc@example.test','s','t','h')`,
+              [systemId],
+            );
+            continue;
+          }
+          await client.query(
+            await readFile(
+              path.join(root, "prisma/migrations", version, "migration.sql"),
+              "utf8",
+            ),
+          );
+        }
+        await client.query("SET search_path = public;");
+        const remaining = await client.query<{
+          system: number;
+          meal: number;
+          comments: number;
+          histories: number;
+          outbox: number;
+          permissions: number;
+          grants: number;
+          table: string | null;
+          category: string | null;
+        }>(`
+          SELECT
+            (SELECT count(*)::int FROM foodprint.complaints WHERE kind = 'SYSTEM') AS system,
+            (SELECT count(*)::int FROM foodprint.complaints WHERE id = '${meal.rows[0].id}') AS meal,
+            (SELECT count(*)::int FROM foodprint.complaint_comments) AS comments,
+            (SELECT count(*)::int FROM foodprint.complaint_status_histories) AS histories,
+            (SELECT count(*)::int FROM foodprint.email_outbox) AS outbox,
+            (SELECT count(*)::int FROM foodprint.permissions WHERE code LIKE 'system_complaint.%') AS permissions,
+            (SELECT count(*)::int FROM foodprint.role_permissions WHERE permission_id = '${grant.rows[0].id}') AS grants,
+            to_regclass('foodprint.system_complaints')::text AS table,
+            to_regtype('foodprint.system_complaint_category')::text AS category
+        `);
+        assert.deepEqual(remaining.rows[0], {
+          system: 0,
+          meal: 1,
+          comments: 0,
+          histories: 0,
+          outbox: 0,
+          permissions: 0,
+          grants: 0,
+          table: null,
+          category: null,
+        });
+        await assert.rejects(
+          insertComplaint("kind,code", "'SYSTEM','FP-SC-12349'"),
+          (error: unknown) =>
+            sqlState(error, "23514", "chk_complaints_kind_not_system"),
+        );
       } finally {
         await client.end();
         await db.query(`DROP DATABASE "${name}"`);

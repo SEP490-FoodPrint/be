@@ -21,7 +21,6 @@ import { createWarehouseRouter } from "../modules/warehouse/warehouse.routes";
 import { createKitchenRouter } from "../modules/kitchen/kitchen.routes";
 import { createMealAttendanceRouter } from "../modules/meal-attendance/meal-attendance.routes";
 import { createFeedbackRouter } from "../modules/feedback/feedback.routes";
-import { createSystemComplaintRouter } from "../modules/system-complaint/system-complaint.routes";
 import { createAuthorityComplaintRouter } from "../modules/authority-complaint/authority-complaint.routes";
 import { createAuthorityOfficerRouter } from "../modules/authority-officer/authority-officer.routes";
 import { createFoodSafetyIncidentRouter } from "../modules/food-safety-incident/food-safety-incident.routes";
@@ -143,10 +142,6 @@ export function createApiRouter(
     createMealAttendanceRouter(undefined, authHandler),
   );
   router.use("/meal-complaints", createFeedbackRouter(undefined, authHandler));
-  router.use(
-    "/system-complaints",
-    createSystemComplaintRouter(undefined, authHandler),
-  );
   router.use(
     "/authority-complaints",
     createAuthorityComplaintRouter(undefined, authHandler),

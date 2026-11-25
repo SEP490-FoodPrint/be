@@ -89,30 +89,30 @@ void test("CREATED: nội dung đơn, bên xử lý theo loại, nút theo dõi;
 void test("HANDLER_COMMENT: trường Phản hồi kèm người viết và thời gian; không có nút khi thiếu appUrl", () => {
   const email = buildComplaintEmail({
     event: "HANDLER_COMMENT",
-    kind: "SYSTEM",
-    code: "FP-SC-00001",
-    title: "Khiếu nại hệ thống - Lỗi kỹ thuật",
+    kind: "AUTHORITY",
+    code: "FP-AC-00001",
+    title: "Khiếu nại chuyển ATTP từ đơn FP-MC-00001",
     description: "Không tải được báo cáo",
     recipientName: "A",
     comment: {
-      authorName: "Trần Quản Trị",
+      authorName: "Trần Cán Bộ",
       createdAt: new Date("2026-11-23T02:00:00.000Z"),
       content: "Vui lòng gửi ảnh <script>",
     },
   });
   assert.equal(
     email.subject,
-    "[FoodPrint] Có phản hồi mới cho đơn FP-SC-00001",
+    "[FoodPrint] Có phản hồi mới cho đơn FP-AC-00001",
   );
   assert.match(email.html, /Vui lòng gửi ảnh &lt;script&gt;/);
   assert.doesNotMatch(email.html, /Xem &amp; trả lời phản hồi/);
   assert.match(
     email.text,
-    /^Kính gửi A,\n\nQuản trị hệ thống FoodPrint vừa phản hồi/,
+    /^Kính gửi A,\n\nĐơn vị ATTP phường\/xã vừa phản hồi/,
   );
   assert.match(
     email.text,
-    /Phản hồi \(Trần Quản Trị · 09:00 23\/11\/2026\):\nVui lòng gửi ảnh <script>/,
+    /Phản hồi \(Trần Cán Bộ · 09:00 23\/11\/2026\):\nVui lòng gửi ảnh <script>/,
   );
   assert.doesNotMatch(email.text, /Không tải được báo cáo/);
 });
