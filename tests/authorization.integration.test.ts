@@ -2305,7 +2305,12 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         );
         assert.deepEqual(
           Object.keys(record(record(response.body).data)).sort(),
-          ["items", "pagination"],
+          ["items", "pagination", "supplierIntakeState"],
+        );
+        // specs/frontend-api-gaps FR-003: trạng thái tiếp nhận của chính NCC
+        assert.equal(
+          record(record(response.body).data).supplierIntakeState,
+          "ACTIVE",
         );
         for (const item of items) {
           assert.deepEqual(Object.keys(item).sort(), [
@@ -11924,11 +11929,17 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         { id: c05Id, code: c05.code },
       );
 
-      // Phạm vi đọc: ATTP đơn vị nhận, BGH trường, phụ huynh gửi; ATTP khác/phụ huynh khác không thấy.
+      // Phạm vi đọc: ATTP đơn vị nhận, phụ huynh gửi; BGH 403; ATTP khác/phụ huynh khác không thấy.
+      // BGH không thấy liên kết C05 trên C03 (specs/board-escalation-view).
+      assert.equal(
+        data(await request(`/api/meal-complaints/${c03}`, board))
+          .escalatedAuthorityComplaint,
+        null,
+      );
       const ids = (response: { body: unknown }) =>
         rows(response.body).map((item) => item.id);
       assert.deepEqual(ids(await request(route, officer)), [c05Id]);
-      assert.deepEqual(ids(await request(route, board)), [c05Id]);
+      assert.equal((await request(route, board)).status, 403);
       assert.deepEqual(ids(await request(route, parent)), [c05Id]);
       assert.deepEqual(ids(await request(route, foreignOfficer)), []);
       assert.deepEqual(ids(await request(route, otherParent)), []);
@@ -12010,9 +12021,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       assert.equal(satisfied.status, 200);
       assert.equal(data(satisfied).closeReason, "SATISFIED");
       assert.equal(data(satisfied).resolvedCount, 2);
-      const boardView = await request(`${route}/${c05Id}`, board);
-      assert.deepEqual(data(boardView).allowedActions, []);
-      assert.equal((data(boardView).comments as unknown[]).length, 4);
+      assert.equal((await request(`${route}/${c05Id}`, board)).status, 403);
     },
   );
 

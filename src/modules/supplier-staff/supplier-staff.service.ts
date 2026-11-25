@@ -281,8 +281,14 @@ export function createSupplierStaffService(
     ): Promise<StaffList> {
       const scope = supplierStaffManagementScope(principal);
       return databaseOperation(async () => {
-        const rows = await repo.list(scope, query);
+        const [rows, supplierIntakeState] = await Promise.all([
+          repo.list(scope, query),
+          repo.supplierIntakeState(scope),
+        ]);
+        if (!supplierIntakeState)
+          throw new HttpError(404, "Không tìm thấy nhà cung cấp");
         return {
+          supplierIntakeState,
           items: rows.slice(0, query.limit).map(listDto),
           pagination: { ...query, hasNext: rows.length > query.limit },
         };

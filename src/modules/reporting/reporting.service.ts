@@ -73,6 +73,7 @@ export function createReportingService(
           status: row.status,
           attemptedAt: row.attemptedAt?.toISOString() ?? null,
           forwardedAt: row.forwardedAt?.toISOString() ?? null,
+          receivedAt: row.receivedAt?.toISOString() ?? null,
           createdAt: row.createdAt.toISOString(),
         })),
         pagination: page.pagination,
