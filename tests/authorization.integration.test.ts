@@ -996,8 +996,9 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         (error: unknown) =>
           error instanceof HttpError &&
           error.statusCode === 422 &&
+          error.message.includes("còn 4 ngày thiếu bữa") &&
           error.message.includes("Thứ Ba (08/01)") &&
-          error.message.includes("Thứ Sáu (11/01)"),
+          error.message.includes("và 2 mục khác"),
       );
       const rejectedWeek = await menus.getOne(menu.id, health);
       assert.equal(rejectedWeek.status, "DRAFT");
