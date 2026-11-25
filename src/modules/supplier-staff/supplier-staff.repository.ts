@@ -104,6 +104,16 @@ export function createSupplierStaffRepository(connect = getPrisma) {
         orderBy: [{ createdAt: "desc" }, { id: "asc" }],
       });
     },
+    /** Trạng thái tiếp nhận của chính NCC trong phạm vi quản lý (specs/frontend-api-gaps FR-003). */
+    async supplierIntakeState(scope: SupplierStaffManagementScope) {
+      const supplier = await (
+        await connect()
+      ).supplier.findUnique({
+        where: { id: scope.supplierId },
+        select: { intakeState: true },
+      });
+      return supplier?.intakeState ?? null;
+    },
     async permissionState(
       scope: SupplierStaffManagementScope,
       userId: string,

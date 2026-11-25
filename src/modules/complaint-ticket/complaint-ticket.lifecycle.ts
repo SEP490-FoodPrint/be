@@ -118,6 +118,34 @@ export const TICKET_TRANSITIONS = {
   { to: TicketStatus; closeReason?: string }
 >;
 
+/** Trạng thái thật mà người gửi thấy là "Đang xử lý" (`displayStatus = IN_PROGRESS`). */
+export const REQUESTER_IN_PROGRESS_STATUSES: readonly TicketStatus[] = [
+  "NEW",
+  "IN_PROGRESS",
+  "REOPENED",
+];
+
+/**
+ * Đổi bộ lọc `status` thành danh sách trạng thái thật để truy vấn
+ * (specs/frontend-api-gaps FR-001). Danh sách chỉ gồm đơn của người gửi thì
+ * `status` là trạng thái hiển thị: `IN_PROGRESS` gồm cả NEW và REOPENED; người gửi
+ * không thấy NEW/REOPENED nên lọc theo hai giá trị đó trả 400. Bên xử lý và người
+ * chỉ xem lọc theo trạng thái thật như cũ.
+ */
+export function ticketStatusFilter(
+  status: TicketStatus | undefined,
+  requesterOnly: boolean,
+): TicketStatus[] | undefined {
+  if (!status) return undefined;
+  if (!requesterOnly) return [status];
+  if (status === "IN_PROGRESS") return [...REQUESTER_IN_PROGRESS_STATUSES];
+  if (status === "RESOLVED" || status === "CLOSED") return [status];
+  throw new HttpError(
+    400,
+    "Trạng thái lọc chỉ nhận IN_PROGRESS, RESOLVED hoặc CLOSED",
+  );
+}
+
 export function displayStatus(
   viewer: TicketViewer,
   status: TicketStatus,

@@ -168,6 +168,46 @@ void test("hai lớp trạng thái: người gửi thấy Đang xử lý, BGH th
   assert.deepEqual(forSender.allowedActions, ["COMMENT"]);
 });
 
+void test("lọc trạng thái: người gửi theo trạng thái hiển thị, BGH theo trạng thái thật", async () => {
+  const seen: unknown[] = [];
+  const service = createFeedbackService(
+    {
+      ...createFeedbackRepository(),
+      list: (
+        _db: unknown,
+        _scope: unknown,
+        _query: unknown,
+        statuses?: unknown,
+      ) => {
+        seen.push(statuses);
+        return Promise.resolve([]);
+      },
+    } as never,
+    () => Promise.resolve({} as never),
+    () => NOW,
+  );
+  const list = (status: string | undefined, actor: AuthPrincipal) =>
+    service.getAll(
+      { page: 1, limit: 20, ...(status ? { status: status as never } : {}) },
+      actor,
+    );
+  await list("IN_PROGRESS", principal());
+  await list("RESOLVED", principal({ role: "PARENTS_COMMITTEE" }));
+  await list(undefined, principal());
+  await list("IN_PROGRESS", board());
+  await list("NEW", board());
+  assert.deepEqual(seen, [
+    ["NEW", "IN_PROGRESS", "REOPENED"],
+    ["RESOLVED"],
+    undefined,
+    ["IN_PROGRESS"],
+    ["NEW"],
+  ]);
+  for (const status of ["NEW", "REOPENED"])
+    await assert.rejects(list(status, principal()), { statusCode: 400 });
+  assert.equal(seen.length, 5);
+});
+
 void test("RESOLVED: người gửi có 48h để Hài lòng / Yêu cầu xử lý lại", async () => {
   const resolvedAt = new Date(NOW.getTime() - 47 * 3600 * 1000);
   const make = (lastResolvedAt: Date) =>

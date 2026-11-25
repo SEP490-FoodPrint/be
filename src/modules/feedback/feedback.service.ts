@@ -14,6 +14,7 @@ import {
   feedbackWindowStart,
   mealComplaintTitle,
   ticketConflictMessage,
+  ticketStatusFilter,
   toTicketStatus,
   TICKET_TRANSITIONS,
   type TicketAction,
@@ -310,10 +311,18 @@ export function createFeedbackService(
       query: ComplaintListQueryDTO,
       principal: AuthPrincipal,
     ): Promise<ComplaintListResponseDTO> {
+      const scope = listScopes.feedback(principal);
+      // Phụ huynh/GVCN chỉ xem đơn mình gửi (listScopes.feedback): lọc theo trạng thái hiển thị.
+      const statuses = ticketStatusFilter(
+        query.status,
+        principal.orgType === ORG_TYPES.SCHOOL &&
+          isComplaintSubmitter(principal.role),
+      );
       const rows = await repository.list(
         await connect(),
-        listScopes.feedback(principal),
+        scope,
         query,
+        statuses,
       );
       const at = now();
       return {

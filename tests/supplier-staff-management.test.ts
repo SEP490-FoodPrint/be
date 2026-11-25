@@ -74,7 +74,12 @@ function staffRow(index: number, overrides: Partial<StaffRow> = {}): StaffRow {
     ...overrides,
   };
 }
-function listFixture(rows: StaffRow[] = [], failure?: Error) {
+function listFixture(
+  rows: StaffRow[] = [],
+  failure?: Error,
+  intakeState:
+    "ACTIVE" | "PAUSED" | "PAUSED_FOR_FOOD_SAFETY_INSPECTION" | null = "ACTIVE",
+) {
   const calls: {
     scope: { supplierId: string };
     query: { page: number; limit: number };
@@ -89,6 +94,11 @@ function listFixture(rows: StaffRow[] = [], failure?: Error) {
       if (failure) return Promise.reject(failure);
       const offset = (query.page - 1) * query.limit;
       return Promise.resolve(rows.slice(offset, offset + query.limit + 1));
+    },
+    supplierIntakeState(scope: { supplierId: string }) {
+      assert.deepEqual(scope, { supplierId });
+      if (failure) return Promise.reject(failure);
+      return Promise.resolve(intakeState);
     },
   };
   return { service: createSupplierStaffService(repo), calls };
@@ -576,6 +586,7 @@ void test("US1 list returns only the requested page, all staff statuses and expl
     { scope: { supplierId }, query: { page: 1, limit: 20 } },
   ]);
   assert.equal(result.items.length, 20);
+  assert.equal(result.supplierIntakeState, "ACTIVE");
   assert.deepEqual(result.pagination, { page: 1, limit: 20, hasNext: true });
   assert.deepEqual(
     [...new Set(result.items.map((item) => item.status))].sort(),
@@ -614,6 +625,21 @@ void test("US1 list handles exactly-full, empty, out-of-range pages and maximum 
     assert.equal(result.items.length, expectedCount);
     assert.deepEqual(result.pagination, { page, limit, hasNext });
   }
+});
+
+void test("US1 list returns the supplier intake state, including food-safety pauses", async () => {
+  const paused = listFixture(
+    [staffRow(1)],
+    undefined,
+    "PAUSED_FOR_FOOD_SAFETY_INSPECTION",
+  );
+  const result = await paused.service.getAll({ page: 1, limit: 20 }, principal);
+  assert.equal(result.supplierIntakeState, "PAUSED_FOR_FOOD_SAFETY_INSPECTION");
+  const missing = listFixture([], undefined, null);
+  await assert.rejects(
+    () => missing.service.getAll({ page: 1, limit: 20 }, principal),
+    errorStatus(404),
+  );
 });
 
 void test("US1 list forbids missing permission, SYSTEM and staff before calling the repository", async () => {
@@ -671,6 +697,7 @@ void test("US1 HTTP list keeps the response envelope, defaults and error contrac
         },
       ],
       pagination: { page: 1, limit: 20, hasNext: false },
+      supplierIntakeState: "ACTIVE",
     },
   });
   for (const query of [

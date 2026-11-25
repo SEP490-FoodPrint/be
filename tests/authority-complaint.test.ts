@@ -497,6 +497,37 @@ void test("người xem: ATTP đơn vị nhận là HANDLER, BGH chỉ xem, ph�
   });
 });
 
+void test("lọc trạng thái C05: phụ huynh theo trạng thái hiển thị, ATTP và BGH theo trạng thái thật", async () => {
+  const seen: unknown[] = [];
+  const service = createAuthorityComplaintService(
+    {
+      ...createAuthorityComplaintRepository(),
+      list: (_db, _scope, filter) => {
+        seen.push(filter);
+        return Promise.resolve([]);
+      },
+    },
+    () => Promise.resolve({} as PrismaClient),
+    () => NOW,
+  );
+  await service.getAll({ page: 1, limit: 20, status: "IN_PROGRESS" }, parent);
+  await service.getAll({ page: 2, limit: 5, status: "CLOSED" }, parent);
+  await service.getAll({ page: 1, limit: 20, status: "IN_PROGRESS" }, officer);
+  await service.getAll({ page: 1, limit: 20, status: "REOPENED" }, board);
+  await service.getAll({ page: 1, limit: 20 }, parent);
+  assert.deepEqual(seen, [
+    { page: 1, limit: 20, statuses: ["NEW", "IN_PROGRESS", "REOPENED"] },
+    { page: 2, limit: 5, statuses: ["CLOSED"] },
+    { page: 1, limit: 20, statuses: ["IN_PROGRESS"] },
+    { page: 1, limit: 20, statuses: ["REOPENED"] },
+    { page: 1, limit: 20, statuses: undefined },
+  ]);
+  await assert.rejects(
+    service.getAll({ page: 1, limit: 20, status: "NEW" }, parent),
+    { statusCode: 400 },
+  );
+});
+
 function locationHarness(options: {
   unitExists?: boolean;
   location?: { id: string; level: number; isActive: boolean } | null;

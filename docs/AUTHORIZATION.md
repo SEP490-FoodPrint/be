@@ -512,15 +512,15 @@ Thiết kế và hợp đồng: [supplier-orders](../specs/supplier-order-creati
 
 Module `supplier-staff` yêu cầu actor ACTIVE, INGREDIENT_SUPPLIER_ADMIN thuộc SUPPLIER có membership hợp lệ và quyền hiệu lực `supplier_staff.manage`. SYSTEM/staff hoặc admin thiếu quyền đều bị từ chối. Scope lấy từ principal; target chỉ INGREDIENT_SUPPLIER_STAFF thuộc supplier hiện tại, role type SUPPLIER. Không nhận organization/role để mở rộng phạm vi.
 
-| Method | Path                                                           | Hành vi                                                                                    |
-| ------ | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| GET    | `/api/supplier-staff`                                          | Mọi trạng thái; page/limit mặc định 1/20, tối đa100, hasNext; createdAt desc rồi id asc    |
-| GET    | `/api/supplier-staff/:userId`                                  | Detail mọi trạng thái, safe fields và ISO timestamps                                       |
-| POST   | `/api/supplier-staff`                                          | Tạo ACTIVE đúng supplier/role, mật khẩu khởi tạo bcrypt12; không registration hoặc session |
-| PATCH  | `/api/supplier-staff/:userId/status`                           | ACTIVE ↔ LOCKED; same-state không ghi, trạng thái khác409                                  |
-| GET    | `/api/supplier-staff/:userId/permissions`                      | Chỉ target ACTIVE; grants hiện có gồm inactive, enabled = active trừ scoped denial         |
-| PUT    | `/api/supplier-staff/:userId/permission-denials/:permissionId` | Tắt riêng một grant active thuộc role                                                      |
-| DELETE | `/api/supplier-staff/:userId/permission-denials/:permissionId` | Bật lại bằng xóa đúng denial, giữ trần role                                                |
+| Method | Path                                                           | Hành vi                                                                                                                    |
+| ------ | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/supplier-staff`                                          | Mọi trạng thái; page/limit mặc định 1/20, tối đa100, hasNext; createdAt desc rồi id asc; kèm `supplierIntakeState` của NCC |
+| GET    | `/api/supplier-staff/:userId`                                  | Detail mọi trạng thái, safe fields và ISO timestamps                                                                       |
+| POST   | `/api/supplier-staff`                                          | Tạo ACTIVE đúng supplier/role, mật khẩu khởi tạo bcrypt12; không registration hoặc session                                 |
+| PATCH  | `/api/supplier-staff/:userId/status`                           | ACTIVE ↔ LOCKED; same-state không ghi, trạng thái khác409                                                                  |
+| GET    | `/api/supplier-staff/:userId/permissions`                      | Chỉ target ACTIVE; grants hiện có gồm inactive, enabled = active trừ scoped denial                                         |
+| PUT    | `/api/supplier-staff/:userId/permission-denials/:permissionId` | Tắt riêng một grant active thuộc role                                                                                      |
+| DELETE | `/api/supplier-staff/:userId/permission-denials/:permissionId` | Bật lại bằng xóa đúng denial, giữ trần role                                                                                |
 
 Target ngoài phạm vi/admin/không tồn tại cùng404; permission target trong phạm vi nhưng không ACTIVE trả403, permission thiếu/inactive/ngoài role trả 400. Body/query/params strict; không raw input, hash hoặc secret trong output. Username staff case-sensitive duy nhất trong supplier kể cả admin và mọi status; staff khác supplier được trùng. Email Citext duy nhất toàn cục; duplicate409 chung không tiết lộ chủ sở hữu. Mọi vai trò login email-only theo [AUTH_SESSIONS.md](AUTH_SESSIONS.md).
 
