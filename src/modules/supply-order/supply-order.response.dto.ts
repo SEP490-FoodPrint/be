@@ -29,6 +29,7 @@ export interface SupplyOrderListResponseDTO {
       ingredientName: string;
       handlingType: string;
       requestedQuantity: string;
+      sampleTopUpQuantity?: string;
       unit: string;
       note: string | null;
     }[];
@@ -89,6 +90,7 @@ export interface SupplierOrderDetailResponseDTO extends SupplierOrderListItemRes
     ingredientName: string;
     handlingType: string | null;
     requestedQuantity: string;
+    sampleTopUpQuantity?: string;
     unit: string;
     note: string | null;
   }[];

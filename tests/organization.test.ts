@@ -176,6 +176,9 @@ void test("organization service maps school rows correctly and respects paginati
     findMealTimes: () =>
       Promise.resolve({ lunchTime: dummyDate, afternoonMealTime: dummyDate }),
     updateMealTimes: (_tx, _schoolId, data) => Promise.resolve(data),
+    findSamplePolicy: () => Promise.resolve(null),
+    saveSamplePolicy: () =>
+      Promise.reject(new Error("Unexpected sample policy write")),
     listSchools: () =>
       Promise.resolve([
         {

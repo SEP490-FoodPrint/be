@@ -1,4 +1,7 @@
-import type { DeliveryStatus } from "../../generated/prisma/client";
+import type {
+  DeliveryPreparationStage,
+  DeliveryStatus,
+} from "../../generated/prisma/client";
 import type { SupplierDeliveryNextAction } from "../../utils/delivery-status";
 
 export type SupplierOrderSourceType = "REQUEST" | "STANDALONE";
@@ -20,6 +23,7 @@ export interface SupplierOrderItemDTO {
   sourceFacility: SupplierOrderSourceFacilityDTO | null;
   traceUrl: string | null;
   actualQuantity: string;
+  sampleTopUpQuantity?: string;
   unit: string;
   note: string | null;
 }
@@ -39,6 +43,7 @@ export interface SupplierOrderSummaryDTO {
   orderType: "DIRECT_USE" | "DRY_STOCK" | null;
   batchNo: number | null;
   status: DeliveryStatus;
+  preparationStage?: DeliveryPreparationStage;
   statusLabel: string;
   expectedArrivalAt: string | null;
   arrivedAt: string | null;
@@ -52,6 +57,12 @@ export interface SupplierOrderSummaryDTO {
 
 export interface SupplierOrderDetailDTO extends SupplierOrderSummaryDTO {
   items: SupplierOrderItemDTO[];
+  topUpLots?: {
+    ingredientLotId: string;
+    lotCode: string;
+    unit: string;
+    sampleTopUpQuantity: string;
+  }[];
 }
 
 export interface SupplierOrderCreateResultDTO extends SupplierOrderDetailDTO {

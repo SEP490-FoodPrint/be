@@ -10,6 +10,10 @@ import {
 import type { Prisma, PrismaClient } from "../../generated/prisma/client";
 import { convertQuantity } from "../kitchen/kitchen.service";
 import {
+  DEFAULT_SAMPLE_POLICY,
+  samplePolicyWarnings,
+} from "../kitchen/sample-planner";
+import {
   assertPermission,
   withSchoolTransaction,
 } from "../../utils/authorization";
@@ -31,6 +35,7 @@ import {
 import type {
   CookingModeRequestDTO,
   MealTimesRequestDTO,
+  SamplePolicyRequestDTO,
   DeliveryInspectionRolesRequestDTO,
   OrganizationListRequestDTO,
   OrganizationSummaryRequestDTO,
@@ -52,6 +57,7 @@ import type {
   AvailableWeekSummaryDTO,
   CookingModeResponseDTO,
   MealTimesResponseDTO,
+  SamplePolicyResponseDTO,
   DeliveryInspectionRolesResponseDTO,
   DishItemDTO,
   PublicDishIngredientDTO,
@@ -67,6 +73,7 @@ import {
   type OrganizationRepository,
   type PublicMenuDayDbRow,
   type PublicSchoolDbRow,
+  type SamplePolicyRow,
   type SchoolDirectoryRow,
 } from "./organization.repository";
 import { gradeDishLines } from "../../utils/dish-portion";
@@ -173,6 +180,36 @@ function formatMealTime(value: Date | null): string | null {
 
 function parseMealTime(value: string | null): Date | null {
   return value ? new Date(`1970-01-01T${value}:00.000Z`) : null;
+}
+
+const SAMPLE_POLICY_PERMISSION = "school_sample_policy.manage";
+
+function assertSamplePolicyManager(
+  principal: AuthPrincipal,
+): asserts principal is AuthPrincipal & { schoolId: string } {
+  assertPermission(principal, SAMPLE_POLICY_PERMISSION);
+  if (
+    principal.role !== ROLES.SCHOOL_MANAGEMENT_BOARD ||
+    principal.orgType !== "SCHOOL" ||
+    !principal.schoolId
+  )
+    throw new HttpError(403, "Chỉ Ban Giám hiệu được cấu hình lưu mẫu");
+}
+
+function mapSamplePolicy(row: SamplePolicyRow | null): SamplePolicyResponseDTO {
+  const values = row
+    ? {
+        sampleGrams: row.sampleGrams.toString(),
+        sampleMilliliters: row.sampleMilliliters.toString(),
+      }
+    : { ...DEFAULT_SAMPLE_POLICY };
+  return {
+    ...values,
+    isDefault: row === null,
+    updatedAt: row?.updatedAt.toISOString() ?? null,
+    updatedBy: row?.updatedByUser.fullName ?? null,
+    warnings: samplePolicyWarnings(values),
+  };
 }
 
 const DELIVERY_INSPECTION_PERMISSION = "school_delivery_inspection.manage";
@@ -344,6 +381,35 @@ export function createOrganizationService(
         lunchTime: formatMealTime(value.lunchTime),
         afternoonMealTime: formatMealTime(value.afternoonMealTime),
       };
+    },
+
+    async getSamplePolicy(
+      principal: AuthPrincipal,
+    ): Promise<SamplePolicyResponseDTO> {
+      assertSamplePolicyManager(principal);
+      return mapSamplePolicy(await data.findSamplePolicy(principal.schoolId));
+    },
+
+    // Mẻ đã lập giữ lượng mẫu đã chụp; giá trị mới chỉ áp dụng cho kế hoạch sau đó.
+    async updateSamplePolicy(
+      input: SamplePolicyRequestDTO,
+      principal: AuthPrincipal,
+    ): Promise<SamplePolicyResponseDTO> {
+      assertSamplePolicyManager(principal);
+      const row = await withSchoolTransaction(
+        await getClient(),
+        principal,
+        SAMPLE_POLICY_PERMISSION,
+        (tx, actor, schoolId) => {
+          assertSamplePolicyManager(actor);
+          return data.saveSamplePolicy(tx, schoolId, {
+            sampleGrams: input.sampleGrams,
+            sampleMilliliters: input.sampleMilliliters,
+            updatedByUserId: actor.id,
+          });
+        },
+      );
+      return mapSamplePolicy(row);
     },
 
     async getDeliveryInspectionRoles(

@@ -38,11 +38,15 @@ export interface CookingBatchDetailDTO {
   menuDayId: string;
   dishId: string | null;
   batchGroupId: string;
-  BatchGroup: { id: string; batchCode: string };
+  BatchGroup: { id: string; batchCode: string; supplyRoundId?: string };
   dishes: {
     dishId: string;
     name: string;
     plannedPortions: number | null;
+    sampleQuantity?: string | null;
+    sampleUnit?: string | null;
+    sampleRatio?: string | null;
+    standardQuantitySnapshot?: string | null;
     cookingBatchLots: CookingBatchLotDTO[];
   }[];
   mealType: MealType;
@@ -126,8 +130,16 @@ export interface CookingBatchSummaryDTO {
   menuDayId: string;
   dishId: string | null;
   batchGroupId: string;
-  BatchGroup: { id: string; batchCode: string };
-  dishes: { dishId: string; name: string; plannedPortions: number | null }[];
+  BatchGroup: { id: string; batchCode: string; supplyRoundId?: string };
+  dishes: {
+    dishId: string;
+    name: string;
+    plannedPortions: number | null;
+    sampleQuantity?: string | null;
+    sampleUnit?: string | null;
+    sampleRatio?: string | null;
+    standardQuantitySnapshot?: string | null;
+  }[];
   mealType: MealType;
   cookingModeApplied: CookingMode;
   status: CookingBatchStatus;

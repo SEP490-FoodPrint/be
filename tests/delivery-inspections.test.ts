@@ -1627,6 +1627,7 @@ function v1InspectionFixture() {
     ingredientEntryId: string;
     ingredientId: string;
     requestedQuantity: string;
+    sampleTopUpQuantity?: string;
     unit: string;
     ingredientName?: string;
   };
@@ -1974,6 +1975,9 @@ function v1InspectionFixture() {
               supplyRequestId: item.supplyRequestId,
               ingredientEntryId: item.ingredientEntryId,
               requestedQuantity: new Prisma.Decimal(item.requestedQuantity),
+              sampleTopUpQuantity: new Prisma.Decimal(
+                item.sampleTopUpQuantity ?? 0,
+              ),
               unit: item.unit,
               IngredientEntry: {
                 ingredientId: item.ingredientId,
@@ -2256,7 +2260,8 @@ function v1InspectionFixture() {
           status?: string;
           availableQuantity?: number;
           DeliveryItem?: {
-            Delivery: { supplyRequestId: string; status: { not: string } };
+            deliveryId?: string;
+            Delivery?: { supplyRequestId: string; status: { not: string } };
           };
         };
         data: { availableQuantity?: Prisma.Decimal; status: string };
@@ -2282,10 +2287,14 @@ function v1InspectionFixture() {
           return Promise.resolve({ count: 0 });
         }
         let count = 0;
-        const reqTarget = where.DeliveryItem?.Delivery.supplyRequestId;
-        const excludedStatus = where.DeliveryItem?.Delivery.status.not;
+        const deliveryTarget = where.DeliveryItem?.deliveryId;
+        const reqTarget = where.DeliveryItem?.Delivery?.supplyRequestId;
+        const excludedStatus = where.DeliveryItem?.Delivery?.status.not;
         for (const d of state.deliveries) {
-          if (d.supplyRequestId === reqTarget && d.status !== excludedStatus) {
+          const matches = deliveryTarget
+            ? d.id === deliveryTarget
+            : d.supplyRequestId === reqTarget && d.status !== excludedStatus;
+          if (matches) {
             for (const item of d.items) {
               for (const lot of item.lots) {
                 if (lot.status === where.status) {
@@ -2335,6 +2344,10 @@ function v1InspectionFixture() {
   const service = createDeliveryInspectionService(
     () => Promise.resolve(client),
     () => state.currentTime,
+    {
+      prepareDeliveryInspected: () => Promise.resolve(null),
+      scheduleAnchor: () => undefined,
+    },
   );
 
   return {
@@ -2840,6 +2853,38 @@ void test("v1 reject immutability, photoHash replay, request cap3 preservation, 
   assert.equal(reqPending.status, "CANCELLED");
   assert.equal(reqD4.status, "RECEIVED");
   assert.equal(f.state.receipts.length, 1);
+});
+
+void test("request receipt requires and posts the confirmed sample top-up", async (context) => {
+  context.mock.method(
+    documentStorage,
+    "download",
+    (document: OnboardingDocument) =>
+      `https://example.test/photos/${encodeURIComponent(document.publicId)}`,
+  );
+  const f = v1InspectionFixture();
+  const delivery = f.makeDelivery(90, { workflowVersion: 2 });
+  f.state.customSourceItems = [
+    {
+      id: f.ids.requestItemId,
+      supplyRequestId: delivery.supplyRequestId!,
+      ingredientEntryId: f.ids.entryId,
+      ingredientId: f.ids.ingredientId,
+      requestedQuantity: "6",
+      sampleTopUpQuantity: "0.125",
+      unit: "kg",
+    },
+  ];
+  f.state.deliveries.push(delivery);
+  const approval = validateDeliveryInspectionDecision({ decision: "APPROVE" });
+  await f.service.arrive(delivery.id, {}, {}, f.actors[1]);
+  for (const actor of f.actors)
+    await f.service.decide(delivery.id, approval, actor);
+  assert.equal(delivery.status, "RECEIVED");
+  assert.deepEqual(
+    f.state.receipts.map(({ quantity }) => quantity),
+    ["6.125"],
+  );
 });
 
 void test("PREPARING blocks arrival/inspect 409 and dispatched v2 6+4 REQUEST + inactive source + standalone repeated ingredient receive cleanly (T138)", async (context) => {

@@ -1562,6 +1562,7 @@ void test("warehouse Decimal quantities and dates remain JSON-compatible without
             ingredientEntryId: null,
             supplyRequestItemId: null,
             actualQuantity: new Prisma.Decimal("5.500"),
+            sampleTopUpQuantity: new Prisma.Decimal(0),
             unit: "kg",
             note: "Mới xay",
             Ingredient: { id: "ing-1", name: "Gạo" },

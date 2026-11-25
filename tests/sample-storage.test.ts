@@ -6,6 +6,8 @@ import { promisify } from "node:util";
 import express, { type RequestHandler } from "express";
 import { Prisma, type SampleStorageUnit } from "../src/generated/prisma/client";
 import { SampleStorageService } from "../src/modules/sample-storage/sample-storage.service";
+import { HttpError } from "../src/utils/http-error";
+import { validateFoodSample } from "../src/modules/retained-sample/retained-sample.validation";
 import { createSampleStorageRouter } from "../src/modules/sample-storage/sample-storage.routes";
 import { globalErrorHandler } from "../src/middlewares/error.middleware";
 import { validateSampleStorageWrite } from "../src/modules/sample-storage/sample-storage.validation";
@@ -469,4 +471,32 @@ void test("SampleStorage router handles HTTP CRUD endpoints with authentications
   } finally {
     await viewer.close();
   }
+});
+
+void test("PR5 T049: validateFoodSample supports both planned-sample (omitted quantity/unit) and legacy (minimum 100g/150ml)", () => {
+  const base = {
+    storageUnitId: "11111111-1111-4111-8111-111111111111",
+    storageLocation: "Ngăn 1",
+    sampledAt: "2026-11-25T04:00:00+07:00",
+  };
+  const planned = validateFoodSample(base);
+  assert.equal(planned.quantity, undefined);
+  assert.equal(planned.unit, undefined);
+
+  const legacy = validateFoodSample({ ...base, quantity: "120", unit: "g" });
+  assert.equal(legacy.quantity, "120");
+  assert.equal(legacy.unit, "g");
+
+  assert.throws(
+    () => validateFoodSample({ ...base, quantity: "80", unit: "g" }),
+    (err: unknown) => err instanceof HttpError && err.statusCode === 400,
+  );
+  assert.throws(
+    () => validateFoodSample({ ...base, quantity: "120" }),
+    (err: unknown) => err instanceof HttpError && err.statusCode === 400,
+  );
+  assert.throws(
+    () => validateFoodSample({ ...base, unit: "g" }),
+    (err: unknown) => err instanceof HttpError && err.statusCode === 400,
+  );
 });

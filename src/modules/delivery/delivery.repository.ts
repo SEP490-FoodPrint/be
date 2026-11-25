@@ -72,6 +72,7 @@ export const deliveryListSelect = {
       ingredientEntryId: true,
       supplyRequestItemId: true,
       actualQuantity: true,
+      sampleTopUpQuantity: true,
       unit: true,
       note: true,
       Ingredient: {
@@ -134,6 +135,7 @@ const summarySelect = {
   workflowVersion: true,
   supplyRequestId: true,
   status: true,
+  preparationStage: true,
   expectedArrivalAt: true,
   arrivedAt: true,
   receivedAt: true,
@@ -148,6 +150,7 @@ const summarySelect = {
       status: true,
       orderType: true,
       batchNo: true,
+      requestedDeliveryDate: true,
       _count: {
         select: {
           deliveries: {
@@ -203,6 +206,7 @@ const detailSelect = {
       sourceFacilityCodeSnapshot: true,
       ingredientNameSnapshot: true,
       actualQuantity: true,
+      sampleTopUpQuantity: true,
       unit: true,
       // Link truy xuất in trên nhãn QR bao bì mà NCC tạo khi lập đơn giao
       qrUrl: true,
@@ -388,6 +392,7 @@ export const deliveryInspectionRepository = {
         supplyRequestId: true,
         ingredientEntryId: true,
         requestedQuantity: true,
+        sampleTopUpQuantity: true,
         unit: true,
         IngredientEntry: {
           select: {
@@ -592,6 +597,38 @@ export const deliveryInspectionRepository = {
       data: { status: "COMPLETED" },
     });
     return updated.count;
+  },
+  async blockDeliveryLots(tx: Tx, deliveryId: string) {
+    if (!tx.ingredientLot?.updateMany) return;
+    if (tx.ingredientLot?.findMany && tx.supplyRequestItem?.update) {
+      const topUpLots = await tx.ingredientLot.findMany({
+        where: {
+          DeliveryItem: { deliveryId, supplyRequestItemId: { not: null } },
+          sampleTopUpQuantity: { gt: 0 },
+        },
+        select: {
+          sampleTopUpQuantity: true,
+          DeliveryItem: { select: { supplyRequestItemId: true } },
+        },
+      });
+      for (const lot of topUpLots) {
+        const reqItemId = lot.DeliveryItem.supplyRequestItemId;
+        if (!reqItemId) continue;
+        await tx.supplyRequestItem.update({
+          where: { id: reqItemId },
+          data: {
+            sampleTopUpQuantity: { decrement: lot.sampleTopUpQuantity },
+          },
+        });
+      }
+    }
+    await tx.ingredientLot.updateMany({
+      where: {
+        DeliveryItem: { deliveryId },
+        status: "AVAILABLE",
+      },
+      data: { status: "BLOCKED" },
+    });
   },
   async cancelRemainder(tx: Tx, supplyRequestId: string) {
     await tx.supplyRequest.update({

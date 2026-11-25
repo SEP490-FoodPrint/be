@@ -4615,6 +4615,135 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   );
 
   await context.test(
+    "school sample policy persists only for the authenticated board's school",
+    async () => {
+      const route = "/api/schools/me/sample-policy";
+      const board = await user("SCHOOL_MANAGEMENT_BOARD", {
+        schoolId: schoolA.id,
+      });
+      const otherBoard = await user("SCHOOL_MANAGEMENT_BOARD", {
+        schoolId: schoolB.id,
+      });
+      for (const account of [board, otherBoard]) {
+        const session = await authSessions.issue(account.id);
+        issued.set(account.id, session);
+        refreshTokens.push(session.refreshToken);
+      }
+
+      const defaults = await request(route, board.id);
+      assert.equal(defaults.status, 200);
+      assert.deepEqual(record(defaults.body).data, {
+        sampleGrams: "100",
+        sampleMilliliters: "150",
+        isDefault: true,
+        updatedAt: null,
+        updatedBy: null,
+        warnings: [],
+      });
+
+      const values = { sampleGrams: "80.5", sampleMilliliters: "175" };
+      assert.equal(
+        (await request(route, adminA.id, "PATCH", values)).status,
+        403,
+      );
+      assert.equal(
+        (
+          await request(route, board.id, "PATCH", {
+            ...values,
+            schoolId: schoolB.id,
+          })
+        ).status,
+        400,
+      );
+      const saved = await request(route, board.id, "PATCH", values);
+      assert.equal(saved.status, 200);
+      const policy = record(record(saved.body).data);
+      assert.equal(policy.isDefault, false);
+      assert.equal(policy.sampleGrams, values.sampleGrams);
+      assert.equal(policy.sampleMilliliters, values.sampleMilliliters);
+      assert.deepEqual(policy.warnings, [
+        "Thấp hơn mức tối thiểu 100 g theo QĐ 1246/QĐ-BYT",
+      ]);
+      assert.deepEqual(
+        record((await request(route, board.id)).body).data,
+        policy,
+      );
+      assert.deepEqual(
+        record((await request(route, otherBoard.id)).body).data,
+        record(defaults.body).data,
+      );
+      const stored = await db.schoolSamplePolicy.findUniqueOrThrow({
+        where: { schoolId: schoolA.id },
+      });
+      assert.equal(stored.updatedByUserId, board.id);
+      assert.equal(stored.sampleGrams.toString(), values.sampleGrams);
+      assert.equal(
+        stored.sampleMilliliters.toString(),
+        values.sampleMilliliters,
+      );
+    },
+  );
+
+  await context.test(
+    "supply round approval isolates schools and rejects a stale version",
+    async () => {
+      const warehouse = await user("INGREDIENT_MANAGEMENT_DEPARTMENT", {
+        schoolId: schoolA.id,
+      });
+      const otherWarehouse = await user("INGREDIENT_MANAGEMENT_DEPARTMENT", {
+        schoolId: schoolB.id,
+      });
+      for (const account of [warehouse, otherWarehouse]) {
+        const session = await authSessions.issue(account.id);
+        issued.set(account.id, session);
+        refreshTokens.push(session.refreshToken);
+      }
+
+      const round = await db.supplyRound.create({
+        data: {
+          schoolId: schoolA.id,
+          deliveryDate: new Date("2027-02-08T00:00:00.000Z"),
+          batchNo: 1,
+          status: "IN_REVIEW",
+        },
+      });
+      const dish = await db.dish.create({
+        data: {
+          schoolId: schoolA.id,
+          name: "Món kiểm thử duyệt kế hoạch mẻ",
+          standardQuantity: 100,
+          standardUnit: "g",
+        },
+      });
+      const planVersion = "a".repeat(32);
+      const key = { supplyRoundId: round.id, dishId: dish.id };
+      await db.supplyRoundDishPlan.create({
+        data: { ...key, status: "PENDING_WAREHOUSE", planVersion },
+      });
+      const route = `/api/supply-rounds/${round.id}/dishes/${dish.id}/approve`;
+      assert.equal(
+        (await request(route, otherWarehouse.id, "POST", { planVersion }))
+          .status,
+        404,
+      );
+      assert.equal(
+        (
+          await request(route, warehouse.id, "POST", {
+            planVersion: "b".repeat(32),
+          })
+        ).status,
+        409,
+      );
+      const plan = await db.supplyRoundDishPlan.findUniqueOrThrow({
+        where: { supplyRoundId_dishId: key },
+      });
+      assert.equal(plan.status, "PENDING_WAREHOUSE");
+      assert.equal(plan.planVersion, planVersion);
+      assert.equal(plan.approvedByUserId, null);
+    },
+  );
+
+  await context.test(
     "school grades are isolated and can be detached from historical classes",
     async () => {
       const route = "/api/school-grades";

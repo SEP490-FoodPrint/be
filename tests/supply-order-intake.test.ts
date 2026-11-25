@@ -349,6 +349,7 @@ function detailRow(): SupplierOrderDetailRow {
           id: "00000000-0000-4000-8000-000000000010",
           ingredientEntryId: "00000000-0000-4000-8000-000000000011",
           requestedQuantity: new Prisma.Decimal("99999999999.123"),
+          sampleTopUpQuantity: new Prisma.Decimal(0),
           unit: "kg",
           note: null,
           IngredientEntry: {

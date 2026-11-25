@@ -107,8 +107,29 @@ export function createRetainedSampleService(
           const dishId =
             input.dishId ??
             (batch.dishes.length === 1 ? batch.dishes[0].dishId : undefined);
-          if (!dishId || !batch.dishes.some((d) => d.dishId === dishId))
+          if (!dishId)
             throw new HttpError(400, "Cần chọn đúng món trong mẻ để lưu mẫu");
+          const dish = batch.dishes.find((d) => d.dishId === dishId);
+          if (!dish)
+            throw new HttpError(400, "Cần chọn đúng món trong mẻ để lưu mẫu");
+          const hasPlannedSample =
+            dish.sampleQuantity !== null &&
+            dish.sampleQuantity !== undefined &&
+            dish.sampleUnit !== null &&
+            dish.sampleUnit !== undefined;
+          if (hasPlannedSample) {
+            if (input.quantity !== undefined || input.unit !== undefined)
+              throw new HttpError(
+                400,
+                "Mẻ đã ấn định lượng mẫu khi lập kế hoạch; không gửi lượng hoặc đơn vị",
+              );
+          } else if (input.quantity === undefined || input.unit === undefined) {
+            throw new HttpError(400, "Vui lòng nhập lượng mẫu và đơn vị");
+          }
+          const quantity = hasPlannedSample
+            ? dish.sampleQuantity!.toString()
+            : input.quantity!;
+          const sampleUnit = hasPlannedSample ? dish.sampleUnit! : input.unit!;
           const unit = await repository.lockStorageUnit(
             tx,
             input.storageUnitId,
@@ -124,9 +145,8 @@ export function createRetainedSampleService(
           );
           if (existing) {
             if (
-              existing.quantity?.toString() !==
-                String(Number(input.quantity)) ||
-              existing.unit !== input.unit ||
+              existing.quantity?.toString() !== String(Number(quantity)) ||
+              existing.unit !== sampleUnit ||
               existing.storageUnitId !== unit.id ||
               (existing.storageLocation !== storageLocation &&
                 existing.storageLocation !== input.storageLocation &&
@@ -191,10 +211,13 @@ export function createRetainedSampleService(
               `${input.storageLocation} của tủ ${unit.name} đã có mẫu lưu, hãy chọn ngăn khác`,
             );
           const sample = await repository.create(tx, cookingBatchId, actor.id, {
-            ...input,
-            ...photo,
-            storageLocation,
             dishId,
+            quantity,
+            unit: sampleUnit,
+            storageUnitId: input.storageUnitId,
+            storageLocation,
+            sampledAt: input.sampledAt,
+            ...photo,
           });
           if (batch.MenuDay)
             await queueAllocationDraft(

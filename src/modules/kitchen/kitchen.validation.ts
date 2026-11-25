@@ -58,9 +58,20 @@ export const kitchenFiltersSchema = paginationSchema
     endDate: calendarDateSchema.optional(),
     mealType: mealTypeSchema.optional(),
     status: z
-      .enum(["UNCONFIRMED", "CONFIRMED", "COMPLETED"], {
-        error: "Trạng thái mẻ không hợp lệ",
-      })
+      .enum(
+        [
+          "UNCONFIRMED",
+          "PENDING_APPROVAL",
+          "ROUND1_APPROVED",
+          "ROUND2_APPROVED",
+          "CONFIRMED",
+          "COMPLETED",
+          "CANCELLED",
+        ],
+        {
+          error: "Trạng thái mẻ không hợp lệ",
+        },
+      )
       .optional(),
     menuDayId: requestUuidSchema.optional(),
     dishId: requestUuidSchema.optional(),

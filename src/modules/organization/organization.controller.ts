@@ -9,6 +9,7 @@ import {
 import {
   validateCookingMode,
   validateMealTimes,
+  validateSamplePolicy,
   validateDeliveryInspectionRoles,
   validateOrganizationSummaryQuery,
   validateOrganizationDetailParams,
@@ -65,6 +66,19 @@ export function createOrganizationController(
         requirePrincipal(req),
       );
       sendSuccess(res, result, "Cập nhật giờ phục vụ bữa ăn thành công");
+    }),
+
+    getSamplePolicy: asyncHandler(async (req, res) => {
+      const result = await service.getSamplePolicy(requirePrincipal(req));
+      sendSuccess(res, result, "Lấy cấu hình lưu mẫu thành công");
+    }),
+
+    updateSamplePolicy: asyncHandler(async (req, res) => {
+      const result = await service.updateSamplePolicy(
+        validateSamplePolicy(req.body),
+        requirePrincipal(req),
+      );
+      sendSuccess(res, result, "Cập nhật cấu hình lưu mẫu thành công");
     }),
 
     getDeliveryInspectionRoles: asyncHandler(async (req, res) => {

@@ -15,12 +15,22 @@ import {
   validateSupplierOrderListQuery,
   validateSupplierOrderOptionsQuery,
   validateSupplierSchoolOptionsQuery,
+  validateSupplierTopUp,
 } from "./supplier-order.validation";
 
 export function createSupplierOrderController(
   service: SupplierOrderService = supplierOrderService,
 ) {
   return {
+    confirmTopUp: asyncHandler(async (req, res) => {
+      validateSupplierOrderEmptyQuery(req.query);
+      const result = await service.confirmTopUp(
+        validateSupplierOrderDetailParams(req.params),
+        validateSupplierTopUp(req.body),
+        requirePrincipal(req),
+      );
+      sendSuccess(res, result, "Đã xác nhận lấy thêm nguyên liệu lưu mẫu");
+    }),
     create: asyncHandler(async (req, res) => {
       const idempotencyKey = validateSupplierOrderIdempotencyKey(
         req.headers["idempotency-key"],

@@ -13,6 +13,7 @@ import type {
   DailyMealPortionInput,
 } from "./meal-attendance.validation";
 import { assertPortionGroupSafety } from "../kitchen/kitchen.service";
+import { supplyRoundService } from "../supply-round/supply-round.service";
 import {
   allergyCountsFromGroups,
   expectedSpecialGroupCounts,
@@ -476,13 +477,38 @@ export function createMealAttendanceService(
             date: demand.mealDate,
             mealType: demand.mealType,
           });
+          const now = new Date();
           const finalized = await repository.finalizeSubmission(
             tx,
             id,
             actor.id,
-            new Date(),
+            now,
           );
           await autoSplitPortionGroups(tx, id, actor.id, actor.schoolId!);
+          const pending = await tx.class.count({
+            where: {
+              schoolId: actor.schoolId!,
+              status: "ACTIVE",
+              registeredMealPortions: { gt: 0 },
+              NOT: {
+                dailyMealPortions: {
+                  some: {
+                    mealDate: demand.mealDate,
+                    mealType: "LUNCH",
+                    status: "FINALIZED",
+                  },
+                },
+              },
+            },
+          });
+          if (pending === 0) {
+            await supplyRoundService.evaluateAndSkipBatch2IfReady(
+              tx,
+              actor.schoolId!,
+              demand.mealDate,
+              now,
+            );
+          }
           return finalized;
         },
       );

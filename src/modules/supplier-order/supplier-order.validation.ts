@@ -38,6 +38,21 @@ const positiveDecimalQuantitySchema = z
     value.includes(".") ? value.replace(/0+$/, "").replace(/\.$/, "") : value,
   );
 
+export const supplierTopUpSchema = z.strictObject({
+  lots: z
+    .array(
+      z.strictObject({
+        ingredientLotId: requestUuidSchema,
+        sampleTopUpQuantity: positiveDecimalQuantitySchema,
+      }),
+    )
+    .min(1)
+    .max(500),
+});
+
+export const validateSupplierTopUp = (value: unknown) =>
+  parseRequest(supplierTopUpSchema, value);
+
 export const requiredVehiclePlateSchema = z
   .string({ error: "Biển số xe là bắt buộc" })
   .trim()
@@ -128,6 +143,7 @@ export const createFromRequestBodySchema = z.strictObject({
     error: "sourceType phải là REQUEST hoặc STANDALONE",
   }),
   supplyRequestId: requestUuidSchema,
+  replacesDeliveryId: requestUuidSchema.nullable().optional(),
   sources: z
     .array(requestSourceSelectionSchema, {
       error: "Danh sách nguồn cung ứng phải là mảng",

@@ -113,7 +113,9 @@ export function createRetainedSampleRepository(read?: ListReader) {
           completedAt: true,
           mealType: true,
           MenuDay: { select: { menuDate: true } },
-          dishes: { select: { dishId: true } },
+          dishes: {
+            select: { dishId: true, sampleQuantity: true, sampleUnit: true },
+          },
         },
       });
     },

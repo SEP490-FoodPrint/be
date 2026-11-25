@@ -12,6 +12,7 @@ import type {
   supplierOrderListQuerySchema,
   supplierOrderOptionsQuerySchema,
   supplierSchoolOptionsQuerySchema,
+  supplierTopUpSchema,
 } from "./supplier-order.validation";
 
 export type RequestSourceSelectionDTO = z.infer<
@@ -66,3 +67,4 @@ export type SupplierOrderEmptyQueryDTO = z.infer<
 export type DispatchSupplierOrderBodyDTO = z.infer<
   typeof dispatchSupplierOrderBodySchema
 >;
+export type SupplierTopUpDTO = z.infer<typeof supplierTopUpSchema>;
