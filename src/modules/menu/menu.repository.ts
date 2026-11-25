@@ -928,6 +928,15 @@ export const menuRepository = {
       update: { displayOrder: displayOrder },
     });
   },
+  createMealDishes(client: Tx, meal: MealReference, dishIds: string[]) {
+    return client.menuDayDish.createMany({
+      data: dishIds.map((dishId, index) => ({
+        ...meal,
+        dishId,
+        displayOrder: index + 1,
+      })),
+    });
+  },
   insertDayIngredients(client: Tx, ingredients: DayIngredientWrite[]) {
     return client.menuDayDishIngredient.createMany({ data: ingredients });
   },

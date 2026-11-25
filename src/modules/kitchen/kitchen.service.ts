@@ -769,9 +769,13 @@ export async function reserveMealSeasonings(
   menuDate: Date,
   portions: number,
   mode: CookingMode,
-  preview = false,
-  additional: readonly PlanningLot[] = [],
+  options: {
+    preview?: boolean;
+    additional?: readonly PlanningLot[];
+    extend?: boolean;
+  } = {},
 ) {
+  const { preview = false, additional = [], extend = false } = options;
   const standards = await tx.menuMealSeasoning.findMany({
     where: mealKey(meal),
     include: { ingredientEntry: true },
@@ -813,10 +817,14 @@ export async function reserveMealSeasonings(
       409,
       "Gia vị có liên quan dị ứng; cần phương án thực đơn phù hợp trước",
     );
+  const previousPortions = existing[0]?.plannedPortions ?? 0;
   if (existing.length) {
     if (
+      (previousPortions !== portions &&
+        !(extend && portions > previousPortions)) ||
       existing.some(
-        (row) => row.plannedPortions !== portions || row.usedAt !== null,
+        (row) =>
+          row.plannedPortions !== previousPortions || row.usedAt !== null,
       )
     )
       throw new HttpError(
@@ -832,7 +840,7 @@ export async function reserveMealSeasonings(
           total.add(convertQuantity(row.quantityUsed, row.unit, standard.unit)),
         new Prisma.Decimal(0),
       );
-      if (!sum.eq(standard.quantityPerPortion.mul(portions)))
+      if (!sum.eq(standard.quantityPerPortion.mul(previousPortions)))
         throw new HttpError(
           409,
           "Phân bổ gia vị khác định mức đã chốt; cần đối chiếu",
@@ -846,8 +854,9 @@ export async function reserveMealSeasonings(
     )
       throw new HttpError(409, "Phân bổ gia vị không khớp thực đơn");
     await checkMealSeasoningStock(tx, meal, schoolId);
-    return;
+    if (previousPortions === portions) return;
   }
+  const additionalPortions = portions - previousPortions;
   let stock = await readPlanningStock(
     tx,
     schoolId,
@@ -865,7 +874,11 @@ export async function reserveMealSeasonings(
   // A shared meal pool cannot assign split spice lots to individual dishes.
   // Preserve SEPARATE_BY_LOT by choosing one sufficient lot per seasoning.
   if (mode === "SEPARATE_BY_LOT") {
+    const existingLotIds = new Set(
+      existing.map(({ ingredientLotId }) => ingredientLotId),
+    );
     stock = stock.filter((lot) => {
+      if (existingLotIds.size && !existingLotIds.has(lot.id)) return false;
       const s = standards.find(
         (row) => row.ingredientEntryId === lot.ingredientEntryId,
       )!;
@@ -873,7 +886,7 @@ export async function reserveMealSeasonings(
         new Prisma.Decimal(lot.availableQuantity).sub(lot.reservedQuantity),
         lot.unit,
         s.unit,
-      ).gte(s.quantityPerPortion.mul(portions));
+      ).gte(s.quantityPerPortion.mul(additionalPortions));
     });
     if (
       standards.some(
@@ -887,7 +900,7 @@ export async function reserveMealSeasonings(
       );
   }
   const plans = planCookingBatches(
-    portions,
+    additionalPortions,
     mode,
     standards.map((s) => ({
       ingredientEntryId: s.ingredientEntryId,
@@ -908,16 +921,43 @@ export async function reserveMealSeasonings(
       })),
     );
   const byLot = new Map(stock.map((lot) => [lot.id, lot]));
-  for (const plan of plans)
-    for (const lot of plan.lots)
-      await tx.menuMealSeasoningLot.create({
-        data: {
-          ...mealKey(meal),
-          ...lot,
-          plannedPortions: portions,
-          ingredientEntryId: byLot.get(lot.ingredientLotId)!.ingredientEntryId,
-        },
-      });
+  const existingByLot = new Map(
+    existing.map((row) => [row.ingredientLotId, row]),
+  );
+  if (existing.length)
+    await tx.menuMealSeasoningLot.updateMany({
+      where: mealKey(meal),
+      data: { plannedPortions: portions },
+    });
+  for (const plan of plans) {
+    for (const lot of plan.lots) {
+      const prior = existingByLot.get(lot.ingredientLotId);
+      if (prior) {
+        await tx.menuMealSeasoningLot.update({
+          where: { id: prior.id },
+          data: {
+            quantityUsed: {
+              increment: convertQuantity(
+                new Prisma.Decimal(lot.quantityUsed),
+                lot.unit,
+                prior.unit,
+              ),
+            },
+          },
+        });
+      } else {
+        await tx.menuMealSeasoningLot.create({
+          data: {
+            ...mealKey(meal),
+            ...lot,
+            plannedPortions: portions,
+            ingredientEntryId: byLot.get(lot.ingredientLotId)!
+              .ingredientEntryId,
+          },
+        });
+      }
+    }
+  }
 }
 
 export async function checkMealSeasoningStock(
@@ -1626,8 +1666,7 @@ export function createKitchenLifecycle(
             menu.menuDate,
             demand.totalPortions,
             mode,
-            true,
-            stock,
+            { preview: true, additional: stock },
           )) ?? [];
         const allocationProfiles = menu.WeeklyMenu?.isSchoolWide
           ? await repository.allocationGradeRecipes(

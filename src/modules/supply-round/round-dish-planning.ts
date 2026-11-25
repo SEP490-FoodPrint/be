@@ -139,15 +139,21 @@ export async function planRoundOneDish(
     const gradeIds = new Set(
       menu.WeeklyMenu?.grades.map(({ gradeId }) => gradeId),
     );
-    const portions = gradePortions.reduce((sum, row) => {
-      if (!(menu.WeeklyMenu?.isSchoolWide || gradeIds.has(row.gradeId)))
-        return sum;
-      if (round.batchNo === 2 && actualByGrade) {
-        const actual = actualByGrade.get(row.gradeId) ?? 0;
-        return sum + Math.max(0, actual - row.portions);
-      }
-      return sum + row.portions;
-    }, 0);
+    const applicableGrades = gradePortions.filter(
+      ({ gradeId }) => menu.WeeklyMenu?.isSchoolWide || gradeIds.has(gradeId),
+    );
+    const firstRoundPortions = applicableGrades.reduce(
+      (sum, row) => sum + row.portions,
+      0,
+    );
+    const portions = actualByGrade
+      ? applicableGrades.reduce(
+          (sum, row) =>
+            sum +
+            Math.max(0, (actualByGrade.get(row.gradeId) ?? 0) - row.portions),
+          0,
+        )
+      : firstRoundPortions;
     if (!portions) continue;
     const previous = await kitchenRepository.listMealBatches(tx, meal);
     if (
@@ -237,6 +243,9 @@ export async function planRoundOneDish(
       dish,
       occurrence,
       portions,
+      mealSeasoningPortions: actualByGrade
+        ? firstRoundPortions + portions
+        : portions,
       shared,
       recipe: recipe.length ? recipe : allLines,
       lines,
@@ -275,8 +284,9 @@ export async function planRoundOneDish(
       meal,
       schoolId,
       deliveryDate,
-      remainingPortions,
+      plan.mealSeasoningPortions,
       mode,
+      { extend: round.batchNo === 2 },
     );
     const stock = await readPlanningStock(
       tx,
@@ -424,11 +434,18 @@ export async function planRoundOneDish(
       createdByUserId: actorId,
       batchCode: groupCode,
     });
-    const fallback = dish.ingredients.map((line) => ({
-      ingredientId: line.ingredientId,
-      quantityPerPortion: line.quantityPerPortion.toString(),
-      unit: line.unit,
-    }));
+    const recipeEntries = new Set(recipe.map((line) => line.ingredientEntryId));
+    const fallback = dish.ingredients
+      .filter((line) =>
+        line.ingredient.ingredientEntries.some(({ id }) =>
+          recipeEntries.has(id),
+        ),
+      )
+      .map((line) => ({
+        ingredientId: line.ingredientId,
+        quantityPerPortion: line.quantityPerPortion.toString(),
+        unit: line.unit,
+      }));
     for (const [index, child] of batchesToCreate.entries()) {
       const lots = new Map(
         child.dishes[0].lots.map((lot) => [

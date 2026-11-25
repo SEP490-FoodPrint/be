@@ -293,6 +293,7 @@ function fixture(
   stub("deleteDaySeasonings", {});
   stub("activeSchoolDish", { id: id(6), status: "ACTIVE" });
   stub("saveMealDish", {});
+  stub("createMealDishes", {});
   stub("linkedIngredients", [{ id: id(7), defaultUnit: "g" }]);
   stub("activeSeasoningEntries", [
     { id: id(8), Ingredient: { defaultUnit: "g" } },
@@ -1234,6 +1235,8 @@ void test("reopening an unchanged per-grade draft keeps frozen norms rather than
 
 void test("a complete grade batch submits all grade snapshots together", async (t) => {
   const f = gradeFixture(t);
+  const unitLookup = t.mock.method(measurementUnitMock, "findUnique");
+  const unitNormLookup = t.mock.method(repository, "existingUnitNorms");
   f.menu.menuDays[0].menuDayDishes.push({
     ...f.menu.menuDays[0].menuDayDishes[0],
     mealType: "AFTERNOON",
@@ -1289,4 +1292,7 @@ void test("a complete grade batch submits all grade snapshots together", async (
     ],
   );
   assert.equal(f.counts().committedWrites, 10);
+  assert.equal(f.counts().allergyReads, 2);
+  assert.equal(unitLookup.mock.callCount(), 1);
+  assert.equal(unitNormLookup.mock.callCount(), 0);
 });

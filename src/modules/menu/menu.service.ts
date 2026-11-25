@@ -120,10 +120,23 @@ export async function reviewMenuAllergies(
   tx: Tx,
   days: ReturnType<typeof menuCategoryDto>["menuDays"],
   schoolId: string,
+  allergiesByMenu = new Map<
+    string,
+    Awaited<ReturnType<typeof repository.classAllergies>>
+  >(),
+  menuId?: string,
 ): Promise<MenuCreationAllergyReportDTO> {
   const allergyChecks: MenuCreationAllergyReportDTO["allergyChecks"] = [];
   for (const day of days) {
-    for (const mealType of new Set(day.menuDayDishes.map((d) => d.mealType))) {
+    const mealTypes = [...new Set(day.menuDayDishes.map((d) => d.mealType))];
+    if (!mealTypes.length) continue;
+    const scopeKey = menuId || day.weeklyMenuId || day.id;
+    let classAllergies = allergiesByMenu.get(scopeKey);
+    if (!classAllergies) {
+      classAllergies = await repository.classAllergies(tx, schoolId, day.id);
+      allergiesByMenu.set(scopeKey, classAllergies);
+    }
+    for (const mealType of mealTypes) {
       const names = new Map<string, string>();
       for (const dish of day.menuDayDishes.filter(
         (d) => d.mealType === mealType,
@@ -138,7 +151,7 @@ export async function reviewMenuAllergies(
           line.ingredientEntry.Ingredient.name,
         );
       const pairs = matchClassAllergies(
-        await repository.classAllergies(tx, schoolId, day.id),
+        classAllergies,
         [...names].map(([id, name]) => ({ id, name })),
       );
       // Một xung đột = một dị ứng (theo nguyên liệu khai báo) gặp một nguyên liệu của bữa.
@@ -214,6 +227,32 @@ async function mealDay(tx: Tx, meal: MenuMeal, schoolId: string) {
   return day;
 }
 
+function menuIngredientValidationCache() {
+  return {
+    units: new Set<string>(),
+    ingredients: new Map<
+      string,
+      Awaited<ReturnType<typeof repository.linkedIngredients>>
+    >(),
+    seasonings: new Map<
+      string,
+      Awaited<ReturnType<typeof repository.activeSeasoningEntries>>
+    >(),
+    classAllergies: new Map<
+      string,
+      Awaited<ReturnType<typeof repository.classAllergies>>
+    >(),
+    academicYears: null as Awaited<
+      ReturnType<typeof repository.academicYears>
+    > | null,
+    schoolGrades: new Map<
+      string,
+      Awaited<ReturnType<typeof repository.schoolGrades>>
+    >(),
+    revisionCounts: new Map<string, number>(),
+  };
+}
+
 async function validateIngredientSources(
   tx: Tx,
 
@@ -222,14 +261,24 @@ async function validateIngredientSources(
   schoolId: string,
   menuDayId?: string,
   mealType?: "LUNCH" | "AFTERNOON",
+  cache = menuIngredientValidationCache(),
+  existingNorms?: Awaited<ReturnType<typeof repository.existingUnitNorms>>,
 ) {
-  const previous = menuDayId
-    ? await repository.existingUnitNorms(tx, schoolId, menuDayId, mealType)
-    : { ingredients: [], seasonings: [] };
+  const previous =
+    existingNorms ??
+    (menuDayId
+      ? await repository.existingUnitNorms(tx, schoolId, menuDayId, mealType)
+      : { ingredients: [], seasonings: [] });
+  const resolveUnit = async (unit: string, allowInactive: boolean) => {
+    const key = JSON.stringify([unit, allowInactive]);
+    if (cache.units.has(key)) return;
+    await resolveMeasurementUnit(tx, unit, allowInactive);
+    cache.units.add(key);
+    if (!allowInactive) cache.units.add(JSON.stringify([unit, true]));
+  };
   for (const dish of input.dishes)
     for (const row of dish.ingredients)
-      await resolveMeasurementUnit(
-        tx,
+      await resolveUnit(
         row.unit,
         previous.ingredients.some(
           (old) =>
@@ -239,8 +288,7 @@ async function validateIngredientSources(
         ),
       );
   for (const row of input.seasonings)
-    await resolveMeasurementUnit(
-      tx,
+    await resolveUnit(
       row.unit,
       previous.seasonings.some(
         (old) =>
@@ -256,11 +304,12 @@ async function validateIngredientSources(
     ),
   ];
 
-  const catalog = await repository.linkedIngredients(
-    tx,
-    ingredientIds,
-    schoolId,
-  );
+  const ingredientKey = [...ingredientIds].sort().join(",");
+  let catalog = cache.ingredients.get(ingredientKey);
+  if (!catalog) {
+    catalog = await repository.linkedIngredients(tx, ingredientIds, schoolId);
+    cache.ingredients.set(ingredientKey, catalog);
+  }
 
   if (catalog.length !== ingredientIds.length)
     throw new HttpError(
@@ -269,11 +318,17 @@ async function validateIngredientSources(
       "Nguyên liệu chính phải từ Supplier đang liên kết với trường",
     );
 
-  const entries = await repository.activeSeasoningEntries(
-    tx,
-    input.seasonings.map((row) => row.ingredientEntryId),
-    schoolId,
-  );
+  const seasoningIds = input.seasonings.map((row) => row.ingredientEntryId);
+  const seasoningKey = [...new Set(seasoningIds)].sort().join(",");
+  let entries = cache.seasonings.get(seasoningKey);
+  if (!entries) {
+    entries = await repository.activeSeasoningEntries(
+      tx,
+      seasoningIds,
+      schoolId,
+    );
+    cache.seasonings.set(seasoningKey, entries);
+  }
 
   const validIds = new Set(entries.map((entry) => entry.id));
   const invalid = [
@@ -1235,6 +1290,7 @@ function createMenuOperations(
     input: MenuWrite,
 
     schoolId: string,
+    validationCache = menuIngredientValidationCache(),
   ) {
     const parent = await repository.menuEditHeader(tx, id);
     const gradeIds = parent.grades?.map((grade) => grade.gradeId) ?? [];
@@ -1245,6 +1301,10 @@ function createMenuOperations(
     const current = await repository.menuDayHeaders(tx, id);
     const snapshot =
       gradeIds.length && current.length ? await owned(tx, id, schoolId) : null;
+    const recipes = new Map<
+      string,
+      Awaited<ReturnType<typeof readDatabaseMealRecipe>>
+    >();
     const canonicalNorms = (
       dishes: MenuStandardsInput["dishes"],
       seasonings: MenuStandardsInput["seasonings"],
@@ -1441,9 +1501,10 @@ function createMenuOperations(
         ? await repository.updateDayNote(tx, old.id, day.note)
         : await repository.createDay(tx, id, day.menuDate, day.note);
 
-      await repository.deleteDayIngredients(tx, saved.id);
-
-      await repository.deleteDaySeasonings(tx, saved.id);
+      if (old) {
+        await repository.deleteDayIngredients(tx, saved.id);
+        await repository.deleteDaySeasonings(tx, saved.id);
+      }
 
       const desired: { dishId: string; mealType: "LUNCH" | "AFTERNOON" }[] = [];
 
@@ -1482,18 +1543,26 @@ function createMenuOperations(
                   unit: line.unit,
                 })),
             );
-        if (meal.useDishRecipes || (gradeIds.length > 0 && !unchanged)) {
+        const useDatabaseRecipe =
+          meal.useDishRecipes || (gradeIds.length > 0 && !unchanged);
+        if (useDatabaseRecipe) {
           if (meal.dishes.some((d) => !d.dishId))
             throw new HttpError(
               422,
               "Chọn món đã lưu trong danh mục của trường",
             );
-          const recipe = await readDatabaseMealRecipe(
-            tx,
-            schoolId,
-            meal.dishes.map((d) => d.dishId!),
-            gradeIds,
-          );
+          const dishIds = meal.dishes.map((d) => d.dishId!);
+          const key = dishIds.join(",");
+          let recipe = recipes.get(key);
+          if (!recipe) {
+            recipe = await readDatabaseMealRecipe(
+              tx,
+              schoolId,
+              dishIds,
+              gradeIds,
+            );
+            recipes.set(key, recipe);
+          }
           meal.dishes = recipe.dishes.map((d) => ({ ...d, name: undefined }));
           meal.seasonings = recipe.seasonings.map(
             ({ ingredientEntryId, quantityPerPortion, unit }) => ({
@@ -1506,9 +1575,12 @@ function createMenuOperations(
         const dishes: MenuStandardsInput["dishes"] = [];
 
         for (const [displayOrder, item] of meal.dishes.entries()) {
-          const dish = item.dishId
-            ? await repository.activeSchoolDish(tx, schoolId, item.dishId)
-            : await repository.namedSchoolDish(tx, schoolId, item.name!);
+          const dish =
+            useDatabaseRecipe && item.dishId
+              ? { id: item.dishId, status: "ACTIVE" }
+              : item.dishId
+                ? await repository.activeSchoolDish(tx, schoolId, item.dishId)
+                : await repository.namedSchoolDish(tx, schoolId, item.name!);
 
           // Món phải có mốc chuẩn nên không tự tạo món chỉ từ tên trong thực đơn.
           if (!dish && item.name)
@@ -1531,14 +1603,21 @@ function createMenuOperations(
 
           desired.push({ dishId: dish.id, mealType: meal.mealType });
 
-          await repository.saveMealDish(
-            tx,
-            saved.id,
-            dish.id,
-            meal.mealType,
-            displayOrder + 1,
-          );
+          if (old)
+            await repository.saveMealDish(
+              tx,
+              saved.id,
+              dish.id,
+              meal.mealType,
+              displayOrder + 1,
+            );
         }
+        if (!old)
+          await repository.createMealDishes(
+            tx,
+            { menuDayId: saved.id, mealType: meal.mealType },
+            dishes.map(({ dishId }) => dishId),
+          );
 
         const norms = { dishes, seasonings: meal.seasonings };
 
@@ -1546,8 +1625,9 @@ function createMenuOperations(
           tx,
           norms,
           schoolId,
-          saved.id,
+          old ? saved.id : undefined,
           meal.mealType,
+          validationCache,
         );
 
         const ingredients = dishes.flatMap((d) =>
@@ -1638,11 +1718,9 @@ function createMenuOperations(
         }
       }
 
-      const oldDishes = await repository.removedMealDishes(
-        tx,
-        saved.id,
-        desired,
-      );
+      const oldDishes = old
+        ? await repository.removedMealDishes(tx, saved.id, desired)
+        : [];
 
       if (
         oldDishes.length &&
@@ -1654,16 +1732,18 @@ function createMenuOperations(
           "Cần điều chỉnh nhóm suất trước khi bỏ món đang được nhóm sử dụng",
         );
 
-      await repository.deleteRemovedMealDishes(tx, saved.id, desired);
+      if (oldDishes.length)
+        await repository.deleteRemovedMealDishes(tx, saved.id, desired);
 
       for (const meal of day.meals)
-        await assertPortionGroupSafety(
-          tx,
+        if (old || meal.portionGroups?.length)
+          await assertPortionGroupSafety(
+            tx,
 
-          { menuDayId: saved.id, mealType: meal.mealType },
+            { menuDayId: saved.id, mealType: meal.mealType },
 
-          schoolId,
-        );
+            schoolId,
+          );
     }
   }
 
@@ -1673,6 +1753,7 @@ function createMenuOperations(
     menu: Awaited<ReturnType<typeof owned>>,
 
     schoolId: string,
+    validationCache = menuIngredientValidationCache(),
   ) {
     if (!menu.menuDays.length)
       throw new HttpError(422, "Thực đơn chưa có ngày ăn");
@@ -1729,18 +1810,38 @@ function createMenuOperations(
           schoolId,
           day.id,
           mealType,
+          validationCache,
+          {
+            ingredients: day.menuDayDishes
+              .filter((d) => d.mealType === mealType)
+              .flatMap((d) =>
+                d.ingredients.map((i) => ({
+                  dishId: d.dishId,
+                  ingredientId: i.ingredientId,
+                  unit: i.unit,
+                })),
+              ),
+            seasonings: day.mealSeasonings
+              .filter((s) => s.mealType === mealType)
+              .map((s) => ({
+                ingredientEntryId: s.ingredientEntryId,
+                unit: s.unit,
+              })),
+          },
         );
 
       for (const mealType of new Set(
         day.menuDayDishes.map((d) => d.mealType),
       )) {
-        const groups = await assertPortionGroupSafety(
-          tx,
+        const groups = day.portionGroups.some((g) => g.mealType === mealType)
+          ? await assertPortionGroupSafety(
+              tx,
 
-          { menuDayId: day.id, mealType },
+              { menuDayId: day.id, mealType },
 
-          schoolId,
-        );
+              schoolId,
+            )
+          : [];
         const mealIngredients = [
           ...day.menuDayDishes
             .filter((d) => d.mealType === mealType)
@@ -1757,10 +1858,17 @@ function createMenuOperations(
               name: s.ingredientEntry.Ingredient.name,
             })),
         ];
-        const conflicts = matchClassAllergies(
-          await repository.classAllergies(tx, schoolId, day.id),
-          mealIngredients,
-        );
+        const scopeKey = menu.id || day.weeklyMenuId || day.id;
+        let classAllergies = validationCache.classAllergies.get(scopeKey);
+        if (!classAllergies) {
+          classAllergies = await repository.classAllergies(
+            tx,
+            schoolId,
+            day.id,
+          );
+          validationCache.classAllergies.set(scopeKey, classAllergies);
+        }
+        const conflicts = matchClassAllergies(classAllergies, mealIngredients);
         if (
           conflicts.some(
             ({ row, ingredient }) =>
@@ -1827,11 +1935,47 @@ function createMenuOperations(
     tx: Tx,
     weekStartDate: Date,
     menuId: string | null,
+    validationCache?: ReturnType<typeof menuIngredientValidationCache>,
   ) {
-    const revisionRequested =
-      menuId !== null &&
-      (await repository.revisionRequestCount(tx, menuId)) > 0;
+    let revisionRequested = false;
+    if (menuId !== null) {
+      let count = validationCache?.revisionCounts.get(menuId);
+      if (count === undefined) {
+        count = await repository.revisionRequestCount(tx, menuId);
+        validationCache?.revisionCounts.set(menuId, count);
+      }
+      revisionRequested = count > 0;
+    }
     assertMenuWeekOpen(weekStartDate, today(), revisionRequested);
+  }
+
+  async function cachedAcademicYears(
+    tx: Tx,
+    schoolId: string,
+    validationCache: ReturnType<typeof menuIngredientValidationCache>,
+  ) {
+    if (!validationCache.academicYears) {
+      validationCache.academicYears = await repository.academicYears(
+        tx,
+        schoolId,
+      );
+    }
+    return validationCache.academicYears;
+  }
+
+  async function cachedSchoolGrades(
+    tx: Tx,
+    schoolId: string,
+    gradeIds: string[],
+    validationCache: ReturnType<typeof menuIngredientValidationCache>,
+  ) {
+    const key = [...gradeIds].sort().join(",");
+    let grades = validationCache.schoolGrades.get(key);
+    if (!grades) {
+      grades = await repository.schoolGrades(tx, schoolId, gradeIds);
+      validationCache.schoolGrades.set(key, grades);
+    }
+    return grades;
   }
 
   async function submitReady(
@@ -1839,10 +1983,14 @@ function createMenuOperations(
     menu: Awaited<ReturnType<typeof owned>>,
     schoolId: string,
     previousSubmittedAt: Date | null = null,
+    validationCache = menuIngredientValidationCache(),
   ) {
-    await assertWeekOpen(tx, menu.weekStartDate, menu.id);
-    await ready(tx, menu, schoolId);
-    assertCompleteMenuWeek(menu, await repository.academicYears(tx, schoolId));
+    await assertWeekOpen(tx, menu.weekStartDate, menu.id, validationCache);
+    await ready(tx, menu, schoolId, validationCache);
+    assertCompleteMenuWeek(
+      menu,
+      await cachedAcademicYears(tx, schoolId, validationCache),
+    );
     await repository.submitDraftDays(tx, menu.id);
     await repository.submitWeeklyMenu(
       tx,
@@ -1858,15 +2006,20 @@ function createMenuOperations(
     schoolId: string,
     input: MenuWrite,
     gradeBatch = false,
+    validationCache = menuIngredientValidationCache(),
   ) {
     assertPermission(actor, "class_allergy.view");
-    const calendarYears = await repository.academicYears(tx, schoolId);
+    const calendarYears = await cachedAcademicYears(
+      tx,
+      schoolId,
+      validationCache,
+    );
     assertNoHolidayMenuDays(input.days, calendarYears);
     const gradeIds = input.gradeIds ?? [];
     if (
       gradeIds.length &&
-      (await repository.schoolGrades(tx, schoolId, gradeIds)).length !==
-        gradeIds.length
+      (await cachedSchoolGrades(tx, schoolId, gradeIds, validationCache))
+        .length !== gradeIds.length
     )
       throw new HttpError(
         422,
@@ -1878,7 +2031,12 @@ function createMenuOperations(
       input.weekStartDate,
       gradeIds,
     );
-    await assertWeekOpen(tx, input.weekStartDate, existingWeekly?.id ?? null);
+    await assertWeekOpen(
+      tx,
+      input.weekStartDate,
+      existingWeekly?.id ?? null,
+      validationCache,
+    );
     assertMenuDaysEditable(
       input.days,
       existingWeekly?.menuDays ?? [],
@@ -2045,18 +2203,29 @@ function createMenuOperations(
         days: [...retainedDays, ...mergedIncomingDays],
       };
 
-      await writeDays(tx, existingWeekly.id, mergedInput, schoolId);
+      await writeDays(
+        tx,
+        existingWeekly.id,
+        mergedInput,
+        schoolId,
+        validationCache,
+      );
 
       await repository.resetForEditing(tx, existingWeekly.id);
       const saved = await owned(tx, existingWeekly.id, schoolId);
       return {
         ...saved,
-        ...(await reviewMenuAllergies(tx, saved.menuDays, schoolId)),
+        ...(await reviewMenuAllergies(
+          tx,
+          saved.menuDays,
+          schoolId,
+          validationCache.classAllergies,
+          saved.id,
+        )),
       };
     }
 
-    const years = await repository.academicYears(tx, schoolId);
-    const year = years.find(
+    const year = calendarYears.find(
       (row) =>
         getSchoolMonday(row.startDate) <= input.weekStartDate &&
         input.weekStartDate.getTime() <
@@ -2077,12 +2246,18 @@ function createMenuOperations(
       gradeIds,
     );
 
-    await writeDays(tx, menu.id, input, schoolId);
+    await writeDays(tx, menu.id, input, schoolId, validationCache);
 
     const saved = await owned(tx, menu.id, schoolId);
     return {
       ...saved,
-      ...(await reviewMenuAllergies(tx, saved.menuDays, schoolId)),
+      ...(await reviewMenuAllergies(
+        tx,
+        saved.menuDays,
+        schoolId,
+        validationCache.classAllergies,
+        saved.id,
+      )),
     };
   }
 
@@ -2098,16 +2273,21 @@ function createMenuOperations(
         async (tx, actor, schoolId) => {
           assertPermission(actor, "class_allergy.view");
           if (input.submit) assertPermission(actor, "menu.update");
-          const grades = await repository.schoolGrades(
+          const validationCache = menuIngredientValidationCache();
+          const grades = await cachedSchoolGrades(
             tx,
             schoolId,
             input.gradeIds,
+            validationCache,
           );
           if (grades.length !== input.gradeIds.length)
             throw new HttpError(
               422,
               "Khối đã chọn không thuộc trường đang đăng nhập",
             );
+          for (const grade of grades) {
+            validationCache.schoolGrades.set(grade.id, [grade]);
+          }
           const savedMenus = [];
           const allergyChecks: MenuGradeBatchResponseDTO["allergyChecks"] = [];
           for (const grade of [...grades].sort((a, b) =>
@@ -2125,6 +2305,7 @@ function createMenuOperations(
                   days: structuredClone(input.days),
                 },
                 true,
+                validationCache,
               );
               savedMenus.push({ saved, grade });
               allergyChecks.push(
@@ -2150,7 +2331,7 @@ function createMenuOperations(
           const menus: MenuGradeBatchResponseDTO["menus"] = [];
           for (const { saved, grade } of savedMenus) {
             const menu = submitted
-              ? await submitReady(tx, saved, schoolId)
+              ? await submitReady(tx, saved, schoolId, null, validationCache)
               : saved;
             menus.push({
               id: menu.id,

@@ -288,3 +288,7 @@ FE: `npm run build` (FE chưa có script `lint`), các script test liên quan nh
 ## 12. Ngoài plan
 
 Theo spec mục 15–16: đơn giá, hạn chót khai báo của NCC, ghi đè lượng mẫu theo món, giao lại một phần, xử lý bữa thiếu món khi đơn bị hủy, thông báo email/đẩy, báo cáo thừa suất.
+
+## Sửa lỗi sau demo
+
+Đối chiếu [kế hoạch sửa và kiểm thử lại](../../../.task_specs/TASK-10-fix-demo-main-flow_plan.md). Dùng test hồi quy cho giao dịch gửi duyệt nhiều khối, trường hợp giữ thêm gia vị và bản chụp phân bổ đã tồn tại. Kiểm tra cả luồng qua frontend trên database riêng của buổi demo.

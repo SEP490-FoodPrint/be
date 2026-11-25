@@ -555,3 +555,25 @@ void test("repository scopes every meal source consistently", async () => {
   assert.equal(batch.where.mealType, "LUNCH");
   assert.equal(demand.where.mealType, "LUNCH");
 });
+
+void test("empty inactive-only grade menu does not block active grades from allocation", () => {
+  const data = gradeFixture();
+  data.demands = [data.demands[0]];
+  data.batches = [data.batches[0]];
+  data.menus[1].WeeklyMenu = {
+    isSchoolWide: false,
+    grades: [
+      {
+        gradeId: "grade1",
+        grade: { name: "Khối 2", classes: [] },
+      },
+    ],
+  };
+  const ready = projectAllocationDay(data, date, "LUNCH");
+  assert.equal(ready.status, "READY");
+  assert.equal(ready.totals.finalized, 50);
+
+  data.menus[1].WeeklyMenu.grades[0].grade.classes = [{ id: "active-class" }];
+  const blocked = projectAllocationDay(data, date, "LUNCH");
+  assert.equal(blocked.status, "DEMAND_PENDING");
+});
