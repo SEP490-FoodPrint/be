@@ -19,14 +19,24 @@ export const BUSINESS_CODE_TYPES = {
   DE: "chuyến giao hàng",
   CP: "khiếu nại nguyên liệu",
   MC: "khiếu nại bữa ăn",
-  SC: "khiếu nại gửi hệ thống",
   AC: "khiếu nại leo thang lên ATTP",
   IC: "sự cố an toàn thực phẩm",
 } as const;
 export type BusinessCodeType = keyof typeof BUSINESS_CODE_TYPES;
 
-/** Chữ viết tắt đã dùng bởi cơ chế khác hoặc mã cũ; không được đăng ký lại. */
-const RESERVED_ABBREVIATIONS = ["LO", "CB", "BG", "SU", "SF", "REG"] as const;
+/**
+ * Chữ viết tắt đã dùng bởi cơ chế khác hoặc mã cũ; không được đăng ký lại.
+ * `SC` từng cấp cho khiếu nại gửi hệ thống, đã gỡ (specs/remove-system-complaints).
+ */
+const RESERVED_ABBREVIATIONS = [
+  "LO",
+  "CB",
+  "BG",
+  "SU",
+  "SF",
+  "REG",
+  "SC",
+] as const;
 
 for (const type of Object.keys(BUSINESS_CODE_TYPES)) {
   if (

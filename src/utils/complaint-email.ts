@@ -23,6 +23,7 @@ const HANDLER_LABELS: Record<ComplaintEmailKind, string> = {
   MEAL: "Ban Giám hiệu nhà trường",
   INGREDIENT: "nhà cung cấp",
   AUTHORITY: "đơn vị ATTP phường/xã",
+  // Không còn đơn SYSTEM (specs/remove-system-complaints); giữ nhãn vì enum DB còn giá trị này.
   SYSTEM: "Quản trị hệ thống FoodPrint",
 };
 
