@@ -40,3 +40,8 @@ Chia 2 PR: **PR A** (`feat/authority-officer-accounts`) gồm Phase 2–4 và t�
 - [x] T013 Unit tests (thêm file mới vào `test:unit`).
 - [x] T014 Integration + migration tests.
 - [x] T015 `npm run validate`, `test:unit`, `test:local:migrations`, `test:local:authorization`, spec gate; ghi kết quả thật.
+
+## Phase 8: Phường/xã trong danh mục trường/NCC
+
+- [x] T016 `location` và `hasLocation` ở danh sách/chi tiết trường và NCC, kèm unit và integration test, README (FR-012).
+- [x] T017 `frontend-plan.md`.

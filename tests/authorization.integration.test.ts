@@ -11708,6 +11708,62 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         ).locationId,
         ward.id,
       );
+      // FR-012: danh mục trường/NCC của System Admin trả phường/xã và lọc theo `hasLocation`.
+      const bareSchool = await db.school.create({
+        data: { name: "AC bare school" },
+      });
+      const bareSupplier = await db.supplier.create({
+        data: { name: "AC bare supplier" },
+      });
+      for (const [kind, placedId, placedName, bareId, bareName] of [
+        [
+          "schools",
+          areaSchool.id,
+          "AC area school",
+          bareSchool.id,
+          "AC bare school",
+        ],
+        [
+          "suppliers",
+          areaSupplier.id,
+          "AC supplier A",
+          bareSupplier.id,
+          "AC bare supplier",
+        ],
+      ] as const) {
+        const expected = { id: ward.id, code: ward.code, name: ward.name };
+        const found = async (name: string, hasLocation: boolean) => {
+          const response = await request(
+            `/api/${kind}?search=${encodeURIComponent(name)}&hasLocation=${hasLocation}`,
+            admin,
+          );
+          assert.equal(response.status, 200);
+          const page = data(response);
+          const items = page.items as { id: string; location: unknown }[];
+          assert.equal(record(page.pagination).total, items.length);
+          return items.map(({ id, location }) => ({ id, location }));
+        };
+        assert.deepEqual(await found(placedName, true), [
+          { id: placedId, location: expected },
+        ]);
+        assert.deepEqual(await found(placedName, false), []);
+        assert.deepEqual(await found(bareName, false), [
+          { id: bareId, location: null },
+        ]);
+        assert.deepEqual(await found(bareName, true), []);
+        assert.deepEqual(
+          data(await request(`/api/${kind}/${placedId}`, admin)).location,
+          expected,
+        );
+        assert.equal(
+          data(await request(`/api/${kind}/${bareId}`, admin)).location,
+          null,
+        );
+        assert.equal(
+          (await request(`/api/${kind}?hasLocation=yes`, admin)).status,
+          400,
+        );
+      }
       const areaSchools = async (actor: string) => {
         const response = await request(
           "/api/commune-food-safety-units/me/schools",

@@ -1,4 +1,5 @@
 import type { Prisma } from "../../generated/prisma/client";
+import { wardLocationSelect } from "../../utils/ward-location";
 const select = {
   id: true,
   name: true,
@@ -6,6 +7,7 @@ const select = {
   email: true,
   phone: true,
   address: true,
+  location: { select: wardLocationSelect },
   status: true,
   createdAt: true,
   updatedAt: true,
@@ -16,6 +18,7 @@ interface Filter {
   limit: number;
   search?: string;
   status?: "ACTIVE" | "INACTIVE";
+  hasLocation?: boolean;
 }
 function escapeSearch(value: string) {
   return value.replace(/[\\%_]/g, "\\$&");
@@ -32,6 +35,9 @@ export function createSupplierRepository() {
         AND: [
           scope,
           q.status ? { status: q.status } : {},
+          q.hasLocation === undefined
+            ? {}
+            : { locationId: q.hasLocation ? { not: null } : null },
           search
             ? {
                 OR: [

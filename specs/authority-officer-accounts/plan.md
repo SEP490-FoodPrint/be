@@ -44,6 +44,12 @@ Prisma: `User.email String? @db.Citext`. Rà các chỗ đọc `user.email` (ses
 5. **Catalog quyền**: thêm `authority_school.view` + grant officer; bỏ `["COMMUNE_FOOD_SAFETY_OFFICER", "dashboard.view"]`.
 6. **Tài liệu**: `src/modules/README.md`, `docs/AUTHORIZATION.md` (bảng endpoint mới, quyền), `docs/ONBOARDING.md` (`locationId`), `docs/AUTH_SESSIONS.md`/`EMAIL_VERIFICATION.md` (email lần đầu).
 
+### Bổ sung: phường/xã trong danh mục trường/NCC (FR-012)
+
+- `directory-validation.ts`: `hasLocationSchema` dùng chung; thêm vào query danh sách `organization` và `supplier`.
+- Repository hai module select `location` bằng `wardLocationSelect`, lọc `locationId` trong `where` sau phạm vi; service ánh xạ bằng `toWardLocation`. Không cần migration hay quyền mới.
+- `frontend-plan.md`: hợp đồng API cho frontend.
+
 ## Kiểm thử
 
 - Unit: validation tạo tài khoản/email setup/onboarding `locationId` (trường và NCC); service tạo cán bộ (409 phường/xã đã có, 400 không phải phường/xã, 403); `emailSetupRequired`; từ chối username sau khi có email; resource `authority-school`; chi tiết trường loại NCC `UNLINKED` và NCC `INACTIVE`, trường ngoài địa bàn `404`.

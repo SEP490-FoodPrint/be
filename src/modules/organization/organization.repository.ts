@@ -6,6 +6,7 @@ import type {
 } from "../../generated/prisma/client";
 import type { AuthPrincipal } from "../../types/auth";
 import { getPrisma } from "../../utils/database";
+import { wardLocationSelect } from "../../utils/ward-location";
 import { listWindow, type ListQuery } from "../../utils/list-query";
 import { listScopes } from "../../utils/resource-access";
 
@@ -27,6 +28,7 @@ const directorySelect = {
   email: true,
   phone: true,
   address: true,
+  location: { select: wardLocationSelect },
 } as const satisfies Prisma.SchoolSelect;
 export type SchoolDirectoryRow = Prisma.SchoolGetPayload<{
   select: typeof directorySelect;
@@ -36,6 +38,7 @@ interface DirectoryFilter {
   limit: number;
   search?: string;
   status?: "ACTIVE" | "INACTIVE";
+  hasLocation?: boolean;
 }
 export const publicSchoolInclude = {
   location: {
@@ -377,6 +380,9 @@ export function createOrganizationRepository(
         AND: [
           scope,
           q.status ? { status: q.status } : {},
+          q.hasLocation === undefined
+            ? {}
+            : { locationId: q.hasLocation ? { not: null } : null },
           search
             ? {
                 OR: [

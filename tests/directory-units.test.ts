@@ -14,6 +14,9 @@ void test("directory validation trims before length and rejects tenant overrides
   ]) {
     assert.equal(validate({ search: "   Hoa   " }).search, "Hoa");
     assert.equal(validate({ search: "   " }).search, undefined);
+    assert.equal(validate({}).hasLocation, undefined);
+    assert.equal(validate({ hasLocation: "true" }).hasLocation, true);
+    assert.equal(validate({ hasLocation: "false" }).hasLocation, false);
     assert.equal(
       validate({ search: `  ${"x".repeat(255)}  ` }).search?.length,
       255,
@@ -24,6 +27,8 @@ void test("directory validation trims before length and rejects tenant overrides
       { search: ["Hoa"] },
       { sortBy: "name" },
       { limit: "101" },
+      { hasLocation: "yes" },
+      { hasLocation: "" },
     ])
       assert.throws(() => validate(value));
   }
@@ -48,7 +53,13 @@ void test("supplier count and page use the identical scope/filter predicate and 
   const result = await createSupplierRepository().list(
     tx,
     { id: testAdmin.id },
-    { page: 2, limit: 5, search: "a%_\\", status: "ACTIVE" },
+    {
+      page: 2,
+      limit: 5,
+      search: "a%_\\",
+      status: "ACTIVE",
+      hasLocation: false,
+    },
   );
   assert.equal(result.total, 12);
   const args = findArgs as Prisma.SupplierFindManyArgs;
@@ -58,6 +69,7 @@ void test("supplier count and page use the identical scope/filter predicate and 
     AND: [
       { id: testAdmin.id },
       { status: "ACTIVE" },
+      { locationId: null },
       {
         OR: [
           { name: { contains: "a\\%\\_\\\\", mode: "insensitive" } },
@@ -82,6 +94,13 @@ void test("supplier list maps safe DTO, retains nulls and derives total without 
             email: null,
             phone: null,
             address: null,
+            location: {
+              id: testAdmin.id,
+              code: "W1",
+              name: "Phường 1",
+              level: 2,
+              isActive: true,
+            },
             status: "ACTIVE",
             createdAt: now,
             updatedAt: now,
@@ -109,6 +128,11 @@ void test("supplier list maps safe DTO, retains nulls and derives total without 
   assert.equal(result.pagination.total, 12);
   assert.equal(result.pagination.hasNext, true);
   assert.equal(result.items[0]?.email, null);
+  assert.deepEqual(result.items[0]?.location, {
+    id: testAdmin.id,
+    code: "W1",
+    name: "Phường 1",
+  });
   assert.equal(result.items[0]?.createdAt, now.toISOString());
   assert.ok(!Object.hasOwn(result.items[0], "passwordHash"));
   await assert.rejects(
