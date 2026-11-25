@@ -2,13 +2,16 @@
 -- Xóa vĩnh viễn dữ liệu FP-SC, bảng con và enum phân loại; quyền system_complaint.* bị xóa khỏi catalog DB.
 -- Giữ giá trị 'SYSTEM' của complaint_kind (đổi enum cần dựng lại mọi cột kind có FK tổ hợp),
 -- và chặn đơn mới bằng CHECK chk_complaints_kind_not_system.
+-- Lần chạy CD đầu trên Azure (2026-11-25) không lấy được khóa khi API đang chạy và đã rollback
+-- trọn vẹn; chờ khóa lâu hơn và lấy sẵn khóa mạnh nhất cần cho DROP/ALTER (specs/cd-remove-system-complaints).
 BEGIN;
-SET LOCAL lock_timeout = '5s';
-SET LOCAL statement_timeout = '60s';
+SET LOCAL lock_timeout = '30s';
+SET LOCAL statement_timeout = '5min';
 
--- Khóa các bảng bị xóa dữ liệu để không có đơn/bình luận/email mới chen vào giữa chừng.
-LOCK TABLE "foodprint"."complaints", "foodprint"."system_complaints",
-  "foodprint"."complaint_comments", "foodprint"."complaint_status_histories",
+-- complaints và system_complaints cần ACCESS EXCLUSIVE cho DROP TABLE/ADD CONSTRAINT: lấy ngay từ đầu
+-- để không phải nâng khóa giữa transaction. Các bảng con chặn ghi mới chen vào giữa chừng.
+LOCK TABLE "foodprint"."complaints", "foodprint"."system_complaints" IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE "foodprint"."complaint_comments", "foodprint"."complaint_status_histories",
   "foodprint"."email_outbox" IN SHARE ROW EXCLUSIVE MODE;
 
 DELETE FROM "foodprint"."email_outbox"
