@@ -163,10 +163,12 @@ function detailRow() {
           title: "Khiếu nại suất ăn lớp 1A",
           description: "Cơm bị sống",
           submittedAt: NOW,
+          attachments: [],
           comments: [],
         },
       },
     },
+    attachments: [],
     comments: [],
   };
 }
@@ -225,7 +227,7 @@ function escalateHarness(options: {
     },
     addComment: (_tx, input) => {
       calls.push(`comment:${input.type}`);
-      return Promise.resolve({});
+      return Promise.resolve({ id: "30000000-0000-4000-8000-0000000000c1" });
     },
     allocateCode: (_tx, type) => {
       calls.push(`code:${type}`);

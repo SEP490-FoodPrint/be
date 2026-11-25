@@ -4,6 +4,10 @@ import {
   buildComplaintEmail,
   type ComplaintEmailEvent,
 } from "../../utils/complaint-email";
+import type {
+  EvidenceStorage,
+  StoredEvidence,
+} from "../../utils/evidence-files";
 import {
   allowedTicketActions,
   displayStatus,
@@ -14,10 +18,15 @@ import {
   type TicketViewer,
 } from "./complaint-ticket.lifecycle";
 import type {
+  CommentSide,
+  CommentType,
   ComplaintTicketRepository,
+  TicketActor,
+  TicketAttachmentRow,
   TicketCommentRow,
 } from "./complaint-ticket.repository";
 import type {
+  TicketAttachmentDTO,
   TicketCommentDTO,
   TicketFieldsDTO,
 } from "./complaint-ticket.response.dto";
@@ -54,7 +63,39 @@ export function mapTicketFields(
   };
 }
 
-export function mapTicketComment(row: TicketCommentRow): TicketCommentDTO {
+/** Ký URL xem file; lỗi cấu hình lưu trữ không làm hỏng việc đọc đơn (`url = null`). */
+export function mapTicketAttachment(
+  row: TicketAttachmentRow,
+  storage: Pick<EvidenceStorage, "url">,
+): TicketAttachmentDTO {
+  let url: string | null;
+  try {
+    url = storage.url(row.storagePublicId);
+  } catch {
+    url = null;
+  }
+  return {
+    id: row.id,
+    fileName: row.originalFilename,
+    mimeType: row.mimeType,
+    sizeBytes: row.sizeBytes,
+    uploaderSide: row.uploaderSide,
+    createdAt: row.createdAt.toISOString(),
+    url,
+  };
+}
+
+export function mapTicketAttachments(
+  rows: readonly TicketAttachmentRow[],
+  storage: Pick<EvidenceStorage, "url">,
+): TicketAttachmentDTO[] {
+  return rows.map((row) => mapTicketAttachment(row, storage));
+}
+
+export function mapTicketComment(
+  row: TicketCommentRow,
+  storage: Pick<EvidenceStorage, "url">,
+): TicketCommentDTO {
   return {
     id: row.id,
     authorSide: row.authorSide,
@@ -62,7 +103,38 @@ export function mapTicketComment(row: TicketCommentRow): TicketCommentDTO {
     content: row.content,
     createdAt: row.createdAt.toISOString(),
     author: { id: row.authorUser.id, fullName: row.authorUser.fullName },
+    attachments: mapTicketAttachments(row.attachments, storage),
   };
+}
+
+export function mapTicketComments(
+  rows: readonly TicketCommentRow[],
+  storage: Pick<EvidenceStorage, "url">,
+): TicketCommentDTO[] {
+  return rows.map((row) => mapTicketComment(row, storage));
+}
+
+/** Ghi bình luận kèm file của chính bình luận đó trong cùng transaction. */
+export async function addCommentWithEvidence(
+  tx: Prisma.TransactionClient,
+  tickets: Pick<ComplaintTicketRepository, "addComment" | "addAttachments">,
+  input: {
+    complaintId: string;
+    actor: TicketActor;
+    side: CommentSide;
+    type: CommentType;
+    content: string;
+    files: readonly StoredEvidence[];
+  },
+): Promise<void> {
+  const comment = await tickets.addComment(tx, input);
+  await tickets.addAttachments(tx, {
+    complaintId: input.complaintId,
+    commentId: comment.id,
+    uploaderUserId: input.actor.userId,
+    side: input.side,
+    files: input.files,
+  });
 }
 
 /**

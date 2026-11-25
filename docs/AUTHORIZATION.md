@@ -189,6 +189,7 @@ School xem supplier qua quan hệ ACTIVE/SUSPENDED; ingredient qua IngredientEnt
 - `GET /api/meal-complaints/meal-options` và `POST /api/meal-complaints` yêu cầu `meal_complaint.submit` và vai trò `HOMEROOM_TEACHER` hoặc `PARENTS_COMMITTEE`. Trường, ngày ăn và phạm vi lớp do server xác định.
 - `meal_complaint.view` cho phép người gửi đọc đơn của chính mình trong trường và cho phép Ban Giám hiệu đọc đơn của trường. Migration spec 019 bổ sung quyền đọc đang hoạt động cho role `PARENTS_COMMITTEE` đã tồn tại và giữ các thiết lập thu hồi quyền theo tài khoản.
 - Đơn khiếu nại là ticket ([specs/complaint-supertype](../specs/complaint-supertype/spec.md)); không thêm mã quyền mới. `POST /api/meal-complaints/:id/accept` và `/:id/resolve` yêu cầu `meal_complaint.respond` và vai trò `SCHOOL_MANAGEMENT_BOARD` của trường sở hữu đơn. `POST /:id/satisfy` và `/:id/reopen` yêu cầu `meal_complaint.submit` và chỉ người gửi đơn được gọi. `POST /:id/comments` nhận cả hai bên: BGH sau khi đã nhận đơn, người gửi khi đơn ở `NEW`/`IN_PROGRESS`/`REOPENED`. Sai trạng thái, quá hạn 48h hoặc thua khi chạy đồng thời trả `409`. Đã bỏ `PATCH /api/meal-complaints/:id`.
+- File đính kèm ([specs/complaint-attachments](../specs/complaint-attachments/spec.md)) không thêm mã quyền: endpoint tạo đơn, bình luận và "Đã xử lý" của `meal-complaints`, `ingredient-quality-feedback`, `authority-complaints` nhận `multipart/form-data` sau khi đã qua kiểm tra quyền của route; file chỉ được ký URL trong chi tiết đơn theo đúng phạm vi đọc hiện có.
 
 ## Báo cáo sự cố ATTP (`food-safety-incident`, PR5)
 

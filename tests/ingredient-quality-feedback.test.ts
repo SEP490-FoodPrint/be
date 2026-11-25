@@ -33,6 +33,7 @@ import {
 } from "../src/modules/ingredient-quality-feedback/ingredient-quality-feedback.validation";
 import { createIngredientQualityFeedbackRouter } from "../src/modules/ingredient-quality-feedback/ingredient-quality-feedback.routes";
 import { testAdmin, testStaff } from "./helpers/authorization";
+import type { EvidenceStorage } from "../src/utils/evidence-files";
 
 const supplierIdA = "22222222-2222-4222-8222-222222222222";
 const schoolIdX = "44444444-4444-4444-8444-444444444441";
@@ -92,6 +93,7 @@ function listRow(overrides: Partial<FeedbackListRow> = {}): FeedbackListRow {
     ingredientQualityFeedback: {
       deliveryId: deliveryId1,
       ingredientLotId: null,
+      issueType: "OTHER",
       Delivery: {
         id: deliveryId1,
         deliveryNo: "FP-DE-00010",
@@ -110,6 +112,7 @@ function detailRow(
     ...listRow(),
     description: "Một thùng cải bị dập",
     senderUser: { id: schoolSender.id, fullName: "School Staff X" },
+    attachments: [],
     comments: [],
     ...overrides,
   };
@@ -181,6 +184,7 @@ function identityOf(principal: AuthPrincipal) {
 function harness(options: {
   repository?: Partial<IngredientQualityFeedbackRepository>;
   tickets?: Partial<ComplaintTicketRepository>;
+  storage?: EvidenceStorage;
 }) {
   const record = { isolation: [] as (string | undefined)[] };
   const client = fakeClient(record);
@@ -220,7 +224,7 @@ function harness(options: {
         type: input.type,
         content: input.content,
       });
-      return Promise.resolve({});
+      return Promise.resolve({ id: "30000000-0000-4000-8000-0000000000c1" });
     },
     ...options.tickets,
   };
@@ -235,6 +239,7 @@ function harness(options: {
     () => Promise.resolve(client),
     () => NOW,
     tickets,
+    options.storage,
   );
   return { service, transitions, comments, emails, record };
 }
@@ -384,6 +389,7 @@ void test("detail returns comments in order and rejects missing lot", async (con
       content: "Thùng bị dập",
       createdAt: new Date("2026-11-19T02:00:00Z"),
       authorUser: { id: schoolSender.id, fullName: "School Staff X" },
+      attachments: [],
     },
   ];
   const { service } = harness({
@@ -403,6 +409,7 @@ void test("detail returns comments in order and rejects missing lot", async (con
       content: "Thùng bị dập",
       createdAt: "2026-11-19T02:00:00.000Z",
       author: { id: schoolSender.id, fullName: "School Staff X" },
+      attachments: [],
     },
   ]);
   assert.deepEqual(detail.allowedActions, ["ACCEPT"]);
@@ -589,24 +596,49 @@ void test("validation: create body is strict, trims description 10–2000 and ac
   assert.deepEqual(
     validateCreateIngredientQualityFeedbackBody({
       deliveryId: deliveryId1,
+      title: "  Rau cải dập  ",
+      issueType: "SPOILED_OR_NOT_FRESH",
       description: "  Rau cải bị dập úng  ",
     }),
-    { deliveryId: deliveryId1, description: "Rau cải bị dập úng" },
+    {
+      deliveryId: deliveryId1,
+      title: "Rau cải dập",
+      issueType: "SPOILED_OR_NOT_FRESH",
+      description: "Rau cải bị dập úng",
+    },
   );
   assert.deepEqual(
     validateCreateIngredientQualityFeedbackBody({
       deliveryId: deliveryId1,
       ingredientLotId: null,
+      title: "Lô thịt lỗi",
+      issueType: "OTHER",
       description: "ạ".repeat(2000),
+    }).ingredientLotId,
+    null,
+  );
+  // multipart: chuỗi rỗng = không chọn lô.
+  assert.equal(
+    validateCreateIngredientQualityFeedbackBody({
+      deliveryId: deliveryId1,
+      ingredientLotId: "",
+      title: "Lô thịt lỗi",
+      issueType: "LATE_DELIVERY",
+      description: "Giao trễ hai tiếng",
     }).ingredientLotId,
     null,
   );
   const valid = {
     deliveryId: deliveryId1,
+    title: "Thịt có mùi lạ",
+    issueType: "OTHER",
     description: "Thịt có mùi lạ khi nhận",
   };
   for (const body of [
-    { ...valid, title: "Tự đặt" },
+    { ...valid, title: "Ngắn" },
+    { ...valid, title: undefined },
+    { ...valid, issueType: undefined },
+    { ...valid, issueType: "BROKEN" },
     { ...valid, status: "RESOLVED" },
     { ...valid, code: "FP-CP-00001" },
     { ...valid, senderUserId: schoolSender.id },
@@ -625,10 +657,13 @@ void test("validation: create body is strict, trims description 10–2000 and ac
 function createHarness(
   delivery: { id: string; deliveryNo: string; status: string } | null,
   lot: { id: string; lotCode: string } | null = null,
+  storage?: EvidenceStorage,
 ) {
   const calls: string[] = [];
   const created: unknown[] = [];
+  const attachments: unknown[] = [];
   const h = harness({
+    storage,
     repository: {
       findDeliveryForFeedback: (_tx, deliveryId, schoolId) => {
         calls.push(`delivery:${deliveryId}:${schoolId}`);
@@ -657,9 +692,13 @@ function createHarness(
         calls.push(`history:${id}:${actor.roleCode}`);
         return Promise.resolve({});
       },
+      addAttachments: (_tx, input) => {
+        attachments.push(input);
+        return Promise.resolve();
+      },
     },
   });
-  return { ...h, calls, created };
+  return { ...h, calls, created, attachments };
 }
 
 void test("create: checks delivery and lot in the sender's school, allocates FP-CP and records NEW", async () => {
@@ -669,7 +708,12 @@ void test("create: checks delivery and lot in the sender's school, allocates FP-
     status: "RECEIVED",
   });
   const detail = await service.create(
-    { deliveryId: deliveryId1, description: "Một thùng cải bị dập" },
+    {
+      deliveryId: deliveryId1,
+      title: "Cải bị dập",
+      issueType: "SPOILED_OR_NOT_FRESH",
+      description: "Một thùng cải bị dập",
+    },
     schoolSender,
   );
   assert.deepEqual(record.isolation, ["Serializable"]);
@@ -683,13 +727,14 @@ void test("create: checks delivery and lot in the sender's school, allocates FP-
   assert.deepEqual(created, [
     {
       code: "FP-CP-48213",
-      title: "Phản ánh chất lượng nguyên liệu chuyến giao FP-DE-00010",
+      title: "Cải bị dập",
       description: "Một thùng cải bị dập",
       senderUserId: schoolSender.id,
       senderRoleCode: "SCHOOL_KITCHEN_STAFF",
       senderSchoolId: schoolIdX,
       deliveryId: deliveryId1,
       ingredientLotId: null,
+      issueType: "SPOILED_OR_NOT_FRESH",
     },
   ]);
   assert.equal(detail.displayStatus, "IN_PROGRESS");
@@ -706,6 +751,8 @@ void test("create: checks delivery and lot in the sender's school, allocates FP-
     {
       deliveryId: deliveryId1,
       ingredientLotId: lotId1,
+      title: "Thịt có mùi lạ",
+      issueType: "OTHER" as const,
       description: "Lô thịt có mùi lạ",
     },
     schoolSender,
@@ -718,7 +765,12 @@ void test("create: checks delivery and lot in the sender's school, allocates FP-
 });
 
 void test("create: rejects foreign/unknown delivery, unreceived delivery and lot outside the delivery", async () => {
-  const body = { deliveryId: deliveryId1, description: "Một thùng cải bị dập" };
+  const body = {
+    deliveryId: deliveryId1,
+    title: "Cải bị dập",
+    issueType: "OTHER" as const,
+    description: "Một thùng cải bị dập",
+  };
   const missing = createHarness(null);
   await assert.rejects(missing.service.create(body, schoolSender), {
     statusCode: 404,
@@ -775,6 +827,8 @@ void test("routes: POST / requires submit permission and returns 201 no-store", 
   });
   const body = JSON.stringify({
     deliveryId: deliveryId1,
+    title: "Cải bị dập",
+    issueType: "SPOILED_OR_NOT_FRESH",
     description: "Một thùng cải bị dập",
   });
   const init = {
@@ -815,4 +869,220 @@ void test("catalog Q11: BGH submits and sees the whole school; kitchen/nutrition
       "ingredient_quality_feedback.submit",
       "ingredient_quality_feedback.view_own",
     ]);
+});
+
+/** Lưu trữ giả: ghi lại upload/xóa, URL ký giả (specs/complaint-attachments). */
+function memoryStorage(failOnUpload?: number) {
+  const uploaded: string[] = [];
+  const removed: string[] = [];
+  const storage: EvidenceStorage = {
+    upload: (_file, publicId) => {
+      if (failOnUpload === uploaded.length)
+        return Promise.reject(new Error("down"));
+      uploaded.push(publicId);
+      return Promise.resolve();
+    },
+    remove: (publicId) => {
+      removed.push(publicId);
+      return Promise.resolve();
+    },
+    url: (publicId) => `https://signed.example.test/${publicId}`,
+  };
+  return { storage, uploaded, removed };
+}
+
+const PNG = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13]);
+const PDF = Buffer.from("%PDF-1.7\n%test\n");
+const pngFile = {
+  buffer: PNG,
+  size: PNG.length,
+  mimeType: "image/png",
+  originalName: "rau-dap.png",
+};
+const pdfFile = {
+  buffer: PDF,
+  size: PDF.length,
+  mimeType: "application/pdf",
+  originalName: "phieu-giao.pdf",
+};
+const createBody = {
+  deliveryId: deliveryId1,
+  title: "Cải bị dập",
+  issueType: "SPOILED_OR_NOT_FRESH" as const,
+  description: "Một thùng cải bị dập",
+};
+
+void test("create with files: uploads before the transaction and records root attachments", async () => {
+  const memory = memoryStorage();
+  const h = createHarness(
+    { id: deliveryId1, deliveryNo: "FP-DE-00010", status: "RECEIVED" },
+    null,
+    memory.storage,
+  );
+  await h.service.create(
+    { ...createBody, files: [pngFile, pdfFile] },
+    schoolSender,
+  );
+  assert.equal(memory.uploaded.length, 2);
+  assert.ok(
+    memory.uploaded.every((id) =>
+      id.startsWith(`foodprint/complaints/${schoolSender.id}/`),
+    ),
+  );
+  assert.match(memory.uploaded[0], /\.png$/);
+  assert.match(memory.uploaded[1], /\.pdf$/);
+  assert.deepEqual(memory.removed, []);
+  assert.equal(h.attachments.length, 1);
+  const input = h.attachments[0] as {
+    complaintId: string;
+    commentId: string | null;
+    side: string;
+    uploaderUserId: string;
+    files: { publicId: string; mimeType: string; fileName: string }[];
+  };
+  assert.equal(input.complaintId, feedbackId1);
+  assert.equal(input.commentId, null);
+  assert.equal(input.side, "REQUESTER");
+  assert.equal(input.uploaderUserId, schoolSender.id);
+  assert.deepEqual(
+    input.files.map((file) => [file.publicId, file.mimeType, file.fileName]),
+    [
+      [memory.uploaded[0], "image/png", "rau-dap.png"],
+      [memory.uploaded[1], "application/pdf", "phieu-giao.pdf"],
+    ],
+  );
+});
+
+void test("create with files: business rejection removes the uploaded files", async () => {
+  const memory = memoryStorage();
+  const h = createHarness(
+    { id: deliveryId1, deliveryNo: "D1", status: "IN_TRANSIT" },
+    null,
+    memory.storage,
+  );
+  await assert.rejects(
+    h.service.create({ ...createBody, files: [pngFile] }, schoolSender),
+    { statusCode: 409 },
+  );
+  assert.equal(memory.uploaded.length, 1);
+  assert.deepEqual(memory.removed, memory.uploaded);
+  assert.ok(!h.calls.includes("create"));
+});
+
+void test("create with files: invalid file content is rejected before any upload", async () => {
+  const memory = memoryStorage();
+  const h = createHarness(
+    { id: deliveryId1, deliveryNo: "D1", status: "RECEIVED" },
+    null,
+    memory.storage,
+  );
+  await assert.rejects(
+    h.service.create(
+      {
+        ...createBody,
+        files: [pngFile, { ...pdfFile, mimeType: "image/png" }],
+      },
+      schoolSender,
+    ),
+    (error: { statusCode: number; fields: { field: string }[] }) =>
+      error.statusCode === 400 && error.fields[0].field === "files.1",
+  );
+  assert.deepEqual(memory.uploaded, []);
+  assert.equal(h.calls.length, 0);
+});
+
+void test("resolve with files: attachments belong to the RESOLUTION comment", async () => {
+  const memory = memoryStorage();
+  const attachments: { commentId: string | null; side: string }[] = [];
+  const { service, comments } = harness({
+    storage: memory.storage,
+    repository: supplierRepository(target({ status: "IN_PROGRESS" })),
+    tickets: {
+      addAttachments: (_tx, input) => {
+        attachments.push({ commentId: input.commentId, side: input.side });
+        return Promise.resolve();
+      },
+    },
+  });
+  await service.resolve(
+    { feedbackId: feedbackId1 },
+    { content: "Đã đổi hàng", files: [pdfFile] },
+    supplierAdminA,
+  );
+  assert.deepEqual(
+    comments.map((comment) => comment.type),
+    ["RESOLUTION"],
+  );
+  assert.deepEqual(attachments, [
+    { commentId: "30000000-0000-4000-8000-0000000000c1", side: "HANDLER" },
+  ]);
+  assert.equal(memory.uploaded.length, 1);
+});
+
+void test("detail maps attachments with signed URLs and hides storage ids", async () => {
+  const memory = memoryStorage();
+  const file = {
+    id: "40000000-0000-4000-8000-000000000001",
+    storagePublicId: "foodprint/complaints/u/f.png",
+    mimeType: "image/png",
+    sizeBytes: 12,
+    originalFilename: "rau-dap.png",
+    uploaderSide: "REQUESTER" as const,
+    createdAt: new Date("2026-11-19T01:00:00Z"),
+  };
+  const { service } = harness({
+    storage: memory.storage,
+    repository: {
+      findDetail: () => Promise.resolve(detailRow({ attachments: [file] })),
+    },
+  });
+  const detail = await service.getDetail(
+    { feedbackId: feedbackId1 },
+    supplierAdminA,
+  );
+  assert.equal(detail.issueType, "OTHER");
+  assert.deepEqual(detail.attachments, [
+    {
+      id: file.id,
+      fileName: "rau-dap.png",
+      mimeType: "image/png",
+      sizeBytes: 12,
+      uploaderSide: "REQUESTER",
+      createdAt: "2026-11-19T01:00:00.000Z",
+      url: "https://signed.example.test/foodprint/complaints/u/f.png",
+    },
+  ]);
+});
+
+void test("routes: multipart create forwards text fields and files", async (context) => {
+  const memory = memoryStorage();
+  const h = createHarness(
+    { id: deliveryId1, deliveryNo: "FP-DE-00010", status: "RECEIVED" },
+    null,
+    memory.storage,
+  );
+  const request = await startApi(context, h.service, schoolSender);
+  const form = new FormData();
+  form.set("deliveryId", deliveryId1);
+  form.set("ingredientLotId", "");
+  form.set("title", "Cải bị dập");
+  form.set("issueType", "SPOILED_OR_NOT_FRESH");
+  form.set("description", "Một thùng cải bị dập");
+  form.append("files", new Blob([PNG], { type: "image/png" }), "a.png");
+  const created = await request("", { method: "POST", body: form });
+  assert.equal(created.status, 201);
+  assert.equal(memory.uploaded.length, 1);
+  assert.equal(
+    (h.created[0] as { issueType: string }).issueType,
+    "SPOILED_OR_NOT_FRESH",
+  );
+
+  const tooMany = new FormData();
+  for (const [key, value] of Object.entries(createBody))
+    tooMany.set(key, value);
+  for (let index = 0; index < 6; index += 1)
+    tooMany.append("files", new Blob([PNG], { type: "image/png" }), "a.png");
+  const rejected = await request("", { method: "POST", body: tooMany });
+  assert.equal(rejected.status, 400);
+  assert.equal(memory.uploaded.length, 1);
 });

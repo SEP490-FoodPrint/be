@@ -5,6 +5,7 @@ import {
   requireResource,
 } from "../../middlewares/permission.middleware";
 import { requirePrincipal } from "../../utils/authorization";
+import { receiveEvidenceFiles } from "../../utils/evidence-files";
 import {
   ingredientQualityFeedbackReadScope,
   ingredientQualityFeedbackResponseScope,
@@ -62,7 +63,13 @@ export function createIngredientQualityFeedbackRouter(
     requireResource("ingredient-quality-feedback"),
     controller.getAll,
   );
-  router.post("/", authHandler, requireRequester, controller.create);
+  router.post(
+    "/",
+    authHandler,
+    requireRequester,
+    receiveEvidenceFiles,
+    controller.create,
+  );
   router.get(
     "/:feedbackId",
     authHandler,
@@ -79,12 +86,14 @@ export function createIngredientQualityFeedbackRouter(
     "/:feedbackId/comments",
     authHandler,
     requireCommenter,
+    receiveEvidenceFiles,
     controller.comment,
   );
   router.post(
     "/:feedbackId/resolve",
     authHandler,
     requireResponseScope,
+    receiveEvidenceFiles,
     controller.resolve,
   );
   router.post(

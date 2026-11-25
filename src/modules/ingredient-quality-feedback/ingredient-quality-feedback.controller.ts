@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { asyncHandler } from "../../utils/async-handler";
 import { requirePrincipal } from "../../utils/authorization";
+import { evidenceFilesOf } from "../../utils/evidence-files";
 import { sendSuccess } from "../../utils/response";
 import {
   ingredientQualityFeedbackService,
@@ -39,7 +40,10 @@ export function createIngredientQualityFeedbackController(
   return {
     create: asyncHandler(async (req, res) => {
       validateIngredientQualityFeedbackEmptyQuery(req.query);
-      const body = validateCreateIngredientQualityFeedbackBody(req.body);
+      const body = validateCreateIngredientQualityFeedbackBody({
+        ...req.body,
+        files: evidenceFilesOf(req.files),
+      });
       privateResult(
         res,
         await service.create(body, requirePrincipal(req)),
@@ -79,7 +83,10 @@ export function createIngredientQualityFeedbackController(
     }),
     comment: asyncHandler(async (req, res) => {
       const { params, principal } = ticketInput(req);
-      const body = validateFeedbackCommentBody(req.body);
+      const body = validateFeedbackCommentBody({
+        ...req.body,
+        files: evidenceFilesOf(req.files),
+      });
       privateResult(
         res,
         await service.comment(params, body, principal),
@@ -89,7 +96,10 @@ export function createIngredientQualityFeedbackController(
     }),
     resolve: asyncHandler(async (req, res) => {
       const { params, principal } = ticketInput(req);
-      const body = validateFeedbackResolveBody(req.body);
+      const body = validateFeedbackResolveBody({
+        ...req.body,
+        files: evidenceFilesOf(req.files),
+      });
       privateResult(
         res,
         await service.resolve(params, body, principal),

@@ -5,6 +5,7 @@ import {
   requirePermission,
   requireResource,
 } from "../../middlewares/permission.middleware";
+import { receiveEvidenceFiles } from "../../utils/evidence-files";
 import { createFeedbackController } from "./feedback.controller";
 import { feedbackService, type FeedbackService } from "./feedback.service";
 
@@ -29,15 +30,28 @@ export function createFeedbackRouter(
     requireResource("feedback"),
     controller.getOne,
   );
-  router.post("/", authHandler, requester, controller.create);
+  router.post(
+    "/",
+    authHandler,
+    requester,
+    receiveEvidenceFiles,
+    controller.create,
+  );
   router.post("/:id/accept", authHandler, handler, controller.accept);
   router.post(
     "/:id/comments",
     authHandler,
     requirePermission("meal_complaint.respond", "meal_complaint.submit"),
+    receiveEvidenceFiles,
     controller.comment,
   );
-  router.post("/:id/resolve", authHandler, handler, controller.resolve);
+  router.post(
+    "/:id/resolve",
+    authHandler,
+    handler,
+    receiveEvidenceFiles,
+    controller.resolve,
+  );
   router.post("/:id/satisfy", authHandler, requester, controller.satisfy);
   router.post("/:id/reopen", authHandler, requester, controller.reopen);
   return router;

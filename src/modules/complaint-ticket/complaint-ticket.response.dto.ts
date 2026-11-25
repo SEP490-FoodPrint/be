@@ -4,6 +4,17 @@ import type {
   TicketStatus,
 } from "./complaint-ticket.lifecycle";
 
+/** File chứng cứ (specs/complaint-attachments FR-004); `url` là URL ký có hạn, `null` khi chưa ký được. */
+export interface TicketAttachmentDTO {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  uploaderSide: "REQUESTER" | "HANDLER";
+  createdAt: string;
+  url: string | null;
+}
+
 export interface TicketCommentDTO {
   id: string;
   authorSide: "REQUESTER" | "HANDLER";
@@ -11,6 +22,7 @@ export interface TicketCommentDTO {
   content: string;
   createdAt: string;
   author: { id: string; fullName: string };
+  attachments: TicketAttachmentDTO[];
 }
 
 /** Trường ticket chung của mọi loại đơn khiếu nại (FR-009). */

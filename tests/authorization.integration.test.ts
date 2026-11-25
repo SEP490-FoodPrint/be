@@ -1862,6 +1862,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       const input = {
         dailyMealPortionId: classB,
         complaintType: "OTHER" as const,
+        title: "Bữa ăn có dị vật",
         description: "Bữa ăn cần được kiểm tra.",
       };
       await assert.rejects(() => feedback.create(input, teacherPrincipal), {
@@ -1874,7 +1875,8 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       assert.equal(sent.status, "NEW");
       assert.equal(sent.displayStatus, "IN_PROGRESS");
       assert.match(sent.code, /^FP-MC-[0-9]{5}$/);
-      assert.match(sent.title, /^Khiếu nại suất ăn lớp /);
+      assert.equal(sent.title, "Bữa ăn có dị vật");
+      assert.deepEqual(sent.attachments, []);
       assert.equal(sent.meal.dailyMealPortionId, classB);
       const teacherSent = await feedback.create(
         { ...input, dailyMealPortionId: classA },
@@ -10630,6 +10632,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
             senderSchoolId: sch1.id,
             deliveryId: del1.id,
             ingredientLotId: null,
+            issueType: "OTHER",
           });
           return { id: created.id, complaintCode };
         });
@@ -11098,6 +11101,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
               senderSchoolId: sch1.id,
               deliveryId: del1.id,
               ingredientLotId: null,
+              issueType: "OTHER",
             });
           });
         const fb1 = await mkFb("Dynamic feedback 1");

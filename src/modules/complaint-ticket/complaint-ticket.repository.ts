@@ -4,6 +4,7 @@ import {
   type BusinessCodeType,
 } from "../../utils/business-code";
 import type { ComplaintEmailEvent } from "../../utils/complaint-email";
+import type { StoredEvidence } from "../../utils/evidence-files";
 import type { TicketStatus } from "./complaint-ticket.lifecycle";
 
 type Tx = Prisma.TransactionClient;
@@ -20,6 +21,29 @@ export interface TicketActor {
   roleCode: string;
 }
 
+/** File đính kèm (specs/complaint-attachments): chỉ các cột được phép trả ra ngoài + public id để ký URL. */
+export const ticketAttachmentSelect = {
+  id: true,
+  storagePublicId: true,
+  mimeType: true,
+  sizeBytes: true,
+  originalFilename: true,
+  uploaderSide: true,
+  createdAt: true,
+} as const satisfies Prisma.ComplaintAttachmentSelect;
+export type TicketAttachmentRow = Prisma.ComplaintAttachmentGetPayload<{
+  select: typeof ticketAttachmentSelect;
+}>;
+
+const attachmentOrder = [{ createdAt: "asc" }, { id: "asc" }] as const;
+
+/** File cấp đơn (gửi lúc tạo đơn / Chuyển ATTP), theo thứ tự gửi. */
+export const complaintAttachmentsArgs = {
+  where: { commentId: null },
+  orderBy: [...attachmentOrder],
+  select: ticketAttachmentSelect,
+} as const satisfies Prisma.Complaint$attachmentsArgs;
+
 export const ticketCommentSelect = {
   id: true,
   authorSide: true,
@@ -27,6 +51,10 @@ export const ticketCommentSelect = {
   content: true,
   createdAt: true,
   authorUser: { select: { id: true, fullName: true } },
+  attachments: {
+    orderBy: [...attachmentOrder],
+    select: ticketAttachmentSelect,
+  },
 } as const satisfies Prisma.ComplaintCommentSelect;
 export type TicketCommentRow = Prisma.ComplaintCommentGetPayload<{
   select: typeof ticketCommentSelect;
@@ -152,7 +180,7 @@ export function createComplaintTicketRepository() {
         type: CommentType;
         content: string;
       },
-    ): Promise<unknown> {
+    ): Promise<{ id: string }> {
       return tx.complaintComment.create({
         data: {
           complaintId: input.complaintId,
@@ -162,6 +190,36 @@ export function createComplaintTicketRepository() {
           commentType: input.type,
           content: input.content,
         },
+        select: { id: true },
+      });
+    },
+    /**
+     * Ghi file đã upload vào đơn (`commentId` NULL = file cấp đơn) trong transaction của thao tác.
+     * Service bảo đảm `commentId` là bình luận vừa tạo của chính `complaintId`.
+     */
+    async addAttachments(
+      tx: Tx,
+      input: {
+        complaintId: string;
+        commentId: string | null;
+        uploaderUserId: string;
+        side: CommentSide;
+        files: readonly StoredEvidence[];
+      },
+    ): Promise<void> {
+      if (!input.files.length) return;
+      await tx.complaintAttachment.createMany({
+        data: input.files.map((file) => ({
+          complaintId: input.complaintId,
+          commentId: input.commentId,
+          uploadedByUserId: input.uploaderUserId,
+          uploaderSide: input.side,
+          storagePublicId: file.publicId,
+          mimeType: file.mimeType,
+          sizeBytes: file.sizeBytes,
+          originalFilename: file.fileName,
+          sha256: file.sha256,
+        })),
       });
     },
     /** Người nhận email thông báo: người gửi đơn (specs/complaint-email-notifications). */

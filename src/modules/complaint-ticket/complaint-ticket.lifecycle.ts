@@ -171,43 +171,7 @@ export function toTicketStatus(value: string): TicketStatus {
   throw new HttpError(503, "Không thể tải dữ liệu. Vui lòng thử lại sau.");
 }
 
-const VIETNAM_DATE = new Intl.DateTimeFormat("en-GB", {
-  timeZone: "UTC",
-  day: "2-digit",
-  month: "2-digit",
-  year: "numeric",
-});
-
-/** Tiêu đề tự sinh cho khiếu nại suất ăn; `mealDate` là ngày (DATE) lưu ở 00:00 UTC. */
-export function mealComplaintTitle(input: {
-  className: string;
-  mealType: string;
-  mealDate: Date;
-}): string {
-  const meal =
-    input.mealType === "AFTERNOON"
-      ? "Bữa chiều"
-      : input.mealType === "LUNCH"
-        ? "Bữa trưa"
-        : "Bữa ăn";
-  return truncateTitle(
-    `Khiếu nại suất ăn lớp ${input.className} - ${meal} ngày ${VIETNAM_DATE.format(input.mealDate)}`,
-  );
-}
-
-/** Tiêu đề tự sinh cho phản ánh chất lượng nguyên liệu theo chuyến giao. */
-export function ingredientFeedbackTitle(deliveryNo: string): string {
-  return truncateTitle(
-    `Phản ánh chất lượng nguyên liệu chuyến giao ${deliveryNo}`,
-  );
-}
-
 /** Tiêu đề tự sinh cho C05 theo mã C03 gốc. */
 export function authorityComplaintTitle(mealComplaintCode: string): string {
   return `Khiếu nại chuyển ATTP từ đơn ${mealComplaintCode}`;
-}
-
-function truncateTitle(value: string): string {
-  const chars = Array.from(value);
-  return chars.length <= 255 ? value : chars.slice(0, 255).join("");
 }
