@@ -14,6 +14,7 @@ import {
   feedbackWindowStart,
   mealComplaintTitle,
   ticketConflictMessage,
+  ticketStatusFilter,
   toTicketStatus,
   TICKET_TRANSITIONS,
   type TicketAction,
@@ -112,12 +113,14 @@ function toResponse(
       mealDate: portion.mealDate.toISOString().slice(0, 10),
       mealType: portion.mealType,
     },
-    escalatedAuthorityComplaint: child.authorityEscalation
-      ? {
-          id: child.authorityEscalation.id,
-          code: child.authorityEscalation.Complaint.code,
-        }
-      : null,
+    // Chỉ người gửi thấy hồ sơ C05 đã chuyển; BGH không xem thông tin leo thang (specs/board-escalation-view FR-002).
+    escalatedAuthorityComplaint:
+      child.authorityEscalation && row.senderUserId === principal.id
+        ? {
+            id: child.authorityEscalation.id,
+            code: child.authorityEscalation.Complaint.code,
+          }
+        : null,
     ...mapTicketFields(viewerOf(row, principal), row, latestCommentSide, now, {
       canEscalate: canEscalate(row, principal),
     }),
@@ -310,10 +313,18 @@ export function createFeedbackService(
       query: ComplaintListQueryDTO,
       principal: AuthPrincipal,
     ): Promise<ComplaintListResponseDTO> {
+      const scope = listScopes.feedback(principal);
+      // Phụ huynh/GVCN chỉ xem đơn mình gửi (listScopes.feedback): lọc theo trạng thái hiển thị.
+      const statuses = ticketStatusFilter(
+        query.status,
+        principal.orgType === ORG_TYPES.SCHOOL &&
+          isComplaintSubmitter(principal.role),
+      );
       const rows = await repository.list(
         await connect(),
-        listScopes.feedback(principal),
+        scope,
         query,
+        statuses,
       );
       const at = now();
       return {

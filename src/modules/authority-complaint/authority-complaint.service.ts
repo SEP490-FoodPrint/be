@@ -15,6 +15,7 @@ import {
   authorityComplaintTitle,
   feedbackWindowStart,
   ticketConflictMessage,
+  ticketStatusFilter,
   toTicketStatus,
   TICKET_TRANSITIONS,
   type TicketAction,
@@ -275,11 +276,17 @@ export function createAuthorityComplaintService(
       query: AuthorityComplaintListQueryDTO,
       principal: AuthPrincipal,
     ): Promise<AuthorityComplaintListResponseDTO> {
-      const rows = await repository.list(
-        await connect(),
-        listScopes["authority-complaint"](principal),
-        query,
+      const scope = listScopes["authority-complaint"](principal);
+      // Vai trò trường chỉ xem đơn mình gửi (listScopes): lọc theo trạng thái hiển thị.
+      const statuses = ticketStatusFilter(
+        query.status,
+        principal.orgType === ORG_TYPES.SCHOOL,
       );
+      const rows = await repository.list(await connect(), scope, {
+        page: query.page,
+        limit: query.limit,
+        statuses,
+      });
       const at = now();
       return {
         items: rows

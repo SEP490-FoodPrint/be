@@ -9,6 +9,8 @@ export interface ReportingListResponseDTO {
     status: NotificationStatus;
     attemptedAt: string | null;
     forwardedAt: string | null;
+    /** Thời điểm cán bộ ATTP tiếp nhận; null khi chưa tiếp nhận (specs/frontend-api-gaps FR-002). */
+    receivedAt: string | null;
     createdAt: string;
   }[];
   pagination: { page: number; limit: number; hasNext: boolean };

@@ -10,6 +10,7 @@ const listSelect = {
   status: true,
   attemptedAt: true,
   forwardedAt: true,
+  receivedAt: true,
   createdAt: true,
 } as const satisfies Prisma.FoodSafetyReportForwardingSelect;
 const receivedSelect = {

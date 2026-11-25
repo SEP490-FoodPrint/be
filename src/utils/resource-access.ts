@@ -263,8 +263,9 @@ export const listScopes = {
     throw new HttpError(403, "Vai trò không được phép xem khiếu nại");
   },
   /**
-   * C05 (specs/authority-complaints FR-005): ATTP xem đơn gửi đơn vị mình; BGH xem đơn của trường (chỉ đọc);
+   * C05 (specs/authority-complaints FR-005): ATTP xem đơn gửi đơn vị mình;
    * vai trò trường khác (phụ huynh) chỉ xem đơn mình gửi trong trường hiện tại.
+   * BGH không xem C05 (specs/board-escalation-view FR-001).
    */
   "authority-complaint": (p: AuthPrincipal): Prisma.ComplaintWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["authority-complaint"]);
@@ -275,13 +276,12 @@ export const listScopes = {
           is: { recipientCommuneFoodSafetyUnitId: authority(p) },
         },
       };
-    if (p.orgType === "SCHOOL" && p.role === ROLES.SCHOOL_ADMINISTRATION)
+    if (
+      p.orgType === "SCHOOL" &&
+      (p.role === ROLES.SCHOOL_ADMINISTRATION ||
+        p.role === ROLES.SCHOOL_MANAGEMENT_BOARD)
+    )
       throw new HttpError(403, "Vai trò không được phép xem khiếu nại");
-    if (p.orgType === "SCHOOL" && p.role === ROLES.SCHOOL_MANAGEMENT_BOARD)
-      return {
-        kind: "AUTHORITY",
-        authorityComplaint: { is: { schoolId: school(p) } },
-      };
     if (p.orgType === "SCHOOL")
       return {
         kind: "AUTHORITY",
