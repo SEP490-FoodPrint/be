@@ -200,6 +200,7 @@ void test("organization service maps school rows correctly and respects paginati
             email: dummySchool.email,
             phone: dummySchool.phone,
             address: dummySchool.address,
+            location: null,
             status: dummySchool.status,
             createdAt: dummyDate,
             updatedAt: dummyDate,

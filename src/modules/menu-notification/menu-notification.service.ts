@@ -76,11 +76,12 @@ export async function menuRecipients(
     select: { id: true, email: true, fullName: true },
   });
   const seen = new Set<string>();
-  return users.filter((user) => {
-    const key = user.email.trim().toLowerCase();
-    if (!key || seen.has(key)) return false;
+  return users.flatMap((user) => {
+    const email = user.email;
+    const key = email?.trim().toLowerCase();
+    if (!email || !key || seen.has(key)) return [];
     seen.add(key);
-    return true;
+    return [{ id: user.id, email, fullName: user.fullName }];
   });
 }
 

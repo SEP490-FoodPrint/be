@@ -73,6 +73,19 @@ Trường lạ hoặc body rỗng trả 400. Email, username, password/passwordH
 
 Kiểm thử nằm trong `npm run test:auth`/`npm run test:unit`; `npm run test:authorization` kiểm tra quyền sở hữu, field được bảo vệ và chặn tài khoản bị khóa bằng PostgreSQL/Redis local tạm.
 
+## Cán bộ ATTP cập nhật email lần đầu
+
+Theo [specs/authority-officer-accounts](../specs/authority-officer-accounts/spec.md). System Admin tạo tài khoản bằng tên đăng nhập, `email = null`, `UNVERIFIED`. `POST /api/auth/login` tìm `identifier` theo email trước; không có thì chỉ khớp tên đăng nhập của cán bộ ATTP **chưa có email**. Khi đã có email, đăng nhập bằng tên đăng nhập trả cùng lỗi 401 như sai thông tin.
+
+`GET /api/auth/me`, login và refresh trả `emailSetupRequired` (boolean, mọi tài khoản). Khi `true`: `email = null`, `onboardingRequired = false`, không có quyền; API nghiệp vụ, sửa hồ sơ và đổi mật khẩu trả 403. Chỉ dùng hai endpoint sau (cần cookie phiên và `X-CSRF-Protection: 1`):
+
+| API                                | Body            | Kết quả                                                                                                                          |
+| ---------------------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| POST /api/auth/email-setup/request | { email }       | Gửi OTP tới email; data={ expiresIn, resendAfter }; email đã dùng `409 EMAIL_TAKEN`; gửi quá nhanh 429 kèm Retry-After           |
+| POST /api/auth/email-setup/verify  | { email, code } | Ghi email, `emailVerifiedAt`, ACTIVE trong một transaction; thu hồi mọi phiên cũ, đặt cookie phiên mới; data={ user, expiresIn } |
+
+Mã sai/hết hạn/khác email trả 400; tài khoản không cần cập nhật email trả `409 EMAIL_SETUP_NOT_REQUIRED`.
+
 ## Access token và refresh token nằm ở đâu?
 
 | Thành phần                     | Vị trí                               | Cấu hình                                                          |

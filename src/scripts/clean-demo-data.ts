@@ -202,6 +202,7 @@ async function main() {
   });
 
   for (const u of users) {
+    if (!u.email) continue;
     const mapped = userMap[u.email];
     const newName = mapped
       ? mapped.name

@@ -18,6 +18,7 @@ import {
   withSchoolTransaction,
 } from "../../utils/authorization";
 import { getPrisma } from "../../utils/database";
+import { toWardLocation } from "../../utils/ward-location";
 import { HttpError } from "../../utils/http-error";
 import { withReadTransaction } from "../../utils/read-transaction";
 import { listScopes } from "../../utils/resource-access";
@@ -87,6 +88,7 @@ function mapDirectory(
     email: row.email,
     phone: row.phone,
     address: row.address,
+    location: row.location ? toWardLocation(row.location) : null,
     status: row.status,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),

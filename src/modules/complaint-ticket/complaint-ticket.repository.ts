@@ -9,6 +9,7 @@ import type { TicketStatus } from "./complaint-ticket.lifecycle";
 type Tx = Prisma.TransactionClient;
 type Db = PrismaClient | Tx;
 
+/** `SYSTEM` còn trong enum DB nhưng CHECK `chk_complaints_kind_not_system` chặn đơn mới (specs/remove-system-complaints). */
 export type ComplaintKindValue = "MEAL" | "INGREDIENT" | "AUTHORITY" | "SYSTEM";
 export type CommentSide = "REQUESTER" | "HANDLER";
 export type CommentType =
@@ -49,7 +50,7 @@ export interface ComplaintEmailRecipientRow {
   code: string;
   title: string;
   description: string;
-  senderUser: { email: string; fullName: string; status: string };
+  senderUser: { email: string | null; fullName: string; status: string };
   /** Bình luận mới nhất của bên xử lý (bình luận/nội dung xử lý vừa ghi trong cùng transaction). */
   comments: {
     content: string;

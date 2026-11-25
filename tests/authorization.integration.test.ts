@@ -1,6 +1,7 @@
 import type { Prisma } from "../src/generated/prisma/client";
 import { ROLES } from "../src/constants/roles";
 import { recordLocalTestDatabase } from "./helpers/local-test-database";
+import { withEmail } from "./helpers/account-email";
 import { createSupplierStaffService } from "../src/modules/supplier-staff/supplier-staff.service";
 import {
   createSupplierStaffRepository,
@@ -67,6 +68,7 @@ import { ACCESS_COOKIE, REFRESH_COOKIE } from "../src/utils/auth-cookies";
 import { createOnboardingService } from "../src/modules/auth/onboarding.service";
 import { sessionService } from "../src/modules/auth/session.service";
 import { createSignupService } from "../src/modules/auth/signup.service";
+import { createEmailSetupService } from "../src/modules/auth/email-setup.service";
 import {
   createEmailVerificationService,
   verificationFingerprint,
@@ -204,18 +206,20 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   ) {
     const r = await role(code);
     const username = "user_" + randomUUID().replaceAll("-", "");
-    return db.user.create({
-      data: {
-        roleId: r.id,
-        roleCode: r.code,
-        username,
-        email: username + "@example.test",
-        passwordHash,
-        fullName: code,
-        status: "ACTIVE",
-        ...scope,
-      },
-    });
+    return withEmail(
+      await db.user.create({
+        data: {
+          roleId: r.id,
+          roleCode: r.code,
+          username,
+          email: username + "@example.test",
+          passwordHash,
+          fullName: code,
+          status: "ACTIVE",
+          ...scope,
+        },
+      }),
+    );
   }
   const system = await user("SYSTEM_ADMIN");
   const adminA = await user("SCHOOL_ADMINISTRATION", { schoolId: schoolA.id });
@@ -388,6 +392,13 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       return Promise.resolve();
     },
   });
+  const emailSetup = createEmailSetupService(emailStore, {
+    assertConfigured() {},
+    send(email, code) {
+      sentCodes.set(email, code);
+      return Promise.resolve();
+    },
+  });
   // External file/email providers are replaced; PostgreSQL, Redis, sessions and HTTP are real.
   const uploadedFiles = new Map<string, OnboardingDocument>();
   let failedUploadField: string | undefined;
@@ -429,6 +440,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         session: sessionService,
         signup: createSignupService(undefined, verification),
         emailVerification: verification,
+        emailSetup,
         password: passwords,
         onboarding: createOnboardingService(getPrisma, testDocumentStorage),
       },
@@ -2727,7 +2739,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           }),
           0,
         );
-        accounts.push(persisted);
+        accounts.push(withEmail(persisted));
       }
       assert.notEqual(accounts[0].id, accounts[1].id);
       assert.deepEqual(
@@ -3285,7 +3297,9 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
       const foreignBefore = await db.user.findUniqueOrThrow({
         where: { id: foreign.id },
       });
-      const preservedFields = (account: typeof staff) => ({
+      const preservedFields = (
+        account: Omit<typeof staff, "email"> & { email: string | null },
+      ) => ({
         id: account.id,
         username: account.username,
         email: account.email,
@@ -7001,17 +7015,19 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   async function codeAccount() {
     const id = randomUUID(),
       codeRole = await role("SCHOOL_ADMINISTRATION");
-    return db.user.create({
-      data: {
-        username: "email_" + id,
-        email: id + "@example.test",
-        fullName: "Email test",
-        passwordHash,
-        status: "UNVERIFIED",
-        roleId: codeRole.id,
-        roleCode: codeRole.code,
-      },
-    });
+    return withEmail(
+      await db.user.create({
+        data: {
+          username: "email_" + id,
+          email: id + "@example.test",
+          fullName: "Email test",
+          passwordHash,
+          status: "UNVERIFIED",
+          roleId: codeRole.id,
+          roleCode: codeRole.code,
+        },
+      }),
+    );
   }
   const challengeKey = (email: string) =>
     emailPrefix + "challenge:" + verificationFingerprint("email:" + email);
@@ -11471,247 +11487,6 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
   );
 
   await context.test(
-    "system complaints (C06): every non-admin org submits FP-SC tickets, System Admin handles them with scoped reads and conditional transitions",
-    async () => {
-      const route = "/api/system-complaints";
-      const login = async (account: { id: string }) => {
-        const session = await authSessions.issue(account.id);
-        issued.set(account.id, session);
-        refreshTokens.push(session.refreshToken);
-        return account.id;
-      };
-      const kitchen = await login(
-        await user("SCHOOL_KITCHEN_STAFF", { schoolId: schoolA.id }),
-      );
-      const senderSchool = await db.school.create({
-        data: { name: "System complaint school" },
-      });
-      const schoolAdministrator = await login(
-        await user("SCHOOL_ADMINISTRATION", { schoolId: senderSchool.id }),
-      );
-      const supplierSender = await login(
-        await user("INGREDIENT_SUPPLIER_STAFF", { supplierId: supplierA.id }),
-      );
-      // Mỗi đơn vị ATTP chỉ có một cán bộ: dùng tài khoản fixture đã đăng nhập.
-      const officerSender = officerA.id;
-      const admin1 = await login(await user("SYSTEM_ADMIN"));
-      const admin2 = await login(await user("SYSTEM_ADMIN"));
-      const data = (response: { body: unknown }) =>
-        record(record(response.body).data);
-
-      // Gửi đơn: mã FP-SC, tiêu đề tự sinh, snapshot tổ chức; field server-owned bị từ chối.
-      const created = await request(route, kitchen, "POST", {
-        category: "TECHNICAL",
-        description: "Không tải được báo cáo tồn kho.",
-      });
-      assert.equal(created.status, 201);
-      const ticket = data(created);
-      assert.match(String(ticket.code), /^FP-SC-\d{5}$/);
-      assert.equal(ticket.title, "Khiếu nại hệ thống - Lỗi kỹ thuật");
-      assert.equal(ticket.status, "NEW");
-      assert.equal(ticket.displayStatus, "IN_PROGRESS");
-      assert.deepEqual(ticket.senderOrganization, {
-        type: "SCHOOL",
-        id: schoolA.id,
-        name: "School A",
-      });
-      const ticketId = String(ticket.id);
-      for (const [sender, type, id] of [
-        [schoolAdministrator, "SCHOOL", senderSchool.id],
-        [supplierSender, "SUPPLIER", supplierA.id],
-        [officerSender, "AUTHORITY", unitA.id],
-      ] as const) {
-        const response = await request(route, sender, "POST", {
-          category: "ACCOUNT",
-          description: "Không đăng nhập được vào hệ thống.",
-        });
-        assert.equal(response.status, 201);
-        assert.deepEqual(record(data(response).senderOrganization).type, type);
-        assert.equal(record(data(response).senderOrganization).id, id);
-      }
-      assert.equal(
-        (
-          await request(route, kitchen, "POST", {
-            category: "OTHER",
-            description: "Tự đặt tiêu đề cho đơn.",
-            title: "Tiêu đề",
-          })
-        ).status,
-        400,
-      );
-      assert.equal(
-        (
-          await request(route, admin1, "POST", {
-            category: "OTHER",
-            description: "Admin không được tự gửi đơn.",
-          })
-        ).status,
-        403,
-      );
-      const parent = await db.complaint.findUniqueOrThrow({
-        where: { id: ticketId },
-        include: { systemComplaint: true, statusHistories: true },
-      });
-      assert.equal(parent.kind, "SYSTEM");
-      assert.equal(parent.senderRoleCode, "SCHOOL_KITCHEN_STAFF");
-      assert.equal(parent.systemComplaint?.category, "TECHNICAL");
-      assert.equal(parent.statusHistories.length, 1);
-
-      // Phạm vi đọc: admin thấy mọi đơn SYSTEM, không thấy MEAL/INGREDIENT; người gửi chỉ thấy đơn của mình.
-      const adminList = rows((await request(route, admin1)).body);
-      assert.equal(adminList.length, 4);
-      assert(adminList.every((item) => String(item.code).startsWith("FP-SC-")));
-      const ownList = rows((await request(route, kitchen)).body);
-      assert.deepEqual(
-        ownList.map((item) => item.id),
-        [ticketId],
-      );
-      assert.equal(
-        (await request(`${route}/${ticketId}`, supplierSender)).status,
-        404,
-      );
-      // Người khác cùng trường có quyền gửi chỉ thấy đơn của chính mình (rỗng).
-      assert.deepEqual(rows((await request(route, staffA.id)).body), []);
-
-      // Người gửi không tiếp nhận; hai admin tiếp nhận đồng thời: một thắng, một 409.
-      assert.equal(
-        (await request(`${route}/${ticketId}/accept`, kitchen, "POST", {}))
-          .status,
-        403,
-      );
-      assert.equal(
-        (
-          await request(`${route}/${ticketId}/resolve`, admin1, "POST", {
-            content: "Chưa tiếp nhận",
-          })
-        ).status,
-        409,
-      );
-      const race = await Promise.all(
-        [admin1, admin2].map((id) =>
-          request(`${route}/${ticketId}/accept`, id, "POST", {}),
-        ),
-      );
-      assert.deepEqual(
-        race.map((response) => response.status).sort(),
-        [200, 409],
-      );
-      assert.equal(
-        await db.complaintStatusHistory.count({
-          where: { complaintId: ticketId, toStatus: "IN_PROGRESS" },
-        }),
-        1,
-      );
-
-      // Trao đổi hai chiều, đã xử lý, người gửi hài lòng.
-      assert.equal(
-        (
-          await request(`${route}/${ticketId}/comments`, kitchen, "POST", {
-            content: "Lỗi xảy ra khi mở trang tồn kho.",
-          })
-        ).status,
-        201,
-      );
-      const handlerView = data(await request(`${route}/${ticketId}`, admin2));
-      assert.equal(handlerView.hasNewMessage, true);
-      assert.deepEqual(handlerView.allowedActions, ["COMMENT", "RESOLVE"]);
-      // PR-E: bình luận của bên xử lý gửi email cho người gửi; bình luận của người gửi thì không.
-      assert.equal(
-        (
-          await request(`${route}/${ticketId}/comments`, admin2, "POST", {
-            content: "Bạn dùng trình duyệt nào?",
-          })
-        ).status,
-        201,
-      );
-      const resolved = await request(
-        `${route}/${ticketId}/resolve`,
-        admin2,
-        "POST",
-        {
-          content: "Đã khắc phục lỗi tải báo cáo.",
-        },
-      );
-      assert.equal(resolved.status, 200);
-      assert.equal(data(resolved).status, "RESOLVED");
-      const comments = (data(resolved).comments as unknown[]).map((item) =>
-        record(item),
-      );
-      assert.equal(comments.at(-1)?.commentType, "RESOLUTION");
-      assert.equal(
-        (await request(`${route}/${ticketId}/satisfy`, admin1, "POST", {}))
-          .status,
-        403,
-      );
-      const satisfied = await request(
-        `${route}/${ticketId}/satisfy`,
-        kitchen,
-        "POST",
-        {},
-      );
-      assert.equal(satisfied.status, 200);
-      assert.equal(data(satisfied).status, "CLOSED");
-      assert.equal(data(satisfied).closeReason, "SATISFIED");
-      assert.equal(
-        (await request(`${route}/${ticketId}/reopen`, kitchen, "POST", {}))
-          .status,
-        409,
-      );
-
-      // PR-E: outbox có đúng một email cho mỗi sự kiện (tạo, bình luận bên xử lý, Đã xử lý),
-      // gửi tới email người gửi; Tiếp nhận, bình luận người gửi, Hài lòng không tạo email.
-      const kitchenEmail = (
-        await db.user.findUniqueOrThrow({ where: { id: kitchen } })
-      ).email;
-      const outbox = await db.emailOutbox.findMany({
-        where: { complaintId: ticketId },
-        orderBy: { createdAt: "asc" },
-      });
-      assert.deepEqual(
-        outbox.map((row) => row.complaintEvent),
-        ["CREATED", "HANDLER_COMMENT", "RESOLVED"],
-      );
-      assert(outbox.every((row) => row.recipientEmail === kitchenEmail));
-      assert(outbox.every((row) => row.registrationId === null));
-      assert.equal(outbox[0].status, "PENDING");
-      assert.match(outbox[1].text, /Bạn dùng trình duyệt nào\?/);
-      assert.match(outbox[2].subject, /đã được xử lý$/);
-      assert.match(outbox[2].text, /Đã khắc phục lỗi tải báo cáo\./);
-      assert.equal(
-        await db.emailOutbox.count({
-          where: { complaint: { kind: "SYSTEM" }, complaintEvent: "CREATED" },
-        }),
-        4,
-      );
-      await assert.rejects(
-        db.emailOutbox.create({
-          data: {
-            complaintId: ticketId,
-            recipientEmail: kitchenEmail,
-            subject: "x",
-            text: "x",
-            html: "x",
-          },
-        }),
-        "CHECK: complaint_id cần complaint_event",
-      );
-
-      // Tài khoản bị khóa sau khi gửi: đơn vẫn còn với snapshot cũ, người gửi không thao tác được nữa.
-      await db.user.update({
-        where: { id: supplierSender },
-        data: { status: "LOCKED" },
-      });
-      assert.notEqual((await request(route, supplierSender)).status, 200);
-      assert.equal(
-        rows((await request(route, admin1)).body).filter(
-          (item) => record(item.sender).id === supplierSender,
-        ).length,
-        1,
-      );
-    },
-  );
-
-  await context.test(
     "authority complaints (C05): System Admin maps ATTP unit to the ward, parent escalates a resolved C03 once, ATTP handles, BGH reads only",
     async () => {
       const route = "/api/authority-complaints";
@@ -11821,6 +11596,62 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         ).locationId,
         ward.id,
       );
+      // FR-012: danh mục trường/NCC của System Admin trả phường/xã và lọc theo `hasLocation`.
+      const bareSchool = await db.school.create({
+        data: { name: "AC bare school" },
+      });
+      const bareSupplier = await db.supplier.create({
+        data: { name: "AC bare supplier" },
+      });
+      for (const [kind, placedId, placedName, bareId, bareName] of [
+        [
+          "schools",
+          areaSchool.id,
+          "AC area school",
+          bareSchool.id,
+          "AC bare school",
+        ],
+        [
+          "suppliers",
+          areaSupplier.id,
+          "AC supplier A",
+          bareSupplier.id,
+          "AC bare supplier",
+        ],
+      ] as const) {
+        const expected = { id: ward.id, code: ward.code, name: ward.name };
+        const found = async (name: string, hasLocation: boolean) => {
+          const response = await request(
+            `/api/${kind}?search=${encodeURIComponent(name)}&hasLocation=${hasLocation}`,
+            admin,
+          );
+          assert.equal(response.status, 200);
+          const page = data(response);
+          const items = page.items as { id: string; location: unknown }[];
+          assert.equal(record(page.pagination).total, items.length);
+          return items.map(({ id, location }) => ({ id, location }));
+        };
+        assert.deepEqual(await found(placedName, true), [
+          { id: placedId, location: expected },
+        ]);
+        assert.deepEqual(await found(placedName, false), []);
+        assert.deepEqual(await found(bareName, false), [
+          { id: bareId, location: null },
+        ]);
+        assert.deepEqual(await found(bareName, true), []);
+        assert.deepEqual(
+          data(await request(`/api/${kind}/${placedId}`, admin)).location,
+          expected,
+        );
+        assert.equal(
+          data(await request(`/api/${kind}/${bareId}`, admin)).location,
+          null,
+        );
+        assert.equal(
+          (await request(`/api/${kind}?hasLocation=yes`, admin)).status,
+          400,
+        );
+      }
       const areaSchools = async (actor: string) => {
         const response = await request(
           "/api/commune-food-safety-units/me/schools",
@@ -13114,6 +12945,179 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
           },
         }),
         "CHECK: LOCK_ACCOUNT cần đợt kiểm tra",
+      );
+    },
+  );
+  await context.test(
+    "ATTP officer accounts: one per ward, username login, email setup, then email login",
+    async () => {
+      const route = "/api/authority-officers";
+      const tag = randomUUID().slice(0, 8);
+      const province = await db.location.create({
+        data: { code: "P-" + tag, name: "Tỉnh", type: "PROVINCE", level: 1 },
+      });
+      const ward = (n: number) =>
+        db.location.create({
+          data: {
+            code: `W${n}-${tag}`,
+            name: `Phường ${n}`,
+            type: "WARD",
+            level: 2,
+            parentId: province.id,
+          },
+        });
+      const [ward1, ward2] = [await ward(1), await ward(2)];
+      const body = (locationId: string, username: string) => ({
+        locationId,
+        username,
+        password: "Officer-123!",
+        fullName: "Cán bộ ATTP",
+      });
+      const create = (
+        locationId: string,
+        username: string,
+        actor = system.id,
+      ) => request(route, actor, "POST", body(locationId, username));
+      const dataOf = (response: { body: unknown }) =>
+        record(record(response.body).data);
+
+      assert.equal((await create(ward1.id, "x-" + tag, adminA.id)).status, 403);
+      assert.equal(
+        (await create(ward1.id, "x-" + tag, officerA.id)).status,
+        403,
+      );
+      assert.equal((await create(province.id, "x-" + tag)).status, 400);
+      const raced = await Promise.all([
+        create(ward1.id, "Attp-A-" + tag),
+        create(ward1.id, "attp-b-" + tag),
+      ]);
+      assert.deepEqual(raced.map((r) => r.status).sort(), [201, 409]);
+      const created = raced.find((r) => r.status === 201);
+      assert(created);
+      const officer = dataOf(created);
+      const username = String(officer.username);
+      assert.equal(username, username.toLowerCase());
+      assert.equal(officer.status, "UNVERIFIED");
+      assert.equal(officer.email, null);
+      assert.equal(officer.emailSetupRequired, true);
+      assert.equal(record(officer.unit).code, "ATTP-" + ward1.code);
+      assert.equal(record(officer.location).id, ward1.id);
+      assert(!("passwordHash" in officer));
+      assert.equal((await create(ward2.id, username)).status, 409);
+      assert.equal(
+        await db.communeFoodSafetyUnit.count({
+          where: { locationId: ward2.id },
+        }),
+        0,
+      );
+      const bare = await db.communeFoodSafetyUnit.create({
+        data: { code: "BARE-" + tag, name: "Bare", locationId: ward2.id },
+      });
+      const reused = await create(ward2.id, "attp-c-" + tag);
+      assert.equal(reused.status, 201);
+      assert.equal(record(dataOf(reused).unit).id, bare.id);
+
+      const listed = await request(
+        `${route}?locationId=${ward1.id}&search=${username}`,
+        system.id,
+      );
+      const items = dataOf(listed).items;
+      assert(Array.isArray(items));
+      assert.equal(items.length, 1);
+      assert.equal(
+        (await request(`${route}/${String(officer.id)}`, system.id)).status,
+        200,
+      );
+      assert.equal(
+        (await request(`${route}/${adminA.id}`, system.id)).status,
+        404,
+      );
+
+      const cookies = (response: { headers: Headers }) => {
+        const value = response.headers
+          .getSetCookie()
+          .map((cookie) => cookie.split(";")[0])
+          .join("; ");
+        const refresh = parseCookie(value)[REFRESH_COOKIE];
+        if (refresh) refreshTokens.push(refresh);
+        return value;
+      };
+      const post = (path: string, payload: unknown, cookie = "") =>
+        http.request("/api/auth" + path, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-CSRF-Protection": "1",
+            ...(cookie ? { Cookie: cookie } : {}),
+          },
+          body: JSON.stringify(payload),
+        });
+      const signIn = (identifier: string) =>
+        post("/login", { identifier, password: "Officer-123!" });
+      const get = (path: string, cookie: string) =>
+        http.request(path, { headers: { Cookie: cookie } });
+
+      const first = await signIn(username);
+      assert.equal(first.status, 200);
+      const pending = cookies(first);
+      const me = record(record((await get("/api/auth/me", pending)).body).data);
+      assert.equal(me.emailSetupRequired, true);
+      assert.equal(me.onboardingRequired, false);
+      assert.equal(me.email, null);
+      assert.equal(
+        (await get("/api/commune-food-safety-units/me/schools", pending))
+          .status,
+        403,
+      );
+      assert.equal((await post("/email-setup/request", {})).status, 401);
+
+      const email = `attp-${tag}@example.test`;
+      assert.equal(
+        (await post("/email-setup/request", { email }, pending)).status,
+        200,
+      );
+      assert.equal(
+        (await post("/email-setup/request", { email }, pending)).status,
+        429,
+      );
+      const code = sentCodes.get(email);
+      assert(code);
+      const wrong = code === "000000" ? "000001" : "000000";
+      for (const bad of [
+        { email, code: wrong },
+        { email: "other-" + email, code },
+      ])
+        assert.equal(
+          (await post("/email-setup/verify", bad, pending)).status,
+          400,
+        );
+      const verified = await post(
+        "/email-setup/verify",
+        { email, code },
+        pending,
+      );
+      assert.equal(verified.status, 200);
+      const active = cookies(verified);
+      assert.equal((await get("/api/auth/me", pending)).status, 401);
+      const after = record(
+        record((await get("/api/auth/me", active)).body).data,
+      );
+      assert.equal(after.status, "ACTIVE");
+      assert.equal(after.emailSetupRequired, false);
+      assert.equal(
+        (await post("/email-setup/request", { email }, active)).status,
+        409,
+      );
+      assert.equal((await signIn(username)).status, 401);
+      const byEmail = await signIn(email);
+      assert.equal(byEmail.status, 200);
+      cookies(byEmail);
+
+      // Email already owned by another account.
+      const second = cookies(await signIn("attp-c-" + tag));
+      assert.equal(
+        (await post("/email-setup/request", { email }, second)).status,
+        409,
       );
     },
   );

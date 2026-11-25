@@ -19,10 +19,10 @@ Express + TypeScript strict (CommonJS), Prisma 7, PostgreSQL 18. Tái sử dụn
 
 ## Data Model
 
-Migration `prisma/migrations/20261205000100_authority_officer_accounts/migration.sql`:
+Migration `prisma/migrations/20261208000100_authority_officer_accounts/migration.sql`:
 
 - `ALTER TABLE foodprint.users ALTER COLUMN email DROP NOT NULL;`
-- `CHECK chk_users_email_required`: `email IS NOT NULL OR (role_code = 'COMMUNE_FOOD_SAFETY_OFFICER' AND status = 'UNVERIFIED' AND email_verified_at IS NULL)`.
+- `CHECK chk_users_email_required`: `email IS NOT NULL OR (role_code = 'COMMUNE_FOOD_SAFETY_OFFICER' AND status <> 'ACTIVE' AND email_verified_at IS NULL)`.
 - Không thêm bảng: đã có `uq_commune_food_safety_units_location_id`, `uq_users_commune_officer`, `uq_users_non_staff_username`, `idx_schools_location_id`.
 
 Prisma: `User.email String? @db.Citext`. Rà các chỗ đọc `user.email` (session/me, mailer, quên mật khẩu, danh sách người dùng, DTO) để xử lý `null` theo kiểu; typecheck chỉ ra đủ vị trí.
@@ -43,6 +43,12 @@ Prisma: `User.email String? @db.Citext`. Rà các chỗ đọc `user.email` (ses
 4. **Danh sách và chi tiết trường của ATTP**: `authority` module thêm `GET /me/schools` và `GET /me/schools/:schoolId` (chi tiết kèm `suppliers`: repository lọc `schoolSupplierRelationships.status IN (ACTIVE, SUSPENDED)` (loại `UNLINKED`) và `Supplier.status = ACTIVE`, select allowlist, `orderBy` tên NCC; trường đọc với `where: { id, ...scope }` → không thấy thì `404`); resource mới `authority-school` trong `resource-access.ts` trả `{ location: { communeFoodSafetyUnits: { some: { id: unitId } } } }` (tức `schools.location_id = unit.location_id`); đơn vị chưa có `location_id` → rỗng.
 5. **Catalog quyền**: thêm `authority_school.view` + grant officer; bỏ `["COMMUNE_FOOD_SAFETY_OFFICER", "dashboard.view"]`.
 6. **Tài liệu**: `src/modules/README.md`, `docs/AUTHORIZATION.md` (bảng endpoint mới, quyền), `docs/ONBOARDING.md` (`locationId`), `docs/AUTH_SESSIONS.md`/`EMAIL_VERIFICATION.md` (email lần đầu).
+
+### Bổ sung: phường/xã trong danh mục trường/NCC (FR-012)
+
+- `directory-validation.ts`: `hasLocationSchema` dùng chung; thêm vào query danh sách `organization` và `supplier`.
+- Repository hai module select `location` bằng `wardLocationSelect`, lọc `locationId` trong `where` sau phạm vi; service ánh xạ bằng `toWardLocation`. Không cần migration hay quyền mới.
+- `frontend-plan.md`: hợp đồng API cho frontend.
 
 ## Kiểm thử
 

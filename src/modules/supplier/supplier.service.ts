@@ -4,6 +4,7 @@ import { listScopes } from "../../utils/resource-access";
 import { HttpError } from "../../utils/http-error";
 import { withReadTransaction } from "../../utils/read-transaction";
 import { getPrisma } from "../../utils/database";
+import { toWardLocation } from "../../utils/ward-location";
 import {
   createSupplierRepository,
   type SupplierRepository,
@@ -27,6 +28,7 @@ function map(row: SupplierRow): SupplierItemResponseDTO {
     email: row.email,
     phone: row.phone,
     address: row.address,
+    location: row.location ? toWardLocation(row.location) : null,
     status: row.status,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),

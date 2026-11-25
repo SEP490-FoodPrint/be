@@ -117,8 +117,6 @@ void test("all list resources deny absent grants, including System Admin", () =>
       assert.deepEqual(scope(grantedSystem), { kind: "MEAL" });
     } else if (resource === "ingredient-quality-feedback") {
       assert.deepEqual(scope(grantedSystem), { kind: "INGREDIENT" });
-    } else if (resource === "system-complaint") {
-      assert.deepEqual(scope(grantedSystem), { kind: "SYSTEM" });
     } else {
       assert.deepEqual(scope(grantedSystem), {});
     }

@@ -2,7 +2,11 @@ import type { PrismaClient } from "../../generated/prisma/client";
 import type { SessionUser } from "../../types/session-user";
 import { getPrisma } from "../../utils/database";
 import { authorizationTransaction } from "../../utils/authorization";
-import { loadSessionUser } from "../../utils/session-identity";
+import {
+  emailSetupFirst,
+  loadSessionUser,
+  requiresEmailSetup,
+} from "../../utils/session-identity";
 import type { ProfileUpdateRequestDTO } from "./auth.request.dto";
 import type { SessionUserResponseDTO } from "./auth.response.dto";
 import { profileRepository } from "./profile.repository";
@@ -19,6 +23,7 @@ export function createProfileService(
       const db = await connect();
       return authorizationTransaction(db, async (tx) => {
         const current = await loadSessionUser(user.id, tx);
+        if (requiresEmailSetup(current)) throw emailSetupFirst();
         const saved = await profileRepository.update(tx, current.id, input);
         return toSessionUserResponseDTO({
           ...current,

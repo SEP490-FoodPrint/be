@@ -10,6 +10,10 @@ import type {
 } from "./onboarding.validation";
 import type { loginSchema } from "./session.validation";
 import type { profileUpdateSchema } from "./profile.validation";
+import type {
+  emailSetupRequestSchema,
+  emailSetupVerifySchema,
+} from "./email-setup.validation";
 export type OnboardingSubmitRequestDTO =
   | z.infer<typeof schoolSubmissionSchema>
   | z.infer<typeof supplierSubmissionSchema>;
@@ -28,3 +32,5 @@ export type RegistrationApproveRequestDTO = z.infer<
 export type RegistrationRejectRequestDTO = z.infer<typeof rejectRequestSchema>;
 export type LoginRequestDTO = z.infer<typeof loginSchema>;
 export type ProfileUpdateRequestDTO = z.infer<typeof profileUpdateSchema>;
+export type EmailSetupRequestDTO = z.infer<typeof emailSetupRequestSchema>;
+export type EmailSetupVerifyDTO = z.infer<typeof emailSetupVerifySchema>;

@@ -41,6 +41,8 @@ export function sessionUserFromIdentity(user: Identity | null): SessionUser {
     user.communeFoodSafetyUnit?.name ??
     null;
   if (user.status === "ACTIVE") {
+    // chk_users_email_required: an ACTIVE account always has an email.
+    if (!user.email) throw new HttpError(403, "Tài khoản chưa có email hợp lệ");
     return {
       ...principalFromIdentity(user),
       email: user.email,
@@ -54,6 +56,35 @@ export function sessionUserFromIdentity(user: Identity | null): SessionUser {
   }
   if (user.status !== "UNVERIFIED")
     throw new HttpError(403, "Tài khoản đã bị khóa hoặc ngừng hoạt động");
+  if (
+    user.Role.code === ROLES.COMMUNE_FOOD_SAFETY_OFFICER &&
+    user.Role.type === "AUTHORITY" &&
+    user.email === null &&
+    !user.emailVerifiedAt &&
+    user.communeFoodSafetyUnitId &&
+    !user.schoolId &&
+    !user.supplierId
+  ) {
+    // Officer created by System Admin: may only set up an email (FR-004); no permissions.
+    return {
+      id: user.id,
+      username: user.username,
+      email: null,
+      phone: user.phone,
+      organizationName,
+      fullName: user.fullName,
+      roleId: user.roleId,
+      role: user.Role.code,
+      orgType: user.Role.type,
+      schoolId: null,
+      supplierId: null,
+      communeFoodSafetyUnitId: user.communeFoodSafetyUnitId,
+      status: "UNVERIFIED",
+      onboardingRequired: false,
+      registrationRequest: null,
+      emailVerifiedAt: null,
+    };
+  }
   const school =
     user.Role.code === ROLES.SCHOOL_ADMINISTRATION &&
     user.Role.type === "SCHOOL";
@@ -77,6 +108,7 @@ export function sessionUserFromIdentity(user: Identity | null): SessionUser {
       403,
       "Vui lòng xác minh email trước khi đăng nhập hoặc hoàn thiện hồ sơ",
     );
+  if (!user.email) throw new HttpError(403, "Tài khoản chưa có email hợp lệ");
   return {
     id: user.id,
     username: user.username,
@@ -111,6 +143,20 @@ export async function loadSessionUser(
     );
   });
 }
+
+/** Cán bộ ATTP chưa cập nhật email (FR-004): chỉ được dùng luồng cập nhật email. */
+export function requiresEmailSetup(
+  user: SessionUser,
+): user is Extract<SessionUser, { email: null }> {
+  return user.email === null;
+}
+
+export const emailSetupFirst = () =>
+  new HttpError(
+    403,
+    "Vui lòng cập nhật email trước khi sử dụng chức năng này",
+    "EMAIL_SETUP_REQUIRED",
+  );
 
 export function requireSessionUser(req: Request): SessionUser {
   if (!req.sessionUser)

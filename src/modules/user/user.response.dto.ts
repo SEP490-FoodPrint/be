@@ -22,7 +22,7 @@ export type UserSchoolAccountItemDTO = {
   id: string;
   schoolId: string | null;
   fullName: string;
-  email: string;
+  email: string | null;
   phone: string | null;
   roleCode: string;
   roleName: string;
@@ -38,7 +38,7 @@ export type UserAccountDetailDTO = {
   id: string;
   schoolId: string | null;
   fullName: string;
-  email: string;
+  email: string | null;
   phone: string | null;
   roleCode: string;
   roleName: string;

@@ -22,8 +22,8 @@ import { createWarehouseRouter } from "../modules/warehouse/warehouse.routes";
 import { createKitchenRouter } from "../modules/kitchen/kitchen.routes";
 import { createMealAttendanceRouter } from "../modules/meal-attendance/meal-attendance.routes";
 import { createFeedbackRouter } from "../modules/feedback/feedback.routes";
-import { createSystemComplaintRouter } from "../modules/system-complaint/system-complaint.routes";
 import { createAuthorityComplaintRouter } from "../modules/authority-complaint/authority-complaint.routes";
+import { createAuthorityOfficerRouter } from "../modules/authority-officer/authority-officer.routes";
 import { createFoodSafetyIncidentRouter } from "../modules/food-safety-incident/food-safety-incident.routes";
 import { createFoodSafetyInspectionRouter } from "../modules/food-safety-inspection/food-safety-inspection.routes";
 import {
@@ -145,10 +145,6 @@ export function createApiRouter(
   );
   router.use("/meal-complaints", createFeedbackRouter(undefined, authHandler));
   router.use(
-    "/system-complaints",
-    createSystemComplaintRouter(undefined, authHandler),
-  );
-  router.use(
     "/authority-complaints",
     createAuthorityComplaintRouter(undefined, authHandler),
   );
@@ -176,6 +172,10 @@ export function createApiRouter(
   router.use(
     "/commune-food-safety-units",
     createAuthorityRouter(undefined, authHandler),
+  );
+  router.use(
+    "/authority-officers",
+    createAuthorityOfficerRouter(undefined, authHandler),
   );
   router.use("/classes", createClassRouter(undefined, authHandler));
   router.use("/school-grades", createSchoolGradeRouter(undefined, authHandler));

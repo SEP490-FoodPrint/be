@@ -1,6 +1,7 @@
 import {
   paginationSchema,
   emptyQuerySchema,
+  hasLocationSchema,
   idParamsSchema,
   parse,
 } from "../../utils/directory-validation";
@@ -113,6 +114,7 @@ export const organizationListQuerySchema = paginationSchema.safeExtend({
   status: z
     .enum(["ACTIVE", "INACTIVE"], { error: "Trạng thái không hợp lệ" })
     .optional(),
+  hasLocation: hasLocationSchema,
 });
 export const organizationSummaryQuerySchema = emptyQuerySchema;
 export const organizationDetailParamsSchema = idParamsSchema;

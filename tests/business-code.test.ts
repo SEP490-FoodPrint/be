@@ -46,11 +46,10 @@ void test("danh mục chỉ gồm chữ viết tắt 2 chữ in hoa, không trù
     "IC",
     "MC",
     "RG",
-    "SC",
   ]);
   for (const type of Object.keys(BUSINESS_CODE_TYPES)) {
     assert.match(type, /^[A-Z]{2}$/);
-    assert(!["LO", "CB", "BG", "SU", "SF"].includes(type));
+    assert(!["LO", "CB", "BG", "SU", "SF", "SC"].includes(type));
   }
   assert.equal(BUSINESS_CODE_MAX_SEQUENCE, 100_000);
 });

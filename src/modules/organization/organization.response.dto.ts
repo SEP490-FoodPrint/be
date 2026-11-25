@@ -1,3 +1,4 @@
+import type { WardLocationDTO } from "../../utils/ward-location";
 import type { CookingMode } from "../../generated/prisma/client";
 
 export interface CookingModeResponseDTO {
@@ -43,6 +44,8 @@ export interface OrganizationListItemResponseDTO {
   email: string | null;
   phone: string | null;
   address: string | null;
+  /** Phường/xã của tổ chức; chưa gắn → `null`. */
+  location: WardLocationDTO | null;
   status: string;
   createdAt: string;
   updatedAt: string;

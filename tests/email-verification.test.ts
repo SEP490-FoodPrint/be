@@ -26,7 +26,7 @@ const status = (code: number) => (error: unknown) =>
 function fixture() {
   let now = Date.now();
   const { store, records } = memoryEmailVerification(() => now);
-  const user: VerificationAccount = {
+  const user: VerificationAccount & { email: string } = {
     id: randomUUID(),
     email: "applicant@example.test",
     emailVerifiedAt: null,
