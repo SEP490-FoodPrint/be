@@ -612,3 +612,9 @@ Không còn câu hỏi mở.
 - **Mẻ theo đợt có thể dư suất (D28).** Khối nghỉ quá nửa làm số suất mẻ Đợt 1 lớn hơn suất đã chốt. Bước hoàn thành chấp nhận "lớn hơn hoặc bằng" cho mẻ theo đợt. Báo cáo thừa suất chưa có trong bản này.
 - **Lệch định lượng đặt hàng và tách mẻ cho suất ăn** (không phải phần mẫu). Đặt hàng tính theo khẩu phần từng khối, còn tách mẻ dùng định lượng đã chụp trong thực đơn. Thiếu thì món báo `PLAN_FAILED` để kho xử lý, dư thì thành tồn kho.
 - **NCC khai báo chậm** (N9): món đứng ở `WAITING_SUPPLIERS`, chưa có hạn chót (mục 15).
+
+## Hồi quy luồng demo thực tế
+
+- Gửi tuần đầy đủ cho nhiều khối phải giữ nguyên kiểm tra quyền, định lượng, đơn vị, dị ứng và tính nguyên tử. Các lần tra cùng danh mục trong một transaction dùng chung kết quả xác thực thành công.
+- Gia vị của một bữa giữ theo tổng suất cần phục vụ. Đợt 2 giữ thêm phần chênh lệch dương theo khối, bảo toàn lượng đã giữ đợt 1 và lượng mẫu đang lưu theo lô. Giữ đúng quy tắc nguồn của chế độ nấu.
+- Bản chụp phân bổ mẻ theo đợt chỉ mô tả phần nguyên liệu được cấp theo mẻ. Khi đọc bản chụp cũ, gia vị thực sự được quản lý chung theo bữa không làm bộ phân bổ báo thiếu nguyên liệu của mẻ.
