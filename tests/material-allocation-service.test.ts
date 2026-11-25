@@ -314,7 +314,7 @@ void test("persisted material allocations remain ready and scoped to grade", () 
       plannedPortions: 50,
       mealAllocationBatches: [],
     })),
-  }));
+  })) as unknown as AllocationDay["batches"];
   day.demands[0].MealAllocation = {
     id: "allocation",
     status: "ALLOCATED",

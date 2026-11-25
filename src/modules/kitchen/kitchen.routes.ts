@@ -63,23 +63,13 @@ export function createKitchenRouter(
     receivePhoto,
     sampleController.create,
   );
-  router.get(
-    "/plan",
-    authHandler,
-    requirePermission("cooking_batch.create"),
-    controller.preview,
-  );
+  // TASK-10 v8 (V29, V32): bếp dùng thẳng mẻ do luồng đợt giao tạo, đã gỡ lập mẻ thủ công
+  // (GET /plan xem trước và POST / tạo kế hoạch).
   router.get(
     "/:id",
     authHandler,
     requireResource("kitchen"),
     controller.getOne,
-  );
-  router.post(
-    "/",
-    authHandler,
-    requirePermission("cooking_batch.create"),
-    controller.plan,
   );
   router.post(
     "/:id/confirm",

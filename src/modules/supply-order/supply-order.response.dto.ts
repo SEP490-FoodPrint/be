@@ -30,6 +30,8 @@ export interface SupplyOrderListResponseDTO {
       handlingType: string;
       requestedQuantity: string;
       sampleTopUpQuantity?: string;
+      carryOverQuantity?: string;
+      sampleCompensationQuantity?: string;
       unit: string;
       note: string | null;
     }[];
@@ -82,6 +84,7 @@ export interface SupplierOrderListResponseDTO {
 }
 
 export interface SupplierOrderDetailResponseDTO extends SupplierOrderListItemResponseDTO {
+  requiresSampleStep: boolean;
   note: string | null;
   acceptedByUserId: string | null;
   items: {

@@ -9,16 +9,26 @@ import { getPrisma } from "../../utils/database";
 import {
   checkMealSeasoningStock,
   checkReservedStock,
+  reservedQuantities,
 } from "../kitchen/kitchen.service";
 import { HttpError } from "../../utils/http-error";
 import { evaluateBatch2Skip } from "../supply-order/fresh-demand.service";
-import { planRoundOneDish } from "./round-dish-planning";
 import {
+  applyBatchSample,
+  applyMealSeasoningSample,
+  planRoundDish,
+  refreshCompensations,
+  type RoundPhase,
+} from "./round-dish-planning";
+import {
+  roundSampleRepository as samples,
   supplyRoundRepository as repository,
   type RoundKey,
+  type RoundMeal,
   type RoundOccurrence,
   type RoundRequest,
 } from "./supply-round.repository";
+import { convertQuantity } from "../../utils/quantity-conversion";
 import type {
   RoundApprovalDTO,
   RoundDishParamsDTO,
@@ -90,48 +100,8 @@ function waitingRequests(
   );
 }
 
-async function refreshStages(
-  tx: Tx,
-  round: Round,
-  requests: RoundRequest[],
-  dishes: Map<string, RoundOccurrence[]>,
-) {
+async function refreshRoundStatus(tx: Tx, round: Round) {
   const plans = await repository.plans(tx, round.id);
-  const statusFor = new Map(plans.map((plan) => [plan.dishId, plan.status]));
-  const samples = await repository.batchSamples(tx, round.id);
-  const topUpDeliveries = new Set(
-    samples.map((sample) => sample.IngredientLot.DeliveryItem.Delivery.id),
-  );
-  for (const request of requests) {
-    const delivery = request.deliveries[0];
-    if (
-      !delivery?.preparationStage ||
-      delivery.status !== "PREPARING" ||
-      delivery.preparationStage === "READY_TO_DISPATCH"
-    )
-      continue;
-    const states = [...dishes.values()]
-      .filter(([dish]) => usesRequest(dish, request))
-      .map(([dish]) => statusFor.get(dish.dishId));
-    if (
-      (states.length || dishes.size) &&
-      states.every((state) => state === "APPROVED")
-    ) {
-      await repository.setStage(
-        tx,
-        delivery.id,
-        topUpDeliveries.has(delivery.id)
-          ? "TOP_UP_PENDING"
-          : "READY_TO_DISPATCH",
-      );
-    } else if (
-      states.some(
-        (state) => state === "PENDING_WAREHOUSE" || state === "APPROVED",
-      )
-    ) {
-      await repository.setStage(tx, delivery.id, "PENDING_WAREHOUSE");
-    }
-  }
   const status =
     plans.length && plans.every((plan) => plan.status === "APPROVED")
       ? "READY"
@@ -140,6 +110,65 @@ async function refreshStages(
         : "COLLECTING";
   if (status !== round.status)
     await repository.updateRoundStatus(tx, round.id, status);
+  return status;
+}
+
+/** Chỉ Đợt 2 nấu riêng có giai đoạn chuẩn bị của chuyến (bước NCC xác nhận bổ sung lưu mẫu). */
+async function refreshStages(
+  tx: Tx,
+  round: Round,
+  requests: RoundRequest[],
+  dishes: Map<string, RoundOccurrence[]>,
+) {
+  if (round.batchNo === 2) {
+    const plans = await repository.plans(tx, round.id);
+    const statusFor = new Map(plans.map((plan) => [plan.dishId, plan.status]));
+    const roundSamples = await repository.batchSamples(tx, round.id);
+    const topUpDeliveries = new Set(
+      roundSamples.map(
+        (sample) => sample.IngredientLot.DeliveryItem.Delivery.id,
+      ),
+    );
+    for (const request of requests) {
+      const delivery = request.deliveries[0];
+      if (
+        !delivery?.preparationStage ||
+        delivery.status !== "PREPARING" ||
+        delivery.preparationStage === "READY_TO_DISPATCH"
+      )
+        continue;
+      const states = [...dishes.values()]
+        .filter(([dish]) => usesRequest(dish, request))
+        .map(([dish]) => statusFor.get(dish.dishId));
+      if (
+        (states.length || dishes.size) &&
+        states.every((state) => state === "APPROVED")
+      ) {
+        await repository.setStage(
+          tx,
+          delivery.id,
+          topUpDeliveries.has(delivery.id)
+            ? "TOP_UP_PENDING"
+            : "READY_TO_DISPATCH",
+        );
+      } else if (
+        states.some(
+          (state) => state === "PENDING_WAREHOUSE" || state === "APPROVED",
+        )
+      ) {
+        await repository.setStage(tx, delivery.id, "PENDING_WAREHOUSE");
+      }
+    }
+  }
+  await refreshRoundStatus(tx, round);
+}
+
+async function phaseFor(tx: Tx, round: Round): Promise<RoundPhase> {
+  const mode = await samples.cookingMode(tx, round.schoolId);
+  if (round.batchNo === 2)
+    return mode === "COMBINE_LOTS" ? "ROUND2_COMBINE" : "ROUND2_SEPARATE";
+  const requests = await repository.requests(tx, round);
+  return requests.length ? "ROUND1" : "ROUND1_NO_FRESH";
 }
 
 async function planOne(
@@ -148,6 +177,7 @@ async function planOne(
   dishId: string,
   actorId: string,
   requested: boolean,
+  phase: RoundPhase,
 ) {
   const requests = await repository.requests(tx, round);
   const occurrences = groupOccurrences(await repository.occurrences(tx, round));
@@ -172,19 +202,42 @@ async function planOne(
       );
     return;
   }
-  if (waitingRequests(matching[0], requests).length) {
+  if (
+    phase === "ROUND2_SEPARATE" &&
+    waitingRequests(matching[0], requests).length
+  ) {
     if (requested)
       throw new HttpError(409, "Chưa đủ nhà cung cấp khai báo lô cho món");
     return;
   }
   await repository.beginDish(tx);
   try {
-    const planVersion = await planRoundOneDish(tx, round, matching, actorId);
-    await repository.updatePlan(tx, round.id, dishId, {
-      status: "PENDING_WAREHOUSE",
-      planVersion,
-      failureMessage: null,
-    });
+    if (phase === "ROUND2_SEPARATE") {
+      const round1 = await repository.findByKey(tx, { ...round, batchNo: 1 });
+      await samples.resetRound2Dish(tx, round.id, round1?.id ?? null, dishId);
+    }
+    const planVersion = await planRoundDish(
+      tx,
+      round,
+      matching,
+      actorId,
+      phase,
+    );
+    // Đợt 1 và Đợt 2 nấu chung tự động, kho không duyệt (V12, V14).
+    await repository.updatePlan(
+      tx,
+      round.id,
+      dishId,
+      phase === "ROUND2_SEPARATE"
+        ? { status: "PENDING_WAREHOUSE", planVersion, failureMessage: null }
+        : {
+            status: "APPROVED",
+            planVersion,
+            failureMessage: null,
+            approvedAt: new Date(),
+            approvedByUserId: actorId,
+          },
+    );
   } catch (error) {
     await repository.rollbackDish(tx);
     if (!(error instanceof HttpError))
@@ -199,13 +252,28 @@ async function planOne(
         error instanceof HttpError
           ? error.message
           : "Không thể lập mẻ cho món. Vui lòng thử lại.",
+      approvedAt: null,
+      approvedByUserId: null,
     });
   }
   await repository.releaseDish(tx);
   await refreshStages(tx, round, requests, occurrences);
 }
 
-async function reconcile(key: RoundKey, actorId: string) {
+/** Đợt 1 xong lập mẻ: ghi phần bù (chỉ khi Đợt 2 chưa có đơn, V7 khóa phần bù đã đặt). */
+async function afterRound1Planned(tx: Tx, round: Round, phase: RoundPhase) {
+  const second = { ...round, batchNo: 2 };
+  if (phase === "ROUND1_NO_FRESH") {
+    // V34: ngày không đồ tươi không có Đợt 2.
+    if (!(await repository.findByKey(tx, second)))
+      await repository.markNotNeeded(tx, second, new Date());
+    return;
+  }
+  if (!(await repository.requests(tx, second)).length)
+    await refreshCompensations(tx, round);
+}
+
+async function reconcile(key: RoundKey, actorId: string, forced?: RoundPhase) {
   const database = await getPrisma();
   const queue = await database.$transaction(async (tx) => {
     await repository.lock(tx, key);
@@ -216,7 +284,11 @@ async function reconcile(key: RoundKey, actorId: string) {
     const dishes = groupOccurrences(await repository.occurrences(tx, key));
     const ids = [...dishes.keys()];
     await repository.ensurePlans(tx, round.id, ids);
-    return { roundId: round.id, ids };
+    return {
+      roundId: round.id,
+      ids,
+      phase: forced ?? (await phaseFor(tx, round)),
+    };
   }, transactionOptions);
   if (!queue) return;
   for (const dishId of queue.ids) {
@@ -225,9 +297,127 @@ async function reconcile(key: RoundKey, actorId: string) {
       const round = await repository.findById(tx, key.schoolId, queue.roundId);
       if (!round || round.status === "CLOSED" || round.status === "NOT_NEEDED")
         return;
-      await planOne(tx, round, dishId, actorId, false);
+      await planOne(tx, round, dishId, actorId, false, queue.phase);
     }, transactionOptions);
   }
+  if (key.batchNo === 1)
+    await database.$transaction(async (tx) => {
+      await repository.lock(tx, key);
+      const round = await repository.findById(tx, key.schoolId, queue.roundId);
+      if (round) await afterRound1Planned(tx, round, queue.phase);
+    }, transactionOptions);
+}
+
+/** Mọi chuyến của các đơn đồ tươi trong đợt đã nhận (có ít nhất một đơn). */
+function allReceived(requests: RoundRequest[]) {
+  return (
+    requests.length > 0 &&
+    requests.every(
+      ({ deliveries }) =>
+        deliveries.length > 0 &&
+        deliveries.every(({ status }) => status === "RECEIVED"),
+    )
+  );
+}
+
+/**
+ * Đợt 2 đã có hàng: trả lại phần đồ khô và gia vị đã cắt ở Đợt 1 bằng tồn kho (V9, V16).
+ * Phần đồ tươi đã nằm trong lượng đặt Đợt 2 (V5, V18).
+ */
+async function restoreStockCompensations(tx: Tx, round1: Round) {
+  const compensations = (await samples.compensations(tx, round1.id)).filter(
+    (row) => row.kind === "STOCK",
+  );
+  if (!compensations.length) return;
+  const rows = await samples.cutSampleRows(tx, round1.id);
+  const occurrences = await repository.occurrences(tx, round1);
+  const meals = [
+    ...new Map(
+      occurrences.map((row) => [
+        `${row.menuDayId}|${row.mealType}`,
+        { menuDayId: row.menuDayId, mealType: row.mealType },
+      ]),
+    ).values(),
+  ];
+  for (const compensation of compensations) {
+    let remaining = compensation.sampleQuantity;
+    const targets: {
+      lotId: string;
+      unit: string;
+      add: (quantity: Prisma.Decimal) => Promise<unknown>;
+    }[] = [];
+    for (const row of rows) {
+      const entryId =
+        row.IngredientLot.DeliveryItem.ingredientEntryId ??
+        row.IngredientLot.DeliveryItem.SupplyRequestItem?.ingredientEntryId;
+      if (entryId !== compensation.ingredientEntryId) continue;
+      targets.push({
+        lotId: row.ingredientLotId,
+        unit: row.unit,
+        add: (quantity) =>
+          tx.cookingBatchLot.update({
+            where: {
+              cookingBatchId_dishId_ingredientLotId: {
+                cookingBatchId: row.cookingBatchId,
+                dishId: row.dishId,
+                ingredientLotId: row.ingredientLotId,
+              },
+            },
+            data: { quantityUsed: { increment: quantity } },
+          }),
+      });
+    }
+    for (const meal of meals)
+      for (const row of await repository.seasoningLots(tx, meal))
+        if (row.ingredientEntryId === compensation.ingredientEntryId)
+          targets.push({
+            lotId: row.ingredientLotId,
+            unit: row.unit,
+            add: (quantity) =>
+              tx.menuMealSeasoningLot.update({
+                where: { id: row.id },
+                data: { quantityUsed: { increment: quantity } },
+              }),
+          });
+    for (const target of targets) {
+      if (!remaining.gt(0)) break;
+      const lot = await tx.ingredientLot.findUniqueOrThrow({
+        where: { id: target.lotId },
+        select: { id: true, unit: true, availableQuantity: true },
+      });
+      const reserved = (await reservedQuantitiesFor(tx, lot)).toDecimalPlaces(
+        3,
+      );
+      const free = convertQuantity(
+        lot.availableQuantity.sub(reserved),
+        lot.unit,
+        target.unit,
+      ).toDecimalPlaces(3, Prisma.Decimal.ROUND_DOWN);
+      const wanted = convertQuantity(
+        remaining,
+        compensation.unit,
+        target.unit,
+      ).toDecimalPlaces(3, Prisma.Decimal.ROUND_UP);
+      const amount = Prisma.Decimal.min(free, wanted);
+      if (!amount.gt(0)) continue;
+      await target.add(amount);
+      remaining = remaining.sub(
+        convertQuantity(amount, target.unit, compensation.unit),
+      );
+    }
+    if (remaining.gt(new Prisma.Decimal("0.0005")))
+      throw new HttpError(
+        409,
+        "Kho không đủ đồ khô/gia vị để bù phần lưu mẫu của Đợt 1; cần nhập thêm trước khi nấu",
+      );
+  }
+}
+
+async function reservedQuantitiesFor(
+  tx: Tx,
+  lot: { id: string; unit: string },
+) {
+  return (await reservedQuantities(tx, [lot])).get(lot.id)!;
 }
 
 async function view(tx: Tx, key: RoundKey): Promise<SupplyRoundResponseDTO> {
@@ -292,7 +482,7 @@ async function view(tx: Tx, key: RoundKey): Promise<SupplyRoundResponseDTO> {
         mealType: row.CookingBatch.mealType,
       });
     }
-    if (key.batchNo === 1)
+    if (occurrences.length)
       for (const row of await repository.seasoningSamples(
         tx,
         occurrences.map(({ menuDayId, mealType }) => ({
@@ -322,11 +512,16 @@ async function view(tx: Tx, key: RoundKey): Promise<SupplyRoundResponseDTO> {
       status: first.get(id)?.status ?? "WAITING_SUPPLIERS",
       planVersion: first.get(id)?.planVersion ?? null,
       failureMessage: first.get(id)?.failureMessage ?? null,
+      // Đợt 1 (TASK-10 v8): chờ NCC giao và trường kiểm nhận đủ; Đợt 2: chờ NCC khai báo lô.
       waitingSuppliers: [
         ...new Set(
-          waitingRequests(dish, requests).map(
-            (request) => request.Supplier.name,
-          ),
+          (key.batchNo === 1
+            ? requests.filter(
+                (request) =>
+                  usesRequest(dish, request) && !allReceived([request]),
+              )
+            : waitingRequests(dish, requests)
+          ).map((request) => request.Supplier.name),
         ),
       ],
     })),
@@ -339,10 +534,221 @@ async function view(tx: Tx, key: RoundKey): Promise<SupplyRoundResponseDTO> {
     ),
     topUps: [...topUps.values()],
     fromStock: [...fromStock.values()],
+    cookingMode: await samples.cookingMode(tx, key.schoolId),
+    ...(await roundExtras(tx, key, round)),
+  };
+}
+
+/** Phần bù của Đợt 1 và phần dư/thừa (TASK-10 v8) cho màn kế hoạch mẻ. */
+async function roundExtras(
+  tx: Tx,
+  key: RoundKey,
+  round: Round | null,
+): Promise<
+  Pick<
+    SupplyRoundResponseDTO,
+    "compensations" | "leftovers" | "round1Ready" | "batch2NotNeeded"
+  >
+> {
+  const round1 =
+    key.batchNo === 1
+      ? round
+      : await repository.findByKey(tx, { ...key, batchNo: 1 });
+  const round2 = await repository.findByKey(tx, { ...key, batchNo: 2 });
+  const compensations = round1
+    ? await samples.compensations(tx, round1.id)
+    : [];
+  const names = new Map(
+    (
+      await tx.ingredientEntry.findMany({
+        where: {
+          id: { in: compensations.map((row) => row.ingredientEntryId) },
+        },
+        select: { id: true, Ingredient: { select: { name: true } } },
+      })
+    ).map((row) => [row.id, row.Ingredient.name]),
+  );
+  const leftovers = round1 ? await samples.leftoversOfRound(tx, round1.id) : [];
+  return {
+    round1Ready: Boolean(
+      round1 && (round1.status === "READY" || round1.status === "CLOSED"),
+    ),
+    batch2NotNeeded: round2?.status === "NOT_NEEDED",
+    compensations: compensations.map((row) => ({
+      ingredientEntryId: row.ingredientEntryId,
+      ingredientName: names.get(row.ingredientEntryId) ?? "Nguyên liệu",
+      kind: row.kind,
+      quantity: row.sampleQuantity.toString(),
+      unit: row.unit,
+    })),
+    leftovers: leftovers.map((row) => ({
+      ingredientName:
+        row.ingredientLot.DeliveryItem.ingredientNameSnapshot ?? "Nguyên liệu",
+      source: row.ingredientLot.DeliveryItem.sourceFacilityNameSnapshot,
+      lotCode: row.ingredientLot.lotCode,
+      dishName: row.dish.name,
+      mealType: row.mealType,
+      quantity: row.quantity.toString(),
+      unit: row.unit,
+      surplus: round2?.status === "NOT_NEEDED",
+    })),
   };
 }
 
 export const supplyRoundService = {
+  /** Bước 3 của NCC (Đợt 2 nấu riêng): trạng thái theo nguyên liệu của chuyến (V22, V24, V31). */
+  async deliveryTopUpStatus(db: Tx, deliveryId: string) {
+    const delivery = await db.delivery.findUnique({
+      where: { id: deliveryId },
+      select: {
+        schoolId: true,
+        deliveryItems: {
+          select: {
+            ingredientEntryId: true,
+            ingredientNameSnapshot: true,
+          },
+        },
+        SupplyRequest: {
+          select: { id: true, batchNo: true, requestedDeliveryDate: true },
+        },
+      },
+    });
+    const request = delivery?.SupplyRequest;
+    if (!delivery || !request?.requestedDeliveryDate || request.batchNo !== 2)
+      return [];
+    const key = {
+      schoolId: delivery.schoolId,
+      deliveryDate: request.requestedDeliveryDate,
+      batchNo: 2,
+    };
+    const round = await repository.findByKey(db, key);
+    const plans = round ? await repository.plans(db, round.id) : [];
+    const statusFor = new Map(plans.map((plan) => [plan.dishId, plan]));
+    const requests = await repository.requests(db, key);
+    const occurrences = groupOccurrences(await repository.occurrences(db, key));
+    const entries = new Map<string, string>();
+    for (const item of delivery.deliveryItems)
+      if (item.ingredientEntryId && !entries.has(item.ingredientEntryId))
+        entries.set(
+          item.ingredientEntryId,
+          item.ingredientNameSnapshot ?? "Nguyên liệu",
+        );
+    return [...entries].map(([ingredientEntryId, ingredientName]) => {
+      const dishes = [...occurrences.values()].filter(([dish]) =>
+        dish.Dish.dishIngredientEntries.some(
+          (line) => line.ingredientEntryId === ingredientEntryId,
+        ),
+      );
+      const waitingFor = new Set<string>();
+      let ready = true;
+      let approved = true;
+      for (const [dish] of dishes) {
+        const plan = statusFor.get(dish.dishId);
+        const status = plan?.status ?? "WAITING_SUPPLIERS";
+        if (status !== "APPROVED") approved = false;
+        if (status === "APPROVED" || status === "PENDING_WAREHOUSE") {
+          if (status === "PENDING_WAREHOUSE")
+            waitingFor.add(`Kho trường duyệt món ${dish.Dish.name}`);
+          continue;
+        }
+        ready = false;
+        const pending = waitingRequests(dish, requests).map(
+          (row) => row.Supplier.name,
+        );
+        if (pending.length)
+          for (const name of pending)
+            waitingFor.add(`${name} khai báo lô cho món ${dish.Dish.name}`);
+        else waitingFor.add(`Trường xử lý kế hoạch món ${dish.Dish.name}`);
+      }
+      return {
+        ingredientEntryId,
+        ingredientName,
+        ready,
+        approved: ready && approved,
+        waitingFor: [...waitingFor],
+      };
+    });
+  },
+  /**
+   * Gọi sau khi commit nhận hàng hoặc chốt điểm danh lớp cuối (V11, V14, V20, V34):
+   * tạo mẻ Đợt 1 khi đủ điều kiện, lập Đợt 2 nấu chung khi đã nhận đủ, xét "Đợt 2 không cần",
+   * rồi chuyển mẻ sang chính thức nếu xong cả ngày.
+   */
+  async afterDayProgress(input: {
+    schoolId: string;
+    deliveryDate: Date;
+    actorId: string;
+  }) {
+    const { schoolId, deliveryDate, actorId } = input;
+    const first = { schoolId, deliveryDate, batchNo: 1 };
+    const second = { schoolId, deliveryDate, batchNo: 2 };
+    const database = await getPrisma();
+    const state = await database.$transaction(async (tx) => {
+      const round1 = await repository.findByKey(tx, first);
+      const requests1 = await repository.requests(tx, first);
+      const pending = await samples.attendancePending(
+        tx,
+        schoolId,
+        deliveryDate,
+      );
+      const occurrences = await repository.occurrences(tx, first);
+      // Ngày không đồ tươi (V34) là ngày mà thực đơn không có nguyên liệu DIRECT_USE nào,
+      // không phải ngày kho chưa kịp tạo đơn Đợt 1.
+      const entryIds = [
+        ...new Set(
+          occurrences.flatMap((row) =>
+            row.Dish.dishIngredientEntries.map(
+              ({ ingredientEntryId }) => ingredientEntryId,
+            ),
+          ),
+        ),
+      ];
+      const hasFresh = (await samples.entryKinds(tx, entryIds)).some(
+        (row) => row.handlingType === "DIRECT_USE",
+      );
+      return {
+        round1Ready: round1?.status === "READY" || round1?.status === "CLOSED",
+        // Có đơn đồ tươi Đợt 1: chờ nhận đủ hàng (V11). Không có: chờ chốt điểm danh (V34).
+        canPlanRound1:
+          occurrences.length > 0 &&
+          (requests1.length
+            ? allReceived(requests1)
+            : pending === 0 && !hasFresh),
+        attendanceDone: pending === 0,
+        mode: await samples.cookingMode(tx, schoolId),
+        requests2: await repository.requests(tx, second),
+      };
+    }, transactionOptions);
+    if (!state.round1Ready && state.canPlanRound1)
+      await reconcile(first, actorId);
+    if (state.mode === "COMBINE_LOTS" && allReceived(state.requests2))
+      await reconcile(second, actorId, "ROUND2_COMBINE");
+    await database.$transaction(async (tx) => {
+      const now = new Date();
+      const round1 = await repository.findByKey(tx, first);
+      if (
+        round1 &&
+        (round1.status === "READY" || round1.status === "CLOSED") &&
+        (await samples.attendancePending(tx, schoolId, deliveryDate)) === 0 &&
+        !(await repository.requests(tx, second)).length
+      )
+        await supplyRoundService.evaluateAndSkipBatch2IfReady(
+          tx,
+          schoolId,
+          deliveryDate,
+          now,
+        );
+      await repository.lock(tx, first);
+      await repository.lock(tx, second);
+      await supplyRoundService.finalizeReceivedDay(
+        tx,
+        schoolId,
+        deliveryDate,
+        now,
+        actorId,
+      );
+    }, transactionOptions);
+  },
   async evaluateAndSkipBatch2IfReady(
     tx: Tx,
     schoolId: string,
@@ -353,27 +759,29 @@ export const supplyRoundService = {
     const secondKey = { schoolId, deliveryDate, batchNo: 2 };
     await repository.lock(tx, firstKey);
     await repository.lock(tx, secondKey);
+    const round1 = await repository.findByKey(tx, firstKey);
+    // V20: chỉ kết luận khi mẻ Đợt 1 đã tạo (đã biết phần cắt mẫu).
+    if (!round1 || !["READY", "CLOSED"].includes(round1.status)) return;
     const existing = await repository.findByKey(tx, secondKey);
     if (existing && existing.status !== "NOT_NEEDED") return;
-    const decision = await evaluateBatch2Skip(
-      tx,
-      schoolId,
-      deliveryDate.toISOString().slice(0, 10),
-    );
-    if (!decision?.notNeeded) return;
-    if (!existing) await repository.markNotNeeded(tx, secondKey, at);
-    await supplyRoundService.finalizeReceivedDay(
-      tx,
-      schoolId,
-      deliveryDate,
-      at,
-    );
+    if (!existing) {
+      const decision = await evaluateBatch2Skip(
+        tx,
+        schoolId,
+        deliveryDate.toISOString().slice(0, 10),
+      );
+      if (!decision?.notNeeded) return;
+      await repository.markNotNeeded(tx, secondKey, at);
+    }
+    // V37: phần dư Đợt 1 không vào mẻ, hiển thị thừa.
+    await samples.releaseRoundLeftovers(tx, round1.id, at);
   },
   async finalizeReceivedDay(
     tx: Tx,
     schoolId: string,
     deliveryDate: Date,
     at: Date,
+    actorId?: string,
   ) {
     const firstKey = { schoolId, deliveryDate, batchNo: 1 };
     const secondKey = { ...firstKey, batchNo: 2 };
@@ -390,15 +798,9 @@ export const supplyRoundService = {
       second.status === "NOT_NEEDED" ? [firstKey] : [firstKey, secondKey];
     for (const key of keys) {
       const requests = await repository.requests(tx, key);
-      if (
-        !requests.length ||
-        requests.some(
-          ({ deliveries }) =>
-            !deliveries.length ||
-            deliveries.some(({ status }) => status !== "RECEIVED"),
-        )
-      )
-        return;
+      // Ngày không đồ tươi: Đợt 1 không có đơn nào (V34).
+      if (!requests.length && key.batchNo === 1) continue;
+      if (!allReceived(requests)) return;
     }
     const ids =
       second.status === "NOT_NEEDED" ? [first.id] : [first.id, second.id];
@@ -423,13 +825,50 @@ export const supplyRoundService = {
     )
       return;
     for (const part of parts) await repository.mergePart(tx, part, at);
-    for (const batch of parts.length
-      ? await repository.readyBatches(tx, ids)
-      : batches) {
+    // Nấu chung: phần mẫu lấy khi gộp (Đợt 2 đã đặt sẵn) hoặc cắt từ mẻ Đợt 1 khi Đợt 2 không cần (V14, V19).
+    const pendingSamples = (
+      await tx.cookingBatch.findMany({
+        where: { id: { in: batchIds }, sampleStrategy: "ROUND2_ORDER" },
+        select: {
+          id: true,
+          menuDayId: true,
+          mealType: true,
+          sampleStrategy: true,
+        },
+      })
+    ).filter((batch) => batch.sampleStrategy === "ROUND2_ORDER");
+    for (const batch of pendingSamples) {
+      await applyBatchSample(tx, batch.id, schoolId, {
+        fresh: "CUT",
+        stock: "STOCK",
+      });
+      await tx.cookingBatch.update({
+        where: { id: batch.id },
+        data: { sampleStrategy: "CUT" },
+      });
+    }
+    const byMeal = new Map<string, { meal: RoundMeal; ids: string[] }>();
+    for (const batch of pendingSamples) {
+      if (batch.mealType !== "LUNCH" && batch.mealType !== "AFTERNOON")
+        continue;
+      const key = `${batch.menuDayId}|${batch.mealType}`;
+      const entry = byMeal.get(key) ?? {
+        meal: { menuDayId: batch.menuDayId, mealType: batch.mealType },
+        ids: [],
+      };
+      entry.ids.push(batch.id);
+      byMeal.set(key, entry);
+    }
+    for (const { meal, ids: mealBatchIds } of byMeal.values())
+      await applyMealSeasoningSample(tx, meal, mealBatchIds, "STOCK");
+    if (second.status !== "NOT_NEEDED")
+      await restoreStockCompensations(tx, first);
+    for (const batch of await repository.readyBatches(tx, ids)) {
       await checkReservedStock(tx, batch, schoolId);
       await checkMealSeasoningStock(tx, batch, schoolId);
     }
     await repository.confirmBatches(tx, batchIds, at);
+    void actorId;
   },
   async onLotsDeclared(id: string) {
     const database = await getPrisma();
@@ -439,34 +878,18 @@ export const supplyRoundService = {
       !declared?.createdByUserId ||
       !request?.requestedDeliveryDate ||
       request.orderType !== "DIRECT_USE" ||
-      (request.batchNo !== 1 && request.batchNo !== 2)
+      request.batchNo !== 2
     )
       return;
     await reconcile(
       {
         schoolId: request.schoolId,
         deliveryDate: request.requestedDeliveryDate,
-        batchNo: request.batchNo,
+        batchNo: 2,
       },
       declared.createdByUserId,
+      "ROUND2_SEPARATE",
     );
-    if (
-      request.batchNo === 1 &&
-      (await repository.hasReplanRequiredRound2(
-        database,
-        request.schoolId,
-        request.requestedDeliveryDate,
-      ))
-    ) {
-      await reconcile(
-        {
-          schoolId: request.schoolId,
-          deliveryDate: request.requestedDeliveryDate,
-          batchNo: 2,
-        },
-        declared.createdByUserId,
-      );
-    }
   },
   async onDeliveryRejected(
     tx: Tx,
@@ -507,7 +930,17 @@ export const supplyRoundService = {
           current.status === "NOT_NEEDED"
         )
           throw new HttpError(409, "Đợt giao không còn lập được mẻ");
-        await planOne(tx, current, params.dishId, actor.id, true);
+        const phase = await phaseFor(tx, current);
+        if (
+          phase === "ROUND1" &&
+          !allReceived(await repository.requests(tx, current))
+        )
+          throw new HttpError(
+            409,
+            "Đợt 1 chưa nhận đủ hàng; mẻ chỉ lập sau khi nhận đủ",
+          );
+        await planOne(tx, current, params.dishId, actor.id, true, phase);
+        if (current.batchNo === 1) await afterRound1Planned(tx, current, phase);
         return view(tx, current);
       },
     );
