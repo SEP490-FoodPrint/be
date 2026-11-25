@@ -750,7 +750,6 @@ export const INITIAL_ROLE_PERMISSIONS = [
   ["SCHOOL_MANAGEMENT_BOARD", "supplier_relationship.manage"],
   ["SCHOOL_MANAGEMENT_BOARD", "meal_complaint.view"],
   ["SCHOOL_MANAGEMENT_BOARD", "meal_complaint.respond"],
-  ["SCHOOL_MANAGEMENT_BOARD", "authority_complaint.view"],
   ["SCHOOL_MANAGEMENT_BOARD", "ingredient_quality_feedback.submit"],
   ["SCHOOL_MANAGEMENT_BOARD", "ingredient_quality_feedback.view_own"],
   ["SCHOOL_MANAGEMENT_BOARD", "ingredient_quality_feedback.view_details"],

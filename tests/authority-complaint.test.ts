@@ -325,7 +325,6 @@ void test("catalog: quyền C05 và authority.manage theo Clarifications", () =>
   assert.deepEqual(holders("authority_complaint.view"), [
     "COMMUNE_FOOD_SAFETY_OFFICER",
     "PARENTS_COMMITTEE",
-    "SCHOOL_MANAGEMENT_BOARD",
   ]);
   assert.deepEqual(holders("authority_complaint.respond"), [
     "COMMUNE_FOOD_SAFETY_OFFICER",
@@ -333,15 +332,11 @@ void test("catalog: quyền C05 và authority.manage theo Clarifications", () =>
   assert.deepEqual(holders("authority.manage"), ["SYSTEM_ADMIN"]);
 });
 
-void test("phạm vi đọc: ATTP theo đơn vị, BGH theo trường, phụ huynh đơn của mình; còn lại 403", () => {
+void test("phạm vi đọc: ATTP theo đơn vị, phụ huynh đơn của mình; BGH và còn lại 403", () => {
   const scope = listScopes["authority-complaint"];
   assert.deepEqual(scope(officer), {
     kind: "AUTHORITY",
     authorityComplaint: { is: { recipientCommuneFoodSafetyUnitId: unitId } },
-  });
-  assert.deepEqual(scope(board), {
-    kind: "AUTHORITY",
-    authorityComplaint: { is: { schoolId } },
   });
   assert.deepEqual(scope(parent), {
     kind: "AUTHORITY",
@@ -350,6 +345,7 @@ void test("phạm vi đọc: ATTP theo đơn vị, BGH theo trường, phụ huy
   });
   for (const denied of [
     admin,
+    board,
     { ...board, permissions: [] },
     { ...board, role: "SCHOOL_ADMINISTRATION" },
   ])
@@ -462,7 +458,7 @@ void test("escalate: từ chối khi không phải C03 của mình, sai trạng 
   }
 });
 
-void test("người xem: ATTP đơn vị nhận là HANDLER, BGH chỉ xem, phụ huynh thấy Đang xử lý", async () => {
+void test("người xem: ATTP đơn vị nhận là HANDLER, BGH không xem được, phụ huynh thấy Đang xử lý", async () => {
   const service = createAuthorityComplaintService(
     {
       ...createAuthorityComplaintRepository(),
@@ -482,12 +478,7 @@ void test("người xem: ATTP đơn vị nhận là HANDLER, BGH chỉ xem, ph�
       .allowedActions,
     [],
   );
-  const forBoard = await first(board);
-  assert.deepEqual(forBoard.allowedActions, []);
-  assert.deepEqual(forBoard.escalatedFrom, {
-    id: mealComplaintId,
-    code: "FP-MC-48213",
-  });
+  await assert.rejects(first(board), { statusCode: 403 });
   const forParent = await first(parent);
   assert.equal(forParent.displayStatus, "IN_PROGRESS");
   assert.deepEqual(forParent.allowedActions, ["COMMENT"]);
@@ -497,7 +488,7 @@ void test("người xem: ATTP đơn vị nhận là HANDLER, BGH chỉ xem, ph�
   });
 });
 
-void test("lọc trạng thái C05: phụ huynh theo trạng thái hiển thị, ATTP và BGH theo trạng thái thật", async () => {
+void test("lọc trạng thái C05: phụ huynh theo trạng thái hiển thị, ATTP theo trạng thái thật", async () => {
   const seen: unknown[] = [];
   const service = createAuthorityComplaintService(
     {
@@ -513,7 +504,7 @@ void test("lọc trạng thái C05: phụ huynh theo trạng thái hiển thị,
   await service.getAll({ page: 1, limit: 20, status: "IN_PROGRESS" }, parent);
   await service.getAll({ page: 2, limit: 5, status: "CLOSED" }, parent);
   await service.getAll({ page: 1, limit: 20, status: "IN_PROGRESS" }, officer);
-  await service.getAll({ page: 1, limit: 20, status: "REOPENED" }, board);
+  await service.getAll({ page: 1, limit: 20, status: "REOPENED" }, officer);
   await service.getAll({ page: 1, limit: 20 }, parent);
   assert.deepEqual(seen, [
     { page: 1, limit: 20, statuses: ["NEW", "IN_PROGRESS", "REOPENED"] },
