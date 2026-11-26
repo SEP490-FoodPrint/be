@@ -31,6 +31,9 @@ const EXTENSIONS: Record<EvidenceMimeType, string> = {
   "application/pdf": "pdf",
 };
 
+/** Thư mục gốc theo miền nghiệp vụ (`foodprint/<area>/<ownerId>/...`). */
+export type EvidenceArea = "complaints" | "food-safety-incidents";
+
 /** File đã nhận từ multipart, chưa lưu. */
 export interface EvidenceFile {
   buffer: Buffer;
@@ -246,6 +249,18 @@ export const cloudinaryEvidenceStorage: EvidenceStorage = {
   },
 };
 
+/** URL ký có hạn để xem file; lỗi cấu hình/ký ⇒ `null` (không làm hỏng việc đọc hồ sơ). */
+export function signedEvidenceUrl(
+  storage: Pick<EvidenceStorage, "url">,
+  publicId: string,
+): string | null {
+  try {
+    return storage.url(publicId);
+  } catch {
+    return null;
+  }
+}
+
 /** Xóa file đã upload nhưng không được ghi vào DB; lỗi chỉ ghi log. */
 export async function discardEvidenceFiles(
   storage: EvidenceStorage,
@@ -264,13 +279,14 @@ export async function discardEvidenceFiles(
 
 /**
  * Kiểm tra toàn bộ file rồi mới upload tuần tự; một file lỗi ⇒ xóa các file đã upload và trả 503.
- * Đường dẫn: `foodprint/complaints/<ownerId>/<uuid>.<ext>`.
+ * Đường dẫn: `foodprint/<area>/<ownerId>/<uuid>.<ext>` (mặc định area `complaints`).
  */
 export async function storeEvidenceFiles(
   storage: EvidenceStorage,
   files: readonly EvidenceFile[],
   ownerId: string,
   idFactory: () => string = randomUUID,
+  area: EvidenceArea = "complaints",
 ): Promise<StoredEvidence[]> {
   if (files.length > MAX_EVIDENCE_FILES)
     throw new RequestValidationError([
@@ -283,7 +299,7 @@ export async function storeEvidenceFiles(
   const stored: StoredEvidence[] = [];
   for (const [index, file] of files.entries()) {
     const mime = mimes[index];
-    const publicId = `foodprint/complaints/${ownerId}/${idFactory()}.${EXTENSIONS[mime]}`;
+    const publicId = `foodprint/${area}/${ownerId}/${idFactory()}.${EXTENSIONS[mime]}`;
     try {
       await storage.upload(file, publicId);
     } catch (error) {
@@ -314,9 +330,10 @@ export async function withStoredEvidence<T>(
   files: readonly EvidenceFile[] | undefined,
   ownerId: string,
   run: (stored: StoredEvidence[]) => Promise<T>,
+  area: EvidenceArea = "complaints",
 ): Promise<T> {
   const stored = files?.length
-    ? await storeEvidenceFiles(storage, files, ownerId)
+    ? await storeEvidenceFiles(storage, files, ownerId, randomUUID, area)
     : [];
   try {
     return await run(stored);

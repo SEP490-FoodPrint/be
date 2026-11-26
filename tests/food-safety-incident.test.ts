@@ -8,6 +8,7 @@ import type { Prisma, PrismaClient } from "../src/generated/prisma/client";
 import type {
   FoodSafetyIncidentDetailRow,
   FoodSafetyIncidentRepository,
+  SnapshotEvidenceRow,
   TraceSnapshotRow,
   TraceSourceRow,
 } from "../src/modules/food-safety-incident/food-safety-incident.repository";
@@ -29,6 +30,7 @@ import {
   validateReportFoodSafetyIncident,
 } from "../src/modules/food-safety-incident/food-safety-incident.validation";
 import type { AuthPrincipal } from "../src/types/auth";
+import type { EvidenceStorage } from "../src/utils/evidence-files";
 import { HttpError } from "../src/utils/http-error";
 import { RequestValidationError } from "../src/utils/request-validation";
 import { listScopes } from "../src/utils/resource-access";
@@ -148,6 +150,7 @@ function detailRow(
     traceCompleteness: null,
     traceSnapshots: [],
     inspections: [],
+    attachments: [],
     School: { id: schoolId, name: "Trường A" },
     User: { id: parent.id, fullName: parent.fullName },
     SchoolReviewedBy: null,
@@ -187,12 +190,16 @@ function setup(
     classExists?: boolean;
     changed?: number;
     allocations?: { id: string; status: string }[];
+    evidence?: SnapshotEvidenceRow[];
+    detail?: FoodSafetyIncidentDetailRow;
+    storage?: EvidenceStorage;
   } = {},
 ) {
   const calls: string[] = [];
   const created: Record<string, unknown>[] = [];
   const histories: Record<string, unknown>[] = [];
   const snapshots: Record<string, unknown>[] = [];
+  const attachments: Record<string, unknown>[] = [];
   const target =
     options.target === undefined
       ? { status: "PENDING_SCHOOL_REVIEW" }
@@ -200,7 +207,7 @@ function setup(
   const repository = {
     connect: () => Promise.resolve(fakeClient(actor)),
     list: () => Promise.resolve([]),
-    findDetail: () => Promise.resolve(detailRow()),
+    findDetail: () => Promise.resolve(options.detail ?? detailRow()),
     lockIncident: () => {
       calls.push("lock");
       return Promise.resolve();
@@ -276,6 +283,14 @@ function setup(
           ? null
           : { id: unitId, name: "ATTP phường A" },
       ),
+    addAttachments: (_tx: unknown, data: { files: unknown[] }) => {
+      // Như repository thật: không có file thì không ghi.
+      if (!data.files.length) return Promise.resolve();
+      calls.push("attachments");
+      attachments.push(data);
+      return Promise.resolve();
+    },
+    findSnapshotEvidence: () => Promise.resolve(options.evidence ?? []),
     findTraceSource: () => Promise.resolve([]),
     nextSnapshotVersion: () => Promise.resolve(snapshots.length + 1),
     createSnapshot: (
@@ -293,8 +308,9 @@ function setup(
     repository as unknown as FoodSafetyIncidentRepository,
     () => Promise.resolve(fakeClient(actor)),
     () => NOW,
+    options.storage,
   );
-  return { service, calls, created, histories, snapshots };
+  return { service, calls, created, histories, snapshots, attachments };
 }
 
 const report = {
@@ -793,7 +809,7 @@ void test("allocations after submission: new snapshot + supplement forwarding; n
   await f.service.addAllocations(incidentId, body, board);
   assert.deepEqual(f.calls, ["lock", "allocations", "snapshot", "forwarding"]);
   assert.equal(f.snapshots[0].completeness, "MISSING");
-  assert.equal(f.snapshots[0].payloadVersion, 1);
+  assert.equal(f.snapshots[0].payloadVersion, 2);
   assert.equal(
     f.snapshots[0].payloadHash,
     hashTracePayload(f.snapshots[0].payload),

@@ -1,5 +1,6 @@
-import type { Response } from "express";
+import type { Request, Response } from "express";
 import { asyncHandler } from "../../utils/async-handler";
+import { evidenceFilesOf } from "../../utils/evidence-files";
 import { requirePrincipal } from "../../utils/authorization";
 import { sendSuccess } from "../../utils/response";
 import {
@@ -13,6 +14,12 @@ import {
   validatePlanFoodSafetyInspection,
   validateRecordFoodSafetyInspectionResult,
 } from "./food-safety-inspection.validation";
+
+/** PR-G: thêm file multipart (trường `files`) vào body trước khi validate. */
+const withFiles = (req: Request) => ({
+  ...(req.body as Record<string, unknown>),
+  files: evidenceFilesOf(req.files),
+});
 
 function privateResult(
   res: Response,
@@ -58,7 +65,7 @@ export function createFoodSafetyInspectionController(
         await service.recordResult(
           id,
           inspectionId,
-          validateRecordFoodSafetyInspectionResult(req.body),
+          validateRecordFoodSafetyInspectionResult(withFiles(req)),
           requirePrincipal(req),
         ),
         "Đã ghi kết quả kiểm tra",

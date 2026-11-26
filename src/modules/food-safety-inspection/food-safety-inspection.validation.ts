@@ -4,6 +4,17 @@ import {
   requestUuidSchema,
   requiredText,
 } from "../../utils/request-validation";
+import { evidenceFilesSchema } from "../../utils/evidence-files";
+
+/** multipart chỉ gửi chuỗi: `findings` là chuỗi JSON; JSON sai để Zod báo lỗi danh sách. */
+const jsonStringAsValue = (value: unknown) => {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
+};
 
 export const INSPECTION_CONCLUSIONS = [
   "SUPPLIER_AT_FAULT",
@@ -62,23 +73,28 @@ export const recordFoodSafetyInspectionResultSchema = z
     overallConclusion: z.enum(INSPECTION_CONCLUSIONS, {
       error: "Kết luận chung không hợp lệ",
     }),
-    findings: z
-      .array(
-        z.strictObject({
-          supplierId: requestUuidSchema,
-          finding: z.enum(SUPPLIER_FINDINGS, {
-            error: "Kết luận NCC không hợp lệ",
+    findings: z.preprocess(
+      jsonStringAsValue,
+      z
+        .array(
+          z.strictObject({
+            supplierId: requestUuidSchema,
+            finding: z.enum(SUPPLIER_FINDINGS, {
+              error: "Kết luận NCC không hợp lệ",
+            }),
+            evidenceNote: optionalText(2000),
           }),
-          evidenceNote: optionalText(2000),
-        }),
-        { error: "Danh sách kết luận NCC không hợp lệ" },
-      )
-      .max(50, { error: "Tối đa 50 NCC mỗi đợt" })
-      .refine(
-        (items) =>
-          new Set(items.map((item) => item.supplierId)).size === items.length,
-        { error: "Một NCC chỉ được kết luận một lần" },
-      ),
+          { error: "Danh sách kết luận NCC không hợp lệ" },
+        )
+        .max(50, { error: "Tối đa 50 NCC mỗi đợt" })
+        .refine(
+          (items) =>
+            new Set(items.map((item) => item.supplierId)).size === items.length,
+          { error: "Một NCC chỉ được kết luận một lần" },
+        ),
+    ),
+    /** v6 (PR-G): file INSPECTION_RESULT tùy chọn. */
+    files: evidenceFilesSchema,
   })
   .superRefine((value, context) => {
     const hasFault = value.findings.some((item) => item.finding === "AT_FAULT");

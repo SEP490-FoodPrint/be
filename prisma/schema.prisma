@@ -658,6 +658,7 @@ model FoodSafetyIncident {
   inspections                      FoodSafetyInspection[]
   enforcementActions               SupplierEnforcementAction[]
   supplierRestrictions             SupplierRestriction[]
+  attachments                      FoodSafetyIncidentAttachment[]
 
   @@index([schoolId, status], map: "idx_food_safety_incidents_school_status")
   @@index([reportedByUserId, createdAt], map: "idx_food_safety_incidents_reporter", where: raw("(reported_by_user_id IS NOT NULL)"))
@@ -705,6 +706,7 @@ model FoodSafetyInspection {
   createdByUser     User                                 @relation("food_safety_inspections_created_by_user", fields: [createdByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   findings          FoodSafetyInspectionSupplierFinding[]
   enforcementActions SupplierEnforcementAction[]
+  attachments       FoodSafetyIncidentAttachment[]
 
   @@unique([incidentId, id])
   @@index([incidentId, status], map: "idx_food_safety_inspections_incident")
@@ -1254,6 +1256,28 @@ model ComplaintAttachment {
   @@index([complaintId, createdAt, id], map: "idx_complaint_attachments_complaint")
   @@index([commentId], map: "idx_complaint_attachments_comment")
   @@map("complaint_attachments")
+  @@schema("foodprint")
+}
+
+/// v6 (PR-G): file ảnh/PDF đính kèm hồ sơ sự cố ATTP; chỉ thêm. INSPECTION_RESULT ⇔ có inspection_id (CHECK trong migration).
+model FoodSafetyIncidentAttachment {
+  id               String                            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  incidentId       String                            @map("incident_id") @db.Uuid
+  stage            FoodSafetyIncidentAttachmentStage
+  inspectionId     String?                           @map("inspection_id") @db.Uuid
+  uploadedByUserId String                            @map("uploaded_by_user_id") @db.Uuid
+  storagePublicId  String                            @unique(map: "food_safety_incident_attachments_storage_public_id_key") @map("storage_public_id") @db.Text
+  mimeType         String                            @map("mime_type") @db.VarChar(32)
+  sizeBytes        Int                               @map("size_bytes")
+  originalFilename String                            @map("original_filename") @db.VarChar(255)
+  sha256           String                            @db.VarChar(64)
+  createdAt        DateTime                          @default(now()) @map("created_at") @db.Timestamptz(6)
+  Incident         FoodSafetyIncident                @relation(fields: [incidentId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  Inspection       FoodSafetyInspection?             @relation(fields: [incidentId, inspectionId], references: [incidentId, id], onDelete: Restrict, onUpdate: NoAction, map: "food_safety_incident_attachments_inspection_fkey")
+  uploadedByUser   User                              @relation("food_safety_incident_attachments_uploaded_by_user", fields: [uploadedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction)
+
+  @@index([incidentId, createdAt, id], map: "idx_food_safety_incident_attachments_incident")
+  @@map("food_safety_incident_attachments")
   @@schema("foodprint")
 }
 
@@ -1838,6 +1862,7 @@ model User {
   foodSafetyIncidentTraceSnapshots             FoodSafetyIncidentTraceSnapshot[] @relation("food_safety_incident_trace_snapshots_created_by_user")
   foodSafetyInspectionsRecorded                FoodSafetyInspection[] @relation("food_safety_inspections_recorded_by_user")
   foodSafetyInspectionsCreated                 FoodSafetyInspection[] @relation("food_safety_inspections_created_by_user")
+  foodSafetyIncidentAttachments                FoodSafetyIncidentAttachment[] @relation("food_safety_incident_attachments_uploaded_by_user")
   enforcementActionsRequested                  SupplierEnforcementAction[] @relation("supplier_enforcement_actions_requested_by_user")
   enforcementActionsDecided                    SupplierEnforcementAction[] @relation("supplier_enforcement_actions_decided_by_user")
   restrictionLocks                             SupplierRestrictionLockedAccount[]
@@ -2349,6 +2374,16 @@ enum SchoolPreliminaryAssessment {
   UNDETERMINED
 
   @@map("school_preliminary_assessment")
+  @@schema("foodprint")
+}
+
+/// v6 (PR-G): bước nghiệp vụ gửi file đính kèm sự cố ATTP.
+enum FoodSafetyIncidentAttachmentStage {
+  REPORT
+  SCHOOL_REVIEW
+  INSPECTION_RESULT
+
+  @@map("food_safety_incident_attachment_stage")
   @@schema("foodprint")
 }
 

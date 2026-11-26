@@ -222,6 +222,8 @@ Theo [specs/food-safety-inspections](../specs/food-safety-inspections/spec.md). 
 
 Chi tiết hồ sơ (`GET /api/food-safety-incidents/:id`) thêm `inspections`: người báo (PH/GVCN) thấy trạng thái, kết quả, kết luận từng NCC và tên/vai trò người ghi, không thấy `teamDescription` (Q23).
 
+File đính kèm sự cố ([specs/food-safety-incident-attachments](../specs/food-safety-incident-attachments/spec.md), PR-G) không thêm mã quyền: `POST /api/food-safety-incidents`, `/direct`, `/:id/forward` và `/:id/inspections/:inspectionId/result` nhận `multipart/form-data` sau kiểm tra quyền của route; service kiểm tra vai trò/quyền trước khi upload. Người báo (PH/GVCN) chỉ thấy file `REPORT` và file kết quả kiểm tra; file `SCHOOL_REVIEW` chỉ hiện trong projection đầy đủ (BGH, ATTP nhận hồ sơ, System Admin).
+
 ## Chế tài NCC theo sự cố ATTP (`supplier-enforcement`, PR6b)
 
 Theo [specs/supplier-enforcement](../specs/supplier-enforcement/spec.md). Quyền mới `supplier_enforcement.request` (gán mặc định `COMMUNE_FOOD_SAFETY_OFFICER`) và `supplier_enforcement.decide` (`SYSTEM_ADMIN`); trên DB đã có vai trò, bootstrap chỉ thêm grant cho `SYSTEM_ADMIN`, System Admin cấp `request` cho cán bộ ATTP qua API quản trị quyền. Resource `supplier-enforcement`: System Admin (`decide`) xem mọi yêu cầu; cán bộ ATTP (`request`) chỉ yêu cầu thuộc hồ sơ đơn vị mình đang nhận; tổ chức khác `403`.

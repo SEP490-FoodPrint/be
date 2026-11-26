@@ -2,6 +2,7 @@ import type { Prisma } from "../../generated/prisma/client";
 import { getPrisma } from "../../utils/database";
 import { allocateBusinessCode } from "../../utils/business-code";
 import { listWindow, type ListQuery } from "../../utils/list-query";
+import type { StoredEvidence } from "../../utils/evidence-files";
 
 type Tx = Prisma.TransactionClient;
 type Status = Prisma.FoodSafetyIncidentCreateInput["status"];
@@ -136,6 +137,18 @@ const traceSourceSelect = {
   },
 } as const satisfies Prisma.FoodSafetyIncidentAllocationSelect;
 
+/** v6 (PR-G): file đính kèm; service lọc theo bước khi ánh xạ projection. */
+const attachmentSelect = {
+  id: true,
+  stage: true,
+  inspectionId: true,
+  storagePublicId: true,
+  mimeType: true,
+  sizeBytes: true,
+  originalFilename: true,
+  createdAt: true,
+} as const satisfies Prisma.FoodSafetyIncidentAttachmentSelect;
+
 const detailSelect = {
   ...listSelect,
   reportedRoleCode: true,
@@ -222,6 +235,10 @@ const detailSelect = {
     },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   },
+  attachments: {
+    select: attachmentSelect,
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  },
 } as const satisfies Prisma.FoodSafetyIncidentSelect;
 
 export type FoodSafetyIncidentListRow = Prisma.FoodSafetyIncidentGetPayload<{
@@ -259,6 +276,19 @@ export type NewTraceSnapshot = {
   at: Date;
 };
 export type IncidentActor = { id: string; roleCode: string };
+export type IncidentAttachmentRow =
+  Prisma.FoodSafetyIncidentAttachmentGetPayload<{
+    select: typeof attachmentSelect;
+  }>;
+export type IncidentAttachmentStage = IncidentAttachmentRow["stage"];
+/** File REPORT/SCHOOL_REVIEW đưa vào payload snapshot (chỉ dữ liệu không đổi). */
+export type SnapshotEvidenceRow = {
+  id: string;
+  stage: IncidentAttachmentStage;
+  mimeType: string;
+  sizeBytes: number;
+  sha256: string;
+};
 export type IncidentRecipient = {
   unitId: string;
   unitName: string;
@@ -520,6 +550,49 @@ export function createFoodSafetyIncidentRepository(connect = getPrisma) {
         skipDuplicates: true,
       });
       return result.count;
+    },
+    /** File chỉ được tạo, không sửa/xóa (Q31); không có file thì không ghi. */
+    async addAttachments(
+      tx: Tx,
+      data: {
+        incidentId: string;
+        stage: Exclude<IncidentAttachmentStage, "INSPECTION_RESULT">;
+        uploaderUserId: string;
+        files: readonly StoredEvidence[];
+        at: Date;
+      },
+    ): Promise<void> {
+      if (!data.files.length) return;
+      await tx.foodSafetyIncidentAttachment.createMany({
+        data: data.files.map((file) => ({
+          incidentId: data.incidentId,
+          stage: data.stage,
+          inspectionId: null,
+          uploadedByUserId: data.uploaderUserId,
+          storagePublicId: file.publicId,
+          mimeType: file.mimeType,
+          sizeBytes: file.sizeBytes,
+          originalFilename: file.fileName,
+          sha256: file.sha256,
+          createdAt: data.at,
+        })),
+      });
+    },
+    findSnapshotEvidence(
+      tx: Tx,
+      incidentId: string,
+    ): Promise<SnapshotEvidenceRow[]> {
+      return tx.foodSafetyIncidentAttachment.findMany({
+        where: { incidentId, stage: { in: ["REPORT", "SCHOOL_REVIEW"] } },
+        select: {
+          id: true,
+          stage: true,
+          mimeType: true,
+          sizeBytes: true,
+          sha256: true,
+        },
+        orderBy: { id: "asc" },
+      });
     },
     findTraceSource(tx: Tx, incidentId: string): Promise<TraceSourceRow[]> {
       return tx.foodSafetyIncidentAllocation.findMany({

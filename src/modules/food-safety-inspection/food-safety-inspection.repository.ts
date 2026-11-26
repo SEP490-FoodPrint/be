@@ -1,5 +1,6 @@
 import type { Prisma } from "../../generated/prisma/client";
 import { getPrisma } from "../../utils/database";
+import type { StoredEvidence } from "../../utils/evidence-files";
 
 type Tx = Prisma.TransactionClient;
 type Db = Pick<
@@ -33,6 +34,19 @@ const inspectionSelect = {
       Supplier: { select: { id: true, name: true } },
     },
     orderBy: { supplierId: "asc" },
+  },
+  /** v6 (PR-G): file kết quả kiểm tra của đợt. */
+  attachments: {
+    select: {
+      id: true,
+      stage: true,
+      storagePublicId: true,
+      mimeType: true,
+      sizeBytes: true,
+      originalFilename: true,
+      createdAt: true,
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   },
 } as const satisfies Prisma.FoodSafetyInspectionSelect;
 
@@ -148,6 +162,33 @@ export function createFoodSafetyInspectionRepository(connect = getPrisma) {
       if (!findings.length) return;
       await tx.foodSafetyInspectionSupplierFinding.createMany({
         data: findings.map((item) => ({ inspectionId, ...item })),
+      });
+    },
+    /** File INSPECTION_RESULT ghi cùng transaction với kết quả (bất biến, Q26/Q31). */
+    async addResultAttachments(
+      tx: Tx,
+      data: {
+        incidentId: string;
+        inspectionId: string;
+        uploaderUserId: string;
+        files: readonly StoredEvidence[];
+        at: Date;
+      },
+    ): Promise<void> {
+      if (!data.files.length) return;
+      await tx.foodSafetyIncidentAttachment.createMany({
+        data: data.files.map((file) => ({
+          incidentId: data.incidentId,
+          stage: "INSPECTION_RESULT" as const,
+          inspectionId: data.inspectionId,
+          uploadedByUserId: data.uploaderUserId,
+          storagePublicId: file.publicId,
+          mimeType: file.mimeType,
+          sizeBytes: file.sizeBytes,
+          originalFilename: file.fileName,
+          sha256: file.sha256,
+          createdAt: data.at,
+        })),
       });
     },
     readInspection(

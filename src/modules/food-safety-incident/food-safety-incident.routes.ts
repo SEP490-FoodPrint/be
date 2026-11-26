@@ -5,6 +5,7 @@ import {
   requirePermission,
   requireResource,
 } from "../../middlewares/permission.middleware";
+import { receiveEvidenceFiles } from "../../utils/evidence-files";
 import { createFoodSafetyIncidentController } from "./food-safety-incident.controller";
 import {
   foodSafetyIncidentService,
@@ -24,12 +25,14 @@ export function createFoodSafetyIncidentRouter(
     "/",
     authHandler,
     requirePermission("food_safety_incident.report"),
+    receiveEvidenceFiles,
     controller.report,
   );
   router.post(
     "/direct",
     authHandler,
     requirePermission("food_safety_incident.create"),
+    receiveEvidenceFiles,
     controller.createDirect,
   );
   router.get("/:id", authHandler, resource, controller.getOne);
@@ -43,6 +46,7 @@ export function createFoodSafetyIncidentRouter(
     "/:id/forward",
     authHandler,
     requirePermission("food_safety_incident.forward"),
+    receiveEvidenceFiles,
     controller.forward,
   );
   router.post("/:id/cancel", authHandler, manage, controller.cancel);

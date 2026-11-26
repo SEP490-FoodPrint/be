@@ -11,6 +11,17 @@ export type FoodSafetyIncidentSourceDTO =
 export type FoodSafetyIncidentActionDTO =
   "FORWARD" | "CANCEL" | "ADD_ALLOCATIONS" | "PLAN_INSPECTION" | "CLOSE";
 
+/** v6 (PR-G): file đính kèm hồ sơ; `url` là URL ký 10 phút (`null` khi chưa ký được). */
+export interface FoodSafetyIncidentAttachmentDTO {
+  id: string;
+  stage: "REPORT" | "SCHOOL_REVIEW" | "INSPECTION_RESULT";
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  createdAt: string;
+  url: string | null;
+}
+
 /** PR6a: đợt kiểm tra theo projection người báo (Q23) — không có teamDescription, người ghi chỉ tên/vai trò. */
 export interface FoodSafetyIncidentInspectionReporterDTO {
   id: string;
@@ -31,6 +42,8 @@ export interface FoodSafetyIncidentInspectionReporterDTO {
     finding: "AT_FAULT" | "CLEARED" | "INCONCLUSIVE";
     evidenceNote: string | null;
   }[];
+  /** v6: file kết quả kiểm tra (INSPECTION_RESULT) của đợt. */
+  attachments: FoodSafetyIncidentAttachmentDTO[];
 }
 
 export interface FoodSafetyIncidentInspectionFullDTO extends Omit<
@@ -88,6 +101,8 @@ export interface FoodSafetyIncidentReporterDetailDTO {
   cancellationNote: string | null;
   histories: FoodSafetyIncidentHistoryDTO[];
   inspections: FoodSafetyIncidentInspectionReporterDTO[];
+  /** v6: người báo chỉ thấy file REPORT; projection đầy đủ thêm SCHOOL_REVIEW. */
+  attachments: FoodSafetyIncidentAttachmentDTO[];
   allowedActions: FoodSafetyIncidentActionDTO[];
   createdAt: string;
   updatedAt: string;
@@ -232,9 +247,21 @@ export interface TracePayloadV1DTO {
   potentialExposedPortionCount: number;
 }
 
+/** Payload v2 (PR-G): v1 + file REPORT/SCHOOL_REVIEW (sha256) để neo chứng cứ. */
+export interface TracePayloadV2DTO extends TracePayloadV1DTO {
+  evidenceFiles: {
+    id: string;
+    stage: "REPORT" | "SCHOOL_REVIEW";
+    mimeType: string;
+    sizeBytes: number;
+    sha256: string;
+  }[];
+}
+
 export interface FoodSafetyIncidentTraceSnapshotDTO extends FoodSafetyIncidentTraceSnapshotSummaryDTO {
   incidentId: string;
-  payload: TracePayloadV1DTO;
+  /** Snapshot cũ giữ payload v1; snapshot mới dùng v2. */
+  payload: TracePayloadV1DTO | TracePayloadV2DTO;
   /** Hash tính lại từ payload đã lưu khớp `payloadHash`. */
   hashMatches: boolean;
 }

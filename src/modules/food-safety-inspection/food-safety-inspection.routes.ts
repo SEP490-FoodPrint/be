@@ -2,6 +2,7 @@ import { Router } from "express";
 import type { RequestHandler } from "express";
 import { authenticate } from "../../middlewares/auth.middleware";
 import { requirePermission } from "../../middlewares/permission.middleware";
+import { receiveEvidenceFiles } from "../../utils/evidence-files";
 import { createFoodSafetyInspectionController } from "./food-safety-inspection.controller";
 import {
   foodSafetyInspectionService,
@@ -28,6 +29,7 @@ export function createFoodSafetyInspectionRouter(
     "/:id/inspections/:inspectionId/result",
     authHandler,
     manage,
+    receiveEvidenceFiles,
     controller.recordResult,
   );
   router.post("/:id/close", authHandler, manage, controller.close);
