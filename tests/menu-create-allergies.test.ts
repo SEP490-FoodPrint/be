@@ -6,7 +6,10 @@ import {
   canEditMenuDay,
   createMenuService,
 } from "../src/modules/menu/menu.service";
-import { createDishRecipeService } from "../src/modules/dish/dish.service";
+import {
+  assertDishNameFree,
+  createDishRecipeService,
+} from "../src/modules/dish/dish.service";
 import {
   menuRepository as repository,
   type MenuDetailRow,
@@ -14,7 +17,12 @@ import {
 import { validateMenuWrite } from "../src/modules/menu/menu.validation";
 import { validateDishRecipe } from "../src/modules/dish/dish.validation";
 import { principalFromIdentity } from "../src/utils/authorization";
-import { dishRecipeRepository } from "../src/modules/dish/dish.repository";
+import { HttpError } from "../src/utils/http-error";
+import {
+  DUPLICATE_DISH_NAME,
+  dishRecipeRepository,
+  dishWriteError,
+} from "../src/modules/dish/dish.repository";
 import {
   validateMenuGradeBatch,
   validateMenuSubmitGroup,
@@ -529,8 +537,14 @@ void test("dish category and meal classification persist through create/read/upd
     dish: {
       create: save,
       update: save,
-      findFirst: ({ where }: { where: { id: string; schoolId: string } }) => {
+      findFirst: ({
+        where,
+      }: {
+        where: { id?: string; schoolId: string; name?: unknown };
+      }) => {
         assert.equal(where.schoolId, id(3));
+        // Kiểm tra trùng tên món: trường chưa có món nào cùng tên.
+        if (where.name) return Promise.resolve(null);
         assert.equal(where.id, id(6));
         return Promise.resolve({ id: id(6) });
       },
@@ -1295,4 +1309,43 @@ void test("a complete grade batch submits all grade snapshots together", async (
   assert.equal(f.counts().allergyReads, 2);
   assert.equal(unitLookup.mock.callCount(), 1);
   assert.equal(unitNormLookup.mock.callCount(), 0);
+});
+
+const conflict = (message: string) => (error: unknown) =>
+  error instanceof HttpError &&
+  error.statusCode === 409 &&
+  error.message === message;
+
+void test("a new or renamed dish cannot reuse another dish name", () => {
+  assert.doesNotThrow(() => assertDishNameFree(null));
+  assert.throws(
+    () => assertDishNameFree({ id: "a", status: "ACTIVE" }),
+    conflict(DUPLICATE_DISH_NAME),
+  );
+  assert.throws(
+    () => assertDishNameFree({ id: "a", status: "ACTIVE" }, "b"),
+    conflict(DUPLICATE_DISH_NAME),
+  );
+  assert.throws(
+    () => assertDishNameFree({ id: "a", status: "INACTIVE" }),
+    conflict("Tên món trùng với món đã ngừng dùng. Đặt tên khác."),
+  );
+});
+
+void test("saving a dish under its own name is allowed", () => {
+  assert.doesNotThrow(() =>
+    assertDishNameFree({ id: "a", status: "ACTIVE" }, "a"),
+  );
+});
+
+void test("a concurrent unique violation is reported as a duplicate name", () => {
+  assert.throws(
+    () => dishWriteError({ code: "P2002" }),
+    conflict(DUPLICATE_DISH_NAME),
+  );
+  const other = new Error("other");
+  assert.throws(
+    () => dishWriteError(other),
+    (error) => error === other,
+  );
 });
