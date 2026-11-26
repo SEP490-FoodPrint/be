@@ -837,6 +837,8 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         undefined,
         () => Promise.resolve(db),
         () => kitchenToday,
+        // 10:00 giờ VN, trước giờ bữa trưa 11:30: chỉ xử lý lô bữa trưa.
+        () => new Date("2032-01-05T03:00:00Z"),
       );
       const samples = createRetainedSampleService(undefined, () =>
         Promise.resolve(db),
