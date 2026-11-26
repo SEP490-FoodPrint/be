@@ -4,6 +4,16 @@ import {
   requestUuidSchema,
   requiredText,
 } from "../../utils/request-validation";
+import { evidenceFilesSchema } from "../../utils/evidence-files";
+
+/** Trường văn bản trong multipart: chuỗi rỗng coi như không gửi. */
+const blankAsUndefined = (value: unknown) =>
+  typeof value === "string" && !value.trim() ? undefined : value;
+/** multipart gửi số dưới dạng chuỗi; chỉ nhận chuỗi chữ số, còn lại để Zod báo lỗi. */
+const digitsAsNumber = (value: unknown) =>
+  typeof value === "string" && /^\d+$/.test(value.trim())
+    ? Number(value.trim())
+    : value;
 
 export const FOOD_SAFETY_INCIDENT_STATUSES = [
   "PENDING_SCHOOL_REVIEW",
@@ -81,20 +91,28 @@ export const reportFoodSafetyIncidentSchema = z.strictObject({
     .trim()
     .min(10, { error: "Mô tả cần ít nhất 10 ký tự" })
     .max(2000, { error: "Mô tả chỉ nhận tối đa 2000 ký tự" }),
-  reportedSymptomaticCount: z
-    .number({ error: "Số người có triệu chứng phải là số nguyên" })
-    .int({ error: "Số người có triệu chứng phải là số nguyên" })
-    .min(1, { error: "Số người có triệu chứng tối thiểu là 1" })
-    .max(100_000, { error: "Số người có triệu chứng tối đa 100000" }),
+  reportedSymptomaticCount: z.preprocess(
+    digitsAsNumber,
+    z
+      .number({ error: "Số người có triệu chứng phải là số nguyên" })
+      .int({ error: "Số người có triệu chứng phải là số nguyên" })
+      .min(1, { error: "Số người có triệu chứng tối thiểu là 1" })
+      .max(100_000, { error: "Số người có triệu chứng tối đa 100000" }),
+  ),
   symptomDescription: optionalText(2000),
-  occurredAt: z.iso
-    .datetime({
-      offset: true,
-      error: "Thời điểm xảy ra không hợp lệ.",
-    })
-    .transform((value) => new Date(value))
-    .optional(),
-  classId: requestUuidSchema.optional(),
+  occurredAt: z.preprocess(
+    blankAsUndefined,
+    z.iso
+      .datetime({
+        offset: true,
+        error: "Thời điểm xảy ra không hợp lệ.",
+      })
+      .transform((value) => new Date(value))
+      .optional(),
+  ),
+  classId: z.preprocess(blankAsUndefined, requestUuidSchema.optional()),
+  /** v6 (PR-G): file REPORT tùy chọn (Q29–Q31). */
+  files: evidenceFilesSchema,
 });
 
 /** BGH tự lập hồ sơ gửi thẳng ATTP (US3, Q20). */
@@ -102,8 +120,11 @@ export const directFoodSafetyIncidentSchema =
   reportFoodSafetyIncidentSchema.extend(preliminaryFields);
 
 /** BGH xác minh sơ bộ và chuyển ATTP (US2). */
-export const forwardFoodSafetyIncidentSchema =
-  z.strictObject(preliminaryFields);
+export const forwardFoodSafetyIncidentSchema = z.strictObject({
+  ...preliminaryFields,
+  /** v6 (PR-G): file SCHOOL_REVIEW tùy chọn. */
+  files: evidenceFilesSchema,
+});
 
 /** BGH hủy khi trùng/nhập sai (Q4). */
 export const cancelFoodSafetyIncidentSchema = z.strictObject({

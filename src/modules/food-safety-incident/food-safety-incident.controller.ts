@@ -1,5 +1,6 @@
-import type { Response } from "express";
+import type { Request, Response } from "express";
 import { asyncHandler } from "../../utils/async-handler";
+import { evidenceFilesOf } from "../../utils/evidence-files";
 import { requirePrincipal } from "../../utils/authorization";
 import { sendSuccess } from "../../utils/response";
 import {
@@ -16,6 +17,12 @@ import {
   validateForwardFoodSafetyIncident,
   validateReportFoodSafetyIncident,
 } from "./food-safety-incident.validation";
+
+/** PR-G: thêm file multipart (trường `files`) vào body trước khi validate. */
+const withFiles = (req: Request) => ({
+  ...(req.body as Record<string, unknown>),
+  files: evidenceFilesOf(req.files),
+});
 
 function privateResult(
   res: Response,
@@ -63,7 +70,7 @@ export function createFoodSafetyIncidentController(
       privateResult(
         res,
         await service.report(
-          validateReportFoodSafetyIncident(req.body),
+          validateReportFoodSafetyIncident(withFiles(req)),
           requirePrincipal(req),
         ),
         "Đã gửi báo cáo sự cố tới Ban Giám hiệu",
@@ -74,7 +81,7 @@ export function createFoodSafetyIncidentController(
       privateResult(
         res,
         await service.createDirect(
-          validateDirectFoodSafetyIncident(req.body),
+          validateDirectFoodSafetyIncident(withFiles(req)),
           requirePrincipal(req),
         ),
         "Đã lập hồ sơ sự cố và gửi ATTP",
@@ -87,7 +94,7 @@ export function createFoodSafetyIncidentController(
         res,
         await service.forward(
           id,
-          validateForwardFoodSafetyIncident(req.body),
+          validateForwardFoodSafetyIncident(withFiles(req)),
           requirePrincipal(req),
         ),
         "Đã chuyển hồ sơ sự cố lên ATTP",

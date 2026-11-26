@@ -17,6 +17,7 @@ import {
   validateRecordFoodSafetyInspectionResult,
 } from "../src/modules/food-safety-inspection/food-safety-inspection.validation";
 import type { AuthPrincipal } from "../src/types/auth";
+import type { EvidenceStorage } from "../src/utils/evidence-files";
 import { HttpError } from "../src/utils/http-error";
 import { RequestValidationError } from "../src/utils/request-validation";
 
@@ -105,6 +106,15 @@ const inspectionRow = (state: "PLANNED" | "COMPLETED") => ({
   completedAt: state === "COMPLETED" ? NOW : null,
   createdAt: NOW,
   findings: [],
+  attachments: [] as {
+    id: string;
+    stage: "INSPECTION_RESULT";
+    storagePublicId: string;
+    mimeType: string;
+    sizeBytes: number;
+    originalFilename: string;
+    createdAt: Date;
+  }[],
 });
 
 function setup(
@@ -115,12 +125,14 @@ function setup(
     counts?: { planned: number; completed: number };
     payloads?: unknown[];
     changed?: number;
+    storage?: EvidenceStorage;
   } = {},
 ) {
   const calls: string[] = [];
   const moves: string[] = [];
   const histories: Record<string, unknown>[] = [];
   const findings: unknown[] = [];
+  const attachments: unknown[] = [];
   const incident =
     options.incident === undefined
       ? { status: "AUTHORITY_ACKNOWLEDGED" }
@@ -163,6 +175,12 @@ function setup(
       findings.push(...items);
       return Promise.resolve();
     },
+    addResultAttachments: (_tx: unknown, data: { files: unknown[] }) => {
+      if (!data.files.length) return Promise.resolve();
+      calls.push("attachments");
+      attachments.push(data);
+      return Promise.resolve();
+    },
     readInspection: () => Promise.resolve(inspectionRow("COMPLETED")),
     moveIncident: (_tx: unknown, _id: string, from: string, to: string) => {
       moves.push(`${from}->${to}`);
@@ -184,8 +202,9 @@ function setup(
     repository as unknown as FoodSafetyInspectionRepository,
     () => Promise.resolve(fakeClient(actor)),
     () => NOW,
+    options.storage,
   );
-  return { service, calls, moves, histories, findings };
+  return { service, calls, moves, histories, findings, attachments };
 }
 
 const plan = {

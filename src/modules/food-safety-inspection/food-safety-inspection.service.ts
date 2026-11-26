@@ -8,6 +8,12 @@ import {
   loadPrincipal,
 } from "../../utils/authorization";
 import { getPrisma } from "../../utils/database";
+import {
+  cloudinaryEvidenceStorage,
+  signedEvidenceUrl,
+  withStoredEvidence,
+  type EvidenceStorage,
+} from "../../utils/evidence-files";
 import { HttpError } from "../../utils/http-error";
 import { RequestValidationError } from "../../utils/request-validation";
 import {
@@ -65,7 +71,10 @@ export function snapshotSupplierIds(payloads: readonly unknown[]): string[] {
   return [...ids].sort();
 }
 
-function mapInspection(row: FoodSafetyInspectionRow): FoodSafetyInspectionDTO {
+function mapInspection(
+  row: FoodSafetyInspectionRow,
+  storage: Pick<EvidenceStorage, "url">,
+): FoodSafetyInspectionDTO {
   return {
     id: row.id,
     incidentId: row.incidentId,
@@ -81,6 +90,21 @@ function mapInspection(row: FoodSafetyInspectionRow): FoodSafetyInspectionDTO {
       finding: item.finding,
       evidenceNote: item.evidenceNote,
     })),
+    attachments: row.attachments.flatMap((file) =>
+      file.stage === "INSPECTION_RESULT"
+        ? [
+            {
+              id: file.id,
+              stage: file.stage,
+              fileName: file.originalFilename,
+              mimeType: file.mimeType,
+              sizeBytes: file.sizeBytes,
+              createdAt: file.createdAt.toISOString(),
+              url: signedEvidenceUrl(storage, file.storagePublicId),
+            },
+          ]
+        : [],
+    ),
   };
 }
 
@@ -88,6 +112,7 @@ export function createFoodSafetyInspectionService(
   repository: FoodSafetyInspectionRepository = createFoodSafetyInspectionRepository(),
   connect: () => Promise<PrismaClient> = getPrisma,
   now = () => new Date(),
+  storage: EvidenceStorage = cloudinaryEvidenceStorage,
 ) {
   const database = () => databaseOperation(() => connect());
 
@@ -137,7 +162,7 @@ export function createFoodSafetyInspectionService(
     const row = await repository.readInspection(tx, id);
     if (!row)
       throw new HttpError(503, "Chưa tải được hồ sơ. Vui lòng thử lại.");
-    return mapInspection(row);
+    return mapInspection(row, storage);
   }
 
   const actorOf = (actor: AuthPrincipal) => ({
@@ -200,7 +225,7 @@ export function createFoodSafetyInspectionService(
         }
         return {
           incidentStatus: "UNDER_INSPECTION",
-          inspection: mapInspection(inspection),
+          inspection: mapInspection(inspection, storage),
         };
       });
     },
@@ -212,75 +237,90 @@ export function createFoodSafetyInspectionService(
       body: RecordFoodSafetyInspectionResultRequestDTO,
       principal: AuthPrincipal,
     ): Promise<FoodSafetyInspectionActionResponseDTO> {
-      return officerAction(id, principal, async (tx, actor, target, at) => {
-        if (target.status !== "UNDER_INSPECTION")
-          throw new HttpError(409, "Hồ sơ không ở bước kiểm tra");
-        const inspection = await repository.findInspection(
-          tx,
-          id,
-          inspectionId,
-        );
-        if (!inspection)
-          throw new HttpError(404, "Không tìm thấy đợt kiểm tra");
-        if (inspection.status !== "PLANNED")
-          throw new HttpError(409, "Đợt kiểm tra đã có kết quả");
-        const allowed = new Set(
-          (await supplierOptions(tx, target)).items.map((item) => item.id),
-        );
-        const invalid = body.findings.flatMap((item, index) =>
-          allowed.has(item.supplierId)
-            ? []
-            : [
-                {
-                  field: `findings.${index}.supplierId`,
-                  message: "NCC không thuộc chuỗi truy xuất của hồ sơ",
-                },
-              ],
-        );
-        if (invalid.length) throw new RequestValidationError(invalid);
-        const changed = await repository.recordResult(tx, inspectionId, {
-          resultSummary: body.resultSummary,
-          overallConclusion: body.overallConclusion,
-          recordedByUserId: actor.id,
-          at,
-        });
-        if (changed !== 1)
-          throw new HttpError(409, "Đợt kiểm tra đã có kết quả");
-        await repository.createFindings(
-          tx,
-          inspectionId,
-          body.findings.map((item) => ({
-            supplierId: item.supplierId,
-            finding: item.finding,
-            evidenceNote: item.evidenceNote ?? null,
-          })),
-        );
-        const counts = await repository.countInspections(tx, id);
-        let incidentStatus: FoodSafetyInspectionActionResponseDTO["incidentStatus"] =
-          "UNDER_INSPECTION";
-        if (counts.planned === 0) {
-          const moved = await repository.moveIncident(
-            tx,
-            id,
-            "UNDER_INSPECTION",
-            "INSPECTION_COMPLETED",
-          );
-          if (moved !== 1)
-            throw new HttpError(409, "Trạng thái hồ sơ đã thay đổi");
-          await repository.recordHistory(tx, {
-            incidentId: id,
-            fromStatus: "UNDER_INSPECTION",
-            toStatus: "INSPECTION_COMPLETED",
-            actor: actorOf(actor),
-            at,
-          });
-          incidentStatus = "INSPECTION_COMPLETED";
-        }
-        return {
-          incidentStatus,
-          inspection: await readInspection(tx, inspectionId),
-        };
-      });
+      assertOfficer(principal);
+      return withStoredEvidence(
+        storage,
+        body.files,
+        principal.id,
+        (files) =>
+          officerAction(id, principal, async (tx, actor, target, at) => {
+            if (target.status !== "UNDER_INSPECTION")
+              throw new HttpError(409, "Hồ sơ không ở bước kiểm tra");
+            const inspection = await repository.findInspection(
+              tx,
+              id,
+              inspectionId,
+            );
+            if (!inspection)
+              throw new HttpError(404, "Không tìm thấy đợt kiểm tra");
+            if (inspection.status !== "PLANNED")
+              throw new HttpError(409, "Đợt kiểm tra đã có kết quả");
+            const allowed = new Set(
+              (await supplierOptions(tx, target)).items.map((item) => item.id),
+            );
+            const invalid = body.findings.flatMap((item, index) =>
+              allowed.has(item.supplierId)
+                ? []
+                : [
+                    {
+                      field: `findings.${index}.supplierId`,
+                      message: "NCC không thuộc chuỗi truy xuất của hồ sơ",
+                    },
+                  ],
+            );
+            if (invalid.length) throw new RequestValidationError(invalid);
+            const changed = await repository.recordResult(tx, inspectionId, {
+              resultSummary: body.resultSummary,
+              overallConclusion: body.overallConclusion,
+              recordedByUserId: actor.id,
+              at,
+            });
+            if (changed !== 1)
+              throw new HttpError(409, "Đợt kiểm tra đã có kết quả");
+            await repository.createFindings(
+              tx,
+              inspectionId,
+              body.findings.map((item) => ({
+                supplierId: item.supplierId,
+                finding: item.finding,
+                evidenceNote: item.evidenceNote ?? null,
+              })),
+            );
+            await repository.addResultAttachments(tx, {
+              incidentId: id,
+              inspectionId,
+              uploaderUserId: actor.id,
+              files,
+              at,
+            });
+            const counts = await repository.countInspections(tx, id);
+            let incidentStatus: FoodSafetyInspectionActionResponseDTO["incidentStatus"] =
+              "UNDER_INSPECTION";
+            if (counts.planned === 0) {
+              const moved = await repository.moveIncident(
+                tx,
+                id,
+                "UNDER_INSPECTION",
+                "INSPECTION_COMPLETED",
+              );
+              if (moved !== 1)
+                throw new HttpError(409, "Trạng thái hồ sơ đã thay đổi");
+              await repository.recordHistory(tx, {
+                incidentId: id,
+                fromStatus: "UNDER_INSPECTION",
+                toStatus: "INSPECTION_COMPLETED",
+                actor: actorOf(actor),
+                at,
+              });
+              incidentStatus = "INSPECTION_COMPLETED";
+            }
+            return {
+              incidentStatus,
+              inspection: await readInspection(tx, inspectionId),
+            };
+          }),
+        "food-safety-incidents",
+      );
     },
 
     /** US3: đóng hồ sơ; không gỡ hạn chế NCC (Q5). */

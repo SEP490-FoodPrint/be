@@ -11,6 +11,12 @@ import {
   computeCanonicalHash,
 } from "../../utils/canonical-hash";
 import { getPrisma } from "../../utils/database";
+import {
+  cloudinaryEvidenceStorage,
+  signedEvidenceUrl,
+  withStoredEvidence,
+  type EvidenceStorage,
+} from "../../utils/evidence-files";
 import { HttpError } from "../../utils/http-error";
 import { readListPage } from "../../utils/list-query";
 import { RequestValidationError } from "../../utils/request-validation";
@@ -22,7 +28,9 @@ import {
   type FoodSafetyIncidentRepository,
   type FoodSafetyIncidentTarget,
   type IncidentActor,
+  type IncidentAttachmentRow,
   type IncidentRecipient,
+  type SnapshotEvidenceRow,
   type TraceSnapshotRow,
   type TraceSourceRow,
 } from "./food-safety-incident.repository";
@@ -37,6 +45,7 @@ import type {
 import type {
   FoodSafetyIncidentActionDTO,
   FoodSafetyIncidentAllocationsResponseDTO,
+  FoodSafetyIncidentAttachmentDTO,
   FoodSafetyIncidentDetailResponseDTO,
   FoodSafetyIncidentFullDetailDTO,
   FoodSafetyIncidentListItemDTO,
@@ -47,6 +56,7 @@ import type {
   TraceCompletenessDTO,
   TraceMissingReasonDTO,
   TracePayloadV1DTO,
+  TracePayloadV2DTO,
 } from "./food-safety-incident.response.dto";
 
 type Tx = Prisma.TransactionClient;
@@ -119,7 +129,8 @@ const isoDate = (value: Date) => value.toISOString().slice(0, 10);
 
 // ---- PR5b: snapshot truy xuất (specs/food-safety-incident-trace-snapshots) ----
 
-export const TRACE_PAYLOAD_VERSION = 1;
+/** v2 (PR-G): thêm `evidenceFiles`; snapshot v1 cũ giữ nguyên payload và hash. */
+export const TRACE_PAYLOAD_VERSION = 2;
 
 type DecimalLike = { toFixed(digits: number): string };
 const fixed3 = (value: DecimalLike) => value.toFixed(3);
@@ -146,13 +157,17 @@ function uniqueBy<T>(items: T[], key: (item: T) => string): T[] {
 export type TraceSnapshotDraft = {
   completeness: TraceCompletenessDTO;
   missingReasons: TraceMissingReasonDTO[];
-  payload: TracePayloadV1DTO;
+  payload: TracePayloadV2DTO;
 };
 
-/** FR-004: dựng payload chuẩn hóa + lý do thiếu từ chuỗi truy xuất của các suất ăn đã gắn. */
+/**
+ * FR-004: dựng payload chuẩn hóa + lý do thiếu từ chuỗi truy xuất của các suất ăn đã gắn.
+ * PR-G: kèm file REPORT/SCHOOL_REVIEW (sha256); file không ảnh hưởng mức đầy đủ.
+ */
 export function buildTraceSnapshot(
   incident: { id: string; code: string | null; schoolId: string },
   rows: readonly TraceSourceRow[],
+  evidence: readonly SnapshotEvidenceRow[] = [],
 ): TraceSnapshotDraft {
   const allocations = uniqueBy(
     rows.map((row) => row.MealAllocation),
@@ -207,7 +222,7 @@ export function buildTraceSnapshot(
   missingReasons.sort(byKeys((reason) => canonicalizeJson(reason)));
 
   const byId = byKeys<{ id: string }>((item) => item.id);
-  const payload: TracePayloadV1DTO = {
+  const payload: TracePayloadV2DTO = {
     incident: {
       id: incident.id,
       code: incident.code,
@@ -321,6 +336,21 @@ export function buildTraceSnapshot(
       (total, allocation) => total + allocation.DailyMealPortion.totalPortions,
       0,
     ),
+    evidenceFiles: evidence
+      .flatMap((file) =>
+        file.stage === "INSPECTION_RESULT"
+          ? []
+          : [
+              {
+                id: file.id,
+                stage: file.stage,
+                mimeType: file.mimeType,
+                sizeBytes: file.sizeBytes,
+                sha256: file.sha256,
+              },
+            ],
+      )
+      .sort(byId),
   };
   const completeness: TraceCompletenessDTO =
     allocations.length === 0
@@ -357,7 +387,7 @@ function mapSnapshot(
   return {
     ...mapSnapshotSummary(row),
     incidentId: row.incidentId,
-    payload: row.payload as unknown as TracePayloadV1DTO,
+    payload: row.payload as unknown as TracePayloadV1DTO | TracePayloadV2DTO,
     hashMatches: hashTracePayload(row.payload) === row.payloadHash,
   };
 }
@@ -383,8 +413,36 @@ function mapListItem(
   };
 }
 
+function mapAttachment(
+  row: IncidentAttachmentRow,
+  storage: Pick<EvidenceStorage, "url">,
+): FoodSafetyIncidentAttachmentDTO {
+  return {
+    id: row.id,
+    stage: row.stage,
+    fileName: row.originalFilename,
+    mimeType: row.mimeType,
+    sizeBytes: row.sizeBytes,
+    createdAt: row.createdAt.toISOString(),
+    url: signedEvidenceUrl(storage, row.storagePublicId),
+  };
+}
+
+/** File cấp hồ sơ theo projection: người báo chỉ REPORT (chốt 2026-11-25), đầy đủ thêm SCHOOL_REVIEW. */
+function mapIncidentAttachments(
+  rows: readonly IncidentAttachmentRow[],
+  stages: readonly IncidentAttachmentRow["stage"][],
+  storage: Pick<EvidenceStorage, "url">,
+): FoodSafetyIncidentAttachmentDTO[] {
+  return rows
+    .filter((row) => stages.includes(row.stage))
+    .map((row) => mapAttachment(row, storage));
+}
+
 function mapInspectionCore(
   inspection: FoodSafetyIncidentDetailRow["inspections"][number],
+  attachments: readonly IncidentAttachmentRow[],
+  storage: Pick<EvidenceStorage, "url">,
 ) {
   return {
     id: inspection.id,
@@ -398,11 +456,19 @@ function mapInspectionCore(
       finding: finding.finding,
       evidenceNote: finding.evidenceNote,
     })),
+    attachments: attachments
+      .filter(
+        (file) =>
+          file.stage === "INSPECTION_RESULT" &&
+          file.inspectionId === inspection.id,
+      )
+      .map((file) => mapAttachment(file, storage)),
   };
 }
 
 function mapReporterDetail(
   row: FoodSafetyIncidentDetailRow,
+  storage: Pick<EvidenceStorage, "url">,
 ): FoodSafetyIncidentReporterDetailDTO {
   return {
     view: "REPORTER",
@@ -424,7 +490,7 @@ function mapReporterDetail(
       createdAt: history.createdAt.toISOString(),
     })),
     inspections: row.inspections.map((inspection) => ({
-      ...mapInspectionCore(inspection),
+      ...mapInspectionCore(inspection, row.attachments, storage),
       recordedBy: inspection.recordedByUser
         ? {
             fullName: inspection.recordedByUser.fullName,
@@ -432,6 +498,7 @@ function mapReporterDetail(
           }
         : null,
     })),
+    attachments: mapIncidentAttachments(row.attachments, ["REPORT"], storage),
     allowedActions: [],
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -441,11 +508,17 @@ function mapReporterDetail(
 function mapFullDetail(
   row: FoodSafetyIncidentDetailRow,
   principal: AuthPrincipal,
+  storage: Pick<EvidenceStorage, "url">,
 ): FoodSafetyIncidentFullDetailDTO {
-  const base = mapReporterDetail(row);
+  const base = mapReporterDetail(row, storage);
   return {
     ...base,
     view: "FULL",
+    attachments: mapIncidentAttachments(
+      row.attachments,
+      ["REPORT", "SCHOOL_REVIEW"],
+      storage,
+    ),
     school: row.School,
     reportedBy: row.User,
     reportedRoleCode: row.reportedRoleCode,
@@ -487,7 +560,7 @@ function mapFullDetail(
           : null,
     })),
     inspections: row.inspections.map((inspection) => ({
-      ...mapInspectionCore(inspection),
+      ...mapInspectionCore(inspection, row.attachments, storage),
       teamDescription: inspection.teamDescription,
       createdAt: inspection.createdAt.toISOString(),
       createdBy: inspection.createdByUser,
@@ -504,10 +577,11 @@ function mapFullDetail(
 function mapDetail(
   row: FoodSafetyIncidentDetailRow,
   principal: AuthPrincipal,
+  storage: Pick<EvidenceStorage, "url">,
 ): FoodSafetyIncidentDetailResponseDTO {
   return isReporterView(principal)
-    ? mapReporterDetail(row)
-    : mapFullDetail(row, principal);
+    ? mapReporterDetail(row, storage)
+    : mapFullDetail(row, principal, storage);
 }
 
 const actorOf = (actor: AuthPrincipal): IncidentActor => ({
@@ -519,8 +593,22 @@ export function createFoodSafetyIncidentService(
   repository: FoodSafetyIncidentRepository = createFoodSafetyIncidentRepository(),
   connect: () => Promise<PrismaClient> = getPrisma,
   now = () => new Date(),
+  storage: EvidenceStorage = cloudinaryEvidenceStorage,
 ) {
   const database = () => databaseOperation(() => connect());
+  /** PR-G: upload trước transaction (transaction có thể thử lại), lỗi sau upload ⇒ xóa file. */
+  const withEvidence = <T>(
+    files: Parameters<typeof withStoredEvidence>[1],
+    principal: AuthPrincipal,
+    run: Parameters<typeof withStoredEvidence<T>>[3],
+  ) =>
+    withStoredEvidence(
+      storage,
+      files,
+      principal.id,
+      run,
+      "food-safety-incidents",
+    );
 
   async function readDetail(
     tx: Tx,
@@ -624,6 +712,7 @@ export function createFoodSafetyIncidentService(
     const draft = buildTraceSnapshot(
       incident,
       await repository.findTraceSource(tx, incident.id),
+      await repository.findSnapshotEvidence(tx, incident.id),
     );
     const version = await repository.nextSnapshotVersion(tx, incident.id);
     return repository.createSnapshot(tx, version, {
@@ -682,7 +771,7 @@ export function createFoodSafetyIncidentService(
       const scope = listScopes["food-safety-incident"](principal);
       const row = await repository.findDetail(await database(), id, scope);
       if (!row) throw new HttpError(404, NOT_FOUND);
-      return mapDetail(row, principal);
+      return mapDetail(row, principal, storage);
     },
 
     /** FR-008: payload snapshot cho BGH/ATTP/SYSTEM; người báo không xem (Q23). */
@@ -711,47 +800,58 @@ export function createFoodSafetyIncidentService(
     ): Promise<FoodSafetyIncidentReporterDetailDTO> {
       if (!reporterSource(principal.role))
         throw new HttpError(403, ONLY_REPORTER);
-      return withSchoolTransaction(
-        await database(),
-        principal,
-        "food_safety_incident.report",
-        async (tx, actor, schoolId) => {
-          const source = reporterSource(actor.role);
-          if (!source) throw new HttpError(403, ONLY_REPORTER);
-          const at = now();
-          assertOccurredAt(body.occurredAt, at);
-          const classId = await resolveClass(
-            tx,
-            actor,
-            schoolId,
-            body.classId,
-            at,
-          );
-          const code = await repository.allocateCode(tx);
-          const id = await repository.create(tx, {
-            code,
-            schoolId,
-            source,
-            status: "PENDING_SCHOOL_REVIEW",
-            reportedByUserId: actor.id,
-            reportedRoleCode: actor.role,
-            reportedClassId: classId,
-            reportedSymptomaticCount: body.reportedSymptomaticCount,
-            symptomDescription: body.symptomDescription ?? null,
-            title: body.title,
-            description: body.description,
-            occurredAt: body.occurredAt ?? null,
-            createdAt: at,
-          });
-          await repository.recordHistory(tx, {
-            incidentId: id,
-            fromStatus: null,
-            toStatus: "PENDING_SCHOOL_REVIEW",
-            actor: actorOf(actor),
-            at,
-          });
-          return mapReporterDetail(await readDetail(tx, id));
-        },
+      assertPermission(principal, "food_safety_incident.report");
+      const db = await database();
+      return withEvidence(body.files, principal, (files) =>
+        withSchoolTransaction(
+          db,
+          principal,
+          "food_safety_incident.report",
+          async (tx, actor, schoolId) => {
+            const source = reporterSource(actor.role);
+            if (!source) throw new HttpError(403, ONLY_REPORTER);
+            const at = now();
+            assertOccurredAt(body.occurredAt, at);
+            const classId = await resolveClass(
+              tx,
+              actor,
+              schoolId,
+              body.classId,
+              at,
+            );
+            const code = await repository.allocateCode(tx);
+            const id = await repository.create(tx, {
+              code,
+              schoolId,
+              source,
+              status: "PENDING_SCHOOL_REVIEW",
+              reportedByUserId: actor.id,
+              reportedRoleCode: actor.role,
+              reportedClassId: classId,
+              reportedSymptomaticCount: body.reportedSymptomaticCount,
+              symptomDescription: body.symptomDescription ?? null,
+              title: body.title,
+              description: body.description,
+              occurredAt: body.occurredAt ?? null,
+              createdAt: at,
+            });
+            await repository.recordHistory(tx, {
+              incidentId: id,
+              fromStatus: null,
+              toStatus: "PENDING_SCHOOL_REVIEW",
+              actor: actorOf(actor),
+              at,
+            });
+            await repository.addAttachments(tx, {
+              incidentId: id,
+              stage: "REPORT",
+              uploaderUserId: actor.id,
+              files,
+              at,
+            });
+            return mapReporterDetail(await readDetail(tx, id), storage);
+          },
+        ),
       );
     },
 
@@ -762,66 +862,77 @@ export function createFoodSafetyIncidentService(
     ): Promise<FoodSafetyIncidentFullDetailDTO> {
       if (!isBoard(principal)) throw new HttpError(403, ONLY_BOARD);
       assertPermission(principal, "food_safety_incident.forward");
-      return withSchoolTransaction(
-        await database(),
-        principal,
-        "food_safety_incident.create",
-        async (tx, actor, schoolId) => {
-          if (!isBoard(actor)) throw new HttpError(403, ONLY_BOARD);
-          assertPermission(actor, "food_safety_incident.forward");
-          const at = now();
-          assertOccurredAt(body.occurredAt, at);
-          const classId = await resolveClass(
-            tx,
-            actor,
-            schoolId,
-            body.classId,
-            at,
-          );
-          const recipient = await resolveRecipient(tx, schoolId);
-          const code = await repository.allocateCode(tx);
-          const id = await repository.create(tx, {
-            code,
-            schoolId,
-            source: "SCHOOL_DIRECT",
-            status: "SUBMITTED_TO_AUTHORITY",
-            reportedByUserId: actor.id,
-            reportedRoleCode: actor.role,
-            reportedClassId: classId,
-            reportedSymptomaticCount: body.reportedSymptomaticCount,
-            symptomDescription: body.symptomDescription ?? null,
-            title: body.title,
-            description: body.description,
-            occurredAt: body.occurredAt ?? null,
-            schoolPreliminaryAssessment: body.preliminaryAssessment,
-            schoolPreliminaryNote: body.preliminaryNote ?? null,
-            schoolReviewedByUserId: actor.id,
-            schoolReviewedAt: at,
-            recipientCommuneFoodSafetyUnitId: recipient.unitId,
-            createdAt: at,
-          });
-          await repository.recordHistory(tx, {
-            incidentId: id,
-            fromStatus: null,
-            toStatus: "SUBMITTED_TO_AUTHORITY",
-            actor: actorOf(actor),
-            at,
-          });
-          const traceSnapshotId = await takeSnapshot(
-            tx,
-            { id, code, schoolId },
-            actor.id,
-            at,
-          );
-          await repository.createForwarding(tx, {
-            incidentId: id,
-            recipient,
-            forwardedByUserId: actor.id,
-            traceSnapshotId,
-            at,
-          });
-          return mapFullDetail(await readDetail(tx, id), actor);
-        },
+      assertPermission(principal, "food_safety_incident.create");
+      const db = await database();
+      return withEvidence(body.files, principal, (files) =>
+        withSchoolTransaction(
+          db,
+          principal,
+          "food_safety_incident.create",
+          async (tx, actor, schoolId) => {
+            if (!isBoard(actor)) throw new HttpError(403, ONLY_BOARD);
+            assertPermission(actor, "food_safety_incident.forward");
+            const at = now();
+            assertOccurredAt(body.occurredAt, at);
+            const classId = await resolveClass(
+              tx,
+              actor,
+              schoolId,
+              body.classId,
+              at,
+            );
+            const recipient = await resolveRecipient(tx, schoolId);
+            const code = await repository.allocateCode(tx);
+            const id = await repository.create(tx, {
+              code,
+              schoolId,
+              source: "SCHOOL_DIRECT",
+              status: "SUBMITTED_TO_AUTHORITY",
+              reportedByUserId: actor.id,
+              reportedRoleCode: actor.role,
+              reportedClassId: classId,
+              reportedSymptomaticCount: body.reportedSymptomaticCount,
+              symptomDescription: body.symptomDescription ?? null,
+              title: body.title,
+              description: body.description,
+              occurredAt: body.occurredAt ?? null,
+              schoolPreliminaryAssessment: body.preliminaryAssessment,
+              schoolPreliminaryNote: body.preliminaryNote ?? null,
+              schoolReviewedByUserId: actor.id,
+              schoolReviewedAt: at,
+              recipientCommuneFoodSafetyUnitId: recipient.unitId,
+              createdAt: at,
+            });
+            await repository.recordHistory(tx, {
+              incidentId: id,
+              fromStatus: null,
+              toStatus: "SUBMITTED_TO_AUTHORITY",
+              actor: actorOf(actor),
+              at,
+            });
+            await repository.addAttachments(tx, {
+              incidentId: id,
+              stage: "REPORT",
+              uploaderUserId: actor.id,
+              files,
+              at,
+            });
+            const traceSnapshotId = await takeSnapshot(
+              tx,
+              { id, code, schoolId },
+              actor.id,
+              at,
+            );
+            await repository.createForwarding(tx, {
+              incidentId: id,
+              recipient,
+              forwardedByUserId: actor.id,
+              traceSnapshotId,
+              at,
+            });
+            return mapFullDetail(await readDetail(tx, id), actor, storage);
+          },
+        ),
       );
     },
 
@@ -831,39 +942,55 @@ export function createFoodSafetyIncidentService(
       body: ForwardFoodSafetyIncidentRequestDTO,
       principal: AuthPrincipal,
     ): Promise<FoodSafetyIncidentFullDetailDTO> {
-      return boardAction(
-        id,
-        principal,
-        "food_safety_incident.forward",
-        async (tx, actor, target, schoolId, at) => {
-          if (target.status !== "PENDING_SCHOOL_REVIEW")
-            throw new HttpError(409, NOT_PENDING);
-          const recipient = await resolveRecipient(tx, schoolId);
-          const changed = await repository.markForwarded(tx, id, {
-            assessment: body.preliminaryAssessment,
-            note: body.preliminaryNote ?? null,
-            reviewerId: actor.id,
-            unitId: recipient.unitId,
-            at,
-          });
-          if (changed !== 1) throw new HttpError(409, NOT_PENDING);
-          await repository.recordHistory(tx, {
-            incidentId: id,
-            fromStatus: "PENDING_SCHOOL_REVIEW",
-            toStatus: "SUBMITTED_TO_AUTHORITY",
-            actor: actorOf(actor),
-            at,
-          });
-          const traceSnapshotId = await takeSnapshot(tx, target, actor.id, at);
-          await repository.createForwarding(tx, {
-            incidentId: id,
-            recipient,
-            forwardedByUserId: actor.id,
-            traceSnapshotId,
-            at,
-          });
-          return mapFullDetail(await readDetail(tx, id), actor);
-        },
+      if (!isBoard(principal)) throw new HttpError(403, ONLY_BOARD);
+      assertPermission(principal, "food_safety_incident.forward");
+      return withEvidence(body.files, principal, (files) =>
+        boardAction(
+          id,
+          principal,
+          "food_safety_incident.forward",
+          async (tx, actor, target, schoolId, at) => {
+            if (target.status !== "PENDING_SCHOOL_REVIEW")
+              throw new HttpError(409, NOT_PENDING);
+            const recipient = await resolveRecipient(tx, schoolId);
+            const changed = await repository.markForwarded(tx, id, {
+              assessment: body.preliminaryAssessment,
+              note: body.preliminaryNote ?? null,
+              reviewerId: actor.id,
+              unitId: recipient.unitId,
+              at,
+            });
+            if (changed !== 1) throw new HttpError(409, NOT_PENDING);
+            await repository.recordHistory(tx, {
+              incidentId: id,
+              fromStatus: "PENDING_SCHOOL_REVIEW",
+              toStatus: "SUBMITTED_TO_AUTHORITY",
+              actor: actorOf(actor),
+              at,
+            });
+            await repository.addAttachments(tx, {
+              incidentId: id,
+              stage: "SCHOOL_REVIEW",
+              uploaderUserId: actor.id,
+              files,
+              at,
+            });
+            const traceSnapshotId = await takeSnapshot(
+              tx,
+              target,
+              actor.id,
+              at,
+            );
+            await repository.createForwarding(tx, {
+              incidentId: id,
+              recipient,
+              forwardedByUserId: actor.id,
+              traceSnapshotId,
+              at,
+            });
+            return mapFullDetail(await readDetail(tx, id), actor, storage);
+          },
+        ),
       );
     },
 
@@ -890,7 +1017,7 @@ export function createFoodSafetyIncidentService(
             note: body.note,
             at,
           });
-          return mapFullDetail(await readDetail(tx, id), actor);
+          return mapFullDetail(await readDetail(tx, id), actor, storage);
         },
       );
     },
@@ -947,7 +1074,7 @@ export function createFoodSafetyIncidentService(
           }
           return {
             added,
-            incident: mapFullDetail(await readDetail(tx, id), actor),
+            incident: mapFullDetail(await readDetail(tx, id), actor, storage),
           };
         },
       );

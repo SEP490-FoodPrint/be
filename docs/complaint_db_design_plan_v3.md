@@ -1,7 +1,7 @@
 # Kế hoạch thiết kế DB v6 — Khiếu nại (mô hình ticket) & Sự cố ATTP
 
 > [!NOTE]
-> **Bản v6 (2026-11-25)** bổ sung phần **file đính kèm chứng minh** cho khiếu nại và sự cố ATTP, **tiêu đề do người gửi nhập** và **loại vấn đề** cho phản hồi nguyên liệu (Q29–Q35, mục 1, 3.4, 5.3, PR-F/PR-G ở mục 7). PR1–PR6b + PR-E đã merge theo bản v5; các thay đổi v6 **chưa sửa code/schema/database**, cần spec riêng trước khi triển khai.
+> **Bản v6 (2026-11-25)** bổ sung phần **file đính kèm chứng minh** cho khiếu nại và sự cố ATTP, **tiêu đề do người gửi nhập** và **loại vấn đề** cho phản hồi nguyên liệu (Q29–Q35, mục 1, 3.4, 5.3, PR-F/PR-G ở mục 7). PR1–PR6b + PR-E đã merge theo bản v5; v6 triển khai qua PR-F (`specs/complaint-attachments`, đã merge #207) và PR-G (`specs/food-safety-incident-attachments`).
 >
 > Bản v5 chuyển miền Khiếu nại sang **mô hình ticket** (tham chiếu `VOPS-13064-updated.md`, sơ đồ chi tiết ở `complaint_state_diagrams.md`) và khóa kết quả kiểm tra ATTP sau khi ghi. Bản v4 cập nhật v3 cho khớp với quy tắc mã nghiệp vụ Feistel (PR #165, `AGENTS.md` mục "Coding Style & Architecture", `specs/feistel-business-codes/`) và schema hiện tại trên `dev`. Hiện **chưa sửa code, `prisma/schema.prisma`, hay database**.
 >
@@ -462,7 +462,7 @@ Mỗi PR tuân thủ Spec-Driven Development: `specs/<slug>/{spec.md,plan.md,tas
 
 ## 8. Bước tiếp theo đề xuất
 
-**v6**: PR-F đã triển khai theo `specs/complaint-attachments/` (nhánh `feat/complaint-attachments`; ba điểm ⏳ ở mục 3.4 đã chốt: bình luận vẫn bắt buộc nội dung). Tiếp theo `specs/food-safety-incident-attachments/` (PR-G); chốt các điểm ⏳ ở mục 3.4 và 5.3 trong spec. Cần xác nhận cấu hình Cloudinary cho PDF (`uploadDocuments`) và dung lượng trước khi triển khai. Danh sách dưới đây là bước tiếp theo của bản v5 (đã hoàn tất PR1–PR6b + PR-E).
+**v6**: PR-F đã triển khai theo `specs/complaint-attachments/` (merge #207; bình luận vẫn bắt buộc nội dung). PR-G triển khai theo `specs/food-safety-incident-attachments/` (nhánh `feat/food-safety-incident-attachments`): không lưu cột `url` (URL ký 10 phút như PR-F), payload snapshot mới tăng lên v2 với `evidenceFiles`. Cả hai lưu file Cloudinary dạng raw + authenticated. Danh sách dưới đây là bước tiếp theo của bản v5 (đã hoàn tất PR1–PR6b + PR-E).
 
 1. Chốt **Q27** (migration guard bảng rỗng) và **Q28** (đổi contract API theo mô hình ticket) — chặn PR1.
 2. Tạo nhánh `refactor/complaint-supertype` từ `dev`, viết `specs/complaint-supertype/{spec,plan,tasks}.md` (kèm amend Spec 019 cho Q21 và Spec `supplier-complaint-response` cho Q28).

@@ -6,6 +6,17 @@ import type {
 export type FoodSafetyIncidentStatusAfterDTO =
   "UNDER_INSPECTION" | "INSPECTION_COMPLETED" | "CLOSED";
 
+/** v6 (PR-G): file kết quả kiểm tra; `url` là URL ký 10 phút (`null` khi chưa ký được). */
+export interface FoodSafetyInspectionAttachmentDTO {
+  id: string;
+  stage: "INSPECTION_RESULT";
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  createdAt: string;
+  url: string | null;
+}
+
 export interface FoodSafetyInspectionDTO {
   id: string;
   incidentId: string;
@@ -21,6 +32,7 @@ export interface FoodSafetyInspectionDTO {
     finding: (typeof SUPPLIER_FINDINGS)[number];
     evidenceNote: string | null;
   }[];
+  attachments: FoodSafetyInspectionAttachmentDTO[];
 }
 
 export interface FoodSafetyInspectionActionResponseDTO {
