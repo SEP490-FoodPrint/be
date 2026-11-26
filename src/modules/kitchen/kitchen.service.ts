@@ -1416,6 +1416,31 @@ export function summarizeDayProgress(
   };
 }
 
+/**
+ * Khung giờ nấu theo giờ bữa trưa BGH cấu hình (giờ Việt Nam, UTC+7):
+ * tới hết phút giờ bữa trưa chỉ xử lý lô bữa trưa, sau đó chỉ lô bữa xế.
+ * Trường chưa cấu hình giờ bữa trưa thì không chặn.
+ */
+export function assertMealWindow(
+  mealType: MealType,
+  lunchTime: Date | null | undefined,
+  now: Date,
+) {
+  if (!(lunchTime instanceof Date) || Number.isNaN(lunchTime.getTime())) return;
+  const lunch = lunchTime.toISOString().slice(11, 16);
+  const current = new Date(now.getTime() + 7 * 3600000)
+    .toISOString()
+    .slice(11, 16);
+  const open: MealType = current <= lunch ? "LUNCH" : "AFTERNOON";
+  if (mealType === open) return;
+  throw new HttpError(
+    409,
+    mealType === "LUNCH"
+      ? `Đã qua giờ bữa trưa (${lunch}). Chỉ xử lý lô bữa xế.`
+      : `Chưa tới khung giờ bữa xế (sau ${lunch}).`,
+  );
+}
+
 /** All kitchen writes lock the trusted school first, then batch/lots by UUID. */
 /** Ngày hôm nay theo giờ Việt Nam (UTC+7), dạng YYYY-MM-DD. */
 function vietnamToday() {
@@ -1430,7 +1455,17 @@ export function createKitchenLifecycle(
   > = blockchainProofService,
   /** Ngày hôm nay (YYYY-MM-DD, giờ VN); tiêm vào để test cố định ngày. */
   today: () => string = vietnamToday,
+  /** Thời điểm hiện tại; tiêm vào để test cố định khung giờ bữa. */
+  now: () => Date = () => new Date(),
 ) {
+  async function checkMealWindow(tx: Tx, batch: Detail, schoolId: string) {
+    const school = await tx.school.findUnique({
+      where: { id: schoolId },
+      select: { lunchTime: true },
+    });
+    assertMealWindow(batch.mealType, school?.lunchTime, now());
+  }
+
   async function write<T>(
     principal: AuthPrincipal,
     permission: string,
@@ -1902,6 +1937,7 @@ export function createKitchenLifecycle(
         async (tx, actor, schoolId) => {
           const batch = await lockedBatch(tx, id, schoolId);
           if (batch.status !== "UNCONFIRMED") return dto(batch);
+          await checkMealWindow(tx, batch, schoolId);
           await assertMealPortions(tx, batch, schoolId, batch.id);
           await checkReservedStock(tx, batch, schoolId);
           await checkMealSeasoningStock(tx, batch, schoolId);
@@ -1936,6 +1972,7 @@ export function createKitchenLifecycle(
           }
           if (batch.status !== "CONFIRMED")
             throw new HttpError(409, "Phải xác nhận nấu trước khi hoàn thành");
+          await checkMealWindow(tx, batch, schoolId);
           await assertMealPortions(
             tx,
             batch,
@@ -2037,9 +2074,10 @@ export function createKitchenService(
   read: KitchenListReader = readFromDatabase,
   connect: () => Promise<PrismaClient> = getPrisma,
   today: () => string = vietnamToday,
+  now: () => Date = () => new Date(),
 ) {
   return {
-    ...createKitchenLifecycle(connect, undefined, today),
+    ...createKitchenLifecycle(connect, undefined, today, now),
     async getContext(principal: AuthPrincipal) {
       return readSchoolContext(
         await connect(),
