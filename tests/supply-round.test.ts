@@ -4,6 +4,8 @@ import { ROLES } from "../src/constants/roles";
 import { Prisma } from "../src/generated/prisma/client";
 import { reserveMealSeasonings } from "../src/modules/kitchen/kitchen.service";
 import { supplyRoundService } from "../src/modules/supply-round/supply-round.service";
+import { round1Deficit } from "../src/modules/supply-round/round-dish-planning";
+import { splitLotByDemand } from "../src/modules/kitchen/lot-batch-planner";
 import {
   roundApprovalSchema,
   roundQuerySchema,
@@ -248,5 +250,55 @@ void test("supply round denials fail before accessing the database", async () =>
   await assert.rejects(
     supplyRoundService.approve(dish, { planVersion: "a".repeat(32) }, board),
     hasStatus(403),
+  );
+});
+
+void test("lô Đợt 2 trả phần bù đúng phần còn thiếu sau Đợt 1 của từng thực đơn khối", () => {
+  const D = (value: string | number) => new Prisma.Decimal(value);
+  // Ca 28/12: cùng món ở Khối 1-3 (30 g/suất) và Khối 4-5 (45 g/suất); Đợt 1 cắt 2 mẫu × 75 g mỗi khối.
+  const deficit13 = round1Deficit(
+    D(181).mul(30),
+    [
+      { quantity: D("4.797"), unit: "kg" },
+      { quantity: D("0.412"), unit: "kg" },
+    ],
+    "g",
+  );
+  const deficit45 = round1Deficit(
+    D(127).mul(45),
+    [
+      { quantity: D("5.053"), unit: "kg" },
+      { quantity: D("0.438"), unit: "kg" },
+    ],
+    "g",
+  );
+  assert.equal(deficit13.toString(), "221");
+  assert.equal(deficit45.toString(), "224");
+  // Lô Đợt 2 11,62 kg = nhu cầu Đợt 2 (182 × 30 g + 127 × 45 g) + 445 g bù.
+  const [share13, share45] = splitLotByDemand(D("11.620"), [
+    D(182).mul(30).add(deficit13),
+    D(127).mul(45).add(deficit45),
+  ]);
+  // Tổng thành phẩm của mỗi khối khớp đúng suất × định lượng (trước đây Khối 1-3 thiếu 4 g).
+  assert.equal(share13.add("4.797").add("0.412").toFixed(3), "10.890");
+  assert.equal(share45.add("5.053").add("0.438").toFixed(3), "11.430");
+  // Chia theo nhu cầu Đợt 2 thuần (cách cũ) làm Khối 1-3 thiếu.
+  const [old13] = splitLotByDemand(D("11.620"), [
+    D(182).mul(30),
+    D(127).mul(45),
+  ]);
+  assert.ok(old13.add("4.797").add("0.412").lt("10.890"));
+});
+
+void test("không có lô Đợt 1 hoặc đã nhận đủ thì không cộng phần bù", () => {
+  const D = (value: string | number) => new Prisma.Decimal(value);
+  assert.equal(round1Deficit(D(500), [], "g").toString(), "0");
+  assert.equal(
+    round1Deficit(D(500), [{ quantity: D("0.6"), unit: "kg" }], "g").toString(),
+    "0",
+  );
+  assert.equal(
+    round1Deficit(D(5), [{ quantity: D(3), unit: "hộp" }], "hộp").toString(),
+    "2",
   );
 });

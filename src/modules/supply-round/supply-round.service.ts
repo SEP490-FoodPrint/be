@@ -9,6 +9,7 @@ import { getPrisma } from "../../utils/database";
 import {
   checkMealSeasoningStock,
   checkReservedStock,
+  readPlanningStock,
   reservedQuantities,
 } from "../kitchen/kitchen.service";
 import { HttpError } from "../../utils/http-error";
@@ -339,77 +340,181 @@ async function restoreStockCompensations(tx: Tx, round1: Round) {
       ]),
     ).values(),
   ];
+  const EPS = new Prisma.Decimal("0.0005");
+  const freeOf = async (lotId: string) => {
+    const lot = await tx.ingredientLot.findUniqueOrThrow({
+      where: { id: lotId },
+      select: { id: true, unit: true, availableQuantity: true },
+    });
+    return {
+      unit: lot.unit,
+      free: lot.availableQuantity
+        .sub(await reservedQuantitiesFor(tx, lot))
+        .toDecimalPlaces(3, Prisma.Decimal.ROUND_DOWN),
+    };
+  };
+  /**
+   * Trả `want` (đơn vị `unit`) vào nơi đã cắt: ưu tiên đúng lô cũ, hết chỗ thì lô khác cùng nguyên liệu.
+   * Trả về lượng đã trả được (đơn vị `unit`).
+   */
+  const restore = async (
+    entryId: string,
+    unit: string,
+    want: Prisma.Decimal,
+    lotId: string,
+    addSame: (quantity: Prisma.Decimal) => Promise<unknown>,
+    addOther: (
+      lot: { id: string; unit: string },
+      quantity: Prisma.Decimal,
+    ) => Promise<unknown>,
+  ) => {
+    let rest = want;
+    const same = await freeOf(lotId);
+    const sameTake = Prisma.Decimal.min(
+      convertQuantity(same.free, same.unit, unit).toDecimalPlaces(
+        3,
+        Prisma.Decimal.ROUND_DOWN,
+      ),
+      rest,
+    );
+    if (sameTake.gt(0)) {
+      await addSame(sameTake);
+      rest = rest.sub(sameTake);
+    }
+    if (rest.gt(EPS))
+      for (const lot of await readPlanningStock(
+        tx,
+        round1.schoolId,
+        round1.deliveryDate,
+        [entryId],
+        true,
+      )) {
+        if (!rest.gt(EPS)) break;
+        if (lot.id === lotId) continue;
+        const free = new Prisma.Decimal(lot.availableQuantity)
+          .sub(lot.reservedQuantity)
+          .toDecimalPlaces(3, Prisma.Decimal.ROUND_DOWN);
+        const amount = Prisma.Decimal.min(
+          free,
+          convertQuantity(rest, unit, lot.unit).toDecimalPlaces(
+            3,
+            Prisma.Decimal.ROUND_UP,
+          ),
+        );
+        if (!amount.gt(0)) continue;
+        await addOther(lot, amount);
+        rest = rest.sub(convertQuantity(amount, lot.unit, unit));
+      }
+    return want.sub(Prisma.Decimal.max(rest, 0));
+  };
   for (const compensation of compensations) {
+    const entryId = compensation.ingredientEntryId;
     let remaining = compensation.sampleQuantity;
-    const targets: {
-      lotId: string;
-      unit: string;
-      add: (quantity: Prisma.Decimal) => Promise<unknown>;
-    }[] = [];
+    // 1) Mỗi mẻ đã cắt được bù đúng phần của mình.
     for (const row of rows) {
-      const entryId =
+      if (!remaining.gt(EPS)) break;
+      const rowEntry =
         row.IngredientLot.DeliveryItem.ingredientEntryId ??
         row.IngredientLot.DeliveryItem.SupplyRequestItem?.ingredientEntryId;
-      if (entryId !== compensation.ingredientEntryId) continue;
-      targets.push({
-        lotId: row.ingredientLotId,
-        unit: row.unit,
-        add: (quantity) =>
+      if (rowEntry !== entryId) continue;
+      const want = Prisma.Decimal.min(
+        row.sampleQuantity,
+        convertQuantity(remaining, compensation.unit, row.unit),
+      );
+      const batchKey = {
+        cookingBatchId: row.cookingBatchId,
+        dishId: row.dishId,
+      };
+      const restored = await restore(
+        entryId,
+        row.unit,
+        want,
+        row.ingredientLotId,
+        (quantity) =>
           tx.cookingBatchLot.update({
             where: {
               cookingBatchId_dishId_ingredientLotId: {
-                cookingBatchId: row.cookingBatchId,
-                dishId: row.dishId,
+                ...batchKey,
                 ingredientLotId: row.ingredientLotId,
               },
             },
             data: { quantityUsed: { increment: quantity } },
           }),
-      });
-    }
-    for (const meal of meals)
-      for (const row of await repository.seasoningLots(tx, meal))
-        if (row.ingredientEntryId === compensation.ingredientEntryId)
-          targets.push({
-            lotId: row.ingredientLotId,
-            unit: row.unit,
-            add: (quantity) =>
-              tx.menuMealSeasoningLot.update({
-                where: { id: row.id },
-                data: { quantityUsed: { increment: quantity } },
-              }),
-          });
-    for (const target of targets) {
-      if (!remaining.gt(0)) break;
-      const lot = await tx.ingredientLot.findUniqueOrThrow({
-        where: { id: target.lotId },
-        select: { id: true, unit: true, availableQuantity: true },
-      });
-      const reserved = (await reservedQuantitiesFor(tx, lot)).toDecimalPlaces(
-        3,
+        (lot, quantity) =>
+          tx.cookingBatchLot.upsert({
+            where: {
+              cookingBatchId_dishId_ingredientLotId: {
+                ...batchKey,
+                ingredientLotId: lot.id,
+              },
+            },
+            create: {
+              ...batchKey,
+              ingredientLotId: lot.id,
+              quantityUsed: quantity,
+              unit: lot.unit,
+            },
+            update: { quantityUsed: { increment: quantity } },
+          }),
       );
-      const free = convertQuantity(
-        lot.availableQuantity.sub(reserved),
-        lot.unit,
-        target.unit,
-      ).toDecimalPlaces(3, Prisma.Decimal.ROUND_DOWN);
-      const wanted = convertQuantity(
-        remaining,
-        compensation.unit,
-        target.unit,
-      ).toDecimalPlaces(3, Prisma.Decimal.ROUND_UP);
-      const amount = Prisma.Decimal.min(free, wanted);
-      if (!amount.gt(0)) continue;
-      await target.add(amount);
       remaining = remaining.sub(
-        convertQuantity(amount, target.unit, compensation.unit),
+        convertQuantity(restored, row.unit, compensation.unit),
       );
     }
-    if (remaining.gt(new Prisma.Decimal("0.0005")))
+    // 2) Phần còn lại là gia vị dùng chung đã cắt ở các bữa.
+    for (const meal of meals)
+      for (const row of await repository.seasoningLots(tx, meal)) {
+        if (!remaining.gt(EPS)) break;
+        if (row.ingredientEntryId !== entryId || !row.sampleQuantity.gt(0))
+          continue;
+        const want = Prisma.Decimal.min(
+          row.sampleQuantity,
+          convertQuantity(remaining, compensation.unit, row.unit),
+        );
+        const restored = await restore(
+          entryId,
+          row.unit,
+          want,
+          row.ingredientLotId,
+          (quantity) =>
+            tx.menuMealSeasoningLot.update({
+              where: { id: row.id },
+              data: { quantityUsed: { increment: quantity } },
+            }),
+          (lot, quantity) =>
+            tx.menuMealSeasoningLot.upsert({
+              where: {
+                menuDayId_mealType_ingredientEntryId_ingredientLotId: {
+                  ...meal,
+                  ingredientEntryId: entryId,
+                  ingredientLotId: lot.id,
+                },
+              },
+              create: {
+                ...meal,
+                ingredientEntryId: entryId,
+                ingredientLotId: lot.id,
+                quantityUsed: quantity,
+                unit: lot.unit,
+                plannedPortions: row.plannedPortions,
+              },
+              update: { quantityUsed: { increment: quantity } },
+            }),
+        );
+        remaining = remaining.sub(
+          convertQuantity(restored, row.unit, compensation.unit),
+        );
+      }
+    if (remaining.gt(EPS)) {
+      const entry = await tx.ingredientEntry.findUnique({
+        where: { id: entryId },
+        select: { Ingredient: { select: { name: true } } },
+      });
       throw new HttpError(
         409,
-        "Kho không đủ đồ khô/gia vị để bù phần lưu mẫu của Đợt 1; cần nhập thêm trước khi nấu",
+        `Kho không đủ ${entry?.Ingredient.name ?? "đồ khô/gia vị"} để bù phần lưu mẫu của Đợt 1 (thiếu ${remaining.toDecimalPlaces(3).toString()} ${compensation.unit}); cần nhập thêm trước khi nấu`,
       );
+    }
   }
 }
 
@@ -606,6 +711,7 @@ export const supplyRoundService = {
           select: {
             ingredientEntryId: true,
             ingredientNameSnapshot: true,
+            Ingredient: { select: { name: true } },
           },
         },
         SupplyRequest: {
@@ -631,7 +737,7 @@ export const supplyRoundService = {
       if (item.ingredientEntryId && !entries.has(item.ingredientEntryId))
         entries.set(
           item.ingredientEntryId,
-          item.ingredientNameSnapshot ?? "Nguyên liệu",
+          item.ingredientNameSnapshot ?? item.Ingredient.name,
         );
     return [...entries].map(([ingredientEntryId, ingredientName]) => {
       const dishes = [...occurrences.values()].filter(([dish]) =>

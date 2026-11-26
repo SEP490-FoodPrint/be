@@ -770,6 +770,119 @@ export const roundSampleRepository = {
       },
     });
   },
+  /**
+   * Lượng nguyên liệu tươi mỗi người dùng (bữa × món) đã thực nhận ở Đợt 1, theo đơn vị lô:
+   * lô của mẻ Đợt 1 (đã trừ mẫu cắt) trừ phần Đợt 2 đã gộp vào, cộng phần dư Đợt 1 (V35).
+   * Dùng để chia phần bù của lô Đợt 2 đúng theo phần còn thiếu của từng người dùng.
+   */
+  async round1Supply(tx: Tx, round1Id: string) {
+    const lotSelect = {
+      DeliveryItem: {
+        select: {
+          ingredientEntryId: true,
+          SupplyRequestItem: { select: { ingredientEntryId: true } },
+        },
+      },
+    } as const;
+    const entryOf = (lot: {
+      DeliveryItem: {
+        ingredientEntryId: string | null;
+        SupplyRequestItem: { ingredientEntryId: string } | null;
+      };
+    }) =>
+      lot.DeliveryItem.ingredientEntryId ??
+      lot.DeliveryItem.SupplyRequestItem?.ingredientEntryId ??
+      null;
+    const lots = await tx.cookingBatchLot.findMany({
+      where: {
+        CookingBatch: {
+          BatchGroup: { supplyRoundId: round1Id },
+          status: { not: "CANCELLED" },
+        },
+      },
+      select: {
+        cookingBatchId: true,
+        dishId: true,
+        ingredientLotId: true,
+        quantityUsed: true,
+        unit: true,
+        CookingBatch: { select: { menuDayId: true, mealType: true } },
+        IngredientLot: { select: lotSelect },
+      },
+    });
+    const merged = lots.length
+      ? await tx.cookingBatchRoundPartLot.findMany({
+          where: {
+            roundPart: {
+              status: "MERGED",
+              cookingBatchId: {
+                in: [...new Set(lots.map((lot) => lot.cookingBatchId))],
+              },
+            },
+          },
+          select: {
+            ingredientLotId: true,
+            quantityUsed: true,
+            roundPart: { select: { cookingBatchId: true, dishId: true } },
+          },
+        })
+      : [];
+    const leftovers = await tx.supplyRoundLeftover.findMany({
+      where: { supplyRoundId: round1Id },
+      select: {
+        menuDayId: true,
+        mealType: true,
+        dishId: true,
+        quantity: true,
+        unit: true,
+        ingredientLot: { select: lotSelect },
+      },
+    });
+    const rows: {
+      menuDayId: string;
+      mealType: string;
+      dishId: string;
+      ingredientEntryId: string;
+      quantity: Prisma.Decimal;
+      unit: string;
+    }[] = [];
+    for (const lot of lots) {
+      const ingredientEntryId = entryOf(lot.IngredientLot);
+      if (!ingredientEntryId) continue;
+      const fromRound2 = merged
+        .filter(
+          (part) =>
+            part.roundPart.cookingBatchId === lot.cookingBatchId &&
+            part.roundPart.dishId === lot.dishId &&
+            part.ingredientLotId === lot.ingredientLotId,
+        )
+        .reduce(
+          (sum, part) => sum.add(part.quantityUsed),
+          new Prisma.Decimal(0),
+        );
+      rows.push({
+        menuDayId: lot.CookingBatch.menuDayId,
+        mealType: lot.CookingBatch.mealType,
+        dishId: lot.dishId,
+        ingredientEntryId,
+        quantity: Prisma.Decimal.max(0, lot.quantityUsed.sub(fromRound2)),
+        unit: lot.unit,
+      });
+    }
+    for (const row of leftovers) {
+      const ingredientEntryId = entryOf(row.ingredientLot);
+      if (ingredientEntryId)
+        rows.push({
+          menuDayId: row.menuDayId,
+          mealType: row.mealType,
+          dishId: row.dishId,
+          ingredientEntryId,
+          quantity: row.quantity,
+          unit: row.unit,
+        });
+    }
+    return rows;
+  },
   createLeftovers(
     tx: Tx,
     rows: {

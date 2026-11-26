@@ -65,8 +65,33 @@ const consumerKey = (meal: RoundMeal, dishId: string) =>
 interface DemandContext {
   gradePortions: { gradeId: string; portions: number }[];
   actualByGrade: Map<string, number> | null;
-  /** Nhu cầu (suất × định lượng sống) theo nguyên liệu → người dùng (món × bữa). */
+  /**
+   * Trọng số chia lô (V27) theo nguyên liệu → người dùng (món × bữa): suất × định lượng sống.
+   * Đợt 2 cộng thêm phần còn thiếu thực tế sau Đợt 1 (bù làm tròn + bù mẫu đã cắt) của từng người dùng.
+   */
   demands: Map<string, Map<string, D>>;
+}
+
+/**
+ * Phần còn thiếu sau Đợt 1 của từng người dùng × nguyên liệu (đơn vị dòng công thức).
+ * Lô Đợt 2 chứa phần bù chung (V2, V4); nếu chia theo nhu cầu Đợt 2 thì người dùng nhu cầu nhỏ
+ * nhận thiếu phần bù của mình và bước phân bổ báo "không đáp ứng đủ nhu cầu".
+ */
+export function round1Deficit(
+  need: D,
+  supplied: readonly { quantity: D; unit: string }[],
+  unit: string,
+): D {
+  if (!supplied.length) return new Decimal(0);
+  let received = new Decimal(0);
+  for (const row of supplied) {
+    try {
+      received = received.add(convertQuantity(row.quantity, row.unit, unit));
+    } catch {
+      return new Decimal(0);
+    }
+  }
+  return Decimal.max(0, need.sub(received));
 }
 
 type PlanMenu = NonNullable<
@@ -137,6 +162,15 @@ async function demandContext(
   const actualByGrade = round.batchNo === 2 ? actual : null;
   const context = { gradePortions, actualByGrade };
   const occurrences = await repository.occurrences(tx, round);
+  const round1 =
+    round.batchNo === 2
+      ? await repository.findByKey(tx, { ...round, batchNo: 1 })
+      : null;
+  const round1Supply = new Map<string, { quantity: D; unit: string }[]>();
+  for (const row of round1 ? await samples.round1Supply(tx, round1.id) : []) {
+    const id = `${row.menuDayId}|${row.mealType}|${row.dishId}|${row.ingredientEntryId}`;
+    round1Supply.set(id, [...(round1Supply.get(id) ?? []), row]);
+  }
   const demands = new Map<string, Map<string, D>>();
   const meals = new Map<string, RoundMeal>();
   for (const occurrence of occurrences) {
@@ -153,6 +187,9 @@ async function demandContext(
     );
     if (!menu) continue;
     const portions = mealPortions(round.batchNo, menu, context);
+    const round1Portions = round1
+      ? mealPortions(1, menu, { gradePortions, actualByGrade: null })
+      : 0;
     const shared = new Set(
       menu.mealSeasonings.map(({ ingredientEntryId }) => ingredientEntryId),
     );
@@ -163,10 +200,17 @@ async function demandContext(
         const consumers =
           demands.get(line.ingredientEntryId) ?? new Map<string, D>();
         const key = consumerKey(meal, dish.dishId);
+        const deficit = round1
+          ? round1Deficit(
+              line.quantityPerPortion.mul(round1Portions),
+              round1Supply.get(`${key}|${line.ingredientEntryId}`) ?? [],
+              line.unit,
+            )
+          : new Decimal(0);
         consumers.set(
           key,
           (consumers.get(key) ?? new Decimal(0)).add(
-            line.quantityPerPortion.mul(portions),
+            line.quantityPerPortion.mul(portions).add(deficit),
           ),
         );
         demands.set(line.ingredientEntryId, consumers);
@@ -577,6 +621,42 @@ async function extendMealSeasonings(
         });
       remaining = remaining.sub(part);
     }
+    // Lô đã giữ ở Đợt 1 không đủ: lấy tiếp từ lô khác còn trống của cùng gia vị.
+    if (remaining.gt(new Decimal("0.0005")))
+      for (const lot of await readPlanningStock(
+        tx,
+        schoolId,
+        menuDate,
+        [standard.ingredientEntryId],
+        true,
+      )) {
+        if (!remaining.gt(new Decimal("0.0005"))) break;
+        if (entryRows.some((row) => row.ingredientLotId === lot.id)) continue;
+        const free = new Decimal(lot.availableQuantity)
+          .sub(lot.reservedQuantity)
+          .toDecimalPlaces(3, Decimal.ROUND_DOWN);
+        if (!free.gt(0)) continue;
+        const part = Decimal.min(
+          convertQuantity(free, lot.unit, standard.unit),
+          remaining,
+        );
+        const amount = Decimal.min(
+          ceilToThree(convertQuantity(part, standard.unit, lot.unit)),
+          free,
+        );
+        if (!amount.gt(0)) continue;
+        await tx.menuMealSeasoningLot.create({
+          data: {
+            ...meal,
+            ingredientEntryId: standard.ingredientEntryId,
+            ingredientLotId: lot.id,
+            quantityUsed: amount,
+            unit: lot.unit,
+            plannedPortions: totalPortions,
+          },
+        });
+        remaining = remaining.sub(part);
+      }
     if (remaining.gt(new Decimal("0.0005")))
       throw new HttpError(
         409,
@@ -838,7 +918,9 @@ export async function planRoundDish(
         const share =
           position < 0
             ? lot.quantity
-            : splitLotByDemand(lot.quantity, [...consumers.values()])[position];
+            : splitLotByDemand(lot.quantity, [...consumers.values()], lot.unit)[
+                position
+              ];
         return share.gt(0)
           ? [
               {
