@@ -5,7 +5,10 @@ import { withSchoolTransaction } from "../../utils/authorization";
 import { HttpError } from "../../utils/http-error";
 import { convertQuantity } from "../kitchen/kitchen.service";
 import { scaleDishLines } from "../../utils/dish-portion";
-import { dishRecipeRepository as recipes } from "./dish.repository";
+import {
+  DUPLICATE_DISH_NAME,
+  dishRecipeRepository as recipes,
+} from "./dish.repository";
 import type { DishRecipeWrite } from "./dish.request.dto";
 import type { DishRecipeDTO } from "./dish.response.dto";
 import type { DishCategoryOptionDTO } from "./dish.response.dto";
@@ -295,6 +298,20 @@ export async function readDatabaseMealRecipe(
     }
   return aggregateDishRecipes(ids.map((id) => rows.find((d) => d.id === id)!));
 }
+/** Tên món không phân biệt hoa thường phải chưa có trong trường (trừ chính món đang sửa). */
+export function assertDishNameFree(
+  found: { id: string; status: string } | null,
+  id?: string,
+) {
+  if (!found || found.id === id) return;
+  throw new HttpError(
+    409,
+    found.status === "ACTIVE"
+      ? DUPLICATE_DISH_NAME
+      : "Tên món trùng với món đã ngừng dùng. Đặt tên khác.",
+  );
+}
+
 export function createDishRecipeService(
   connect: () => Promise<PrismaClient> = getPrisma,
 ) {
@@ -441,6 +458,10 @@ export function createDishRecipeService(
         principal,
         id ? "menu.update" : "menu.create",
         async (tx, _actor, schoolId) => {
+          assertDishNameFree(
+            await recipes.dishByName(tx, schoolId, input.name),
+            id,
+          );
           let categoryId: string | null | undefined = input.category;
           if (categoryId) {
             const legacy = dishCategoryOptions.find(

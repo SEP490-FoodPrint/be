@@ -1,5 +1,6 @@
 import type { Prisma } from "../../generated/prisma/client";
 import type { DishMealType } from "../../generated/prisma/enums";
+import { HttpError } from "../../utils/http-error";
 type Tx = Prisma.TransactionClient;
 const recipeInclude = {
   gradeRecipes: {
@@ -26,7 +27,27 @@ const recipeInclude = {
     },
   },
 } as const;
+export const DUPLICATE_DISH_NAME = "Tên món đã có. Đặt tên khác.";
+
+/** Hai lần lưu cùng lúc vẫn vướng ràng buộc tên món duy nhất: báo trùng tên thay vì lỗi hệ thống. */
+export function dishWriteError(error: unknown): never {
+  if (
+    error &&
+    typeof error === "object" &&
+    "code" in error &&
+    error.code === "P2002"
+  )
+    throw new HttpError(409, DUPLICATE_DISH_NAME);
+  throw error;
+}
+
 export const dishRecipeRepository = {
+  dishByName(tx: Tx, schoolId: string, name: string) {
+    return tx.dish.findFirst({
+      where: { schoolId, name: { equals: name, mode: "insensitive" } },
+      select: { id: true, status: true },
+    });
+  },
   grades(tx: Tx, schoolId: string, ids: string[]) {
     return tx.schoolGrade.findMany({
       where: { schoolId, id: { in: ids } },
@@ -170,8 +191,15 @@ export const dishRecipeRepository = {
       ...(categoryId !== undefined ? { categoryId, category: null } : {}),
       dishIngredientEntries: { create: lines },
     };
-    return id
-      ? tx.dish.update({ where: { id }, data, include: recipeInclude })
-      : tx.dish.create({ data: { schoolId, ...data }, include: recipeInclude });
+    try {
+      return await (id
+        ? tx.dish.update({ where: { id }, data, include: recipeInclude })
+        : tx.dish.create({
+            data: { schoolId, ...data },
+            include: recipeInclude,
+          }));
+    } catch (error) {
+      dishWriteError(error);
+    }
   },
 };
