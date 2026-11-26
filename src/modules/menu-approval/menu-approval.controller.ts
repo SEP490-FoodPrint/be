@@ -15,11 +15,6 @@ export function createMenuApprovalController(
   service: MenuApprovalService = menuApprovalService,
 ) {
   return {
-    getDetail: asyncHandler(async (req, res) => {
-      const { menuId } = validateMenuApprovalParams(req.params);
-      sendSuccess(res, await service.getDetail(menuId, requirePrincipal(req)));
-    }),
-
     getWeek: asyncHandler(async (req, res) => {
       const query = validateMenuApprovalWeekQuery(req.query);
       sendSuccess(res, await service.getWeek(query, requirePrincipal(req)));

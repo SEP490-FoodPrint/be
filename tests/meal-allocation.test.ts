@@ -577,3 +577,19 @@ void test("empty inactive-only grade menu does not block active grades from allo
   const blocked = projectAllocationDay(data, date, "LUNCH");
   assert.equal(blocked.status, "DEMAND_PENDING");
 });
+
+void test("mẻ theo đợt giao được thừa suất: không báo vượt, lưu mẫu chỉ cần đủ suất đã chốt", () => {
+  const bump = (data: ReturnType<typeof fixture>) => {
+    const batch = data.batches.find((b) => b.id === "b1-main")!;
+    batch.plannedPortions = (batch.plannedPortions ?? 0) + 2;
+    batch.dishes[0].plannedPortions =
+      (batch.dishes[0].plannedPortions ?? 0) + 2;
+    return data;
+  };
+  // Mẻ lập thủ công cũ: thừa suất vẫn phải đối soát.
+  assert.equal(projectAllocationDay(bump(fixture()), date).status, "RECONCILE");
+  // Mẻ theo đợt giao (32 suất, chốt 30 kiểu này): phần thừa để trống, vẫn mở phân bổ.
+  const round = bump(fixture());
+  for (const batch of round.batches) batch.supplyBatchNo = 1;
+  assert.equal(projectAllocationDay(round, date).status, "READY");
+});

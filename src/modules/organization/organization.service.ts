@@ -1070,18 +1070,34 @@ function toPublicDishItem(
         Number(a.role === "SEASONING") - Number(b.role === "SEASONING") ||
         a.name.localeCompare(b.name, "vi"),
     );
-  // portionSize là kích thước suất trình bày đã khai báo; nếu không có,
-  // dùng tổng khối lượng nguyên liệu chính của 1 suất.
-  const portion = mdd.portionSize
-    ? `${formatPublicQuantity(mdd.portionSize)} ${mdd.portionUnit || "suất"}`
-    : (totalMainWeight(recipe.lines) ?? "");
+  // UC 13: khẩu phần một suất = khẩu phần của khối (đơn vị mốc chuẩn của món);
+  // khối chưa có khẩu phần thì dùng mốc chuẩn; chỉ món chưa có mốc chuẩn mới dùng
+  // kích thước suất trình bày hoặc tổng nguyên liệu chính.
+  const gradePortion = gradeId
+    ? mdd.Dish.gradeRecipes.find((row) => row.gradeId === gradeId)
+        ?.portionQuantity
+    : undefined;
+  const standardUnit = mdd.Dish.standardUnit || null;
+  const servingQuantity =
+    standardUnit && (gradePortion ?? mdd.Dish.standardQuantity)
+      ? (gradePortion ?? mdd.Dish.standardQuantity)
+      : null;
+  const portion = servingQuantity
+    ? `${formatPublicQuantity(servingQuantity)} ${standardUnit}`
+    : mdd.portionSize
+      ? `${formatPublicQuantity(mdd.portionSize)} ${mdd.portionUnit || "suất"}`
+      : (totalMainWeight(recipe.lines) ?? "");
 
   return {
     id: mdd.dishId,
     name: mdd.Dish.name,
     portion,
-    portionSize: mdd.portionSize ? Number(mdd.portionSize) : null,
-    portionUnit: mdd.portionUnit || null,
+    portionSize: servingQuantity
+      ? Number(servingQuantity)
+      : mdd.portionSize
+        ? Number(mdd.portionSize)
+        : null,
+    portionUnit: servingQuantity ? standardUnit : mdd.portionUnit || null,
     order: mdd.displayOrder,
     mealType: mdd.mealType,
     description: mdd.Dish.description || null,

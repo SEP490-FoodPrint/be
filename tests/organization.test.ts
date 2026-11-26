@@ -366,6 +366,7 @@ void test("public daily menu resolves per-grade portions, ingredients and allerg
         IngredientEntry: { Ingredient: ing(iid, n) },
       })),
       standardQuantity: dec(opts.standardQuantity ?? "100"),
+      standardUnit: "g",
       gradeRecipes: Object.entries(opts.grade ?? {}).map(
         ([gradeId, portion]) => ({ gradeId, portionQuantity: dec(portion) }),
       ),
@@ -440,7 +441,8 @@ void test("public daily menu resolves per-grade portions, ingredients and allerg
   });
   const mainG2 = g2!.lunch.dishes.find((d) => d.id === "d1")!;
   assert.equal(mainG2.recipeSource, "GRADE");
-  assert.equal(mainG2.portion, "80 g");
+  // Khẩu phần một suất là khẩu phần khối (100 g), không phải tổng nguyên liệu.
+  assert.equal(mainG2.portion, "100 g");
   assert.equal(mainG2.ingredients![0].portion, "80 g");
   assert.equal(mainG2.ingredients![0].supplierName, "NCC A");
 
@@ -451,7 +453,8 @@ void test("public daily menu resolves per-grade portions, ingredients and allerg
   });
   const mainG1 = g1!.lunch.dishes.find((d) => d.id === "d1")!;
   assert.equal(mainG1.recipeSource, "MENU");
-  assert.equal(mainG1.portion, "70 g");
+  // Khối chưa có khẩu phần: dùng mốc chuẩn của món.
+  assert.equal(mainG1.portion, "75 g");
 
   // Món chỉ thuộc nhóm dị ứng là món thay thế, không nằm ở cột chính
   assert.deepEqual(
@@ -460,7 +463,7 @@ void test("public daily menu resolves per-grade portions, ingredients and allerg
   );
   assert.equal(mainG1.alternativeDish?.id, "d3");
   assert.equal(mainG1.alternativeDish?.allergyGroup, "Dị ứng thịt");
-  assert.equal(mainG1.alternativeDish?.portion, "70 g");
+  assert.equal(mainG1.alternativeDish?.portion, "100 g");
   assert.equal(g1!.lunch.dishes[1].alternativeDish, null);
   assert.equal(g1!.lunch.dishes[1].recipeSource, "STANDARD");
 });

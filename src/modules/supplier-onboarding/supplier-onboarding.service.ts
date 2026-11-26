@@ -32,6 +32,7 @@ import {
   lockSupplier,
   supplierOrderRepository,
 } from "./supplier-onboarding.repository";
+import { roundSampleRepository } from "../supply-round/supply-round.repository";
 import { createIntakeAccessRepository } from "../account-lifecycle/intake-access.repository";
 import { createIntakeAccessService } from "../account-lifecycle/intake-access.service";
 import type {
@@ -1095,28 +1096,18 @@ export function createOrderIntakeService(
             `${mismatched.Ingredient.name} không phải ${body.orderType === "DRY_STOCK" ? "Đồ lưu kho" : "Đồ tươi"}.`,
           );
         if (body.orderType === "DIRECT_USE" && body.batchNo === 2) {
-          const notFinalized = await tx.class.findMany({
-            where: {
+          // Mỗi lớp chốt đủ các bữa có thực đơn cho khối (UC 22).
+          const notFinalized = (
+            await roundSampleRepository.attendanceByMeal(
+              tx,
               schoolId,
-              status: "ACTIVE",
-              registeredMealPortions: { gt: 0 },
-              NOT: {
-                dailyMealPortions: {
-                  some: {
-                    mealDate: body.deliveryDate,
-                    mealType: "LUNCH",
-                    status: "FINALIZED",
-                  },
-                },
-              },
-            },
-            select: { name: true },
-            orderBy: { name: "asc" },
-          });
+              body.deliveryDate,
+            )
+          ).pending;
           if (notFinalized.length)
             throw new HttpError(
               409,
-              `Còn ${notFinalized.length} lớp chưa chốt: ${shortList(notFinalized.map((c) => c.name))}`,
+              `Còn ${notFinalized.length} lớp chưa chốt: ${shortList(notFinalized)}`,
             );
           const round2 = await tx.supplyRound.findUnique({
             where: {

@@ -2,6 +2,7 @@ import { addPortion } from "../../utils/portions";
 import { Prisma } from "../../generated/prisma/client";
 import { convertQuantity } from "../../utils/quantity-conversion";
 import { HttpError } from "../../utils/http-error";
+import { summarizeAttendance } from "../../utils/meal-attendance-day";
 import { kitchenDetailSelect } from "../kitchen/kitchen.repository";
 
 type Tx = Prisma.TransactionClient;
@@ -332,31 +333,11 @@ export const supplyRoundRepository = {
       update: { status: "NOT_NEEDED", notNeededAt: at },
     });
   },
-  async actualGradePortions(tx: Tx, schoolId: string, deliveryDate: Date) {
-    const classes = await tx.class.findMany({
-      where: { schoolId, status: "ACTIVE", registeredMealPortions: { gt: 0 } },
-      select: {
-        gradeId: true,
-        dailyMealPortions: {
-          where: {
-            mealDate: deliveryDate,
-            mealType: "LUNCH",
-            status: "FINALIZED",
-          },
-          select: { totalPortions: true },
-        },
-      },
-    });
-    const byGrade = new Map<string, number>();
-    for (const c of classes) {
-      if (!c.gradeId) continue;
-      byGrade.set(
-        c.gradeId,
-        (byGrade.get(c.gradeId) ?? 0) +
-          c.dailyMealPortions.reduce((sum, row) => sum + row.totalPortions, 0),
-      );
-    }
-    return byGrade;
+  /** Suất đã chốt theo bữa → khối (mỗi bữa tính riêng, UC 22). */
+  async actualMealGradePortions(tx: Tx, schoolId: string, deliveryDate: Date) {
+    return (
+      await roundSampleRepository.attendanceByMeal(tx, schoolId, deliveryDate)
+    ).actualByMeal;
   },
   round1BatchesForMealDish(tx: Tx, meal: RoundMeal, dishId: string) {
     return tx.cookingBatch.findMany({
@@ -457,6 +438,7 @@ export const supplyRoundRepository = {
           select: {
             batchCode: true,
             mealType: true,
+            sampleStrategy: true,
             dishes: {
               select: {
                 dishId: true,
@@ -1003,23 +985,51 @@ export const roundSampleRepository = {
     });
   },
   /** Còn lớp đăng ký suất ăn chưa chốt điểm danh bữa trưa của ngày. */
-  attendancePending(tx: Tx, schoolId: string, deliveryDate: Date) {
-    return tx.class.count({
-      where: {
-        schoolId,
-        status: "ACTIVE",
-        registeredMealPortions: { gt: 0 },
-        NOT: {
+  /** Điểm danh của ngày theo từng bữa có thực đơn đã duyệt cho khối của lớp. */
+  async attendanceByMeal(tx: Tx, schoolId: string, deliveryDate: Date) {
+    const [classes, menus] = await Promise.all([
+      tx.class.findMany({
+        where: {
+          schoolId,
+          status: "ACTIVE",
+          registeredMealPortions: { gt: 0 },
+        },
+        orderBy: { name: "asc" },
+        select: {
+          name: true,
+          gradeId: true,
           dailyMealPortions: {
-            some: {
+            where: {
               mealDate: deliveryDate,
-              mealType: "LUNCH",
               status: "FINALIZED",
+              mealType: { in: ["LUNCH", "AFTERNOON"] },
             },
+            select: { mealType: true, totalPortions: true },
           },
         },
-      },
-    });
+      }),
+      tx.weeklyMenu.findMany({
+        where: {
+          schoolId,
+          status: "APPROVED",
+          menuDays: { some: { menuDate: deliveryDate } },
+        },
+        select: {
+          isSchoolWide: true,
+          grades: { select: { gradeId: true } },
+          menuDays: {
+            where: { menuDate: deliveryDate },
+            select: { menuDayDishes: { select: { mealType: true } } },
+          },
+        },
+      }),
+    ]);
+    return summarizeAttendance(classes, menus);
+  },
+  async attendancePending(tx: Tx, schoolId: string, deliveryDate: Date) {
+    return (
+      await roundSampleRepository.attendanceByMeal(tx, schoolId, deliveryDate)
+    ).pending.length;
   },
   cookingMode(tx: Tx, schoolId: string) {
     return tx.school

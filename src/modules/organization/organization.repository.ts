@@ -125,6 +125,7 @@ export const publicMenuDayInclude = {
           schoolCategory: { select: { name: true } },
           // Công thức trong mốc chuẩn của món
           standardQuantity: true,
+          standardUnit: true,
           dishIngredientEntries: {
             select: {
               ...publicRecipeLineSelect,

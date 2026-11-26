@@ -144,12 +144,6 @@ export function createMenuRouter(
     requirePermission("menu.update"),
     controller.reviseAndSubmit,
   );
-  router.get(
-    "/:menuId/approval-detail",
-    authHandler,
-    requirePermission("menu.view"),
-    approvalController.getDetail,
-  );
   router.post(
     "/:menuId/reviews",
     authHandler,

@@ -28,6 +28,7 @@ function toResponse(row: SchoolGradeRow): SchoolGradeResponse {
     id: row.id,
     name: row.name,
     classCount: row._count.classes,
+    menuCount: row._count.weeklyMenus,
   };
 }
 
@@ -53,7 +54,9 @@ export function createSchoolGradeService(
 
   return {
     async list(actor: AuthPrincipal) {
-      requireBoard(actor);
+      // UC-53-1: mọi vai trò trường xem được khối của trường mình; thêm/sửa/xóa chỉ BGH.
+      if (actor.orgType !== ORG_TYPES.SCHOOL || !actor.schoolId)
+        throw new HttpError(403, "Chỉ tài khoản của trường được xem khối học");
       const scope = listScopes["school-grade"](actor);
       return (await repository.list(await connect(), scope)).map(toResponse);
     },
@@ -85,6 +88,8 @@ export function createSchoolGradeService(
             409,
             "Khối còn lớp. Hãy chuyển lớp trước khi xóa.",
           );
+        if (grade._count.weeklyMenus)
+          throw new HttpError(409, "Khối đã có thực đơn, không thể xóa.");
         await repository.remove(tx, schoolId, id);
         return { id };
       });

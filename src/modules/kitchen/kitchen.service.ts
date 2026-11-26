@@ -1906,11 +1906,29 @@ export function createKitchenLifecycle(
         },
         orderBy: { id: "asc" },
       });
+      const round = batch.BatchGroup.supplyRoundId
+        ? await repository.findBatchRoundInfo(db, id)
+        : null;
       return {
         ...dto(batch),
         mealSeasonings: shared.map((row) => ({
           ...row,
           quantityUsed: row.quantityUsed.toString(),
+        })),
+        // UC 22-1: nhãn "Đã cắt mẫu, sẽ bù ở Đợt 2" và dòng "Thừa từ Đợt 1".
+        sampleStrategy: round?.batch.sampleStrategy ?? null,
+        supplyBatchNo: round?.batch.supplyBatchNo ?? null,
+        round2Status: round?.round2Status ?? null,
+        leftovers: (round?.leftovers ?? []).map((row) => ({
+          ingredientName:
+            row.ingredientLot.DeliveryItem.ingredientNameSnapshot ??
+            "Nguyên liệu",
+          source: row.ingredientLot.DeliveryItem.sourceFacilityNameSnapshot,
+          lotCode: row.ingredientLot.lotCode,
+          quantity: row.quantity.toString(),
+          unit: row.unit,
+          released: row.releasedAt !== null,
+          surplus: round?.round2Status === "NOT_NEEDED",
         })),
       };
     },
@@ -1971,7 +1989,10 @@ export function createKitchenLifecycle(
             return completionResult(tx, batch);
           }
           if (batch.status !== "CONFIRMED")
-            throw new HttpError(409, "Phải xác nhận nấu trước khi hoàn thành");
+            throw new HttpError(
+              409,
+              "Mẻ chưa chính thức, chưa thể ghi nhận nấu xong.",
+            );
           await checkMealWindow(tx, batch, schoolId);
           await assertMealPortions(
             tx,

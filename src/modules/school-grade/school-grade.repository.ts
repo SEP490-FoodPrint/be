@@ -3,7 +3,7 @@ import type { Prisma, PrismaClient } from "../../generated/prisma/client";
 const projection = {
   id: true,
   name: true,
-  _count: { select: { classes: true } },
+  _count: { select: { classes: true, weeklyMenus: true } },
 } as const satisfies Prisma.SchoolGradeSelect;
 export type SchoolGradeRow = Prisma.SchoolGradeGetPayload<{
   select: typeof projection;

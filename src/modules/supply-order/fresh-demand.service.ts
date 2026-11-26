@@ -20,6 +20,9 @@ import { getPrisma } from "../../utils/database";
 import { HttpError } from "../../utils/http-error";
 import { scaleDishLines } from "../../utils/dish-portion";
 import { batch2Decision } from "../kitchen/sample-planner";
+// Vòng import với supply-round: chỉ dùng lúc gọi hàm, không dùng khi nạp module.
+import { supplyRoundService } from "../supply-round/supply-round.service";
+import { roundSampleRepository } from "../supply-round/supply-round.repository";
 
 type Tx = Prisma.TransactionClient;
 type MealType = "LUNCH" | "AFTERNOON";
@@ -29,8 +32,16 @@ export type GradePortion = {
   gradeName: string;
   plannedPortions: number;
   batch1Portions: number;
+  /** Đợt 2: sĩ số đã chốt lớn nhất trong các bữa của khối (dùng cho điều kiện thừa suất). */
   actualPortions: number | null;
+  /** Đợt 2: suất cần thêm lớn nhất trong các bữa của khối (chi tiết theo bữa ở `meals`). */
   batchPortions: number;
+  /** Đợt 2: sĩ số đã chốt và suất Đợt 2 riêng từng bữa có thực đơn cho khối (UC 22). */
+  meals?: {
+    mealType: MealType;
+    actualPortions: number;
+    batchPortions: number;
+  }[];
 };
 
 export type DemandDetail = {
@@ -107,8 +118,10 @@ export type CalcInput = {
   savedBatch1: Map<string, number> | null;
   /** Ngày đã có đơn Đợt 1 tạo trước khi có bảng mốc: dùng mốc bù floor(kế hoạch / 2). */
   legacyBatch1?: boolean;
-  /** Suất thực tế đã chốt theo khối (chỉ cần cho Đợt 2). */
+  /** Suất thực tế đã chốt theo khối (chỉ cần cho Đợt 2; dùng khi không có số theo bữa). */
   actual: Map<string, number> | null;
+  /** Suất thực tế đã chốt theo bữa → khối (Đợt 2, mỗi bữa tính riêng). */
+  actualByMeal?: Map<MealType, Map<string, number>> | null;
   menus: {
     id: string;
     title: string | null;
@@ -204,17 +217,35 @@ export function computeFreshDemand(
       errors.push(`${grade.name} chưa có thực đơn đã duyệt cho ngày này`);
   }
 
-  // 2. Số suất của đợt theo khối.
+  // 2. Số suất của đợt theo khối; Đợt 2 tính riêng từng bữa (UC 22, BR-IMD-06).
+  const actualFor = (gradeId: string, mealType: MealType) =>
+    input.actualByMeal?.get(mealType)?.get(gradeId) ??
+    input.actual?.get(gradeId) ??
+    0;
+  const mealPortions = new Map<string, number>();
   const grades: GradePortion[] = activeGrades.map((g) => {
     const planned = input.planned.get(g.id) ?? 0;
     const batch1 = input.savedBatch1?.get(g.id) ?? Math.floor(planned / 2);
     let actual: number | null = null;
     let batchPortions = batch1;
+    let meals: GradePortion["meals"];
     if (input.batchNo === 2) {
       if (!input.savedBatch1?.has(g.id) && !input.legacyBatch1)
         errors.push(`${g.name} chưa có mốc suất Đợt 1 đã lưu`);
-      actual = input.actual?.get(g.id) ?? 0;
-      batchPortions = Math.max(0, actual - batch1);
+      meals = (["LUNCH", "AFTERNOON"] as const)
+        .filter((mealType) => assigned.has(`${g.id}:${mealType}`))
+        .map((mealType) => {
+          const mealActual = actualFor(g.id, mealType);
+          const portions = Math.max(0, mealActual - batch1);
+          mealPortions.set(`${g.id}:${mealType}`, portions);
+          return {
+            mealType,
+            actualPortions: mealActual,
+            batchPortions: portions,
+          };
+        });
+      actual = Math.max(0, ...meals.map((meal) => meal.actualPortions));
+      batchPortions = Math.max(0, ...meals.map((meal) => meal.batchPortions));
     }
     return {
       gradeId: g.id,
@@ -223,6 +254,7 @@ export function computeFreshDemand(
       batch1Portions: batch1,
       actualPortions: actual,
       batchPortions,
+      ...(meals ? { meals } : {}),
     };
   });
 
@@ -259,7 +291,11 @@ export function computeFreshDemand(
             grossFromNet(line.requiredQuantity, line.wasteRate ?? 0).toNumber(),
             factor,
           );
-          const quantity = mul(perPortion, g.batchPortions);
+          const portions =
+            input.batchNo === 2
+              ? (mealPortions.get(`${g.gradeId}:${mealType}`) ?? 0)
+              : g.batchPortions;
+          const quantity = mul(perPortion, portions);
           const item = items.get(line.ingredientEntryId) ?? {
             ingredientEntryId: line.ingredientEntryId,
             ingredientId: line.ingredientId,
@@ -282,7 +318,7 @@ export function computeFreshDemand(
             gradeName: gradeName.get(g.gradeId) ?? g.gradeName,
             quantityPerPortion: line.requiredQuantity,
             recipeUnit: line.unit,
-            portions: g.batchPortions,
+            portions,
             quantity,
           });
           items.set(line.ingredientEntryId, item);
@@ -430,11 +466,6 @@ export async function loadFreshDemand(
         name: true,
         gradeId: true,
         registeredMealPortions: true,
-        // Điểm danh cả ngày: tạm đọc bản ghi LUNCH cho tới khi bỏ meal_type khỏi daily_meal_portions.
-        dailyMealPortions: {
-          where: { mealDate: day, mealType: "LUNCH", status: "FINALIZED" },
-          select: { totalPortions: true },
-        },
       },
     }),
     tx.schoolGrade.findMany({
@@ -499,17 +530,16 @@ export async function loadFreshDemand(
     );
 
   const planned = new Map<string, number>();
-  const actual = new Map<string, number>();
-  const notFinalized: string[] = [];
   for (const c of classes) {
     const g = c.gradeId!;
     planned.set(g, (planned.get(g) ?? 0) + c.registeredMealPortions);
-    if (c.dailyMealPortions.length === 0) notFinalized.push(c.name);
-    actual.set(
-      g,
-      (actual.get(g) ?? 0) + (c.dailyMealPortions[0]?.totalPortions ?? 0),
-    );
   }
+  // Đợt 2: mỗi lớp chốt mọi bữa có thực đơn cho khối; sĩ số tính riêng từng bữa (UC 22).
+  const attendance =
+    batchNo === 2
+      ? await roundSampleRepository.attendanceByMeal(tx, schoolId, day)
+      : null;
+  const notFinalized = attendance?.pending ?? [];
   if (batchNo === 2 && notFinalized.length)
     throw new HttpError(
       409,
@@ -645,7 +675,8 @@ export async function loadFreshDemand(
       ? new Map(saved.map((s) => [s.gradeId, s.portions]))
       : null,
     legacyBatch1,
-    actual: batchNo === 2 ? actual : null,
+    actual: null,
+    actualByMeal: attendance?.actualByMeal ?? null,
     menus: menuInputs,
     recipes,
   });
@@ -688,6 +719,7 @@ export async function loadFreshDemand(
         result.grades,
         menuInputs,
         recipes,
+        attendance?.actualByMeal ?? null,
       ),
     ]);
     result.items = applyCarryOver(
@@ -746,14 +778,17 @@ async function evaluateBatch2DecisionFromLoaded(
   grades: GradePortion[],
   menus: CalcInput["menus"],
   recipes: CalcInput["recipes"],
+  actualByMeal: Map<MealType, Map<string, number>> | null,
 ) {
   const needed = new Map<
     string,
     { ingredientEntryId: string; name: string; unit: string; needed: number }
   >();
   for (const g of grades) {
-    const actualPortions = g.actualPortions ?? 0;
     for (const mealType of ["LUNCH", "AFTERNOON"] as const) {
+      // Mỗi bữa cần đủ cho sĩ số đã chốt của chính bữa đó (UC 22).
+      const actualPortions =
+        actualByMeal?.get(mealType)?.get(g.gradeId) ?? g.actualPortions ?? 0;
       const covering = menus.filter(
         (m) =>
           (m.isSchoolWide || m.gradeIds.includes(g.gradeId)) &&
@@ -846,14 +881,7 @@ export async function evaluateBatch2Skip(
   const [classes, gradeRows, menus, saved] = await Promise.all([
     tx.class.findMany({
       where: { schoolId, status: "ACTIVE", registeredMealPortions: { gt: 0 } },
-      select: {
-        gradeId: true,
-        registeredMealPortions: true,
-        dailyMealPortions: {
-          where: { mealDate: day, mealType: "LUNCH", status: "FINALIZED" },
-          select: { totalPortions: true },
-        },
-      },
+      select: { gradeId: true },
     }),
     tx.schoolGrade.findMany({
       where: { schoolId },
@@ -891,17 +919,14 @@ export async function evaluateBatch2Skip(
       select: { gradeId: true, portions: true },
     }),
   ]);
-  if (!saved.length || classes.some((c) => c.dailyMealPortions.length === 0))
-    return null;
-  const actual = new Map<string, number>();
-  for (const c of classes) {
-    if (!c.gradeId) return null;
-    actual.set(
-      c.gradeId,
-      (actual.get(c.gradeId) ?? 0) +
-        c.dailyMealPortions.reduce((s, p) => s + p.totalPortions, 0),
-    );
-  }
+  if (!saved.length || classes.some((c) => !c.gradeId)) return null;
+  // Mọi lớp chốt đủ các bữa có thực đơn; sĩ số tính riêng từng bữa (UC 22).
+  const attendance = await roundSampleRepository.attendanceByMeal(
+    tx,
+    schoolId,
+    day,
+  );
+  if (attendance.pending.length) return null;
   const savedMap = new Map(saved.map((s) => [s.gradeId, s.portions]));
   const activeGrades = gradeRows.filter((g) => savedMap.has(g.id));
   const menuInputs: CalcInput["menus"] = menus.map((m) => ({
@@ -989,7 +1014,12 @@ export async function evaluateBatch2Skip(
   }
   const grades: GradePortion[] = activeGrades.map((g) => {
     const b1 = savedMap.get(g.id) ?? 0;
-    const act = actual.get(g.id) ?? 0;
+    const act = Math.max(
+      0,
+      ...[...attendance.actualByMeal.values()].map(
+        (byGrade) => byGrade.get(g.id) ?? 0,
+      ),
+    );
     return {
       gradeId: g.id,
       gradeName: g.name,
@@ -1006,6 +1036,7 @@ export async function evaluateBatch2Skip(
     grades,
     menuInputs,
     recipes,
+    attendance.actualByMeal,
   );
 }
 
@@ -1051,6 +1082,13 @@ export async function getFreshDemand(
   if (principal.orgType !== "SCHOOL" || !principal.schoolId)
     throw new HttpError(403, "Tài khoản chưa thuộc phạm vi trường học.");
   const schoolId = principal.schoolId;
+  if (query.batchNo === 2)
+    // Đợt 1 nhận đủ mà bước tự động lập mẻ bị lỗi: chạy lại trước khi tính Đợt 2.
+    await supplyRoundService.ensureRound1Planned(
+      schoolId,
+      new Date(`${query.date}T00:00:00.000Z`),
+      principal.id,
+    );
   const db = await databaseOperation(getPrisma);
   return authorizationTransaction(db, (tx) =>
     loadFreshDemand(tx, schoolId, query.date, query.batchNo),

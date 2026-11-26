@@ -264,13 +264,21 @@ void test("supplier-school requires INGREDIENT_SUPPLIER_ADMIN, valid SUPPLIER me
     assert.throws(() => listScopes["supplier-school"](denied), status(403));
   }
 });
-void test("school grade service requires BGH even when SYSTEM has class.manage", async () => {
+void test("school grades: SYSTEM cannot list, school roles list only their school", async () => {
   const service = createSchoolGradeService(() =>
     Promise.reject(new Error("Unexpected database access")),
   );
   const actor = { ...testAdmin, permissions: ["class.manage"] };
   assert.deepEqual(listScopes["school-grade"](actor), {});
   await assert.rejects(service.list(actor), status(403));
+  const kitchen = { ...testStaff, permissions: ["menu.view"] };
+  assert.deepEqual(listScopes["school-grade"](kitchen), {
+    schoolId: kitchen.schoolId,
+  });
+  await assert.rejects(
+    service.create(kitchen, { name: "Khối 1" }),
+    status(403),
+  );
 });
 
 void test("bootstrap System Admin grants allow directory children and preserve permission checks", () => {

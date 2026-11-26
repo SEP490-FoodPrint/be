@@ -7,6 +7,7 @@ import {
   type CalcInput,
 } from "../src/modules/supply-order/fresh-demand.service";
 import { HttpError } from "../src/utils/http-error";
+import { summarizeAttendance } from "../src/utils/meal-attendance-day";
 
 const G1 = "g1";
 const G2 = "g2";
@@ -257,4 +258,84 @@ void test("Đợt 2 cộng phần lẻ Đợt 1 vào lượng đặt", () => {
   const onion = items.find((i) => i.ingredientEntryId === "onion")!;
   assert.equal(onion.quantity, 0);
   assert.equal(onion.orderQuantity, 0.2);
+});
+
+void test("Đợt 2 tính riêng từng bữa: trưa 58, xế 60 trên mốc Đợt 1 là 50", () => {
+  const r = computeFreshDemand(
+    base({
+      batchNo: 2,
+      savedBatch1: new Map([
+        [G1, 50],
+        [G2, 40],
+      ]),
+      actualByMeal: new Map([
+        [
+          "LUNCH",
+          new Map([
+            [G1, 58],
+            [G2, 40],
+          ]),
+        ],
+        [
+          "AFTERNOON",
+          new Map([
+            [G1, 60],
+            [G2, 40],
+          ]),
+        ],
+      ]),
+    }),
+  );
+  const k1 = r.grades.find((g) => g.gradeId === G1)!;
+  assert.deepEqual(k1.meals, [
+    { mealType: "LUNCH", actualPortions: 58, batchPortions: 8 },
+    { mealType: "AFTERNOON", actualPortions: 60, batchPortions: 10 },
+  ]);
+  assert.equal(k1.actualPortions, 60);
+  // Gà chỉ ở bữa trưa: 8 suất × 50 g; nấm: trưa 8 × 20 g + xế 10 × 10 g.
+  assert.equal(qty(r, "chicken"), 0.4);
+  assert.equal(qty(r, "mushroom"), 0.26);
+});
+
+void test("Điểm danh theo bữa: lớp phải chốt mọi bữa có thực đơn cho khối", () => {
+  const summary = summarizeAttendance(
+    [
+      {
+        name: "1A",
+        gradeId: G1,
+        dailyMealPortions: [
+          { mealType: "LUNCH", totalPortions: 30 },
+          { mealType: "AFTERNOON", totalPortions: 31 },
+        ],
+      },
+      {
+        name: "1B",
+        gradeId: G1,
+        dailyMealPortions: [{ mealType: "LUNCH", totalPortions: 28 }],
+      },
+      {
+        name: "2A",
+        gradeId: G2,
+        dailyMealPortions: [{ mealType: "LUNCH", totalPortions: 25 }],
+      },
+    ],
+    [
+      {
+        isSchoolWide: false,
+        grades: [{ gradeId: G1 }],
+        menuDays: [
+          { menuDayDishes: [{ mealType: "LUNCH" }, { mealType: "AFTERNOON" }] },
+        ],
+      },
+      {
+        isSchoolWide: false,
+        grades: [{ gradeId: G2 }],
+        menuDays: [{ menuDayDishes: [{ mealType: "LUNCH" }] }],
+      },
+    ],
+  );
+  assert.deepEqual(summary.pending, ["1B"]);
+  assert.equal(summary.actualByMeal.get("LUNCH")!.get(G1), 58);
+  assert.equal(summary.actualByMeal.get("AFTERNOON")!.get(G1), 31);
+  assert.equal(summary.actualByMeal.get("AFTERNOON")!.has(G2), false);
 });

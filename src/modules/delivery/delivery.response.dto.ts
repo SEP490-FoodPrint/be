@@ -1,5 +1,6 @@
 import type {
   ApprovalDecision,
+  DeliveryPreparationStage,
   DeliveryStatus,
   IngredientLotStatus,
 } from "../../generated/prisma/enums";
@@ -125,6 +126,8 @@ export interface DeliveryListItemDTO {
   supplierName: string | null;
   supplierPhone?: string | null;
   status: DeliveryStatus;
+  /** Đợt 2 nấu riêng: giai đoạn chuẩn bị của chuyến (UC 23); null với chuyến khác. */
+  preparationStage: DeliveryPreparationStage | null;
   vehiclePlate: string | null;
   expectedArrivalAt: string | null;
   arrivedAt: string | null;
