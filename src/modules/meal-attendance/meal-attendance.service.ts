@@ -14,7 +14,11 @@ import type {
   DailyMealPortionInput,
 } from "./meal-attendance.validation";
 import { assertPortionGroupSafety } from "../kitchen/kitchen.service";
-import { supplyRoundService } from "../supply-round/supply-round.service";
+import { roundSampleRepository } from "../supply-round/supply-round.repository";
+import {
+  logSupplyRoundHookFailure,
+  supplyRoundService,
+} from "../supply-round/supply-round.service";
 import {
   allergyCountsFromGroups,
   expectedSpecialGroupCounts,
@@ -486,22 +490,12 @@ export function createMealAttendanceService(
             now,
           );
           await autoSplitPortionGroups(tx, id, actor.id, actor.schoolId!);
-          const pending = await tx.class.count({
-            where: {
-              schoolId: actor.schoolId!,
-              status: "ACTIVE",
-              registeredMealPortions: { gt: 0 },
-              NOT: {
-                dailyMealPortions: {
-                  some: {
-                    mealDate: demand.mealDate,
-                    mealType: "LUNCH",
-                    status: "FINALIZED",
-                  },
-                },
-              },
-            },
-          });
+          // Ngày chốt xong khi mọi lớp chốt đủ các bữa có thực đơn cho khối (UC 22).
+          const pending = await roundSampleRepository.attendancePending(
+            tx,
+            actor.schoolId!,
+            demand.mealDate,
+          );
           if (pending === 0)
             dayFinalized = {
               schoolId: actor.schoolId!,
@@ -516,9 +510,7 @@ export function createMealAttendanceService(
         try {
           await supplyRoundService.afterDayProgress(dayFinalized);
         } catch (error) {
-          console.warn("Supply round hook could not process attendance", {
-            name: error instanceof Error ? error.name : "unknown",
-          });
+          logSupplyRoundHookFailure("attendance", dayFinalized, error);
         }
       }
       return result;

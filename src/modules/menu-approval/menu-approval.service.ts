@@ -1,10 +1,7 @@
 import { ROLES } from "../../constants/roles";
 import { notifyMenuDecision } from "../menu-notification/menu-notification.service";
 import type { AuthPrincipal } from "../../types/auth";
-import {
-  assertPermission,
-  withSchoolTransaction,
-} from "../../utils/authorization";
+import { withSchoolTransaction } from "../../utils/authorization";
 import { HttpError } from "../../utils/http-error";
 import { listScopes } from "../../utils/resource-access";
 import {
@@ -26,7 +23,6 @@ import {
   menuApprovalRepository,
   type ApprovalDecisionRow,
   type ApprovalDetailRow,
-  type FinalizedPortionRow,
   type MenuApprovalRepository,
   type SubmittedWeekRow,
 } from "./menu-approval.repository";
@@ -73,32 +69,16 @@ function requireBoardSchool(principal: AuthPrincipal): string {
 
 const NUTRITION_ROLE_LABEL = "Nhân viên Dinh dưỡng";
 
-/** Số suất một ngày = bữa đông nhất (không cộng trưa + chiều). */
-function portionsByDate(
-  rows: FinalizedPortionRow[],
-): ReadonlyMap<string, number> {
-  const result = new Map<string, number>();
-  for (const row of rows) {
-    const key = row.mealDate.toISOString().slice(0, 10);
-    result.set(key, Math.max(result.get(key) ?? 0, row.totalPortions));
-  }
-  return result;
-}
-
 function mapDetail(
   menu: ApprovalDetailRow,
-  finalizedPortions: FinalizedPortionRow[],
+  registeredPortions: number,
 ): MenuApprovalDetailResponseDTO {
-  const healthReview = menu.menuReviewRecords.find(
-    (review) => review.User.Role.code === ROLES.SCHOOL_NUTRITION_OFFICER,
-  );
   const boardReview =
     menu.status === "PENDING_APPROVAL"
       ? undefined
       : menu.menuReviewRecords.find(
           (review) => review.User.Role.code === ROLES.SCHOOL_MANAGEMENT_BOARD,
         );
-  const portions = portionsByDate(finalizedPortions);
   const days = menu.menuDays.map((day) => {
     const placements = day.menuDayDishes.map((placement) => ({
       mealType: placement.mealType,
@@ -119,7 +99,8 @@ function mapDetail(
       id: day.id,
       shortLabel: dayLabels[day.menuDate.getUTCDay()] ?? "",
       date: formatDate(day.menuDate),
-      portions: portions.get(day.menuDate.toISOString().slice(0, 10)) ?? 0,
+      // Số suất lớp đăng ký ăn bán trú (không phải số GVCN điểm danh trong ngày).
+      portions: registeredPortions,
       lunch: placements
         .filter((placement) => placement.mealType === "LUNCH")
         .map((placement) => placement.item),
@@ -154,28 +135,13 @@ function mapDetail(
       audience:
         menu.grades?.map((grade) => grade.grade.name).join(", ") ||
         "Toàn trường",
-      audienceDetail: "Số suất ăn được xác định theo kế hoạch phục vụ",
+      audienceDetail: "Số suất là tổng suất các lớp đăng ký ăn bán trú",
       servingPeriod: `${formatDate(firstDate)} - ${formatDate(lastDate)}`,
       proposer: menu.User?.fullName ?? NUTRITION_ROLE_LABEL,
       proposerDetail: `${NUTRITION_ROLE_LABEL} · ${menu.School.name}`,
       supplier: `${supplierIds.size} nhà cung cấp`,
     },
-    compliance: [],
     days,
-    medicalReview: {
-      status:
-        healthReview?.decision === "APPROVED"
-          ? "Đã thẩm định"
-          : healthReview
-            ? "Yêu cầu điều chỉnh"
-            : "Chưa thẩm định",
-      isApproved: healthReview?.decision === "APPROVED",
-      reviewer: healthReview?.User.fullName ?? "Chưa phân công",
-      role: NUTRITION_ROLE_LABEL,
-      reviewedAt: formatDateTime(healthReview?.reviewedAt ?? null) ?? "—",
-      note: healthReview?.feedback ?? "Chưa có nhận xét thẩm định.",
-      documents: [],
-    },
     approval: {
       approver: boardReview?.User.fullName ?? null,
       role: "Ban Giám hiệu",
@@ -267,24 +233,6 @@ export function createMenuApprovalService(
     : null,
 ) {
   return {
-    async getDetail(
-      id: string,
-      principal: AuthPrincipal,
-    ): Promise<MenuApprovalDetailResponseDTO> {
-      assertPermission(principal, "menu.view");
-      const schoolId = requireBoardSchool(principal);
-      const menu = await repository.findDetail(id, schoolId);
-      if (!menu) {
-        throw new HttpError(404, "Không tìm thấy thực đơn của trường");
-      }
-      const portions = await repository.findFinalizedPortions(
-        menu.menuDays.map((day) => day.menuDate),
-        schoolId,
-        menu.grades?.map((grade) => grade.gradeId) ?? [],
-      );
-      return mapDetail(menu, portions);
-    },
-
     /** Chi tiết mọi thực đơn đã gửi của một tuần trong một lần gọi. */
     async getWeek(
       query: MenuApprovalWeekQueryRequestDTO,
@@ -317,10 +265,11 @@ export function createMenuApprovalService(
         rows.map(async (row) =>
           mapDetail(
             row,
-            await repository.findFinalizedPortions(
-              row.menuDays.map((day) => day.menuDate),
+            await repository.findRegisteredPortions(
               schoolId,
-              row.grades?.map((grade) => grade.gradeId) ?? [],
+              row.isSchoolWide
+                ? []
+                : (row.grades?.map((grade) => grade.gradeId) ?? []),
             ),
           ),
         ),

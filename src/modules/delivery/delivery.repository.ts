@@ -26,6 +26,7 @@ export const deliveryListSelect = {
   supplierId: true,
   creationMode: true,
   status: true,
+  preparationStage: true,
   expectedArrivalAt: true,
   arrivedAt: true,
   receivedAt: true,

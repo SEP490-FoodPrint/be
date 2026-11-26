@@ -415,8 +415,28 @@ function draftService(
   notFinalized: { name: string }[],
 ) {
   const schoolActor = { ...testStaff, permissions: ["supply_request.create"] };
+  // Lớp chưa chốt: thiếu bản chốt của bữa có thực đơn (thực đơn toàn trường bữa trưa).
   const tx = {
-    class: { findMany: () => Promise.resolve(notFinalized) },
+    class: {
+      findMany: () =>
+        Promise.resolve(
+          notFinalized.map((row) => ({
+            ...row,
+            gradeId: null,
+            dailyMealPortions: [],
+          })),
+        ),
+    },
+    weeklyMenu: {
+      findMany: () =>
+        Promise.resolve([
+          {
+            isSchoolWide: true,
+            grades: [],
+            menuDays: [{ menuDayDishes: [{ mealType: "LUNCH" }] }],
+          },
+        ]),
+    },
   } as unknown as Prisma.TransactionClient;
   let created: Record<string, unknown> | undefined;
   const service = createOrderIntakeService({

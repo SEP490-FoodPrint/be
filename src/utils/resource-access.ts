@@ -82,7 +82,8 @@ export const RESOURCE_PERMISSIONS = {
   authority: ["authority.view", "food_safety_report.view"],
   "authority-school": ["authority_school.view"],
   class: ["class.view"],
-  "school-grade": ["class.manage"],
+  // Xem khối: mọi vai trò trường cần chọn khối (thực đơn, lớp, phân bổ); sửa vẫn chỉ BGH (class.manage).
+  "school-grade": ["class.manage", "class.view", "menu.view"],
   "source-facility": ["source_facility.manage"],
   "supplier-certification": ["supplier_certification.view"],
   registration: ["registration.view"],
@@ -326,9 +327,8 @@ export const listScopes = {
   "school-grade": (p: AuthPrincipal): Prisma.SchoolGradeWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["school-grade"]);
     if (p.orgType === "SYSTEM") return {};
-    if (p.orgType === "SCHOOL" && p.role === ROLES.SCHOOL_MANAGEMENT_BOARD)
-      return { schoolId: school(p) };
-    throw new HttpError(403, "Chỉ Ban Giám hiệu được xem khối học");
+    if (p.orgType === "SCHOOL") return { schoolId: school(p) };
+    throw new HttpError(403, "Chỉ tài khoản của trường được xem khối học");
   },
   class: (p: AuthPrincipal): Prisma.ClassWhereInput => {
     assertPermission(p, ...RESOURCE_PERMISSIONS["class"]);

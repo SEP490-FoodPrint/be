@@ -64,7 +64,10 @@ const consumerKey = (meal: RoundMeal, dishId: string) =>
 
 interface DemandContext {
   gradePortions: { gradeId: string; portions: number }[];
-  actualByGrade: Map<string, number> | null;
+  /** Suất đã chốt theo bữa → khối (Đợt 2, hoặc ngày không đồ tươi); mỗi bữa tính riêng. */
+  actualByMeal: Map<RoundMeal["mealType"], Map<string, number>> | null;
+  /** Ngày không đồ tươi (V34): một đợt duy nhất theo sĩ số thực tế của từng bữa. */
+  actualOnly?: boolean;
   /**
    * Trọng số chia lô (V27) theo nguyên liệu → người dùng (món × bữa): suất × định lượng sống.
    * Đợt 2 cộng thêm phần còn thiếu thực tế sau Đợt 1 (bù làm tròn + bù mẫu đã cắt) của từng người dùng.
@@ -101,18 +104,24 @@ type PlanMenu = NonNullable<
 function mealPortions(
   batchNo: number,
   menu: PlanMenu,
-  context: Pick<DemandContext, "gradePortions" | "actualByGrade">,
+  context: Pick<DemandContext, "gradePortions" | "actualByMeal" | "actualOnly">,
+  mealType: RoundMeal["mealType"],
 ) {
   const gradeIds = new Set(
     menu.WeeklyMenu?.grades.map(({ gradeId }) => gradeId),
   );
+  const covers = (gradeId: string) =>
+    Boolean(menu.WeeklyMenu?.isSchoolWide || gradeIds.has(gradeId));
+  const actual = context.actualByMeal?.get(mealType) ?? null;
+  if (context.actualOnly)
+    return [...(actual ?? new Map<string, number>())].reduce(
+      (sum, [gradeId, portions]) => (covers(gradeId) ? sum + portions : sum),
+      0,
+    );
   return context.gradePortions.reduce((sum, row) => {
-    if (!(menu.WeeklyMenu?.isSchoolWide || gradeIds.has(row.gradeId)))
-      return sum;
-    if (batchNo === 2 && context.actualByGrade) {
-      const actual = context.actualByGrade.get(row.gradeId) ?? 0;
-      return sum + Math.max(0, actual - row.portions);
-    }
+    if (!covers(row.gradeId)) return sum;
+    if (batchNo === 2 && actual)
+      return sum + Math.max(0, (actual.get(row.gradeId) ?? 0) - row.portions);
     return sum + row.portions;
   }, 0);
 }
@@ -148,19 +157,19 @@ async function demandContext(
   schoolId: string,
   useActual = false,
 ): Promise<DemandContext> {
-  const actual =
+  const actualByMeal =
     round.batchNo === 2 || useActual
-      ? await repository.actualGradePortions(tx, schoolId, round.deliveryDate)
+      ? await repository.actualMealGradePortions(
+          tx,
+          schoolId,
+          round.deliveryDate,
+        )
       : null;
-  // Ngày không đồ tươi (V34): một đợt duy nhất theo sĩ số thực tế.
+  // Ngày không đồ tươi (V34): một đợt duy nhất theo sĩ số thực tế của từng bữa.
   const gradePortions = useActual
-    ? [...(actual ?? new Map<string, number>())].map(([gradeId, portions]) => ({
-        gradeId,
-        portions,
-      }))
+    ? []
     : await repository.gradePortions(tx, round);
-  const actualByGrade = round.batchNo === 2 ? actual : null;
-  const context = { gradePortions, actualByGrade };
+  const context = { gradePortions, actualByMeal, actualOnly: useActual };
   const occurrences = await repository.occurrences(tx, round);
   const round1 =
     round.batchNo === 2
@@ -186,9 +195,14 @@ async function demandContext(
       schoolId,
     );
     if (!menu) continue;
-    const portions = mealPortions(round.batchNo, menu, context);
+    const portions = mealPortions(round.batchNo, menu, context, meal.mealType);
     const round1Portions = round1
-      ? mealPortions(1, menu, { gradePortions, actualByGrade: null })
+      ? mealPortions(
+          1,
+          menu,
+          { gradePortions, actualByMeal: null },
+          meal.mealType,
+        )
       : 0;
     const shared = new Set(
       menu.mealSeasonings.map(({ ingredientEntryId }) => ingredientEntryId),
@@ -736,7 +750,7 @@ export async function planRoundDish(
       dish.Dish.status !== "ACTIVE"
     )
       throw new HttpError(409, "Món không còn trong thực đơn đã duyệt");
-    const portions = mealPortions(round.batchNo, menu, context);
+    const portions = mealPortions(round.batchNo, menu, context, meal.mealType);
     if (!portions) continue;
     if (round.batchNo === 1) {
       const previous = await kitchenRepository.listMealBatches(tx, meal);
@@ -848,7 +862,7 @@ export async function planRoundDish(
 
   const round1Context =
     round.batchNo === 2
-      ? { gradePortions: context.gradePortions, actualByGrade: null }
+      ? { gradePortions: context.gradePortions, actualByMeal: null }
       : null;
   for (const plan of plans) {
     const key = consumerKey(plan.meal, plan.dishId);
@@ -870,7 +884,8 @@ export async function planRoundDish(
         plan.meal,
         schoolId,
         deliveryDate,
-        mealPortions(1, plan.menu, round1Context!) + plan.portions,
+        mealPortions(1, plan.menu, round1Context!, plan.meal.mealType) +
+          plan.portions,
         mode,
       );
 

@@ -500,7 +500,14 @@ export function projectAllocationDay(
           sampled: cover(stats.sampled),
         };
       });
+      // UC 23-1: mẻ theo đợt giao được phép thừa suất (làm tròn nguyên liệu, lưu mẫu);
+      // phần thừa để trống, mỗi lớp vẫn nhận đúng số đã chốt.
+      const surplusAllowed = rawBatches.some(
+        (batch) =>
+          batch.supplyBatchNo !== null && batch.supplyBatchNo !== undefined,
+      );
       if (
+        !surplusAllowed &&
         [...portionsByDish.values()].some((row) => row.planned > finalized) &&
         !demandPending
       )
@@ -519,6 +526,7 @@ export function projectAllocationDay(
         {
           mealType,
           finalized,
+          surplusAllowed,
           plannedCoverage: planned,
           sampledCoverage,
           planned: minimum("planned"),
@@ -615,7 +623,11 @@ export function projectAllocationDay(
       "Chưa có đủ số suất giáo viên đã chốt.",
       "RETRY",
     );
-  if (menuStats.some((meal) => meal.plannedCoverage > meal.finalized))
+  if (
+    menuStats.some(
+      (meal) => !meal.surplusAllowed && meal.plannedCoverage > meal.finalized,
+    )
+  )
     return locked(
       "RECONCILE",
       "Số suất của lô vượt số suất giáo viên đã chốt.",
@@ -632,7 +644,11 @@ export function projectAllocationDay(
     );
   if (
     missingSampleBatches ||
-    menuStats.some((meal) => meal.sampledCoverage !== meal.finalized)
+    menuStats.some((meal) =>
+      meal.surplusAllowed
+        ? meal.sampledCoverage < meal.finalized
+        : meal.sampledCoverage !== meal.finalized,
+    )
   )
     return locked(
       "SAMPLES_PENDING",

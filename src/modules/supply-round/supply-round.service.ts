@@ -125,10 +125,12 @@ async function refreshStages(
     const plans = await repository.plans(tx, round.id);
     const statusFor = new Map(plans.map((plan) => [plan.dishId, plan.status]));
     const roundSamples = await repository.batchSamples(tx, round.id);
+    // Chỉ mẻ lấy thêm làm chuyến chờ NCC xác nhận; mẻ cắt mẫu không cần NCC mang thêm
+    // (cùng điều kiện với danh sách lô lấy thêm của NCC).
     const topUpDeliveries = new Set(
-      roundSamples.map(
-        (sample) => sample.IngredientLot.DeliveryItem.Delivery.id,
-      ),
+      roundSamples
+        .filter((sample) => sample.CookingBatch.sampleStrategy !== "CUT")
+        .map((sample) => sample.IngredientLot.DeliveryItem.Delivery.id),
     );
     for (const request of requests) {
       const delivery = request.deliveries[0];
@@ -307,6 +309,20 @@ async function reconcile(key: RoundKey, actorId: string, forced?: RoundPhase) {
       const round = await repository.findById(tx, key.schoolId, queue.roundId);
       if (round) await afterRound1Planned(tx, round, queue.phase);
     }, transactionOptions);
+}
+
+/** Ghi log có ngữ cảnh khi bước tự động của đợt giao lỗi (gọi sau commit nên không chặn thao tác gốc). */
+export function logSupplyRoundHookFailure(
+  hook: string,
+  key: { schoolId: string; deliveryDate: Date },
+  error: unknown,
+) {
+  console.warn(`Supply round hook failed (${hook})`, {
+    schoolId: key.schoolId,
+    deliveryDate: key.deliveryDate.toISOString().slice(0, 10),
+    name: error instanceof Error ? error.name : "unknown",
+    message: error instanceof Error ? error.message : String(error),
+  });
 }
 
 /** Mọi chuyến của các đơn đồ tươi trong đợt đã nhận (có ít nhất một đơn). */
@@ -1008,12 +1024,48 @@ export const supplyRoundService = {
       cancelWaitingBatches,
     );
   },
+  /**
+   * Đợt 1 đã nhận đủ hàng mà chưa từng lập mẻ (bước tự động sau nhận hàng bị lỗi):
+   * chạy lại bước tự động (idempotent) khi Kho mở kế hoạch mẻ hoặc tạo đơn Đợt 2.
+   */
+  async ensureRound1Planned(
+    schoolId: string,
+    deliveryDate: Date,
+    actorId: string,
+  ) {
+    const first = { schoolId, deliveryDate, batchNo: 1 };
+    const database = await getPrisma();
+    const due = await database.$transaction(async (tx) => {
+      const round1 = await repository.findByKey(tx, first);
+      if (round1 && round1.status !== "COLLECTING") return false;
+      return allReceived(await repository.requests(tx, first));
+    }, transactionOptions);
+    if (!due) return;
+    try {
+      await supplyRoundService.afterDayProgress({
+        schoolId,
+        deliveryDate,
+        actorId,
+      });
+    } catch (error) {
+      logSupplyRoundHookFailure("ensure-round1", first, error);
+      throw new HttpError(
+        409,
+        "Đợt 1 đã nhận đủ hàng nhưng hệ thống chưa lập được mẻ. Tải lại trang; nếu vẫn lỗi, liên hệ quản trị.",
+      );
+    }
+  },
   async get(query: RoundQueryDTO, principal: AuthPrincipal) {
     const key = {
       schoolId: schoolScope(principal, VIEW),
       deliveryDate: query.date,
       batchNo: query.batchNo,
     };
+    await supplyRoundService.ensureRound1Planned(
+      key.schoolId,
+      key.deliveryDate,
+      principal.id,
+    );
     const db = await getPrisma();
     return db.$transaction((tx) => view(tx, key));
   },
@@ -1067,9 +1119,10 @@ export const supplyRoundService = {
         if (!round) throw new HttpError(404, "Không tìm thấy đợt giao");
         await repository.lock(tx, round);
         const current = await repository.findById(tx, schoolId, params.id);
+        // Chỉ Đợt 2 có món chờ kho duyệt; Đợt 1 được hệ thống duyệt luôn khi lập mẻ (V12).
         if (
           !current ||
-          ![1, 2].includes(current.batchNo) ||
+          current.batchNo !== 2 ||
           current.status === "CLOSED" ||
           current.status === "NOT_NEEDED"
         )
@@ -1084,27 +1137,13 @@ export const supplyRoundService = {
           plan.planVersion !== input.planVersion
         )
           throw new HttpError(409, "Kế hoạch đã thay đổi");
-        if (current.batchNo === 2) {
-          await repository.approveParts(
-            tx,
-            current.id,
-            params.dishId,
-            actor.id,
-          );
-          await repository.approveBatches(
-            tx,
-            current.id,
-            params.dishId,
-            "ROUND2_APPROVED",
-          );
-        } else {
-          await repository.approveBatches(
-            tx,
-            current.id,
-            params.dishId,
-            "ROUND1_APPROVED",
-          );
-        }
+        await repository.approveParts(tx, current.id, params.dishId, actor.id);
+        await repository.approveBatches(
+          tx,
+          current.id,
+          params.dishId,
+          "ROUND2_APPROVED",
+        );
         await repository.updatePlan(tx, current.id, params.dishId, {
           status: "APPROVED",
           approvedAt: new Date(),

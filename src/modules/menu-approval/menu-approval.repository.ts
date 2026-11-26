@@ -69,12 +69,6 @@ export type ApprovalDecisionRow = Prisma.WeeklyMenuGetPayload<{
   include: typeof approvalDecisionInclude;
 }>;
 
-export interface FinalizedPortionRow {
-  mealDate: Date;
-  mealType: "LUNCH" | "AFTERNOON";
-  totalPortions: number;
-}
-
 export interface SubmittedWeekRow {
   weekStartDate: Date;
   status: "DRAFT" | "PENDING_APPROVAL" | "REVISION_REQUIRED" | "APPROVED";
@@ -89,7 +83,6 @@ export interface MenuApprovalRepository {
     tx: TransactionClient,
     schoolId: string,
   ): Promise<MenuCalendarYear[]>;
-  findDetail(id: string, schoolId: string): Promise<ApprovalDetailRow | null>;
   /** Mọi thực đơn đã gửi (khác DRAFT) của một tuần. */
   findWeekDetails(
     scope: Prisma.WeeklyMenuWhereInput,
@@ -99,11 +92,14 @@ export interface MenuApprovalRepository {
   listSubmittedWeeks(
     scope: Prisma.WeeklyMenuWhereInput,
   ): Promise<SubmittedWeekRow[]>;
-  findFinalizedPortions(
-    dates: Date[],
+  /**
+   * Số suất lớp đăng ký ăn bán trú (UC-19-1): tổng `registeredMealPortions`
+   * của lớp đang hoạt động, lọc theo khối khi thực đơn áp cho khối.
+   */
+  findRegisteredPortions(
     schoolId: string,
     gradeIds?: string[],
-  ): Promise<FinalizedPortionRow[]>;
+  ): Promise<number>;
   findForDecision(
     tx: TransactionClient,
     id: string,
@@ -147,14 +143,6 @@ export function createMenuApprovalRepository(
       });
     },
 
-    async findDetail(id, schoolId) {
-      const prisma = await getClient();
-      return prisma.weeklyMenu.findFirst({
-        where: { id, schoolId },
-        include: approvalDetailInclude,
-      });
-    },
-
     async findWeekDetails(scope, weekStartDate) {
       const prisma = await getClient();
       return prisma.weeklyMenu.findMany({
@@ -180,26 +168,17 @@ export function createMenuApprovalRepository(
       }));
     },
 
-    async findFinalizedPortions(dates, schoolId, gradeIds = []) {
-      if (!dates.length) return [];
+    async findRegisteredPortions(schoolId, gradeIds = []) {
       const prisma = await getClient();
-      const rows = await prisma.dailyMealPortion.groupBy({
-        by: ["mealDate", "mealType"],
+      const result = await prisma.class.aggregate({
         where: {
-          mealDate: { in: dates },
-          status: "FINALIZED",
-          Class: {
-            schoolId,
-            ...(gradeIds.length ? { gradeId: { in: gradeIds } } : {}),
-          },
+          schoolId,
+          status: "ACTIVE",
+          ...(gradeIds.length ? { gradeId: { in: gradeIds } } : {}),
         },
-        _sum: { totalPortions: true },
+        _sum: { registeredMealPortions: true },
       });
-      return rows.map((row) => ({
-        mealDate: row.mealDate,
-        mealType: row.mealType,
-        totalPortions: row._sum.totalPortions ?? 0,
-      }));
+      return result._sum.registeredMealPortions ?? 0;
     },
 
     findForDecision(tx, id, schoolId) {

@@ -4764,6 +4764,7 @@ void test("authorization with real PostgreSQL, scoped HTTP APIs and concurrent a
         refreshTokens.push(session.refreshToken);
       }
       assert.equal((await request(route, system.id)).status, 403);
+      // Quản trị trường không có class.view / menu.view nên không xem khối.
       assert.equal((await request(route, adminA.id)).status, 403);
       const data = { name: "  Khối 5  " };
       const response = await request(route, board.id, "POST", data);

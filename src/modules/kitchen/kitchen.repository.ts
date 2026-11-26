@@ -259,6 +259,73 @@ function kitchenFilterWhere(
 }
 
 export const kitchenRepository = {
+  /**
+   * Thông tin đợt giao của mẻ (UC 22-1): cách lấy mẫu, trạng thái Đợt 2 của ngày
+   * và phần thừa Đợt 1 của cùng bữa – món.
+   */
+  async findBatchRoundInfo(db: Tx, batchId: string) {
+    const batch = await db.cookingBatch.findUnique({
+      where: { id: batchId },
+      select: {
+        sampleStrategy: true,
+        supplyBatchNo: true,
+        menuDayId: true,
+        mealType: true,
+        dishId: true,
+        BatchGroup: {
+          select: {
+            SupplyRound: { select: { schoolId: true, deliveryDate: true } },
+          },
+        },
+      },
+    });
+    const round = batch?.BatchGroup.SupplyRound;
+    if (!batch || !round) return null;
+    const [round2, leftovers] = await Promise.all([
+      db.supplyRound.findUnique({
+        where: {
+          schoolId_deliveryDate_batchNo: {
+            schoolId: round.schoolId,
+            deliveryDate: round.deliveryDate,
+            batchNo: 2,
+          },
+        },
+        select: { status: true },
+      }),
+      batch.dishId
+        ? db.supplyRoundLeftover.findMany({
+            where: {
+              menuDayId: batch.menuDayId,
+              mealType: batch.mealType,
+              dishId: batch.dishId,
+              supplyRound: {
+                schoolId: round.schoolId,
+                deliveryDate: round.deliveryDate,
+                batchNo: 1,
+              },
+            },
+            orderBy: { id: "asc" },
+            select: {
+              quantity: true,
+              unit: true,
+              releasedAt: true,
+              ingredientLot: {
+                select: {
+                  lotCode: true,
+                  DeliveryItem: {
+                    select: {
+                      ingredientNameSnapshot: true,
+                      sourceFacilityNameSnapshot: true,
+                    },
+                  },
+                },
+              },
+            },
+          })
+        : Promise.resolve([]),
+    ]);
+    return { batch, round2Status: round2?.status ?? null, leftovers };
+  },
   async unfinalizedClasses(
     client: Tx,
     meal: { menuDayId: string; mealType: "LUNCH" | "AFTERNOON" },

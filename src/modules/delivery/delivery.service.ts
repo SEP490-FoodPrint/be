@@ -7,7 +7,10 @@ import {
   withSchoolTransaction,
 } from "../../utils/authorization";
 import { HttpError } from "../../utils/http-error";
-import { supplyRoundService } from "../supply-round/supply-round.service";
+import {
+  logSupplyRoundHookFailure,
+  supplyRoundService,
+} from "../supply-round/supply-round.service";
 import { supplyRoundRepository } from "../supply-round/supply-round.repository";
 import { getDeliveryStatusLabel } from "../../utils/delivery-status";
 import { ROLE_LABELS, ROLES } from "../../constants/roles";
@@ -107,6 +110,7 @@ export function createDeliveryService(
           supplierName: row.Supplier?.name ?? null,
           supplierPhone: row.Supplier?.phone ?? null,
           status: row.status,
+          preparationStage: row.preparationStage ?? null,
           vehiclePlate: row.vehiclePlate ?? null,
           expectedArrivalAt: row.expectedArrivalAt?.toISOString() ?? null,
           arrivedAt: row.arrivedAt?.toISOString() ?? null,
@@ -1173,9 +1177,7 @@ export function createDeliveryInspectionService(
         try {
           await supplyRoundService.afterDayProgress(roundReceipt);
         } catch (error) {
-          console.warn("Supply round hook could not process receipt", {
-            name: error instanceof Error ? error.name : "unknown",
-          });
+          logSupplyRoundHookFailure("receipt", roundReceipt, error);
         }
       }
       return result;

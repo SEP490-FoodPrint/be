@@ -30,17 +30,7 @@ export interface MenuApprovalDetailResponseDTO {
     proposerDetail: string;
     supplier: string;
   };
-  compliance: never[];
   days: MenuApprovalDayResponseDTO[];
-  medicalReview: {
-    status: string;
-    isApproved: boolean;
-    reviewer: string;
-    role: string;
-    reviewedAt: string;
-    note: string;
-    documents: never[];
-  };
   approval: {
     approver: string | null;
     role: string;

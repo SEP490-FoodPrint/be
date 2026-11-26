@@ -46,7 +46,7 @@ export const supplierTopUpSchema = z.strictObject({
         sampleTopUpQuantity: positiveDecimalQuantitySchema,
       }),
     )
-    .min(1)
+    // Rỗng khi kế hoạch đã duyệt không có lô nào phải lấy thêm (service so với kế hoạch).
     .max(500),
 });
 

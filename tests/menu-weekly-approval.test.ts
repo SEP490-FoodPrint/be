@@ -113,8 +113,7 @@ function decisionHarness(options?: {
       assert.equal(requestedSchoolId, actor.schoolId);
       return Promise.resolve(options?.years ?? []);
     },
-    findDetail: () => Promise.resolve(null),
-    findFinalizedPortions: () => Promise.resolve([]),
+    findRegisteredPortions: () => Promise.resolve(0),
     findWeekDetails: () => Promise.resolve([]),
     listSubmittedWeeks: () => Promise.resolve([]),
     findForDecision: () => Promise.resolve(options?.week ?? decisionWeek()),
@@ -357,29 +356,28 @@ function detailRow(): ApprovalDetailRow {
   } as unknown as ApprovalDetailRow;
 }
 
-void test("approval detail stays in school scope and uses finalized class demand", async () => {
-  let requestedScope: { id: string; schoolId: string } | undefined;
+const submittedWeek = () =>
+  Promise.resolve([
+    {
+      weekStartDate: new Date("2026-11-02T00:00:00.000Z"),
+      status: "PENDING_APPROVAL" as const,
+      count: 1,
+    },
+  ]);
+
+void test("approval week shows registered meal portions of active classes", async () => {
+  const scopes: { schoolId: string; gradeIds?: string[] }[] = [];
   const repository = {
     connect: () => Promise.resolve(transactionDatabase(board)),
-    findDetail: (id: string, requestedSchoolId: string) => {
-      requestedScope = { id, schoolId: requestedSchoolId };
-      return Promise.resolve(detailRow());
+    findWeekDetails: () => Promise.resolve([detailRow()]),
+    listSubmittedWeeks: submittedWeek,
+    findRegisteredPortions: (
+      requestedSchoolId: string,
+      gradeIds?: string[],
+    ) => {
+      scopes.push({ schoolId: requestedSchoolId, gradeIds });
+      return Promise.resolve(420);
     },
-    findFinalizedPortions: () =>
-      Promise.resolve([
-        {
-          mealDate: new Date("2026-11-02T00:00:00.000Z"),
-          mealType: "LUNCH" as const,
-          totalPortions: 420,
-        },
-        {
-          mealDate: new Date("2026-11-02T00:00:00.000Z"),
-          mealType: "AFTERNOON" as const,
-          totalPortions: 390,
-        },
-      ]),
-    findWeekDetails: () => Promise.resolve([]),
-    listSubmittedWeeks: () => Promise.resolve([]),
     findForDecision: () => Promise.resolve(null),
     academicYears: () => Promise.resolve([]),
     createReview: () => Promise.reject(new Error("not used")),
@@ -387,8 +385,9 @@ void test("approval detail stays in school scope and uses finalized class demand
     updateWeek: () => Promise.reject(new Error("not used")),
   } satisfies MenuApprovalRepository;
   const service: MenuApprovalService = createMenuApprovalService(repository);
-  const detail = await service.getDetail(menuId, board);
-  assert.deepEqual(requestedScope, { id: menuId, schoolId });
+  const [detail] = (await service.getWeek({}, board)).menus;
+  assert.equal(scopes[0]?.schoolId, schoolId);
+  // Số suất lớp đăng ký bán trú, giống nhau mọi ngày (không theo điểm danh).
   assert.equal(detail.days[0]?.portions, 420);
   assert.equal(detail.canDecide, true);
   assert.equal(detail.approval.approver, null);
@@ -398,11 +397,12 @@ void test("approval detail stays in school scope and uses finalized class demand
     detail.summary.proposerDetail,
     "Nhân viên Dinh dưỡng · Trường A",
   );
-  assert.equal(detail.medicalReview.role, "Nhân viên Dinh dưỡng");
+  assert.equal("medicalReview" in detail, false);
 });
 
 void test("approval uses selected grades for demand and suppliers from the saved menu ingredients", async () => {
   const menu = detailRow();
+  menu.isSchoolWide = false;
   menu.grades = [{ gradeId: "grade-one", grade: { name: "Khối 1" } }] as never;
   menu.menuDays[0].menuDayDishes = [
     {
@@ -419,38 +419,38 @@ void test("approval uses selected grades for demand and suppliers from the saved
   ] as never;
   let selectedGrades: string[] | undefined;
   const repository = {
-    findDetail: () => Promise.resolve(menu),
-    findFinalizedPortions: (
-      _dates: Date[],
+    connect: () => Promise.resolve(transactionDatabase(board)),
+    findWeekDetails: () => Promise.resolve([menu]),
+    listSubmittedWeeks: submittedWeek,
+    academicYears: () => Promise.resolve([]),
+    findRegisteredPortions: (
       requestedSchoolId: string,
       gradeIds?: string[],
     ) => {
       assert.equal(requestedSchoolId, schoolId);
       selectedGrades = gradeIds;
-      return Promise.resolve([]);
+      return Promise.resolve(0);
     },
   } as unknown as MenuApprovalRepository;
-  const detail = await createMenuApprovalService(repository).getDetail(
-    menuId,
-    board,
-  );
+  const [detail] = (
+    await createMenuApprovalService(repository).getWeek({}, board)
+  ).menus;
   assert.deepEqual(selectedGrades, ["grade-one"]);
   assert.equal(detail.summary.audience, "Khối 1");
   assert.equal(detail.summary.supplier, "1 nhà cung cấp");
   assert.equal(detail.days[0].lunch[0].supplier, "NCC đã chọn");
 });
 
-void test("approval detail is restricted to the school management board", async () => {
+void test("approval week is restricted to the school management board", async () => {
   let reads = 0;
   const repository = {
     connect: () => Promise.resolve(transactionDatabase(board)),
-    findDetail: () => {
+    findWeekDetails: () => {
       reads += 1;
-      return Promise.resolve(detailRow());
+      return Promise.resolve([detailRow()]);
     },
-    findFinalizedPortions: () => Promise.resolve([]),
-    findWeekDetails: () => Promise.resolve([]),
-    listSubmittedWeeks: () => Promise.resolve([]),
+    findRegisteredPortions: () => Promise.resolve(0),
+    listSubmittedWeeks: submittedWeek,
     findForDecision: () => Promise.resolve(null),
     academicYears: () => Promise.resolve([]),
     createReview: () => Promise.reject(new Error("not used")),
@@ -459,10 +459,13 @@ void test("approval detail is restricted to the school management board", async 
   } satisfies MenuApprovalRepository;
   const service = createMenuApprovalService(repository);
   await assert.rejects(
-    service.getDetail(menuId, {
-      ...board,
-      role: ROLES.SCHOOL_ADMINISTRATION,
-    }),
+    service.getWeek(
+      {},
+      {
+        ...board,
+        role: ROLES.SCHOOL_ADMINISTRATION,
+      },
+    ),
     (error: unknown) => error instanceof HttpError && error.statusCode === 403,
   );
   assert.equal(reads, 0);
@@ -599,7 +602,6 @@ void test("approval week returns every submitted grade menu of the week in one c
   const portionScopes: string[][] = [];
   const repository = {
     connect: () => Promise.resolve(transactionDatabase(board)),
-    findDetail: () => Promise.resolve(null),
     findWeekDetails: (
       scope: Prisma.WeeklyMenuWhereInput,
       weekStartDate: Date,
@@ -624,13 +626,9 @@ void test("approval week returns every submitted grade menu of the week in one c
           count: 2,
         },
       ]),
-    findFinalizedPortions: (
-      _dates: Date[],
-      _schoolId: string,
-      gradeIds = [],
-    ) => {
+    findRegisteredPortions: (_schoolId: string, gradeIds: string[] = []) => {
       portionScopes.push(gradeIds);
-      return Promise.resolve([]);
+      return Promise.resolve(0);
     },
     findForDecision: () => Promise.resolve(null),
     academicYears: () =>
@@ -678,10 +676,9 @@ void test("approval week returns every submitted grade menu of the week in one c
 void test("approval week is empty when nothing has been submitted", async () => {
   const repository = {
     connect: () => Promise.reject(new Error("not used")),
-    findDetail: () => Promise.resolve(null),
     findWeekDetails: () => Promise.reject(new Error("not used")),
     listSubmittedWeeks: () => Promise.resolve([]),
-    findFinalizedPortions: () => Promise.resolve([]),
+    findRegisteredPortions: () => Promise.resolve(0),
     findForDecision: () => Promise.resolve(null),
     academicYears: () => Promise.resolve([]),
     createReview: () => Promise.reject(new Error("not used")),

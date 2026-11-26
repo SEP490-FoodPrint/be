@@ -92,6 +92,7 @@ export async function readAllocationDay(
         status: true,
         completedAt: true,
         plannedPortions: true,
+        supplyBatchNo: true,
         note: true,
         cookingBatchLots: {
           orderBy: { ingredientLotId: "asc" },
@@ -229,8 +230,10 @@ export type AllocationDay = Omit<
 > & {
   batches: (Omit<
     RawAllocationDay["batches"][number],
-    "cookingBatchLots" | "dishes"
+    "cookingBatchLots" | "dishes" | "supplyBatchNo"
   > & {
+    /** Mẻ do luồng đợt giao lập (1|2); null/thiếu với mẻ lập thủ công cũ. */
+    supplyBatchNo?: number | null;
     cookingBatchLots?: (Omit<
       RawAllocationDay["batches"][number]["cookingBatchLots"][number],
       "IngredientLot"

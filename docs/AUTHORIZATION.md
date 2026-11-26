@@ -67,7 +67,7 @@ Bootstrap tạo permission `food_safety_report.receive` và chỉ gán mặc đ�
 
 ### Quản lý khối và lớp học của trường
 
-`GET /api/school-grades`, `POST /api/school-grades`, `PATCH /api/school-grades/:id` và `DELETE /api/school-grades/:id` yêu cầu vai trò Ban Giám hiệu và quyền hiệu lực `class.manage`. Phạm vi trường lấy từ phiên xác thực. Scope nội bộ của SYSTEM có quyền trả bộ lọc rỗng theo quy ước chung, còn service yêu cầu vai trò Ban Giám hiệu cho mọi thao tác.
+`GET /api/school-grades` cho mọi tài khoản trường có một trong các quyền `class.manage`, `class.view` hoặc `menu.view`, chỉ trả khối của trường trong phiên; tài khoản không thuộc trường (kể cả SYSTEM) nhận 403. `POST /api/school-grades`, `PATCH /api/school-grades/:id` và `DELETE /api/school-grades/:id` yêu cầu vai trò Ban Giám hiệu và quyền hiệu lực `class.manage`. Xóa khối còn lớp hoặc đã có thực đơn gán khối trả 409.
 
 Tạo và sửa lớp nhận `gradeId` tùy chọn. Gửi `null` để bỏ gán khối. Khi chỉ sửa khối, có thể cập nhật lớp thuộc niên khóa cũ. Danh sách `GET /api/classes` nhận bộ lọc `gradeId` hoặc `gradeId=unassigned`.
 

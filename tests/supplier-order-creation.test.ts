@@ -198,6 +198,89 @@ void test("round delivery top-up checks exact lots and only increments once on r
   assert.deepEqual(increments, ["lot", "delivery-item", "request-item"]);
 });
 
+void test("round delivery top-up confirms an empty plan when no lot needs extra sample", async () => {
+  const actor = makeSupplierActor();
+  let confirmed = false;
+  const tx = {
+    delivery: {
+      findFirst: () =>
+        Promise.resolve({
+          status: "PREPARING",
+          preparationStage: "TOP_UP_PENDING",
+          topUpConfirmedAt: null,
+        }),
+      update: (args: { data: { preparationStage: string } }) => {
+        assert.equal(args.data.preparationStage, "READY_TO_DISPATCH");
+        confirmed = true;
+        return Promise.resolve({});
+      },
+    },
+    ingredientLot: {
+      findMany: () =>
+        Promise.resolve([
+          {
+            id: uid(8201),
+            lotCode: "FP-LO-8201",
+            unit: "kg",
+            status: "BLOCKED",
+            sampleTopUpQuantity: new Prisma.Decimal(0),
+            DeliveryItem: {
+              id: uid(8202),
+              supplyRequestItemId: requestItemId,
+              unit: "kg",
+            },
+            cookingBatchLots: [],
+          },
+        ]),
+      update: () => Promise.reject(new Error("Unexpected lot update")),
+    },
+  } as unknown as Prisma.TransactionClient;
+  const service = createSupplierOrderService(
+    {
+      ...supplierOrderRepository,
+      findManagementDeliveryById: () =>
+        Promise.resolve({
+          id: deliveryId,
+          deliveryNo: "FP-DE-8201",
+          creationMode: "REQUEST",
+          traceabilityVersion: 1,
+          workflowVersion: 2,
+          schoolId,
+          supplierId,
+          supplyRequestId,
+          status: "PREPARING",
+          preparationStage: "READY_TO_DISPATCH",
+          expectedArrivalAt: null,
+          arrivedAt: null,
+          receivedAt: null,
+          vehiclePlate: null,
+          note: null,
+          createdByUserId: actor.id,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          creationFingerprint: null,
+          School: { name: "Trường" },
+          SupplyRequest: null,
+          deliveryItems: [],
+        }),
+    },
+    {
+      transaction: (operation) => operation(tx),
+      guard: {
+        assertAccess: () => Promise.reject(new Error("Unexpected guard")),
+        assertDeliveryContinuation: () =>
+          Promise.resolve({ actor, replayed: false, delivery: {} as never }),
+      },
+    },
+  );
+  await service.confirmTopUp(
+    { id: deliveryId },
+    validateSupplierTopUp({ lots: [] }),
+    actor,
+  );
+  assert.equal(confirmed, true);
+});
+
 function makeSupplierActor(
   role:
     | typeof ROLES.INGREDIENT_SUPPLIER_ADMIN
