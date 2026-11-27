@@ -708,14 +708,14 @@ export function createFoodSafetyIncidentService(
     incident: { id: string; code: string | null; schoolId: string },
     actorId: string,
     at: Date,
-  ): Promise<string> {
+  ): Promise<{ id: string; version: number }> {
     const draft = buildTraceSnapshot(
       incident,
       await repository.findTraceSource(tx, incident.id),
       await repository.findSnapshotEvidence(tx, incident.id),
     );
     const version = await repository.nextSnapshotVersion(tx, incident.id);
-    return repository.createSnapshot(tx, version, {
+    const snapshotId = await repository.createSnapshot(tx, version, {
       incidentId: incident.id,
       completeness: draft.completeness,
       missingReasons: draft.missingReasons,
@@ -725,6 +725,15 @@ export function createFoodSafetyIncidentService(
       createdByUserId: actorId,
       at,
     });
+    return { id: snapshotId, version };
+  }
+
+  /** Số tham chiếu bản chuyển ATTP: mã hồ sơ + lần chuyển (phiên bản snapshot gửi kèm). */
+  function forwardingReference(
+    code: string | null,
+    version: number,
+  ): string | null {
+    return code ? `${code}/${version}` : null;
   }
 
   /** FR-006: bản bổ sung gửi tới đơn vị đang nhận hồ sơ (không suy lại từ phường/xã). */
@@ -917,7 +926,7 @@ export function createFoodSafetyIncidentService(
               files,
               at,
             });
-            const traceSnapshotId = await takeSnapshot(
+            const snapshot = await takeSnapshot(
               tx,
               { id, code, schoolId },
               actor.id,
@@ -927,7 +936,8 @@ export function createFoodSafetyIncidentService(
               incidentId: id,
               recipient,
               forwardedByUserId: actor.id,
-              traceSnapshotId,
+              traceSnapshotId: snapshot.id,
+              referenceNumber: forwardingReference(code, snapshot.version),
               at,
             });
             return mapFullDetail(await readDetail(tx, id), actor, storage);
@@ -975,17 +985,16 @@ export function createFoodSafetyIncidentService(
               files,
               at,
             });
-            const traceSnapshotId = await takeSnapshot(
-              tx,
-              target,
-              actor.id,
-              at,
-            );
+            const snapshot = await takeSnapshot(tx, target, actor.id, at);
             await repository.createForwarding(tx, {
               incidentId: id,
               recipient,
               forwardedByUserId: actor.id,
-              traceSnapshotId,
+              traceSnapshotId: snapshot.id,
+              referenceNumber: forwardingReference(
+                target.code,
+                snapshot.version,
+              ),
               at,
             });
             return mapFullDetail(await readDetail(tx, id), actor, storage);
@@ -1057,18 +1066,17 @@ export function createFoodSafetyIncidentService(
                   target.recipientCommuneFoodSafetyUnitId,
                 )
               : null;
-            const traceSnapshotId = await takeSnapshot(
-              tx,
-              target,
-              actor.id,
-              at,
-            );
+            const snapshot = await takeSnapshot(tx, target, actor.id, at);
             if (recipient)
               await repository.createForwarding(tx, {
                 incidentId: id,
                 recipient,
                 forwardedByUserId: actor.id,
-                traceSnapshotId,
+                traceSnapshotId: snapshot.id,
+                referenceNumber: forwardingReference(
+                  target.code,
+                  snapshot.version,
+                ),
                 at,
               });
           }

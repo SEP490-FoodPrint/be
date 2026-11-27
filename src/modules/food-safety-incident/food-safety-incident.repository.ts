@@ -488,6 +488,7 @@ export function createFoodSafetyIncidentRepository(connect = getPrisma) {
         recipient: IncidentRecipient;
         forwardedByUserId: string;
         traceSnapshotId: string;
+        referenceNumber: string | null;
         at: Date;
       },
     ): Promise<void> {
@@ -495,6 +496,7 @@ export function createFoodSafetyIncidentRepository(connect = getPrisma) {
         data: {
           incidentId: data.incidentId,
           traceSnapshotId: data.traceSnapshotId,
+          referenceNumber: data.referenceNumber,
           recipientCommuneFoodSafetyUnitId: data.recipient.unitId,
           recipientUserId: data.recipient.officerId,
           recipientOrganization: data.recipient.unitName,

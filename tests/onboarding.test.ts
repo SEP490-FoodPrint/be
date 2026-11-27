@@ -1053,3 +1053,230 @@ void test("submission requires an active ward, stores it in the profile and retu
     name: "Phường 1",
   });
 });
+
+// ---------------------------------------------------------------------------
+// Unit test cho OnboardingService.submit theo ma trận UTCID (Condition/Confirm/Result).
+// Precondition chung: tài khoản UNVERIFIED chưa thuộc tổ chức, phường/xã đang hoạt động
+// được chọn mặc định; `editFixture(null)` = chưa có hồ sơ (nộp lần đầu).
+// ---------------------------------------------------------------------------
+const supplierBody = (extra: Record<string, unknown> = {}) => ({
+  name: "Công ty Thực phẩm ABC",
+  email: "lienhe@abc.vn",
+  certifications: [],
+  ...extra,
+});
+const certificate = (no: string) => ({
+  certificationType: "VSATTP",
+  certificateNo: no,
+  issuedDate: "2026-01-01",
+  expiryDate: "2027-01-01",
+});
+const validationError = (field: string, message?: string) => (error: unknown) =>
+  error instanceof RequestValidationError &&
+  error.fields.some(
+    (issue) =>
+      issue.field === field &&
+      (message === undefined || issue.message === message),
+  );
+const httpError = (statusCode: number, message: string) => (error: unknown) =>
+  error instanceof HttpError &&
+  error.statusCode === statusCode &&
+  error.message === message;
+
+void test("UTCID01 [N] submit: nhà cung cấp nộp lần đầu hợp lệ → PENDING, cấp mã FP-RG, gửi 1 email", async () => {
+  const fixture = editFixture(null);
+  const result = await fixture.service.submit(fixture.user, supplierBody());
+  assert.equal(result.requestType, "SUPPLIER");
+  assert.equal(result.status, "PENDING");
+  assert.equal(result.accountStatus, "UNVERIFIED");
+  assert.match(result.registrationID, /^FP-RG-[0-9]{5}$/);
+  assert.equal(result.profileData.email, "lienhe@abc.vn");
+  assert.equal(fixture.notifications.length, 1);
+  assert.equal(fixture.writes(), 1);
+});
+
+void test("UTCID02 [N] submit: trường học nộp lần đầu hợp lệ → PENDING, requestType SCHOOL", async () => {
+  const fixture = editFixture(null);
+  fixture.user.orgType = "SCHOOL";
+  fixture.user.role = "SCHOOL_ADMINISTRATION";
+  fixture.row.requestType = "SCHOOL";
+  const result = await fixture.service.submit(fixture.user, {
+    name: "Trường Tiểu học A",
+    code: "TH-A",
+  });
+  assert.equal(result.requestType, "SCHOOL");
+  assert.equal(result.status, "PENDING");
+  assert.equal(fixture.notifications.length, 1);
+});
+
+void test("UTCID03 [N] submit: nhà cung cấp kèm 1 chứng nhận hợp lệ → lưu chứng nhận", async () => {
+  const fixture = editFixture(null);
+  const result = await fixture.service.submit(
+    fixture.user,
+    supplierBody({ certifications: [certificate("VS-001")] }),
+  );
+  assert.equal(result.status, "PENDING");
+  assert.deepEqual(
+    (result.profileData as { certifications: unknown[] }).certifications,
+    [certificate("VS-001")],
+  );
+});
+
+void test("UTCID04 [B] submit: tên dài đúng 255 ký tự → hợp lệ", async () => {
+  const fixture = editFixture(null);
+  const name = "A".repeat(255);
+  const result = await fixture.service.submit(
+    fixture.user,
+    supplierBody({ name }),
+  );
+  assert.equal(result.profileData.name, name);
+});
+
+void test("UTCID05 [B] submit: tên dài 256 ký tự → lỗi 'Trường chỉ nhận tối đa 255 ký tự'", async () => {
+  const fixture = editFixture(null);
+  await assert.rejects(
+    async () =>
+      fixture.service.submit(
+        fixture.user,
+        supplierBody({ name: "A".repeat(256) }),
+      ),
+    validationError("name", "Trường chỉ nhận tối đa 255 ký tự"),
+  );
+  assert.equal(fixture.writes(), 0);
+});
+
+void test("UTCID06 [A] submit: tên chỉ có khoảng trắng → lỗi 'Trường không được để trống'", async () => {
+  const fixture = editFixture(null);
+  await assert.rejects(
+    async () =>
+      fixture.service.submit(fixture.user, supplierBody({ name: "   " })),
+    validationError("name", "Trường không được để trống"),
+  );
+  assert.equal(fixture.writes(), 0);
+});
+
+void test("UTCID07 [A] submit: không chọn phường/xã → lỗi 'Vui lòng chọn phường/xã'", async () => {
+  const fixture = editFixture(null);
+  await assert.rejects(
+    async () =>
+      fixture.service.submit(fixture.user, supplierBody({ locationId: null })),
+    validationError("locationId", "Vui lòng chọn phường/xã"),
+  );
+  assert.equal(fixture.writes(), 0);
+});
+
+void test("UTCID08 [A] submit: phường/xã đã ngừng hoạt động → lỗi 'Địa bàn phải là phường/xã đang hoạt động'", async () => {
+  const fixture = editFixture(null);
+  await assert.rejects(
+    async () =>
+      fixture.service.submit(
+        fixture.user,
+        supplierBody({ locationId: fixture.inactiveWardId }),
+      ),
+    validationError("locationId", "Địa bàn phải là phường/xã đang hoạt động"),
+  );
+  assert.equal(fixture.writes(), 0);
+});
+
+void test("UTCID09 [A] submit: email sai định dạng → lỗi 'Email liên hệ không hợp lệ'", async () => {
+  const fixture = editFixture(null);
+  await assert.rejects(
+    async () =>
+      fixture.service.submit(fixture.user, supplierBody({ email: "abc" })),
+    validationError("email", "Email liên hệ không hợp lệ"),
+  );
+});
+
+void test("UTCID10 [A] submit: trùng số chứng nhận → lỗi 'Số chứng nhận không được trùng trong hồ sơ'", async () => {
+  const fixture = editFixture(null);
+  await assert.rejects(
+    async () =>
+      fixture.service.submit(
+        fixture.user,
+        supplierBody({
+          certifications: [certificate("VS-001"), certificate("VS-001")],
+        }),
+      ),
+    validationError(
+      "certifications.1.certificateNo",
+      "Số chứng nhận không được trùng trong hồ sơ",
+    ),
+  );
+});
+
+void test("UTCID11 [B] submit: đúng 20 chứng nhận (tối đa) → hợp lệ", async () => {
+  const fixture = editFixture(null);
+  const certifications = Array.from({ length: 20 }, (_, index) =>
+    certificate(`VS-${index}`),
+  );
+  const result = await fixture.service.submit(
+    fixture.user,
+    supplierBody({ certifications }),
+  );
+  assert.equal(
+    (result.profileData as { certifications: unknown[] }).certifications.length,
+    20,
+  );
+});
+
+void test("UTCID12 [B] submit: 21 chứng nhận → lỗi 'Chứng nhận chỉ nhận tối đa 20 mục'", async () => {
+  const fixture = editFixture(null);
+  const certifications = Array.from({ length: 21 }, (_, index) =>
+    certificate(`VS-${index}`),
+  );
+  await assert.rejects(
+    async () =>
+      fixture.service.submit(fixture.user, supplierBody({ certifications })),
+    validationError("certifications", "Chứng nhận chỉ nhận tối đa 20 mục"),
+  );
+});
+
+void test("UTCID13 [A] submit: tài khoản đã ACTIVE (không phải UNVERIFIED) → 403", async () => {
+  const fixture = editFixture(null);
+  await assert.rejects(
+    async () =>
+      fixture.service.submit(
+        // Ép kiểu có chủ đích: mô phỏng tài khoản đã kích hoạt gọi nhầm luồng nộp hồ sơ.
+        { ...fixture.user, status: "ACTIVE" } as unknown as SessionUser,
+        supplierBody(),
+      ),
+    httpError(403, "Chỉ tài khoản chưa xác minh được nộp hồ sơ."),
+  );
+  assert.equal(fixture.writes(), 0);
+});
+
+void test("UTCID14 [A] submit: tài khoản đã thuộc một tổ chức → 409", async () => {
+  const fixture = editFixture(null);
+  await assert.rejects(
+    async () =>
+      fixture.service.submit(
+        { ...fixture.user, supplierId: randomUUID() },
+        supplierBody(),
+      ),
+    httpError(409, "Tài khoản đã thuộc một tổ chức."),
+  );
+  assert.equal(fixture.writes(), 0);
+});
+
+void test("UTCID15 [A] submit: đã có hồ sơ PENDING nhưng không gửi expectedUpdatedAt → 409", async () => {
+  const fixture = editFixture("PENDING");
+  await assert.rejects(
+    async () => fixture.service.submit(fixture.user, supplierBody()),
+    httpError(409, "Hồ sơ đã thay đổi; tải lại trước khi chỉnh sửa"),
+  );
+  assert.equal(fixture.writes(), 0);
+  assert.equal(fixture.notifications.length, 0);
+});
+
+void test("UTCID16 [A] submit: hồ sơ đã APPROVED → 409 không được chỉnh sửa", async () => {
+  const fixture = editFixture("APPROVED");
+  await assert.rejects(
+    async () =>
+      fixture.service.submit(fixture.user, {
+        ...supplierBody(),
+        expectedUpdatedAt: fixture.row.updatedAt.toISOString(),
+      }),
+    httpError(409, "Hồ sơ đã được duyệt và không còn được chỉnh sửa"),
+  );
+  assert.equal(fixture.writes(), 0);
+});

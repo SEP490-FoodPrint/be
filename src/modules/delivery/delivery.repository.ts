@@ -352,11 +352,17 @@ function inspectionWhere(
                 { expectedArrivalAt: range },
                 { arrivedAt: range },
                 { arrivedAt: null, expectedArrivalAt: null, receivedAt: range },
+                // Ngày tạo chỉ là dự phòng cuối khi đơn không có ngày trường yêu cầu giao:
+                // đơn tạo hôm nay nhưng hẹn giao ngày mai không hiện vào hôm nay.
                 {
                   arrivedAt: null,
                   expectedArrivalAt: null,
                   receivedAt: null,
                   createdAt: range,
+                  OR: [
+                    { supplyRequestId: null },
+                    { SupplyRequest: { is: { requestedDeliveryDate: null } } },
+                  ],
                 },
                 // Ngày giao trường yêu cầu chỉ là dự phòng khi xe chưa có giờ hẹn / giờ đến:
                 // xe đã hẹn ngày khác không được hiện vào ngày yêu cầu của đơn.
