@@ -130,6 +130,7 @@ function setup(
 ) {
   const calls: string[] = [];
   const moves: string[] = [];
+  const resolvedAts: (Date | undefined)[] = [];
   const histories: Record<string, unknown>[] = [];
   const findings: unknown[] = [];
   const attachments: unknown[] = [];
@@ -182,8 +183,15 @@ function setup(
       return Promise.resolve();
     },
     readInspection: () => Promise.resolve(inspectionRow("COMPLETED")),
-    moveIncident: (_tx: unknown, _id: string, from: string, to: string) => {
+    moveIncident: (
+      _tx: unknown,
+      _id: string,
+      from: string,
+      to: string,
+      resolvedAt?: Date,
+    ) => {
       moves.push(`${from}->${to}`);
+      resolvedAts.push(resolvedAt);
       return Promise.resolve(1);
     },
     recordHistory: (_tx: unknown, data: Record<string, unknown>) => {
@@ -204,7 +212,15 @@ function setup(
     () => NOW,
     options.storage,
   );
-  return { service, calls, moves, histories, findings, attachments };
+  return {
+    service,
+    calls,
+    moves,
+    resolvedAts,
+    histories,
+    findings,
+    attachments,
+  };
 }
 
 const plan = {
@@ -456,6 +472,9 @@ void test("close: only INSPECTION_COMPLETED with every inspection completed; leg
   );
   assert.deepEqual(f.moves, ["INSPECTION_COMPLETED->CLOSED"]);
   assert.equal(f.histories[0].note, "Đã xử lý xong");
+  // Thời điểm đóng hồ sơ được ghi cùng lúc chuyển CLOSED, khớp thời điểm trong lịch sử.
+  assert.ok(f.resolvedAts[0] instanceof Date);
+  assert.equal(f.resolvedAts[0], f.histories[0].at);
 
   await assert.rejects(
     setup(officer, {

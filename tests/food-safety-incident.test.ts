@@ -198,6 +198,7 @@ function setup(
   const calls: string[] = [];
   const created: Record<string, unknown>[] = [];
   const histories: Record<string, unknown>[] = [];
+  const forwardings: Record<string, unknown>[] = [];
   const snapshots: Record<string, unknown>[] = [];
   const attachments: Record<string, unknown>[] = [];
   const target =
@@ -261,8 +262,9 @@ function setup(
       calls.push("forward");
       return Promise.resolve(options.changed ?? 1);
     },
-    createForwarding: () => {
+    createForwarding: (_tx: unknown, data: Record<string, unknown>) => {
       calls.push("forwarding");
+      forwardings.push(data);
       return Promise.resolve();
     },
     markCancelled: () => {
@@ -310,7 +312,15 @@ function setup(
     () => NOW,
     options.storage,
   );
-  return { service, calls, created, histories, snapshots, attachments };
+  return {
+    service,
+    calls,
+    created,
+    histories,
+    snapshots,
+    attachments,
+    forwardings,
+  };
 }
 
 const report = {
@@ -531,6 +541,8 @@ void test("forward: only from PENDING_SCHOOL_REVIEW, recipient derived from the 
     "forwarding",
   ]);
   assert.equal(result.view, "FULL");
+  // Số tham chiếu bản chuyển = mã hồ sơ + phiên bản snapshot gửi kèm.
+  assert.equal(f.forwardings[0].referenceNumber, "FP-IC-48213/1");
   for (const [options, code] of [
     [{ target: { status: "SUBMITTED_TO_AUTHORITY" } }, 409],
     [{ target: null }, 404],

@@ -205,10 +205,11 @@ export function createFoodSafetyInspectionRepository(connect = getPrisma) {
       id: string,
       from: NonNullable<IncidentStatus>,
       to: NonNullable<IncidentStatus>,
+      resolvedAt?: Date,
     ): Promise<number> {
       const result = await tx.foodSafetyIncident.updateMany({
         where: { id, status: from },
-        data: { status: to },
+        data: { status: to, ...(resolvedAt ? { resolvedAt } : {}) },
       });
       return result.count;
     },

@@ -337,11 +337,13 @@ export function createFoodSafetyInspectionService(
           throw new HttpError(409, "Còn đợt kiểm tra chưa có kết quả");
         if (counts.completed === 0 && target.source !== "LEGACY_IMPORT")
           throw new HttpError(409, "Hồ sơ chưa có kết quả kiểm tra");
+        // Thời điểm đóng hồ sơ (FE "Thời điểm đóng hồ sơ") = lúc chuyển CLOSED.
         const moved = await repository.moveIncident(
           tx,
           id,
           "INSPECTION_COMPLETED",
           "CLOSED",
+          at,
         );
         if (moved !== 1)
           throw new HttpError(409, "Trạng thái hồ sơ đã thay đổi");
